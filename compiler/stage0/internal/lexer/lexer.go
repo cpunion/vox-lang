@@ -158,7 +158,12 @@ func (lx *lexer) lexPunct() {
 	case ';':
 		lx.emit(TokenSemicolon, ";", start, lx.pos)
 	case ':':
-		lx.emit(TokenColon, ":", start, lx.pos)
+		if lx.pos < len(lx.input) && lx.input[lx.pos] == ':' {
+			lx.pos++
+			lx.emit(TokenColonColon, "::", start, lx.pos)
+		} else {
+			lx.emit(TokenColon, ":", start, lx.pos)
+		}
 	case '.':
 		lx.emit(TokenDot, ".", start, lx.pos)
 	case '+':

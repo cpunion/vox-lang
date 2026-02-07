@@ -3,9 +3,11 @@ package typecheck
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"voxlang/internal/ast"
 	"voxlang/internal/diag"
+	"voxlang/internal/names"
 	"voxlang/internal/source"
 )
 
@@ -48,6 +50,9 @@ type CheckedProgram struct {
 	Prog      *ast.Program
 	FuncSigs  map[string]FuncSig
 	ExprTypes map[ast.Expr]Type
+	// CallTargets stores the resolved function name (possibly qualified, e.g. "dep::foo")
+	// for each call expression.
+	CallTargets map[*ast.CallExpr]string
 }
 
 type FuncSig struct {
@@ -61,10 +66,11 @@ func Check(prog *ast.Program) (*CheckedProgram, *diag.Bag) {
 		diags:     &diag.Bag{},
 		funcSigs:  map[string]FuncSig{},
 		exprTypes: map[ast.Expr]Type{},
+		callTgts:  map[*ast.CallExpr]string{},
 	}
 	c.collectFuncSigs()
 	c.checkAll()
-	return &CheckedProgram{Prog: prog, FuncSigs: c.funcSigs, ExprTypes: c.exprTypes}, c.diags
+	return &CheckedProgram{Prog: prog, FuncSigs: c.funcSigs, ExprTypes: c.exprTypes, CallTargets: c.callTgts}, c.diags
 }
 
 type checker struct {
@@ -72,6 +78,7 @@ type checker struct {
 	diags     *diag.Bag
 	funcSigs  map[string]FuncSig
 	exprTypes map[ast.Expr]Type
+	callTgts  map[*ast.CallExpr]string
 
 	curFn *ast.FuncDecl
 	scope []map[string]varInfo
@@ -87,8 +94,9 @@ func (c *checker) collectFuncSigs() {
 	c.funcSigs["assert"] = FuncSig{Params: []Type{{K: TyBool}}, Ret: Type{K: TyUnit}}
 
 	for _, fn := range c.prog.Funcs {
-		if _, exists := c.funcSigs[fn.Name]; exists {
-			c.errorAt(fn.Span, "duplicate function: "+fn.Name)
+		qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)
+		if _, exists := c.funcSigs[qname]; exists {
+			c.errorAt(fn.Span, "duplicate function: "+qname)
 			continue
 		}
 		sig := FuncSig{}
@@ -96,7 +104,7 @@ func (c *checker) collectFuncSigs() {
 			sig.Params = append(sig.Params, c.typeFromAst(p.Type))
 		}
 		sig.Ret = c.typeFromAst(fn.Ret)
-		c.funcSigs[fn.Name] = sig
+		c.funcSigs[qname] = sig
 	}
 	// main presence check (stage0)
 	if _, ok := c.funcSigs["main"]; !ok {
@@ -107,12 +115,13 @@ func (c *checker) collectFuncSigs() {
 func (c *checker) checkAll() {
 	for _, fn := range c.prog.Funcs {
 		c.curFn = fn
+		qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)
+		sig := c.funcSigs[qname]
 		c.pushScope()
 		for i, p := range fn.Params {
-			sig := c.funcSigs[fn.Name]
 			c.scopeTop()[p.Name] = varInfo{ty: sig.Params[i], mutable: false}
 		}
-		c.checkBlock(fn.Body, c.typeFromAst(fn.Ret))
+		c.checkBlock(fn.Body, sig.Ret)
 		c.popScope()
 	}
 }
@@ -286,16 +295,35 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 	case *ast.CallExpr:
-		id, ok := e.Callee.(*ast.IdentExpr)
-		if !ok {
+		var target string
+		switch cal := e.Callee.(type) {
+		case *ast.IdentExpr:
+			// Unqualified call: resolve within the current package first.
+			target = cal.Name
+			if _, ok := c.funcSigs[target]; !ok {
+				pkg := names.PackageFromFileName(c.curFn.Span.File.Name)
+				if pkg != "" {
+					if _, ok := c.funcSigs[pkg+"::"+cal.Name]; ok {
+						target = pkg + "::" + cal.Name
+					}
+				}
+			}
+		case *ast.PathExpr:
+			if len(cal.Parts) != 2 {
+				c.errorAt(e.S, "stage0 only supports `pkg::fn(...)` calls for qualified names")
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+			target = strings.Join(cal.Parts, "::")
+		default:
 			c.errorAt(e.S, "callee must be an identifier (stage0)")
 			return c.setExprType(ex, Type{K: TyBad})
 		}
-		sig, ok := c.funcSigs[id.Name]
+		sig, ok := c.funcSigs[target]
 		if !ok {
-			c.errorAt(e.S, "unknown function: "+id.Name)
+			c.errorAt(e.S, "unknown function: "+target)
 			return c.setExprType(ex, Type{K: TyBad})
 		}
+		c.callTgts[e] = target
 		if len(e.Args) != len(sig.Params) {
 			c.errorAt(e.S, fmt.Sprintf("wrong number of arguments: expected %d, got %d", len(sig.Params), len(e.Args)))
 			return c.setExprType(ex, Type{K: TyBad})

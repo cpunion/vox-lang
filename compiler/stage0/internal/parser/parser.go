@@ -252,7 +252,22 @@ func (p *Parser) parsePrefix() ast.Expr {
 	switch tok.Kind {
 	case lexer.TokenIdent:
 		p.advance()
-		ex := ast.Expr(&ast.IdentExpr{Name: tok.Lexeme, S: tok.Span})
+		parts := []string{tok.Lexeme}
+		span := tok.Span
+		for p.match(lexer.TokenColonColon) {
+			id := p.expect(lexer.TokenIdent, "expected identifier after `::`")
+			if id.Kind != lexer.TokenIdent {
+				break
+			}
+			parts = append(parts, id.Lexeme)
+			span = joinSpan(span, id.Span)
+		}
+		var ex ast.Expr
+		if len(parts) == 1 {
+			ex = &ast.IdentExpr{Name: tok.Lexeme, S: tok.Span}
+		} else {
+			ex = &ast.PathExpr{Parts: parts, S: span}
+		}
 		return p.parsePostfix(ex)
 	case lexer.TokenInt:
 		p.advance()

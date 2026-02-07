@@ -39,6 +39,7 @@ const (
 	TokenComma
 	TokenSemicolon
 	TokenColon
+	TokenColonColon
 	TokenDot
 
 	// Operators

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
 
 	"voxlang/internal/ir"
 )
@@ -348,7 +349,30 @@ func cType(t ir.Type) string {
 	}
 }
 
-func cFnName(name string) string { return "vox_fn_" + name }
+func cFnName(name string) string { return "vox_fn_" + cIdent(name) }
+
+func cIdent(s string) string {
+	// Best-effort sanitization: keep [A-Za-z0-9_], map others to '_'.
+	// This keeps IR readable (may contain "::") while emitting valid C symbols.
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		ok := (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_'
+		if !ok {
+			ch = '_'
+		}
+		if i == 0 && (ch >= '0' && ch <= '9') {
+			b.WriteByte('_')
+		}
+		b.WriteByte(ch)
+	}
+	out := b.String()
+	if out == "" {
+		return "_"
+	}
+	return out
+}
 
 func cParamName(i int, name string) string {
 	_ = name

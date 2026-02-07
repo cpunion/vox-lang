@@ -89,9 +89,47 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 		}
 	}
 
-	files, err := collectPackageFiles(root, tests)
+	files, err := collectPackageFiles(root, collectOptions{
+		IncludeTests: tests,
+		RequireMain:  !tests,
+		FilePrefix:   "",
+		SkipMain:     false,
+	})
 	if err != nil {
 		return nil, nil, err
+	}
+	// Load direct path dependencies (registry deps are deferred).
+	for depName, dep := range mani.Dependencies {
+		if dep.Path == "" {
+			continue
+		}
+		depRoot := dep.Path
+		if !filepath.IsAbs(depRoot) {
+			depRoot = filepath.Join(root, depRoot)
+		}
+		depRoot, err = filepath.Abs(depRoot)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Best-effort: require the dep's package name to match the dependency key.
+		depManiPath := filepath.Join(depRoot, "vox.toml")
+		depMani, err := manifest.Load(depManiPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load dependency %q manifest: %w", depName, err)
+		}
+		if depMani.Package.Name != depName {
+			return nil, nil, fmt.Errorf("dependency %q package name mismatch: vox.toml has name=%q", depName, depMani.Package.Name)
+		}
+		depFiles, err := collectPackageFiles(depRoot, collectOptions{
+			IncludeTests: false,
+			RequireMain:  false,
+			FilePrefix:   depName + "/",
+			SkipMain:     true,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		files = append(files, depFiles...)
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
@@ -167,7 +205,14 @@ func validateDeps(root string, mani *manifest.Manifest) error {
 	return nil
 }
 
-func collectPackageFiles(root string, includeTests bool) ([]*source.File, error) {
+type collectOptions struct {
+	IncludeTests bool
+	RequireMain  bool
+	FilePrefix   string
+	SkipMain     bool
+}
+
+func collectPackageFiles(root string, opts collectOptions) ([]*source.File, error) {
 	var out []*source.File
 	addDir := func(dir string) error {
 		return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -190,7 +235,10 @@ func collectPackageFiles(root string, includeTests bool) ([]*source.File, error)
 				return err
 			}
 			rel := strings.TrimPrefix(path, root+string(filepath.Separator))
-			out = append(out, source.NewFile(rel, string(b)))
+			if opts.SkipMain && rel == filepath.Join("src", "main.vox") {
+				return nil
+			}
+			out = append(out, source.NewFile(opts.FilePrefix+rel, string(b)))
 			return nil
 		})
 	}
@@ -201,7 +249,7 @@ func collectPackageFiles(root string, includeTests bool) ([]*source.File, error)
 	if err := addDir(srcDir); err != nil {
 		return nil, err
 	}
-	if includeTests {
+	if opts.IncludeTests {
 		testDir := filepath.Join(root, "tests")
 		if _, err := os.Stat(testDir); err == nil {
 			if err := addDir(testDir); err != nil {
@@ -209,8 +257,8 @@ func collectPackageFiles(root string, includeTests bool) ([]*source.File, error)
 			}
 		}
 	}
-	// Stage0 expects main when running (not for tests-only).
-	if !includeTests {
+	// Stage0 expects main for executable builds.
+	if opts.RequireMain && !opts.SkipMain {
 		mainPath := filepath.Join(srcDir, "main.vox")
 		if _, err := os.Stat(mainPath); err != nil {
 			return nil, fmt.Errorf("missing src/main.vox in %s", root)

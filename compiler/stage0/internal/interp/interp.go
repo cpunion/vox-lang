@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"voxlang/internal/ast"
+	"voxlang/internal/names"
 	"voxlang/internal/typecheck"
 )
 
@@ -36,7 +37,7 @@ type Runtime struct {
 func RunMain(p *typecheck.CheckedProgram) (string, error) {
 	rt := &Runtime{prog: p, funcs: map[string]*ast.FuncDecl{}}
 	for _, fn := range p.Prog.Funcs {
-		rt.funcs[fn.Name] = fn
+		rt.funcs[names.QualifyFunc(fn.Span.File.Name, fn.Name)] = fn
 	}
 	mainFn, ok := rt.funcs["main"]
 	if !ok {
@@ -69,19 +70,19 @@ func RunMain(p *typecheck.CheckedProgram) (string, error) {
 func RunTests(p *typecheck.CheckedProgram) (string, error) {
 	rt := &Runtime{prog: p, funcs: map[string]*ast.FuncDecl{}}
 	for _, fn := range p.Prog.Funcs {
-		rt.funcs[fn.Name] = fn
+		rt.funcs[names.QualifyFunc(fn.Span.File.Name, fn.Name)] = fn
 	}
 	// Discover tests by naming convention.
-	var names []string
+	var testNames []string
 	for name := range rt.funcs {
 		if strings.HasPrefix(name, "test_") {
-			names = append(names, name)
+			testNames = append(testNames, name)
 		}
 	}
-	sort.Strings(names)
+	sort.Strings(testNames)
 	var log strings.Builder
 	failed := 0
-	for _, name := range names {
+	for _, name := range testNames {
 		sig, ok := p.FuncSigs[name]
 		if !ok || len(sig.Params) != 0 || sig.Ret.K != typecheck.TyUnit {
 			failed++
@@ -96,10 +97,10 @@ func RunTests(p *typecheck.CheckedProgram) (string, error) {
 			fmt.Fprintf(&log, "[OK] %s\n", name)
 		}
 	}
-	if len(names) == 0 {
+	if len(testNames) == 0 {
 		log.WriteString("[test] no tests found\n")
 	} else {
-		fmt.Fprintf(&log, "[test] %d passed, %d failed\n", len(names)-failed, failed)
+		fmt.Fprintf(&log, "[test] %d passed, %d failed\n", len(testNames)-failed, failed)
 	}
 	if failed != 0 {
 		return log.String(), fmt.Errorf("%d test(s) failed", failed)
@@ -301,9 +302,17 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		}
 		return unit(), fmt.Errorf("unreachable")
 	case *ast.CallExpr:
-		id, ok := e.Callee.(*ast.IdentExpr)
-		if !ok {
-			return unit(), fmt.Errorf("callee must be ident (stage0)")
+		target := rt.prog.CallTargets[e]
+		if target == "" {
+			// Fallback (should not happen once typechecker fills CallTargets).
+			switch cal := e.Callee.(type) {
+			case *ast.IdentExpr:
+				target = cal.Name
+			case *ast.PathExpr:
+				target = strings.Join(cal.Parts, "::")
+			default:
+				return unit(), fmt.Errorf("callee must be ident or path (stage0)")
+			}
 		}
 		args := make([]Value, 0, len(e.Args))
 		for _, a := range e.Args {
@@ -313,7 +322,7 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			}
 			args = append(args, v)
 		}
-		return rt.call(id.Name, args)
+		return rt.call(target, args)
 	default:
 		return unit(), fmt.Errorf("unsupported expr")
 	}

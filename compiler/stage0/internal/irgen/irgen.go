@@ -5,6 +5,7 @@ import (
 
 	"voxlang/internal/ast"
 	"voxlang/internal/ir"
+	"voxlang/internal/names"
 	"voxlang/internal/typecheck"
 )
 
@@ -94,13 +95,14 @@ func (g *gen) genFunc(fn *ast.FuncDecl) (*ir.Func, error) {
 	g.blocks = nil
 	g.curBlock = nil
 
-	ret, err := g.irTypeFromChecked(g.funcSigs[fn.Name].Ret)
+	qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)
+	ret, err := g.irTypeFromChecked(g.funcSigs[qname].Ret)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", fn.Name, err)
 	}
-	f := &ir.Func{Name: fn.Name, Ret: ret}
+	f := &ir.Func{Name: qname, Ret: ret}
 	for i, p := range fn.Params {
-		pty, err := g.irTypeFromChecked(g.funcSigs[fn.Name].Params[i])
+		pty, err := g.irTypeFromChecked(g.funcSigs[qname].Params[i])
 		if err != nil {
 			return nil, err
 		}
@@ -382,13 +384,13 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			return nil, fmt.Errorf("unsupported binary op: %s", e.Op)
 		}
 	case *ast.CallExpr:
-		id, ok := e.Callee.(*ast.IdentExpr)
-		if !ok {
-			return nil, fmt.Errorf("callee must be ident (stage0)")
+		target := g.p.CallTargets[e]
+		if target == "" {
+			return nil, fmt.Errorf("unresolved call target (stage0)")
 		}
-		sig, ok := g.funcSigs[id.Name]
+		sig, ok := g.funcSigs[target]
 		if !ok {
-			return nil, fmt.Errorf("unknown function: %s", id.Name)
+			return nil, fmt.Errorf("unknown function: %s", target)
 		}
 		ret, err := g.irTypeFromChecked(sig.Ret)
 		if err != nil {
@@ -402,7 +404,7 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			}
 			args = append(args, v)
 		}
-		call := &ir.Call{Ret: ret, Name: id.Name, Args: args}
+		call := &ir.Call{Ret: ret, Name: target, Args: args}
 		if ret.K != ir.TUnit {
 			call.Dst = g.newTemp()
 			g.emit(call)
