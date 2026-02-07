@@ -35,8 +35,11 @@ func load() {
 		loadErr = err
 		return
 	}
-	preludePath := filepath.Join(root, "src", "std", "prelude", "lib.vox")
-	testingPath := filepath.Join(root, "src", "std", "testing", "lib.vox")
+	// Single source of truth: stage1 stdlib sources are written in Vox and live under
+	// compiler/stage1/src/std/** so stage1 can directly ship/use them.
+	stage1Root := filepath.Clean(filepath.Join(root, "..", "stage1"))
+	preludePath := filepath.Join(stage1Root, "src", "std", "prelude", "lib.vox")
+	testingPath := filepath.Join(stage1Root, "src", "std", "testing", "lib.vox")
 
 	preludeSrc, err := os.ReadFile(preludePath)
 	if err != nil {
