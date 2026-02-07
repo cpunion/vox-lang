@@ -25,13 +25,17 @@ struct AdvanceResult { p: Parser, tok: lex.Token }
 struct ParseIdentResult { p: Parser, name: String }
 struct ParseTypeResult { p: Parser, ty: ast.TypeName }
 struct ParseExprResult { p: Parser, id: i32 }
-struct ParseStmtResult { p: Parser, st: ast.Stmt }
-struct ParseBlockResult { p: Parser, b: ast.Block }
-struct ParseFnResult { p: Parser, f: ast.FuncDecl }
-struct ParseProgramResult { p: Parser, prog: ast.Program }
-struct ParseImportResult { p: Parser, imp: ast.ImportDecl }
-struct ParseStringResult { p: Parser, s: String }
-struct ParseParamsResult { p: Parser, params: Vec[ast.Param] }
+	struct ParseStmtResult { p: Parser, st: ast.Stmt }
+	struct ParseBlockResult { p: Parser, b: ast.Block }
+	struct ParseFnResult { p: Parser, f: ast.FuncDecl }
+	struct ParseStructResult { p: Parser, s: ast.StructDecl }
+	struct ParseEnumResult { p: Parser, e: ast.EnumDecl }
+	struct ParseProgramResult { p: Parser, prog: ast.Program }
+	struct ParseImportResult { p: Parser, imp: ast.ImportDecl }
+	struct ParseStringResult { p: Parser, s: String }
+	struct ParseParamsResult { p: Parser, params: Vec[ast.Param] }
+	struct ParseFieldResult { p: Parser, f: ast.FieldDecl }
+	struct ParseVariantResult { p: Parser, v: ast.EnumVariantDecl }
 
 fn dummy_token() -> lex.Token {
   return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0 };
@@ -420,17 +424,112 @@ fn parse_block(p: Parser) -> ParseBlockResult {
   return ParseBlockResult { p: ar2.p, b: ast.Block { stmts: stmts } };
 }
 
-fn parse_fn_decl(p: Parser) -> ParseFnResult {
-  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwFn);
-  let r2: ParseIdentResult = parse_ident(ar1.p);
-  let _ar3: AdvanceResult = expect(r2.p, lex.TokenKind.LParen);
-  let r4: ParseParamsResult = parse_params(_ar3.p);
-  let _ar5: AdvanceResult = expect(r4.p, lex.TokenKind.RParen);
-  let _ar6: AdvanceResult = expect(_ar5.p, lex.TokenKind.Arrow);
-  let r7: ParseTypeResult = parse_type_name(_ar6.p);
-  let params: Vec[ast.Param] = r4.params;
-  let r8: ParseBlockResult = parse_block(r7.p);
-  return ParseFnResult { p: r8.p, f: ast.FuncDecl { name: r2.name, params: params, ret: r7.ty, body: r8.b } };
+fn parse_fn_decl(p: Parser, is_pub: bool) -> ParseFnResult {
+	  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwFn);
+	  let r2: ParseIdentResult = parse_ident(ar1.p);
+	  let _ar3: AdvanceResult = expect(r2.p, lex.TokenKind.LParen);
+	  let r4: ParseParamsResult = parse_params(_ar3.p);
+	  let _ar5: AdvanceResult = expect(r4.p, lex.TokenKind.RParen);
+	  let _ar6: AdvanceResult = expect(_ar5.p, lex.TokenKind.Arrow);
+	  let r7: ParseTypeResult = parse_type_name(_ar6.p);
+	  let params: Vec[ast.Param] = r4.params;
+	  let r8: ParseBlockResult = parse_block(r7.p);
+	  return ParseFnResult { p: r8.p, f: ast.FuncDecl { is_pub: is_pub, name: r2.name, params: params, ret: r7.ty, body: r8.b } };
+}
+
+fn parse_field_decl(p: Parser) -> ParseFieldResult {
+	  let mut q: Parser = p;
+	  let mut is_pub: bool = false;
+	  if kind_is(peek_kind(q), lex.TokenKind.KwPub) {
+	    let ar1: AdvanceResult = advance(q);
+	    q = ar1.p;
+	    is_pub = true;
+	  }
+	  let r2: ParseIdentResult = parse_ident(q);
+	  let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.Colon);
+	  let r4: ParseTypeResult = parse_type_name(ar3.p);
+	  return ParseFieldResult { p: r4.p, f: ast.FieldDecl { is_pub: is_pub, name: r2.name, ty: r4.ty } };
+}
+
+fn parse_struct_decl(p: Parser, is_pub: bool) -> ParseStructResult {
+	  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwStruct);
+	  let r2: ParseIdentResult = parse_ident(ar1.p);
+	  let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.LBrace);
+	  let mut q: Parser = ar3.p;
+	  let mut fields: Vec[ast.FieldDecl] = Vec();
+	  if !kind_is(peek_kind(q), lex.TokenKind.RBrace) {
+	    while !q.has_err {
+	      let r: ParseFieldResult = parse_field_decl(q);
+	      q = r.p;
+	      fields.push(r.f);
+	      if kind_is(peek_kind(q), lex.TokenKind.Comma) {
+	        let ar4: AdvanceResult = advance(q);
+	        q = ar4.p;
+	        if kind_is(peek_kind(q), lex.TokenKind.RBrace) {
+	          break;
+	        }
+	        continue;
+	      }
+	      break;
+	    }
+	  }
+	  let ar5: AdvanceResult = expect(q, lex.TokenKind.RBrace);
+	  return ParseStructResult { p: ar5.p, s: ast.StructDecl { is_pub: is_pub, name: r2.name, fields: fields } };
+}
+
+fn parse_enum_variant_decl(p: Parser) -> ParseVariantResult {
+	  let r1: ParseIdentResult = parse_ident(p);
+	  let mut q: Parser = r1.p;
+	  let mut fields: Vec[ast.TypeName] = Vec();
+	  if kind_is(peek_kind(q), lex.TokenKind.LParen) {
+	    let ar2: AdvanceResult = advance(q);
+	    q = ar2.p;
+	    if !kind_is(peek_kind(q), lex.TokenKind.RParen) {
+	      while !q.has_err {
+	        let tr: ParseTypeResult = parse_type_name(q);
+	        q = tr.p;
+	        fields.push(tr.ty);
+	        if kind_is(peek_kind(q), lex.TokenKind.Comma) {
+	          let ar3: AdvanceResult = advance(q);
+	          q = ar3.p;
+	          if kind_is(peek_kind(q), lex.TokenKind.RParen) {
+	            break;
+	          }
+	          continue;
+	        }
+	        break;
+	      }
+	    }
+	    let ar4: AdvanceResult = expect(q, lex.TokenKind.RParen);
+	    q = ar4.p;
+	  }
+	  return ParseVariantResult { p: q, v: ast.EnumVariantDecl { name: r1.name, fields: fields } };
+}
+
+fn parse_enum_decl(p: Parser, is_pub: bool) -> ParseEnumResult {
+	  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwEnum);
+	  let r2: ParseIdentResult = parse_ident(ar1.p);
+	  let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.LBrace);
+	  let mut q: Parser = ar3.p;
+	  let mut vars: Vec[ast.EnumVariantDecl] = Vec();
+	  if !kind_is(peek_kind(q), lex.TokenKind.RBrace) {
+	    while !q.has_err {
+	      let vr: ParseVariantResult = parse_enum_variant_decl(q);
+	      q = vr.p;
+	      vars.push(vr.v);
+	      if kind_is(peek_kind(q), lex.TokenKind.Comma) {
+	        let ar4: AdvanceResult = advance(q);
+	        q = ar4.p;
+	        if kind_is(peek_kind(q), lex.TokenKind.RBrace) {
+	          break;
+	        }
+	        continue;
+	      }
+	      break;
+	    }
+	  }
+	  let ar5: AdvanceResult = expect(q, lex.TokenKind.RBrace);
+	  return ParseEnumResult { p: ar5.p, e: ast.EnumDecl { is_pub: is_pub, name: r2.name, variants: vars } };
 }
 
 fn parse_params(p: Parser) -> ParseParamsResult {
@@ -458,30 +557,50 @@ fn parse_params(p: Parser) -> ParseParamsResult {
   return ParseParamsResult { p: q, params: params };
 }
 
-fn parse_program(p: Parser) -> ParseProgramResult {
-  let mut q: Parser = p;
-  let mut imports: Vec[ast.ImportDecl] = Vec();
-  let mut funcs: Vec[ast.FuncDecl] = Vec();
-  while !q.has_err && !kind_is(peek_kind(q), lex.TokenKind.Eof) {
-    if kind_is(peek_kind(q), lex.TokenKind.KwImport) {
-      let r: ParseImportResult = parse_import_decl(q);
-      q = r.p;
-      imports.push(r.imp);
-    } else {
-      let r: ParseFnResult = parse_fn_decl(q);
-      q = r.p;
-      funcs.push(r.f);
-    }
-  }
-  return ParseProgramResult { p: q, prog: ast.Program { imports: imports, funcs: funcs, exprs: q.exprs } };
-}
+	fn parse_program(p: Parser) -> ParseProgramResult {
+	  let mut q: Parser = p;
+	  let mut imports: Vec[ast.ImportDecl] = Vec();
+	  let mut structs: Vec[ast.StructDecl] = Vec();
+	  let mut enums: Vec[ast.EnumDecl] = Vec();
+	  let mut funcs: Vec[ast.FuncDecl] = Vec();
+	  while !q.has_err && !kind_is(peek_kind(q), lex.TokenKind.Eof) {
+	    if kind_is(peek_kind(q), lex.TokenKind.KwImport) {
+	      let r: ParseImportResult = parse_import_decl(q);
+	      q = r.p;
+	      imports.push(r.imp);
+	    } else {
+	      // optional `pub`
+	      let mut is_pub: bool = false;
+	      if kind_is(peek_kind(q), lex.TokenKind.KwPub) {
+	        let ar1: AdvanceResult = advance(q);
+	        q = ar1.p;
+	        is_pub = true;
+	      }
+	      let k: lex.TokenKind = peek_kind(q);
+	      if kind_is(k, lex.TokenKind.KwStruct) {
+	        let r: ParseStructResult = parse_struct_decl(q, is_pub);
+	        q = r.p;
+	        structs.push(r.s);
+	      } else if kind_is(k, lex.TokenKind.KwEnum) {
+	        let r: ParseEnumResult = parse_enum_decl(q, is_pub);
+	        q = r.p;
+	        enums.push(r.e);
+	      } else {
+	        let r: ParseFnResult = parse_fn_decl(q, is_pub);
+	        q = r.p;
+	        funcs.push(r.f);
+	      }
+	    }
+	  }
+	  return ParseProgramResult { p: q, prog: ast.Program { imports: imports, structs: structs, enums: enums, funcs: funcs, exprs: q.exprs } };
+	}
 
-pub fn parse_text(text: String) -> ParseResult {
-  let lr: lex.LexResult = lex.lex_text(text);
-  if !lex_err_none(lr.err) {
-    return ParseResult { prog: ast.Program { imports: Vec(), funcs: Vec(), exprs: ast.expr_pool() }, err: ParseError.Lex(lr.err) };
-  }
-  let p: Parser = Parser { text: text, toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None, exprs: ast.expr_pool() };
-  let r: ParseProgramResult = parse_program(p);
-  return ParseResult { prog: r.prog, err: r.p.err };
-}
+	pub fn parse_text(text: String) -> ParseResult {
+	  let lr: lex.LexResult = lex.lex_text(text);
+	  if !lex_err_none(lr.err) {
+	    return ParseResult { prog: ast.Program { imports: Vec(), structs: Vec(), enums: Vec(), funcs: Vec(), exprs: ast.expr_pool() }, err: ParseError.Lex(lr.err) };
+	  }
+	  let p: Parser = Parser { text: text, toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None, exprs: ast.expr_pool() };
+	  let r: ParseProgramResult = parse_program(p);
+	  return ParseResult { prog: r.prog, err: r.p.err };
+	}
