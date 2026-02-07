@@ -1,0 +1,331 @@
+import "ir" as ir
+
+struct IdTy { id: i32, ty: String }
+
+fn idty_has(v: Vec[IdTy], id: i32) -> bool {
+  let mut i: i32 = 0;
+  while i < v.len() {
+    if v.get(i).id == id { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn idty_get(v: Vec[IdTy], id: i32) -> String {
+  let mut i: i32 = 0;
+  while i < v.len() {
+    let it: IdTy = v.get(i);
+    if it.id == id { return it.ty; }
+    i = i + 1;
+  }
+  return "";
+}
+
+fn idty_add(v0: Vec[IdTy], id: i32, ty: String) -> Vec[IdTy] {
+  if idty_has(v0, id) { return v0; }
+  let mut v: Vec[IdTy] = v0;
+  v.push(IdTy { id: id, ty: ty });
+  return v;
+}
+
+fn c_value(v: ir.Value) -> String {
+  return match v {
+    ir.Value.Param(i) => c_param_name(i),
+    ir.Value.Temp(i) => c_temp_name(i),
+    ir.Value.Slot(i) => c_slot_name(i),
+    ir.Value.Int(n) => n.to_string(),
+    ir.Value.I64(n) => n.to_string(),
+    ir.Value.Bool(b) => if b { "true" } else { "false" },
+    ir.Value.Str(s) => "\"".concat(s.escape_c()).concat("\""),
+  };
+}
+
+fn c_binop(op: ir.BinOpKind) -> String {
+  return match op {
+    ir.BinOpKind.Add => "+",
+    ir.BinOpKind.Sub => "-",
+    ir.BinOpKind.Mul => "*",
+    ir.BinOpKind.Div => "/",
+    ir.BinOpKind.Mod => "%",
+  };
+}
+
+fn c_cmpop(op: ir.CmpKind) -> String {
+  return match op {
+    ir.CmpKind.Lt => "<",
+    ir.CmpKind.Le => "<=",
+    ir.CmpKind.Gt => ">",
+    ir.CmpKind.Ge => ">=",
+    ir.CmpKind.Eq => "==",
+    ir.CmpKind.Ne => "!=",
+  };
+}
+
+struct LocalsResult { slots: Vec[IdTy], temps: Vec[IdTy], max_slot: i32, max_temp: i32 }
+
+fn locals0() -> LocalsResult { return LocalsResult { slots: Vec(), temps: Vec(), max_slot: -1, max_temp: -1 }; }
+fn locals_add_slot(l0: LocalsResult, sid: i32, ty: String) -> LocalsResult {
+  let mut l: LocalsResult = l0;
+  l.slots = idty_add(l.slots, sid, ty);
+  if sid > l.max_slot { l.max_slot = sid; }
+  return l;
+}
+fn locals_add_temp(l0: LocalsResult, tid: i32, ty: String) -> LocalsResult {
+  let mut l: LocalsResult = l0;
+  l.temps = idty_add(l.temps, tid, ty);
+  if tid > l.max_temp { l.max_temp = tid; }
+  return l;
+}
+fn locals_add_call(pool: ir.TyPool, l0: LocalsResult, has_dst: bool, tid: i32, ret_ty: i32) -> LocalsResult {
+  if !has_dst { return l0; }
+  return locals_add_temp(l0, tid, c_type(pool, ret_ty));
+}
+fn locals_add_instr(pool: ir.TyPool, l0: LocalsResult, ins: ir.Instr) -> LocalsResult {
+  return match ins {
+    ir.Instr.SlotDecl(sid, ty) => locals_add_slot(l0, sid, c_type(pool, ty)),
+    ir.Instr.Const(tid, ty, _v) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.BinOp(tid, _op, ty, _a, _b) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.Cmp(tid, _op, _oty, _a, _b) => locals_add_temp(l0, tid, "bool"),
+    ir.Instr.And(tid, _a, _b) => locals_add_temp(l0, tid, "bool"),
+    ir.Instr.Or(tid, _a, _b) => locals_add_temp(l0, tid, "bool"),
+    ir.Instr.Not(tid, _a) => locals_add_temp(l0, tid, "bool"),
+    ir.Instr.Load(tid, ty, _sid) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.StructInit(tid, ty, _fs) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.FieldGet(tid, ty, _r, _f) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.EnumInit(tid, ty, _v, _ps) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.EnumTag(tid, _r) => locals_add_temp(l0, tid, "int32_t"),
+    ir.Instr.EnumPayload(tid, ty, _r, _v, _i) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.VecNew(tid, ty, _elem) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.VecLen(tid, _sid) => locals_add_temp(l0, tid, "int32_t"),
+    ir.Instr.VecGet(tid, ty, _sid, _idx) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.VecStrJoin(tid, _sid, _sep) => locals_add_temp(l0, tid, "const char*"),
+    ir.Instr.StrLen(tid, _r) => locals_add_temp(l0, tid, "int32_t"),
+    ir.Instr.StrByteAt(tid, _r, _idx) => locals_add_temp(l0, tid, "int32_t"),
+    ir.Instr.StrSlice(tid, _r, _s, _e) => locals_add_temp(l0, tid, "const char*"),
+    ir.Instr.StrConcat(tid, _a, _b) => locals_add_temp(l0, tid, "const char*"),
+    ir.Instr.StrEscapeC(tid, _r) => locals_add_temp(l0, tid, "const char*"),
+    ir.Instr.I32ToStr(tid, _v) => locals_add_temp(l0, tid, "const char*"),
+    ir.Instr.I64ToStr(tid, _v) => locals_add_temp(l0, tid, "const char*"),
+    ir.Instr.BoolToStr(tid, _v) => locals_add_temp(l0, tid, "const char*"),
+    ir.Instr.Call(has_dst, tid, ret_ty, _name, _args) => locals_add_call(pool, l0, has_dst, tid, ret_ty),
+    _ => l0,
+  };
+}
+
+fn collect_locals(pool: ir.TyPool, f: ir.Func) -> LocalsResult {
+  let mut l: LocalsResult = locals0();
+  let mut bi: i32 = 0;
+  while bi < f.blocks.len() {
+    let b: ir.Block = f.blocks.get(bi);
+    let mut ii: i32 = 0;
+    while ii < b.instrs.len() {
+      l = locals_add_instr(pool, l, b.instrs.get(ii));
+      ii = ii + 1;
+    }
+    bi = bi + 1;
+  }
+  return l;
+}
+
+fn vec0() -> Vec[String] { return Vec(); }
+fn vec1(s: String) -> Vec[String] { let mut v: Vec[String] = Vec(); v.push(s); return v; }
+
+fn emit_instr_cmp(pool: ir.TyPool, tid: i32, op: ir.CmpKind, oty: i32, a: ir.Value, b: ir.Value) -> Vec[String] {
+  let t: ir.Ty = ir.ty_pool_get(pool, oty);
+  if t.kind == ir.TyKind.String {
+    if op != ir.CmpKind.Eq && op != ir.CmpKind.Ne { panic("unsupported string comparison"); }
+    let cmpop: String = if op == ir.CmpKind.Eq { "==" } else { "!=" };
+    return vec1("  ".concat(c_temp_name(tid)).concat(" = (strcmp(").concat(c_value(a)).concat(", ").concat(c_value(b)).concat(") ").concat(cmpop).concat(" 0);"));
+  }
+  return vec1("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_value(a)).concat(" ").concat(c_cmpop(op)).concat(" ").concat(c_value(b)).concat(");"));
+}
+
+fn emit_instr_struct_init(pool: ir.TyPool, tid: i32, ty: i32, fs: Vec[ir.StructInitField]) -> Vec[String] {
+  let mut s: String = "  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, ty)).concat("){");
+  let mut i: i32 = 0;
+  while i < fs.len() {
+    let f: ir.StructInitField = fs.get(i);
+    if i != 0 { s = s.concat(", "); }
+    s = s.concat(".").concat(c_ident(f.name)).concat(" = ").concat(c_value(f.val));
+    i = i + 1;
+  }
+  s = s.concat("};");
+  return vec1(s);
+}
+
+fn emit_instr_enum_init(pool: ir.TyPool, p: ir.Program, tid: i32, ty: i32, variant: String, payload: Vec[ir.Value]) -> Vec[String] {
+  let en: ir.EnumDecl = find_enum_decl(p, ty_qname(ir.ty_pool_get(pool, ty)));
+  let tag: i32 = enum_variant_tag(en, variant);
+  let mut s: String = "  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, ty)).concat("){.tag = ").concat(tag.to_string());
+  if enum_has_payload(en) {
+    s = s.concat(", .payload.").concat(c_ident(variant)).concat(" = {");
+    if payload.len() != 0 {
+      let mut pi: i32 = 0;
+      while pi < payload.len() {
+        if pi != 0 { s = s.concat(", "); }
+        s = s.concat("._").concat(pi.to_string()).concat(" = ").concat(c_value(payload.get(pi)));
+        pi = pi + 1;
+      }
+    } else {
+      s = s.concat("._ = 0");
+    }
+    s = s.concat("}");
+  }
+  s = s.concat("};");
+  return vec1(s);
+}
+
+fn emit_instr_call(has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec[ir.Value]) -> Vec[String] {
+  if name == "panic" {
+    if args.len() != 1 { panic("panic expects 1 arg"); }
+    return vec1("  vox_builtin_panic(".concat(c_value(args.get(0))).concat(");"));
+  }
+  if name == "print" {
+    if args.len() != 1 { panic("print expects 1 arg"); }
+    return vec1("  vox_builtin_print(".concat(c_value(args.get(0))).concat(");"));
+  }
+  let mut s: String = "  ";
+  if has_dst && ret_ty != -1 { s = s.concat(c_temp_name(tid)).concat(" = "); }
+  s = s.concat(c_fn_name(name)).concat("(");
+  let mut i: i32 = 0;
+  while i < args.len() {
+    if i != 0 { s = s.concat(", "); }
+    s = s.concat(c_value(args.get(i)));
+    i = i + 1;
+  }
+  s = s.concat(");");
+  return vec1(s);
+}
+
+fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr) -> Vec[String] {
+  return match ins {
+    ir.Instr.SlotDecl(_sid, _ty) => vec0(),
+
+    ir.Instr.Const(tid, _ty, v) => vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_value(v)).concat(";")),
+    ir.Instr.BinOp(tid, op, _ty, a, b) => vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_value(a)).concat(" ").concat(c_binop(op)).concat(" ").concat(c_value(b)).concat(";")),
+    ir.Instr.Cmp(tid, op, oty, a, b) => emit_instr_cmp(pool, tid, op, oty, a, b),
+    ir.Instr.And(tid, a, b) => vec1("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_value(a)).concat(" && ").concat(c_value(b)).concat(");")),
+    ir.Instr.Or(tid, a, b) => vec1("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_value(a)).concat(" || ").concat(c_value(b)).concat(");")),
+    ir.Instr.Not(tid, a) => vec1("  ".concat(c_temp_name(tid)).concat(" = (!").concat(c_value(a)).concat(");")),
+
+    ir.Instr.Store(sid, v) => vec1("  ".concat(c_slot_name(sid)).concat(" = ").concat(c_value(v)).concat(";")),
+    ir.Instr.Load(tid, _ty, sid) => vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_slot_name(sid)).concat(";")),
+
+    ir.Instr.StructInit(tid, ty, fs) => emit_instr_struct_init(pool, tid, ty, fs),
+    ir.Instr.FieldGet(tid, _ty, recv, field) => vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_value(recv)).concat(".").concat(c_ident(field)).concat(";")),
+    ir.Instr.StoreField(sid, field, v) => vec1("  ".concat(c_slot_name(sid)).concat(".").concat(c_ident(field)).concat(" = ").concat(c_value(v)).concat(";")),
+
+    ir.Instr.EnumInit(tid, ty, variant, payload) => emit_instr_enum_init(pool, p, tid, ty, variant, payload),
+    ir.Instr.EnumTag(tid, recv) => vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_value(recv)).concat(".tag;")),
+    ir.Instr.EnumPayload(tid, _ty, recv, variant, idx) => vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_value(recv)).concat(".payload.").concat(c_ident(variant)).concat("._").concat(idx.to_string()).concat(";")),
+
+    ir.Instr.VecNew(tid, _vty, elem) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_vec_new((int32_t)sizeof(").concat(c_type(pool, elem)).concat("));")),
+    ir.Instr.VecPush(recv_slot, _elem, v) => vec1("  vox_vec_push(&".concat(c_slot_name(recv_slot)).concat(", &").concat(c_value(v)).concat(");")),
+    ir.Instr.VecLen(tid, recv_slot) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_vec_len(&").concat(c_slot_name(recv_slot)).concat(");")),
+    ir.Instr.VecGet(tid, _elem, recv_slot, idx) => vec1("  vox_vec_get(&".concat(c_slot_name(recv_slot)).concat(", ").concat(c_value(idx)).concat(", &").concat(c_temp_name(tid)).concat(");")),
+    ir.Instr.VecStrJoin(tid, recv_slot, sep) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_vec_str_join(&").concat(c_slot_name(recv_slot)).concat(", ").concat(c_value(sep)).concat(");")),
+
+    ir.Instr.StrLen(tid, recv) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_str_len(").concat(c_value(recv)).concat(");")),
+    ir.Instr.StrByteAt(tid, recv, idx) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_str_byte_at(").concat(c_value(recv)).concat(", ").concat(c_value(idx)).concat(");")),
+    ir.Instr.StrSlice(tid, recv, start, end) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_str_slice(").concat(c_value(recv)).concat(", ").concat(c_value(start)).concat(", ").concat(c_value(end)).concat(");")),
+    ir.Instr.StrConcat(tid, a, b) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_str_concat(").concat(c_value(a)).concat(", ").concat(c_value(b)).concat(");")),
+    ir.Instr.StrEscapeC(tid, recv) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_str_escape_c(").concat(c_value(recv)).concat(");")),
+
+    ir.Instr.I32ToStr(tid, v) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_i32_to_string(").concat(c_value(v)).concat(");")),
+    ir.Instr.I64ToStr(tid, v) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_i64_to_string(").concat(c_value(v)).concat(");")),
+    ir.Instr.BoolToStr(tid, v) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_bool_to_string(").concat(c_value(v)).concat(");")),
+
+    ir.Instr.Call(has_dst, tid, ret_ty, name, args) => emit_instr_call(has_dst, tid, ret_ty, name, args),
+  };
+}
+
+fn emit_term_ret(has: bool, v: ir.Value) -> Vec[String] {
+  if has { return vec1("  return ".concat(c_value(v)).concat(";")); }
+  return vec1("  return;");
+}
+
+fn emit_term(t: ir.Term) -> Vec[String] {
+  return match t {
+    ir.Term.Ret(has, v) => emit_term_ret(has, v),
+    ir.Term.Br(target) => vec1("  goto ".concat(c_label_name(target)).concat(";")),
+    ir.Term.CondBr(cond, t, e) => vec1("  if (".concat(c_value(cond)).concat(") goto ").concat(c_label_name(t)).concat("; else goto ").concat(c_label_name(e)).concat(";")),
+  };
+}
+
+fn find_enum_decl(p: ir.Program, name: String) -> ir.EnumDecl {
+  let mut i: i32 = 0;
+  while i < p.enums.len() {
+    let en: ir.EnumDecl = p.enums.get(i);
+    if en.name == name { return en; }
+    i = i + 1;
+  }
+  panic("unknown enum in codegen");
+  return ir.EnumDecl { name: "", variants: Vec() };
+}
+
+fn enum_variant_tag(en: ir.EnumDecl, variant: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < en.variants.len() {
+    if en.variants.get(i).name == variant { return i; }
+    i = i + 1;
+  }
+  panic("unknown enum variant in codegen");
+  return -1;
+}
+
+pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
+  let locals: LocalsResult = collect_locals(pool, f);
+  let mut out: Vec[String] = Vec();
+
+  // Signature
+  let mut sig: String = "static ".concat(c_type(pool, f.ret)).concat(" ").concat(c_fn_name(f.name)).concat("(");
+  let mut i: i32 = 0;
+  while i < f.params.len() {
+    if i != 0 { sig = sig.concat(", "); }
+    let pa: ir.Param = f.params.get(i);
+    sig = sig.concat(c_type(pool, pa.ty)).concat(" ").concat(c_param_name(i));
+    i = i + 1;
+  }
+  sig = sig.concat(") {");
+  out.push(sig);
+
+  // Slots
+  let mut sid: i32 = 0;
+  while sid <= locals.max_slot {
+    let ty: String = idty_get(locals.slots, sid);
+    if ty != "" { out.push("  ".concat(ty).concat(" ").concat(c_slot_name(sid)).concat(";")); }
+    sid = sid + 1;
+  }
+
+  // Temps
+  let mut tid: i32 = 0;
+  while tid <= locals.max_temp {
+    let ty: String = idty_get(locals.temps, tid);
+    if ty != "" { out.push("  ".concat(ty).concat(" ").concat(c_temp_name(tid)).concat(";")); }
+    tid = tid + 1;
+  }
+  if locals.max_slot != -1 || locals.max_temp != -1 { out.push(""); }
+
+  // Blocks
+  let mut bi: i32 = 0;
+  while bi < f.blocks.len() {
+    let b: ir.Block = f.blocks.get(bi);
+    out.push(c_label_name(b.name).concat(":"));
+    let mut ii: i32 = 0;
+    while ii < b.instrs.len() {
+      let lines: Vec[String] = emit_instr(pool, p, b.instrs.get(ii));
+      let mut li: i32 = 0;
+      while li < lines.len() { out.push(lines.get(li)); li = li + 1; }
+      ii = ii + 1;
+    }
+    if !b.has_term { panic("block missing terminator"); }
+    let term_lines: Vec[String] = emit_term(b.term);
+    let mut ti: i32 = 0;
+    while ti < term_lines.len() { out.push(term_lines.get(ti)); ti = ti + 1; }
+    out.push("");
+    bi = bi + 1;
+  }
+
+  out.push("}");
+  return out;
+}

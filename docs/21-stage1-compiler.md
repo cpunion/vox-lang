@@ -13,8 +13,8 @@
 1. 词法（lexer）：把 `String` 解析为 token 流，包含位置（byte offset）。
 2. 语法（parser）：从 token 流构建 AST（使用 arena/index 建模递归结构）。
 3. 类型检查：覆盖 Stage0 子集。
-4. IR v0：对齐 `docs/19-ir-spec.md`，先跑通从 AST 到 IR。
-5. 后端：先复用 stage0 的 C 后端策略（tagged union、by-value struct），能产出可执行文件。
+4. IR v0：对齐 `docs/19-ir-spec.md`，跑通从 AST 到 IR。
+5. 后端（C）：先复用 Stage0 的 C 后端策略（tagged union、by-value struct），产出单文件 C 源码，后续再接上编译/链接为可执行文件。
 
 说明：
 
@@ -25,3 +25,11 @@
 
 - lexer：已覆盖常用关键字/标点、字符串/整数、注释与错误定位（byte offset）。
 - parser：已支持 `import "pkg" as alias`、`pub struct`/`enum`/`fn`，以及语句 `let`/赋值/`if`/`while`/`break`/`continue`/`return`/表达式语句；表达式包含 member/call、struct literal、`match { pat => expr }` 与常见二元/一元运算（precedence climbing）。类型名已支持 `path`（`a.b.C`）与方括号泛型（`Vec[i32]`）。
+- typecheck：已覆盖 Stage0 子集的主要路径（函数调用、member 调用、struct literal、enum ctor、match、Vec/String 最小内建）。
+- IR v0：`compiler/stage1/src/ir/**` 已对齐 `docs/19-ir-spec.md`（TyPool、Value/Instr/Term、Program 结构与 formatter）。
+- IRGen：`compiler/stage1/src/irgen/**` 已跑通最小 end-to-end（从 AST 生成 IR；测试覆盖为 smoke level）。
+
+下一步（按依赖顺序）：
+
+1. `compiler/stage1/src/codegen/**`：实现 IR -> C 源码（先 golden tests，不要求实际编译）。
+2. Stage1 loader/driver：把 `lex/parse/typecheck/irgen/codegen` 串起来，作为 `main` 的最小子集入口（暂不做包管理完善与增量构建）。
