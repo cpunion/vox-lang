@@ -149,10 +149,15 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
   - `v.push(x) -> ()`（可变）
   - `v.len() -> i32`
   - `v.get(i: i32) -> T`
+  - `v.join(sep: String) -> String`（仅当 `T == String`；用于拼接字符串片段）
 - `String`：
   - `s.len() -> i32`
   - `s.byte_at(i: i32) -> i32`
   - `s.slice(start: i32, end: i32) -> String`
+  - `s.concat(other: String) -> String`（返回新字符串；用于代码生成等场景）
+  - `s.escape_c() -> String`（返回可放入 C 字符串字面量的转义内容）
+- `i32/i64/bool`：
+  - `x.to_string() -> String`（最小格式化能力；用于诊断与代码生成）
 
 对 receiver 的约束（Stage0）：
 

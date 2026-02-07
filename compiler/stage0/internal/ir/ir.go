@@ -448,6 +448,18 @@ func (i *VecGet) fmtString() string {
 	return fmt.Sprintf("%s = vec_get %s %s %s", i.Dst.fmtString(), i.Ty.String(), i.Recv.fmtString(), i.Idx.fmtString())
 }
 
+type VecStrJoin struct {
+	Dst *Temp
+	// Recv must be a slot so the runtime can read length/data deterministically.
+	Recv *Slot
+	Sep  Value
+}
+
+func (*VecStrJoin) instrNode() {}
+func (i *VecStrJoin) fmtString() string {
+	return fmt.Sprintf("%s = vec_str_join %s %s", i.Dst.fmtString(), i.Recv.fmtString(), i.Sep.fmtString())
+}
+
 // String intrinsics (stage0)
 type StrLen struct {
 	Dst  *Temp
@@ -480,6 +492,57 @@ type StrSlice struct {
 func (*StrSlice) instrNode() {}
 func (i *StrSlice) fmtString() string {
 	return fmt.Sprintf("%s = str_slice %s %s %s", i.Dst.fmtString(), i.Recv.fmtString(), i.Start.fmtString(), i.End.fmtString())
+}
+
+type StrConcat struct {
+	Dst *Temp
+	A   Value
+	B   Value
+}
+
+func (*StrConcat) instrNode() {}
+func (i *StrConcat) fmtString() string {
+	return fmt.Sprintf("%s = str_concat %s %s", i.Dst.fmtString(), i.A.fmtString(), i.B.fmtString())
+}
+
+type StrEscapeC struct {
+	Dst  *Temp
+	Recv Value
+}
+
+func (*StrEscapeC) instrNode() {}
+func (i *StrEscapeC) fmtString() string {
+	return fmt.Sprintf("%s = str_escape_c %s", i.Dst.fmtString(), i.Recv.fmtString())
+}
+
+type I32ToStr struct {
+	Dst *Temp
+	V   Value
+}
+
+func (*I32ToStr) instrNode() {}
+func (i *I32ToStr) fmtString() string {
+	return fmt.Sprintf("%s = i32_to_str %s", i.Dst.fmtString(), i.V.fmtString())
+}
+
+type I64ToStr struct {
+	Dst *Temp
+	V   Value
+}
+
+func (*I64ToStr) instrNode() {}
+func (i *I64ToStr) fmtString() string {
+	return fmt.Sprintf("%s = i64_to_str %s", i.Dst.fmtString(), i.V.fmtString())
+}
+
+type BoolToStr struct {
+	Dst *Temp
+	V   Value
+}
+
+func (*BoolToStr) instrNode() {}
+func (i *BoolToStr) fmtString() string {
+	return fmt.Sprintf("%s = bool_to_str %s", i.Dst.fmtString(), i.V.fmtString())
 }
 
 type Call struct {

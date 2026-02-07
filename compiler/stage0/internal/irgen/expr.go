@@ -266,6 +266,18 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 				tmp := g.newTemp()
 				g.emit(&ir.VecGet{Dst: tmp, Ty: elem, Recv: slot, Idx: idx})
 				return tmp, nil
+			case typecheck.VecCallJoin:
+				slot, err := recvSlotFrom()
+				if err != nil {
+					return nil, err
+				}
+				sep, err := g.genExpr(e.Args[0])
+				if err != nil {
+					return nil, err
+				}
+				tmp := g.newTemp()
+				g.emit(&ir.VecStrJoin{Dst: tmp, Recv: slot, Sep: sep})
+				return tmp, nil
 			default:
 				return nil, fmt.Errorf("unsupported vec call kind")
 			}
@@ -320,9 +332,73 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 				tmp := g.newTemp()
 				g.emit(&ir.StrSlice{Dst: tmp, Recv: recv, Start: sv, End: ev})
 				return tmp, nil
+			case typecheck.StrCallConcat:
+				if len(e.Args) != 1 {
+					return nil, fmt.Errorf("String.concat expects 1 arg")
+				}
+				ov, err := g.genExpr(e.Args[0])
+				if err != nil {
+					return nil, err
+				}
+				tmp := g.newTemp()
+				g.emit(&ir.StrConcat{Dst: tmp, A: recv, B: ov})
+				return tmp, nil
+			case typecheck.StrCallEscapeC:
+				tmp := g.newTemp()
+				g.emit(&ir.StrEscapeC{Dst: tmp, Recv: recv})
+				return tmp, nil
 			default:
 				return nil, fmt.Errorf("unsupported string call kind")
 			}
+		}
+
+		// Primitive to_string: lowered to dedicated IR.
+		if ts, ok := g.p.ToStrCalls[e]; ok {
+			if ts.Recv == nil && ts.RecvName != "" {
+				slot, ok := g.lookup(ts.RecvName)
+				if !ok {
+					return nil, fmt.Errorf("unknown to_string receiver: %s", ts.RecvName)
+				}
+				// Load receiver from slot; type comes from checked program.
+				recvTy := g.p.ExprTypes[ts.Recv]
+				irty, err := g.irTypeFromChecked(recvTy)
+				if err != nil {
+					return nil, err
+				}
+				tmpv := g.newTemp()
+				g.emit(&ir.Load{Dst: tmpv, Ty: irty, Slot: slot})
+				tmp := g.newTemp()
+				switch ts.Kind {
+				case typecheck.ToStrI32:
+					g.emit(&ir.I32ToStr{Dst: tmp, V: tmpv})
+				case typecheck.ToStrI64:
+					g.emit(&ir.I64ToStr{Dst: tmp, V: tmpv})
+				case typecheck.ToStrBool:
+					g.emit(&ir.BoolToStr{Dst: tmp, V: tmpv})
+				default:
+					return nil, fmt.Errorf("unsupported to_string kind")
+				}
+				return tmp, nil
+			}
+			if ts.Recv == nil {
+				return nil, fmt.Errorf("missing to_string receiver")
+			}
+			rv, err := g.genExpr(ts.Recv)
+			if err != nil {
+				return nil, err
+			}
+			tmp := g.newTemp()
+			switch ts.Kind {
+			case typecheck.ToStrI32:
+				g.emit(&ir.I32ToStr{Dst: tmp, V: rv})
+			case typecheck.ToStrI64:
+				g.emit(&ir.I64ToStr{Dst: tmp, V: rv})
+			case typecheck.ToStrBool:
+				g.emit(&ir.BoolToStr{Dst: tmp, V: rv})
+			default:
+				return nil, fmt.Errorf("unsupported to_string kind")
+			}
+			return tmp, nil
 		}
 
 		// Enum constructors are lowered as enum_init.

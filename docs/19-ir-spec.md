@@ -153,6 +153,55 @@ store_field $v0 .x %t1
 %t4 = enum_payload i32 %t2 Pair 1
 ```
 
+### 5.9 Vec（Stage0 内建容器）
+
+Stage0 将 `Vec[T]` 作为内建类型，降低到 C 运行时的 `vox_vec`（元素按值拷贝，v0 暂无 drop glue）。
+
+构造新 vec：
+
+```
+%t0 = vec_new vec(i32)
+```
+
+push（receiver 必须是 slot）：
+
+```
+vec_push $v0 1
+```
+
+len/get：
+
+```
+%t1 = vec_len $v0
+%t2 = vec_get i32 $v0 0
+```
+
+当 `T == str` 时，支持 join：
+
+```
+%t3 = vec_str_join $v1 ","
+```
+
+### 5.10 字符串运行时指令（Stage0）
+
+Stage0 的 `String` 在 C 后端中当前降低为 `const char*`，并提供最小运行时指令集：
+
+```
+%t0 = str_len %t1
+%t2 = str_byte_at %t1 0
+%t3 = str_slice %t1 1 3
+%t4 = str_concat %t1 %t3
+%t5 = str_escape_c %t1
+```
+
+数值到字符串（最小格式化能力）：
+
+```
+%t0 = i32_to_str 123
+%t1 = i64_to_str 123
+%t2 = bool_to_str true
+```
+
 ## 6. 终结指令（terminator）
 
 每个 block 必须以 terminator 结束：

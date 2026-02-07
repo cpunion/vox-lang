@@ -47,11 +47,23 @@ func emitFunc(out *bytes.Buffer, p *ir.Program, f *ir.Func) error {
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TI32}
 			case *ir.VecGet:
 				tempTypes[i.Dst.ID] = i.Ty
+			case *ir.VecStrJoin:
+				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
 			case *ir.StrLen:
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TI32}
 			case *ir.StrByteAt:
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TI32}
 			case *ir.StrSlice:
+				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
+			case *ir.StrConcat:
+				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
+			case *ir.StrEscapeC:
+				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
+			case *ir.I32ToStr:
+				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
+			case *ir.I64ToStr:
+				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
+			case *ir.BoolToStr:
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
 			case *ir.Call:
 				if i.Ret.K != ir.TUnit && i.Dst != nil {
@@ -357,6 +369,15 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		out.WriteString(cTempName(i.Dst.ID))
 		out.WriteString(");\n")
 		return nil
+	case *ir.VecStrJoin:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = vox_vec_str_join(&")
+		out.WriteString(cSlotName(i.Recv.ID))
+		out.WriteString(", ")
+		out.WriteString(cValue(i.Sep))
+		out.WriteString(");\n")
+		return nil
 	case *ir.StrLen:
 		out.WriteString("  ")
 		out.WriteString(cTempName(i.Dst.ID))
@@ -382,6 +403,43 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		out.WriteString(cValue(i.Start))
 		out.WriteString(", ")
 		out.WriteString(cValue(i.End))
+		out.WriteString(");\n")
+		return nil
+	case *ir.StrConcat:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = vox_str_concat(")
+		out.WriteString(cValue(i.A))
+		out.WriteString(", ")
+		out.WriteString(cValue(i.B))
+		out.WriteString(");\n")
+		return nil
+	case *ir.StrEscapeC:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = vox_str_escape_c(")
+		out.WriteString(cValue(i.Recv))
+		out.WriteString(");\n")
+		return nil
+	case *ir.I32ToStr:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = vox_i32_to_string(")
+		out.WriteString(cValue(i.V))
+		out.WriteString(");\n")
+		return nil
+	case *ir.I64ToStr:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = vox_i64_to_string(")
+		out.WriteString(cValue(i.V))
+		out.WriteString(");\n")
+		return nil
+	case *ir.BoolToStr:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = vox_bool_to_string(")
+		out.WriteString(cValue(i.V))
 		out.WriteString(");\n")
 		return nil
 	case *ir.Call:

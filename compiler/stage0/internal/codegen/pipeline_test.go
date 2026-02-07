@@ -612,6 +612,142 @@ func TestPipelineStringSliceCompilesAndRuns(t *testing.T) {
 	}
 }
 
+func TestPipelineStringConcatCompilesAndRuns(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("cc not found")
+	}
+
+	checked := parseAndCheckWithStdlib(t, []*source.File{
+		source.NewFile("src/main.vox", `fn main() -> i32 {
+  let a: String = "ab";
+  let b: String = "cd";
+  let c: String = a.concat(b); // "abcd"
+  return c.len() + c.byte_at(0); // 4 + 'a'(97) = 101
+}`),
+	})
+	irp, err := irgen.Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrc, err := EmitC(irp, EmitOptions{EmitDriverMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	cPath := filepath.Join(dir, "a.c")
+	binPath := filepath.Join(dir, "a.out")
+	if err := writeFile(cPath, csrc); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(cc, "-std=c11", "-O0", "-g", cPath, "-o", binPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, string(out))
+	}
+	run := exec.Command(binPath)
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "101" {
+		t.Fatalf("expected output 101, got %q", got)
+	}
+}
+
+func TestPipelineVecStringJoinCompilesAndRuns(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("cc not found")
+	}
+
+	checked := parseAndCheckWithStdlib(t, []*source.File{
+		source.NewFile("src/main.vox", `fn main() -> i32 {
+  let mut v: Vec[String] = Vec();
+  v.push("a");
+  v.push("b");
+  let s: String = v.join(",");
+  return s.len() + s.byte_at(0); // "a,b" => 3 + 'a'(97) = 100
+}`),
+	})
+	irp, err := irgen.Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrc, err := EmitC(irp, EmitOptions{EmitDriverMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	cPath := filepath.Join(dir, "a.c")
+	binPath := filepath.Join(dir, "a.out")
+	if err := writeFile(cPath, csrc); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(cc, "-std=c11", "-O0", "-g", cPath, "-o", binPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, string(out))
+	}
+	run := exec.Command(binPath)
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "100" {
+		t.Fatalf("expected output 100, got %q", got)
+	}
+}
+
+func TestPipelineEscapeCAndToStringCompilesAndRuns(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("cc not found")
+	}
+
+	checked := parseAndCheckWithStdlib(t, []*source.File{
+		source.NewFile("src/main.vox", `fn main() -> i32 {
+  let s: String = "a\nb";
+  let e: String = s.escape_c(); // "a\\nb"
+  let n: i32 = 42;
+  let x: String = n.to_string(); // "42"
+  // e: len 4 + byte_at(1) '\\'(92) = 96
+  // x: len 2 + byte_at(0) '4'(52) = 54
+  return e.len() + e.byte_at(1) + x.len() + x.byte_at(0);
+}`),
+	})
+	irp, err := irgen.Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrc, err := EmitC(irp, EmitOptions{EmitDriverMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	cPath := filepath.Join(dir, "a.c")
+	binPath := filepath.Join(dir, "a.out")
+	if err := writeFile(cPath, csrc); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(cc, "-std=c11", "-O0", "-g", cPath, "-o", binPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, string(out))
+	}
+	run := exec.Command(binPath)
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "150" {
+		t.Fatalf("expected output 150, got %q", got)
+	}
+}
+
 func TestPipelineNamedImportsForTypesAndEnumsCompilesAndRuns(t *testing.T) {
 	cc, err := exec.LookPath("cc")
 	if err != nil {

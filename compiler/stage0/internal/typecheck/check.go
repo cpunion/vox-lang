@@ -747,13 +747,14 @@ func (c *checker) isEnumUnitValue(ex ast.Expr) bool {
 }
 
 func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *ast.MemberExpr) (Type, bool) {
-	root, ok := rootIdentName(me.Recv)
-	if !ok {
-		return Type{K: TyBad}, false
-	}
-	if _, ok := c.lookupVar(root); !ok {
-		// Likely a type/module path (e.g. Enum.Variant(...)); let the normal call resolver handle it.
-		return Type{K: TyBad}, false
+	// Disambiguation rule (stage0):
+	// - If the receiver is "path-like" (ident/member chain) and the root is NOT a local variable,
+	//   treat it as a type/module path (e.g. Enum.Variant(...)) and let the normal resolver handle it.
+	// - Otherwise it's a value receiver, and we can apply intrinsic method rules.
+	if root, ok := rootIdentName(me.Recv); ok {
+		if _, ok := c.lookupVar(root); !ok {
+			return Type{K: TyBad}, false
+		}
 	}
 
 	recvTy := c.checkExpr(me.Recv, Type{K: TyBad})
@@ -838,6 +839,23 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 			}
 			c.vecCalls[call] = VecCallTarget{Kind: VecCallGet, RecvName: recvName, Recv: me.Recv, Elem: *recvTy.Elem}
 			return c.setExprType(ex, *recvTy.Elem), true
+		case "join":
+			// Only Vec[String].join is supported in stage0.
+			if recvTy.Elem.K != TyString {
+				c.errorAt(call.S, "Vec.join is only supported for Vec[String] in stage0")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			if len(call.Args) != 1 {
+				c.errorAt(call.S, "Vec.join expects 1 arg")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			sepTy := c.checkExpr(call.Args[0], Type{K: TyString})
+			if sepTy.K != TyString {
+				c.errorAt(call.Args[0].Span(), "Vec.join separator must be String")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			c.vecCalls[call] = VecCallTarget{Kind: VecCallJoin, RecvName: recvName, Recv: me.Recv, Elem: *recvTy.Elem}
+			return c.setExprType(ex, Type{K: TyString}), true
 		}
 	}
 
@@ -879,7 +897,52 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 			}
 			c.strCalls[call] = StrCallTarget{Kind: StrCallSlice, RecvName: recvName, Recv: me.Recv}
 			return c.setExprType(ex, Type{K: TyString}), true
+		case "concat":
+			if len(call.Args) != 1 {
+				c.errorAt(call.S, "String.concat expects 1 arg")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			at := c.checkExpr(call.Args[0], Type{K: TyString})
+			if at.K != TyString {
+				c.errorAt(call.Args[0].Span(), "String.concat arg must be String")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			c.strCalls[call] = StrCallTarget{Kind: StrCallConcat, RecvName: recvName, Recv: me.Recv}
+			return c.setExprType(ex, Type{K: TyString}), true
+		case "escape_c":
+			if len(call.Args) != 0 {
+				c.errorAt(call.S, "String.escape_c expects 0 args")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			c.strCalls[call] = StrCallTarget{Kind: StrCallEscapeC, RecvName: recvName, Recv: me.Recv}
+			return c.setExprType(ex, Type{K: TyString}), true
 		}
+	}
+
+	// Primitive to_string.
+	if recvTy.K == TyI32 || recvTy.K == TyI64 || recvTy.K == TyBool {
+		if method != "to_string" {
+			return Type{K: TyBad}, false
+		}
+		if len(call.Args) != 0 {
+			c.errorAt(call.S, "to_string expects 0 args")
+			return c.setExprType(ex, Type{K: TyBad}), true
+		}
+		recvName := ""
+		if id, ok := me.Recv.(*ast.IdentExpr); ok {
+			recvName = id.Name
+		}
+		kind := ToStrBad
+		switch recvTy.K {
+		case TyI32:
+			kind = ToStrI32
+		case TyI64:
+			kind = ToStrI64
+		case TyBool:
+			kind = ToStrBool
+		}
+		c.toStrCalls[call] = ToStrTarget{Kind: kind, RecvName: recvName, Recv: me.Recv}
+		return c.setExprType(ex, Type{K: TyString}), true
 	}
 
 	return Type{K: TyBad}, false

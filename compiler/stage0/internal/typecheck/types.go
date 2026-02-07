@@ -40,6 +40,7 @@ type CheckedProgram struct {
 	LetTypes   map[*ast.LetStmt]Type
 	VecCalls   map[*ast.CallExpr]VecCallTarget
 	StrCalls   map[*ast.CallExpr]StrCallTarget
+	ToStrCalls map[*ast.CallExpr]ToStrTarget
 	// CallTargets stores the resolved function name (possibly qualified, e.g. "dep::foo").
 	// Note: Vox surface syntax may use `dep.foo(...)`; it still resolves to `dep::foo` internally.
 	// for each call expression.
@@ -105,6 +106,7 @@ const (
 	VecCallPush
 	VecCallLen
 	VecCallGet
+	VecCallJoin // Vec[String].join(sep)
 )
 
 type VecCallTarget struct {
@@ -126,10 +128,27 @@ const (
 	StrCallLen
 	StrCallByteAt
 	StrCallSlice
+	StrCallConcat  // String.concat(String)
+	StrCallEscapeC // String.escape_c()
 )
 
 type StrCallTarget struct {
 	Kind     StrCallKind
+	RecvName string
+	Recv     ast.Expr
+}
+
+type ToStrKind int
+
+const (
+	ToStrBad ToStrKind = iota
+	ToStrI32
+	ToStrI64
+	ToStrBool
+)
+
+type ToStrTarget struct {
+	Kind     ToStrKind
 	RecvName string
 	Recv     ast.Expr
 }
@@ -158,6 +177,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		letTypes:      map[*ast.LetStmt]Type{},
 		vecCalls:      map[*ast.CallExpr]VecCallTarget{},
 		strCalls:      map[*ast.CallExpr]StrCallTarget{},
+		toStrCalls:    map[*ast.CallExpr]ToStrTarget{},
 		callTgts:      map[*ast.CallExpr]string{},
 		enumCtors:     map[*ast.CallExpr]EnumCtorTarget{},
 		enumUnits:     map[*ast.MemberExpr]EnumCtorTarget{},
@@ -186,6 +206,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		LetTypes:         c.letTypes,
 		VecCalls:         c.vecCalls,
 		StrCalls:         c.strCalls,
+		ToStrCalls:       c.toStrCalls,
 		CallTargets:      c.callTgts,
 		EnumCtors:        c.enumCtors,
 		EnumUnitVariants: c.enumUnits,
@@ -202,6 +223,7 @@ type checker struct {
 	letTypes   map[*ast.LetStmt]Type
 	vecCalls   map[*ast.CallExpr]VecCallTarget
 	strCalls   map[*ast.CallExpr]StrCallTarget
+	toStrCalls map[*ast.CallExpr]ToStrTarget
 	callTgts   map[*ast.CallExpr]string
 	enumCtors  map[*ast.CallExpr]EnumCtorTarget
 	enumUnits  map[*ast.MemberExpr]EnumCtorTarget
