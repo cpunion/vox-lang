@@ -1,0 +1,67 @@
+import "ast" as ast
+import "ir" as ir
+
+fn tc_expr_struct_lit(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, ty_expr: i32, fields: Vec[ast.StructLitField], expected: i32) -> ExprTyResult {
+  let mut struct_ty: i32 = -1;
+  let mut struct_mod: String = "";
+  let mut struct_name: String = "";
+
+  if expected != -1 && is_struct_ty(ctx, expected) {
+    struct_ty = expected;
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
+    struct_mod = ty_mod(t);
+    struct_name = ty_name(t);
+  } else {
+    let pr: ExprPartsResult = expr_parts(exprs, ty_expr);
+    if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    let ps: Vec[String] = pr.parts;
+    if ps.len() != 1 && ps.len() != 2 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+
+    struct_mod = if ps.len() == 1 { mod_path } else { find_alias(aliases, ps.get(0)) };
+    if struct_mod == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    struct_name = if ps.len() == 1 { ps.get(0) } else { ps.get(1) };
+    struct_ty = find_struct_ty_idx(ctx, struct_mod, struct_name);
+    if struct_ty == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  }
+
+  // Validate the struct exists and is visible.
+  let fs: FindStructResult = find_struct(ctx, struct_mod, struct_name);
+  if !fs.found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  let sig: StructSig = fs.sig;
+  if struct_mod != mod_path && !sig.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+
+  // v0: require all fields are provided exactly once, and no extra fields.
+  if fields.len() != sig.fields.len() { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+
+  let mut i: i32 = 0;
+  while i < fields.len() {
+    let f: ast.StructLitField = fields.get(i);
+
+    // Find field declaration.
+    let mut found: bool = false;
+    let mut want: i32 = ctx.ty_bad;
+    let mut is_pub: bool = false;
+    let mut fi: i32 = 0;
+    while fi < sig.fields.len() {
+      let sf: StructFieldSig = sig.fields.get(fi);
+      if sf.name == f.name {
+        found = true;
+        want = sf.ty;
+        is_pub = sf.is_pub;
+      }
+      fi = fi + 1;
+    }
+    if !found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if struct_mod != mod_path && !is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+
+    let er: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, f.expr, want);
+    if !er.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if er.ty != want { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+
+    i = i + 1;
+  }
+
+  if expected != -1 && expected != struct_ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  return ExprTyResult { ok: true, ty: struct_ty };
+}
+

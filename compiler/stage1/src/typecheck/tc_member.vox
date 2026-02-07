@@ -1,0 +1,63 @@
+import "ast" as ast
+import "ir" as ir
+
+fn tc_expr_member(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, recv: i32, name: String, expected: i32) -> ExprTyResult {
+  // 1) Field access: `value.field`
+  let rr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, recv, -1);
+  if rr.ok && is_struct_ty(ctx, rr.ty) {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, rr.ty);
+    let fm: FindStructResult = find_struct(ctx, ty_mod(t), ty_name(t));
+    if !fm.found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    let sig: StructSig = fm.sig;
+
+    // Visibility: crossing modules requires both the type and the field to be pub.
+    if sig.mod_path != mod_path && !sig.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+
+    let mut i: i32 = 0;
+    while i < sig.fields.len() {
+      let f: StructFieldSig = sig.fields.get(i);
+      if f.name == name {
+        if sig.mod_path != mod_path && !f.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+        if expected != -1 && expected != f.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+        return ExprTyResult { ok: true, ty: f.ty };
+      }
+      i = i + 1;
+    }
+    return ExprTyResult { ok: false, ty: ctx.ty_bad };
+  }
+
+  // 2) Unit enum variant value: `Enum.None` / `alias.Enum.None`
+  let pr: ExprPartsResult = expr_parts(exprs, recv);
+  if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  let mut parts: Vec[String] = pr.parts;
+  parts.push(name);
+
+  if parts.len() != 2 && parts.len() != 3 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+
+  let enum_mod: String = if parts.len() == 2 { mod_path } else { find_alias(aliases, parts.get(0)) };
+  if enum_mod == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  let enum_name: String = if parts.len() == 2 { parts.get(0) } else { parts.get(1) };
+  let var_name: String = if parts.len() == 2 { parts.get(1) } else { parts.get(2) };
+
+  let fe: FindEnumResult = find_enum(ctx, enum_mod, enum_name);
+  if !fe.found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  let es: EnumSig = fe.sig;
+  if es.mod_path != mod_path && !es.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+
+  let mut vi: i32 = 0;
+  while vi < es.vars.len() {
+    let v: EnumVariantSig = es.vars.get(vi);
+    if v.name == var_name {
+      // Only unit variants are values without a call: `E.None`.
+      if v.fields.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+      let ty_idx: i32 = find_enum_ty_idx(ctx, enum_mod, enum_name);
+      if ty_idx == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+      if expected != -1 && expected != ty_idx { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+      return ExprTyResult { ok: true, ty: ty_idx };
+    }
+    vi = vi + 1;
+  }
+
+  return ExprTyResult { ok: false, ty: ctx.ty_bad };
+}
+
