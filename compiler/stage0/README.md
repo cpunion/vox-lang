@@ -14,8 +14,10 @@ Commands:
 go test ./...
 
 go run ./cmd/vox init <dir>
+go run ./cmd/vox ir <dir>
 go run ./cmd/vox build <dir>
 go run ./cmd/vox run <dir>
+go run ./cmd/vox test <dir>
 ```
 
 Notes:

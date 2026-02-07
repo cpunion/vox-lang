@@ -16,6 +16,7 @@ import (
 
 type BuildResult struct {
 	Manifest  *manifest.Manifest
+	Root      string
 	Program   *typecheck.CheckedProgram
 	RunResult string
 	TestLog   string
@@ -102,6 +103,7 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 	}
 
 	res := &BuildResult{Manifest: mani, Program: checked}
+	res.Root = root
 	if tests {
 		log, terr := interp.RunTests(checked)
 		res.TestLog = log
