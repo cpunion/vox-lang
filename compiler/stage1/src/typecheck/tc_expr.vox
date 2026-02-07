@@ -10,64 +10,95 @@ struct ExprTyResult { ok: bool, ty: i32 }
 fn tc_expr(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, id: i32, expected: i32) -> ExprTyResult {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
 
-  // If the caller already knows what type it expects, accept it eagerly.
-  // This keeps Stage1's early typecheck usable even before we implement full inference.
-  if expected != -1 {
-    // Still do a shallow check for obvious mismatches on literals and known locals.
-    return match n {
-      ast.ExprNode.Int(_) => ExprTyResult { ok: true, ty: expected },
-      ast.ExprNode.Str(_) => ExprTyResult { ok: true, ty: expected },
-      ast.ExprNode.Bool(_) => ExprTyResult { ok: true, ty: expected },
-      ast.ExprNode.Ident(name) => tc_expr_ident_expected(ctx, l0, name, expected),
-      ast.ExprNode.If(c, t, e) => tc_expr_if(ctx, w, mod_path, aliases, exprs, l0, c, t, e, expected),
-      _ => ExprTyResult { ok: true, ty: expected },
-    };
-  }
-
   return match n {
-    ast.ExprNode.Int(_) => ExprTyResult { ok: true, ty: ctx.ty_i32 },
-    ast.ExprNode.Str(_) => ExprTyResult { ok: true, ty: ctx.ty_string },
-    ast.ExprNode.Bool(_) => ExprTyResult { ok: true, ty: ctx.ty_bool },
-    ast.ExprNode.Ident(name) => tc_expr_ident(ctx, l0, name),
+    ast.ExprNode.Int(_) => tc_expr_int(ctx, expected),
+    ast.ExprNode.Str(_) => tc_expr_str(ctx, expected),
+    ast.ExprNode.Bool(_) => tc_expr_bool(ctx, expected),
+    ast.ExprNode.Ident(name) => tc_expr_ident(ctx, l0, name, expected),
 
-    // v0: conservatively assume unary/binary yield primitive results.
-    ast.ExprNode.If(c, t, e) => tc_expr_if(ctx, w, mod_path, aliases, exprs, l0, c, t, e, -1),
-    ast.ExprNode.Unary(op, a) => tc_expr_unary(ctx, w, mod_path, aliases, exprs, l0, op, a),
-    ast.ExprNode.Binary(_, l, r) => tc_expr_binary(ctx, w, mod_path, aliases, exprs, l0, l, r),
+    ast.ExprNode.If(c, t, e) => tc_expr_if(ctx, w, mod_path, aliases, exprs, l0, c, t, e, expected),
+    ast.ExprNode.Unary(op, a) => tc_expr_unary(ctx, w, mod_path, aliases, exprs, l0, op, a, expected),
+    ast.ExprNode.Binary(op, l, r) => tc_expr_binary(ctx, w, mod_path, aliases, exprs, l0, op, l, r, expected),
 
-    // Calls/members/struct literals/match: implemented later (keep build green for now).
-    ast.ExprNode.Member(recv, name) => tc_expr_member_stub(ctx, w, mod_path, aliases, exprs, l0, recv, name),
-    ast.ExprNode.Call(_, _) => ExprTyResult { ok: true, ty: ctx.ty_bad },
-    ast.ExprNode.StructLit(_, _) => ExprTyResult { ok: true, ty: ctx.ty_bad },
-    ast.ExprNode.Match(_, _) => ExprTyResult { ok: true, ty: ctx.ty_bad },
+    ast.ExprNode.Member(recv, name) => tc_expr_member(ctx, w, mod_path, aliases, exprs, l0, recv, name, expected),
+    ast.ExprNode.Call(callee, args) => tc_expr_call(ctx, w, mod_path, aliases, exprs, l0, callee, args, expected),
+    ast.ExprNode.StructLit(ty_expr, fields) => tc_expr_struct_lit(ctx, w, mod_path, aliases, exprs, l0, ty_expr, fields, expected),
+    ast.ExprNode.Match(scrut, arms) => tc_expr_match(ctx, w, mod_path, aliases, exprs, l0, scrut, arms, expected),
   };
 }
 
-fn tc_expr_ident_expected(ctx: Ctx, l0: Locals, name: String, expected: i32) -> ExprTyResult {
-  let vr: LookupVarResult = locals_lookup(l0, name);
-  if vr.found && vr.ty != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  return ExprTyResult { ok: true, ty: expected };
-}
-
-fn tc_expr_ident(ctx: Ctx, l0: Locals, name: String) -> ExprTyResult {
-  let vr: LookupVarResult = locals_lookup(l0, name);
-  if vr.found { return ExprTyResult { ok: true, ty: vr.ty }; }
+fn tc_expr_int(ctx: Ctx, expected: i32) -> ExprTyResult {
+  if expected == -1 { return ExprTyResult { ok: true, ty: ctx.ty_i32 }; }
+  if expected == ctx.ty_i32 { return ExprTyResult { ok: true, ty: ctx.ty_i32 }; }
+  if expected == ctx.ty_i64 { return ExprTyResult { ok: true, ty: ctx.ty_i64 }; }
   return ExprTyResult { ok: false, ty: ctx.ty_bad };
 }
 
-fn tc_expr_unary(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, op: ast.UnaryOp, a: i32) -> ExprTyResult {
+fn tc_expr_str(ctx: Ctx, expected: i32) -> ExprTyResult {
+  if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  return ExprTyResult { ok: true, ty: ctx.ty_string };
+}
+
+fn tc_expr_bool(ctx: Ctx, expected: i32) -> ExprTyResult {
+  if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  return ExprTyResult { ok: true, ty: ctx.ty_bool };
+}
+
+fn tc_expr_ident(ctx: Ctx, l0: Locals, name: String, expected: i32) -> ExprTyResult {
+  let vr: LookupVarResult = locals_lookup(l0, name);
+  if !vr.found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if expected != -1 && vr.ty != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  return ExprTyResult { ok: true, ty: vr.ty };
+}
+
+fn tc_expr_unary(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, op: ast.UnaryOp, a: i32, expected: i32) -> ExprTyResult {
   let ar: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, a, -1);
   if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   let is_not: bool = match op { ast.UnaryOp.Not => true, _ => false };
-  if is_not { return ExprTyResult { ok: true, ty: ctx.ty_bool }; }
+  if is_not {
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool };
+  }
+  if expected != -1 && expected != ar.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   return ExprTyResult { ok: true, ty: ar.ty };
 }
 
-fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, l: i32, r: i32) -> ExprTyResult {
+fn is_int_ty(ctx: Ctx, ty: i32) -> bool { return ty == ctx.ty_i32 || ty == ctx.ty_i64; }
+
+fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, op: ast.BinaryOp, l: i32, r: i32, expected: i32) -> ExprTyResult {
   let lr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, l, -1);
   if !lr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   let rr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, r, lr.ty);
   if !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+
+  // bool results
+  let is_cmp: bool = match op { ast.BinaryOp.Lt => true, ast.BinaryOp.Le => true, ast.BinaryOp.Gt => true, ast.BinaryOp.Ge => true, _ => false };
+  let is_eq: bool = match op { ast.BinaryOp.Eq => true, ast.BinaryOp.Ne => true, _ => false };
+  let is_logic: bool = match op { ast.BinaryOp.AndAnd => true, ast.BinaryOp.OrOr => true, _ => false };
+
+  if is_logic {
+    if lr.ty != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool };
+  }
+
+  if is_cmp {
+    if !is_int_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool };
+  }
+
+  if is_eq {
+    // v0: primitive equality only (keep Stage1 aligned with Stage0 subset).
+    let ok_ty: bool = lr.ty == ctx.ty_bool || lr.ty == ctx.ty_i32 || lr.ty == ctx.ty_i64 || lr.ty == ctx.ty_string;
+    if !ok_ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool };
+  }
+
+  // arithmetic
+  if !is_int_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if expected != -1 && expected != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   return ExprTyResult { ok: true, ty: lr.ty };
 }
 
@@ -85,10 +116,4 @@ fn tc_expr_if(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], e
   let out_ty: i32 = if expected != -1 { expected } else { tr.ty };
   if expected == -1 && tr.ty != er.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   return ExprTyResult { ok: true, ty: out_ty };
-}
-
-fn tc_expr_member_stub(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, recv: i32, name: String) -> ExprTyResult {
-  let _r: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, recv, -1);
-  let _n: String = name;
-  return ExprTyResult { ok: true, ty: ctx.ty_bad };
 }
