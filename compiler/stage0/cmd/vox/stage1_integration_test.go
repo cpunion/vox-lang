@@ -21,7 +21,35 @@ func TestStage1ToolchainBuildsMultiModuleProgram(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "src", "a"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	mainSrc := "import \"std/prelude\" as prelude\nimport \"a\" as a\nfn main() -> i32 { prelude.assert(true); return a.one(); }\n"
+	// Dependency package.
+	depRoot := filepath.Join(root, "dep_pkg")
+	if err := os.MkdirAll(filepath.Join(depRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir dep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "Vox.toml"), []byte(`[package]
+name = "dep"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write dep Vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "src", "dep.vox"), []byte("pub fn two() -> i32 { return 2; }\n"), 0o644); err != nil {
+		t.Fatalf("write dep src: %v", err)
+	}
+
+	// Root package manifest (uses dep by path).
+	if err := os.WriteFile(filepath.Join(root, "Vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = { path = "dep_pkg" }
+`), 0o644); err != nil {
+		t.Fatalf("write Vox.toml: %v", err)
+	}
+
+	mainSrc := "import \"std/prelude\" as prelude\nimport \"a\" as a\nimport \"dep\" as dep\nfn main() -> i32 { prelude.assert(true); return a.one() + dep.two(); }\n"
 	aSrc := "pub fn one() -> i32 { return 1; }\n"
 	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte(mainSrc), 0o644); err != nil {
 		t.Fatalf("write main: %v", err)
@@ -47,7 +75,7 @@ func TestStage1ToolchainBuildsMultiModuleProgram(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run built program failed: %v", err)
 	}
-	if got := strings.TrimSpace(string(b)); got != "1" {
+	if got := strings.TrimSpace(string(b)); got != "3" {
 		t.Fatalf("unexpected output: %q", got)
 	}
 }

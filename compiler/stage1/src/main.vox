@@ -8,6 +8,7 @@ import "std/process" as proc
 import "std/fs" as fs
 import "loader" as ld
 import "compile" as c
+import "manifest" as mf
 
 fn usage() -> () {
   print("vox_stage1 usage:\n");
@@ -48,6 +49,35 @@ fn stage1_root() -> String {
   let d2: String = dir_name(d1);
   let d3: String = dir_name(d2);
   return d3;
+}
+
+fn load_deps_from_manifest() -> Vec[ld.SourceFile] {
+  let mt: String = fs.read_to_string("Vox.toml");
+  let mr: mf.ParseResult = mf.parse(mt);
+  if !mr.ok {
+    print("invalid Vox.toml: ".concat(mr.err).concat("\n"));
+    return Vec();
+  }
+  let mut out: Vec[ld.SourceFile] = Vec();
+  let mut i: i32 = 0;
+  while i < mr.m.deps.len() {
+    let d: mf.Dependency = mr.m.deps.get(i);
+    let dep_root: String = d.path;
+    let rels: Vec[String] = fs.walk_vox_files(dep_root);
+    let mut j: i32 = 0;
+    while j < rels.len() {
+      let rel: String = rels.get(j);
+      // Dependencies: include src/** only, ignore tests/**.
+      if has_prefix(rel, "src/") {
+        let full: String = path_join(dep_root, rel);
+        let virt: String = d.name.concat("/").concat(rel);
+        out.push(ld.SourceFile { path: virt, text: fs.read_to_string(full) });
+      }
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return out;
 }
 
 fn load_files(paths: Vec[String]) -> Vec[ld.SourceFile] {
@@ -132,6 +162,9 @@ fn main() -> i32 {
   if cmd == "build-pkg" {
     let paths: Vec[String] = fs.walk_vox_files(".");
     let mut files: Vec[ld.SourceFile] = load_stage1_std();
+    let deps: Vec[ld.SourceFile] = load_deps_from_manifest();
+    let mut di: i32 = 0;
+    while di < deps.len() { files.push(deps.get(di)); di = di + 1; }
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }

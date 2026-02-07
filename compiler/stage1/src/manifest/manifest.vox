@@ -1,0 +1,176 @@
+// Minimal manifest parser for Vox.toml (stage1 v0).
+//
+// Supported subset:
+// - [package] name = "..."
+// - [dependencies] dep = { path = "..." }
+
+pub struct Dependency {
+  pub name: String,
+  pub path: String,
+}
+
+pub struct Manifest {
+  pub pkg_name: String,
+  pub deps: Vec[Dependency],
+}
+
+pub struct ParseResult {
+  pub ok: bool,
+  pub err: String,
+  pub m: Manifest,
+}
+
+fn ok0(m: Manifest) -> ParseResult { return ParseResult { ok: true, err: "", m: m }; }
+fn err0(msg: String) -> ParseResult { return ParseResult { ok: false, err: msg, m: Manifest { pkg_name: "", deps: Vec() } }; }
+
+pub fn parse(text: String) -> ParseResult {
+  let mut m: Manifest = Manifest { pkg_name: "", deps: Vec() };
+  let mut section: String = "";
+  let lines: Vec[String] = split_lines(text);
+  let mut i: i32 = 0;
+  while i < lines.len() {
+    let mut line: String = strip_comment(lines.get(i));
+    line = trim_space(line);
+    if line == "" { i = i + 1; continue; }
+
+    if has_prefix(line, "[") && has_suffix(line, "]") {
+      section = trim_space(line.slice(1, line.len() - 1));
+      i = i + 1;
+      continue;
+    }
+
+    let kv: CutKVResult = cut_kv(line);
+    if !kv.ok { return err0("invalid manifest line"); }
+    let key: String = kv.key;
+    let val: String = kv.val;
+
+    if section == "package" {
+      if key == "name" {
+        m.pkg_name = unquote(val);
+      }
+    } else if section == "dependencies" {
+      // Only support inline table with path.
+      let p: String = parse_inline_path(val);
+      if p != "" {
+        m.deps.push(Dependency { name: key, path: p });
+      }
+    }
+
+    i = i + 1;
+  }
+  return ok0(m);
+}
+
+fn has_prefix(s: String, pre: String) -> bool {
+  if s.len() < pre.len() { return false; }
+  return s.slice(0, pre.len()) == pre;
+}
+
+fn has_suffix(s: String, suf: String) -> bool {
+  if s.len() < suf.len() { return false; }
+  return s.slice(s.len() - suf.len(), s.len()) == suf;
+}
+
+fn strip_comment(line: String) -> String {
+  let i: i32 = index_byte(line, 35); // '#'
+  if i == -1 { return line; }
+  return line.slice(0, i);
+}
+
+fn is_space(ch: i32) -> bool { return ch == 32 || ch == 9 || ch == 10 || ch == 13; }
+
+fn byte_at_safe(s: String, idx: i32) -> i32 {
+  if idx < 0 { return -1; }
+  if idx >= s.len() { return -1; }
+  return s.byte_at(idx);
+}
+
+fn trim_space(s: String) -> String {
+  let n: i32 = s.len();
+  if n == 0 { return ""; }
+  let mut i: i32 = 0;
+  while i < n && is_space(s.byte_at(i)) { i = i + 1; }
+  let mut j: i32 = n;
+  while j > i && is_space(s.byte_at(j - 1)) { j = j - 1; }
+  return s.slice(i, j);
+}
+
+fn index_byte(s: String, b: i32) -> i32 {
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == b { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+struct CutKVResult { ok: bool, key: String, val: String }
+
+fn cut_kv(line: String) -> CutKVResult {
+  let i: i32 = index_byte(line, 61); // '='
+  if i == -1 { return CutKVResult { ok: false, key: "", val: "" }; }
+  let k: String = trim_space(line.slice(0, i));
+  let v: String = trim_space(line.slice(i + 1, line.len()));
+  if k == "" || v == "" { return CutKVResult { ok: false, key: "", val: "" }; }
+  return CutKVResult { ok: true, key: k, val: v };
+}
+
+fn unquote(s: String) -> String {
+  let t: String = trim_space(s);
+  if t.len() >= 2 && byte_at_safe(t, 0) == 34 && byte_at_safe(t, t.len() - 1) == 34 { // '"'
+    return t.slice(1, t.len() - 1);
+  }
+  return t;
+}
+
+fn parse_inline_path(val: String) -> String {
+  // super small subset: { path = "..." }
+  let t: String = trim_space(val);
+  if t.len() < 2 { return ""; }
+  if byte_at_safe(t, 0) != 123 { return ""; } // '{'
+  if byte_at_safe(t, t.len() - 1) != 125 { return ""; } // '}'
+  let inner: String = trim_space(t.slice(1, t.len() - 1));
+  // Find "path".
+  let kv: CutKVResult = cut_kv(inner);
+  if kv.ok && kv.key == "path" { return unquote(kv.val); }
+  // If there are multiple entries separated by commas, do a simple scan.
+  let parts: Vec[String] = split_by_comma(inner);
+  let mut i: i32 = 0;
+  while i < parts.len() {
+    let kv2: CutKVResult = cut_kv(trim_space(parts.get(i)));
+    if kv2.ok && kv2.key == "path" { return unquote(kv2.val); }
+    i = i + 1;
+  }
+  return "";
+}
+
+fn split_lines(text: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  let mut start: i32 = 0;
+  while i < text.len() {
+    if text.byte_at(i) == 10 { // '\n'
+      out.push(text.slice(start, i));
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  // last line
+  if start <= text.len() { out.push(text.slice(start, text.len())); }
+  return out;
+}
+
+fn split_by_comma(text: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  let mut start: i32 = 0;
+  while i < text.len() {
+    if text.byte_at(i) == 44 { // ','
+      out.push(text.slice(start, i));
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  if start <= text.len() { out.push(text.slice(start, text.len())); }
+  return out;
+}
