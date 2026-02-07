@@ -39,6 +39,7 @@ struct ParseVariantResult { p: Parser, v: ast.EnumVariantDecl }
 struct ParsePatResult { p: Parser, pat: ast.Pat }
 struct ParseArmResult { p: Parser, arm: ast.MatchArm }
 struct ParseTypeParamsResult { p: Parser, tps: Vec[String] }
+struct ParseBracedExprResult { p: Parser, id: i32 }
 
 fn dummy_token() -> lex.Token {
   return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0 };
@@ -192,6 +193,29 @@ fn parse_import_decl(p: Parser) -> ParseImportResult {
   return ParseImportResult { p: q, imp: ast.ImportDecl { path: path, alias: alias } };
 }
 
+fn parse_braced_expr(p: Parser) -> ParseBracedExprResult {
+  let ar1: AdvanceResult = expect(p, lex.TokenKind.LBrace);
+  let r2: ParseExprResult = parse_expr(ar1.p, 0);
+  let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.RBrace);
+  return ParseBracedExprResult { p: ar3.p, id: r2.id };
+}
+
+fn parse_if_expr(p: Parser) -> ParseExprResult {
+  // if <cond> { <expr> } else { <expr> }
+  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwIf);
+  let r2: ParseExprResult = parse_expr(ar1.p, 0);
+  let br1: ParseBracedExprResult = parse_braced_expr(r2.p);
+  let ar3: AdvanceResult = expect(br1.p, lex.TokenKind.KwElse);
+
+  // else if ...  ==> else { if ... } (AST nests If)
+  if kind_is(peek_kind(ar3.p), lex.TokenKind.KwIf) {
+    let r4: ParseExprResult = parse_if_expr(ar3.p);
+    return add_expr(r4.p, ast.ExprNode.If(r2.id, br1.id, r4.id));
+  }
+  let br2: ParseBracedExprResult = parse_braced_expr(ar3.p);
+  return add_expr(br2.p, ast.ExprNode.If(r2.id, br1.id, br2.id));
+}
+
 	fn parse_primary(p: Parser) -> ParseExprResult {
   if p.has_err {
     return ParseExprResult { p: p, id: -1 };
@@ -252,6 +276,10 @@ fn parse_import_decl(p: Parser) -> ParseImportResult {
     }
     let ar6: AdvanceResult = expect(q, lex.TokenKind.RBrace);
     return add_expr(ar6.p, ast.ExprNode.Match(r2.id, arms));
+  }
+
+  if kind_is(k, lex.TokenKind.KwIf) {
+    return parse_if_expr(p);
   }
 
   let mut q: Parser = p;
