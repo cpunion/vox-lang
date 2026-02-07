@@ -22,6 +22,24 @@ func Parse(file *source.File) (*ast.Program, *diag.Bag) {
 	return p.parseProgram(), p.diags
 }
 
+func ParseFiles(files []*source.File) (*ast.Program, *diag.Bag) {
+	merged := &ast.Program{}
+	diags := &diag.Bag{}
+	for _, f := range files {
+		prog, d := Parse(f)
+		if prog != nil {
+			merged.Funcs = append(merged.Funcs, prog.Funcs...)
+		}
+		if d != nil && len(d.Items) > 0 {
+			diags.Items = append(diags.Items, d.Items...)
+		}
+	}
+	if len(diags.Items) > 0 {
+		return merged, diags
+	}
+	return merged, nil
+}
+
 func (p *Parser) parseProgram() *ast.Program {
 	prog := &ast.Program{}
 	for !p.at(lexer.TokenEOF) {

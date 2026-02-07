@@ -2,6 +2,8 @@ package interp
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"voxlang/internal/ast"
 	"voxlang/internal/typecheck"
@@ -64,7 +66,51 @@ func RunMain(p *typecheck.CheckedProgram) (string, error) {
 	}
 }
 
+func RunTests(p *typecheck.CheckedProgram) (string, error) {
+	rt := &Runtime{prog: p, funcs: map[string]*ast.FuncDecl{}}
+	for _, fn := range p.Prog.Funcs {
+		rt.funcs[fn.Name] = fn
+	}
+	// Discover tests by naming convention.
+	var names []string
+	for name := range rt.funcs {
+		if strings.HasPrefix(name, "test_") {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	var log strings.Builder
+	failed := 0
+	for _, name := range names {
+		sig, ok := p.FuncSigs[name]
+		if !ok || len(sig.Params) != 0 || sig.Ret.K != typecheck.TyUnit {
+			failed++
+			fmt.Fprintf(&log, "[FAIL] %s: invalid test signature (expected fn %s() -> ())\n", name, name)
+			continue
+		}
+		_, err := rt.call(name, nil)
+		if err != nil {
+			failed++
+			fmt.Fprintf(&log, "[FAIL] %s: %v\n", name, err)
+		} else {
+			fmt.Fprintf(&log, "[OK] %s\n", name)
+		}
+	}
+	if len(names) == 0 {
+		log.WriteString("[test] no tests found\n")
+	} else {
+		fmt.Fprintf(&log, "[test] %d passed, %d failed\n", len(names)-failed, failed)
+	}
+	if failed != 0 {
+		return log.String(), fmt.Errorf("%d test(s) failed", failed)
+	}
+	return log.String(), nil
+}
+
 func (rt *Runtime) call(name string, args []Value) (Value, error) {
+	if v, ok, err := rt.callBuiltin(name, args); ok {
+		return v, err
+	}
 	fn, ok := rt.funcs[name]
 	if !ok {
 		return unit(), fmt.Errorf("unknown function: %s", name)
@@ -288,6 +334,21 @@ func valueEq(a, b Value) bool {
 		return a.S == b.S
 	default:
 		return false
+	}
+}
+
+func (rt *Runtime) callBuiltin(name string, args []Value) (Value, bool, error) {
+	switch name {
+	case "assert":
+		if len(args) != 1 || args[0].K != VBool {
+			return unit(), true, fmt.Errorf("assert expects (bool)")
+		}
+		if !args[0].B {
+			return unit(), true, fmt.Errorf("assertion failed")
+		}
+		return unit(), true, nil
+	default:
+		return unit(), false, nil
 	}
 }
 

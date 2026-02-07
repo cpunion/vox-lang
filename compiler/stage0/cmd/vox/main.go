@@ -15,6 +15,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  vox init [dir]")
 	fmt.Fprintln(os.Stderr, "  vox build [dir]")
 	fmt.Fprintln(os.Stderr, "  vox run [dir]")
+	fmt.Fprintln(os.Stderr, "  vox test [dir]")
 }
 
 func main() {
@@ -50,6 +51,15 @@ func main() {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
+	case "test":
+		dir := "."
+		if len(os.Args) >= 3 {
+			dir = os.Args[2]
+		}
+		if err := test(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -74,6 +84,25 @@ func build(dir string, run bool) error {
 	}
 	if run && res != nil && res.RunResult != "" {
 		fmt.Fprintln(os.Stdout, res.RunResult)
+	}
+	return nil
+}
+
+func test(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	res, diags, err := loader.TestPackage(abs)
+	if err != nil {
+		return err
+	}
+	if diags != nil && len(diags.Items) > 0 {
+		diag.Print(os.Stderr, diags)
+		return fmt.Errorf("test failed")
+	}
+	if res != nil && res.TestLog != "" {
+		fmt.Fprint(os.Stdout, res.TestLog)
 	}
 	return nil
 }

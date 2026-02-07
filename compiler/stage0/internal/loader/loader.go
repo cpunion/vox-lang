@@ -18,6 +18,7 @@ type BuildResult struct {
 	Manifest  *manifest.Manifest
 	Program   *typecheck.CheckedProgram
 	RunResult string
+	TestLog   string
 }
 
 func InitPackage(dir string) error {
@@ -58,6 +59,14 @@ edition = "2026"
 }
 
 func BuildPackage(dir string, run bool) (*BuildResult, *diag.Bag, error) {
+	return buildPackage(dir, run, false)
+}
+
+func TestPackage(dir string) (*BuildResult, *diag.Bag, error) {
+	return buildPackage(dir, false, true)
+}
+
+func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, error) {
 	root, maniPath, err := findPackageRoot(dir)
 	if err != nil {
 		return nil, nil, err
@@ -79,13 +88,11 @@ func BuildPackage(dir string, run bool) (*BuildResult, *diag.Bag, error) {
 		}
 	}
 
-	mainPath := filepath.Join(root, "src", "main.vox")
-	b, err := os.ReadFile(mainPath)
+	files, err := collectPackageFiles(root, tests)
 	if err != nil {
-		return nil, nil, fmt.Errorf("missing src/main.vox in %s", root)
+		return nil, nil, err
 	}
-	file := source.NewFile(strings.TrimPrefix(mainPath, root+string(filepath.Separator)), string(b))
-	prog, pdiags := parser.Parse(file)
+	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		return &BuildResult{Manifest: mani}, pdiags, nil
 	}
@@ -95,6 +102,15 @@ func BuildPackage(dir string, run bool) (*BuildResult, *diag.Bag, error) {
 	}
 
 	res := &BuildResult{Manifest: mani, Program: checked}
+	if tests {
+		log, terr := interp.RunTests(checked)
+		res.TestLog = log
+		if terr != nil {
+			db := &diag.Bag{}
+			db.Add(root, 1, 1, terr.Error())
+			return res, db, nil
+		}
+	}
 	if run {
 		out, rerr := interp.RunMain(checked)
 		if rerr != nil {
@@ -147,4 +163,56 @@ func validateDeps(root string, mani *manifest.Manifest) error {
 		// If the dependency is a Vox package, it should have vox.toml (soft requirement for now).
 	}
 	return nil
+}
+
+func collectPackageFiles(root string, includeTests bool) ([]*source.File, error) {
+	var out []*source.File
+	addDir := func(dir string) error {
+		return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				// skip target-style dirs if present
+				base := filepath.Base(path)
+				if base == "target" || strings.HasPrefix(base, ".") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if filepath.Ext(path) != ".vox" {
+				return nil
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			rel := strings.TrimPrefix(path, root+string(filepath.Separator))
+			out = append(out, source.NewFile(rel, string(b)))
+			return nil
+		})
+	}
+	srcDir := filepath.Join(root, "src")
+	if _, err := os.Stat(srcDir); err != nil {
+		return nil, fmt.Errorf("missing src/ in %s", root)
+	}
+	if err := addDir(srcDir); err != nil {
+		return nil, err
+	}
+	if includeTests {
+		testDir := filepath.Join(root, "tests")
+		if _, err := os.Stat(testDir); err == nil {
+			if err := addDir(testDir); err != nil {
+				return nil, err
+			}
+		}
+	}
+	// Stage0 expects main when running (not for tests-only).
+	if !includeTests {
+		mainPath := filepath.Join(srcDir, "main.vox")
+		if _, err := os.Stat(mainPath); err != nil {
+			return nil, fmt.Errorf("missing src/main.vox in %s", root)
+		}
+	}
+	return out, nil
 }

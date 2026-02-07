@@ -83,6 +83,9 @@ type varInfo struct {
 }
 
 func (c *checker) collectFuncSigs() {
+	// Builtins (stage0): keep minimal and stable.
+	c.funcSigs["assert"] = FuncSig{Params: []Type{{K: TyBool}}, Ret: Type{K: TyUnit}}
+
 	for _, fn := range c.prog.Funcs {
 		if _, exists := c.funcSigs[fn.Name]; exists {
 			c.errorAt(fn.Span, "duplicate function: "+fn.Name)
