@@ -231,12 +231,12 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			return unit(), fmt.Errorf("unknown op: %s", e.Op)
 		}
 		return unit(), fmt.Errorf("unreachable")
-	case *ast.CallExpr:
-		if vc, ok := rt.prog.VecCalls[e]; ok {
-			switch vc.Kind {
-			case typecheck.VecCallNew:
-				return Value{K: VVec, A: nil}, nil
-			case typecheck.VecCallPush:
+		case *ast.CallExpr:
+			if vc, ok := rt.prog.VecCalls[e]; ok {
+				switch vc.Kind {
+				case typecheck.VecCallNew:
+					return Value{K: VVec, A: nil}, nil
+				case typecheck.VecCallPush:
 				if len(e.Args) != 1 {
 					return unit(), fmt.Errorf("Vec.push expects 1 arg")
 				}
@@ -252,20 +252,29 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 				if recv.K != VVec {
 					return unit(), fmt.Errorf("Vec.push requires vec receiver")
 				}
-				recv.A = append(recv.A, cloneValue(v))
-				fr[vc.RecvName] = recv
-				return unit(), nil
-			case typecheck.VecCallLen:
-				fr, ok := rt.lookup(vc.RecvName)
-				if !ok {
-					return unit(), fmt.Errorf("unknown variable: %s", vc.RecvName)
-				}
-				recv := fr[vc.RecvName]
-				if recv.K != VVec {
-					return unit(), fmt.Errorf("Vec.len requires vec receiver")
-				}
-				return Value{K: VInt, I: int64(len(recv.A))}, nil
-			case typecheck.VecCallGet:
+					recv.A = append(recv.A, cloneValue(v))
+					fr[vc.RecvName] = recv
+					return unit(), nil
+				case typecheck.VecCallLen:
+					var recv Value
+					if vc.Recv != nil {
+						rv, err := rt.evalExpr(vc.Recv)
+						if err != nil {
+							return unit(), err
+						}
+						recv = rv
+					} else {
+						fr, ok := rt.lookup(vc.RecvName)
+						if !ok {
+							return unit(), fmt.Errorf("unknown variable: %s", vc.RecvName)
+						}
+						recv = fr[vc.RecvName]
+					}
+					if recv.K != VVec {
+						return unit(), fmt.Errorf("Vec.len requires vec receiver")
+					}
+					return Value{K: VInt, I: int64(len(recv.A))}, nil
+				case typecheck.VecCallGet:
 				if len(e.Args) != 1 {
 					return unit(), fmt.Errorf("Vec.get expects 1 arg")
 				}
@@ -273,37 +282,55 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 				if err != nil {
 					return unit(), err
 				}
-				if idxV.K != VInt {
-					return unit(), fmt.Errorf("Vec.get index must be int")
-				}
-				idx := int(idxV.I)
-				fr, ok := rt.lookup(vc.RecvName)
-				if !ok {
-					return unit(), fmt.Errorf("unknown variable: %s", vc.RecvName)
-				}
-				recv := fr[vc.RecvName]
-				if recv.K != VVec {
-					return unit(), fmt.Errorf("Vec.get requires vec receiver")
-				}
-				if idx < 0 || idx >= len(recv.A) {
-					return unit(), fmt.Errorf("Vec.get index out of bounds")
+					if idxV.K != VInt {
+						return unit(), fmt.Errorf("Vec.get index must be int")
+					}
+					idx := int(idxV.I)
+					var recv Value
+					if vc.Recv != nil {
+						rv, err := rt.evalExpr(vc.Recv)
+						if err != nil {
+							return unit(), err
+						}
+						recv = rv
+					} else {
+						fr, ok := rt.lookup(vc.RecvName)
+						if !ok {
+							return unit(), fmt.Errorf("unknown variable: %s", vc.RecvName)
+						}
+						recv = fr[vc.RecvName]
+					}
+					if recv.K != VVec {
+						return unit(), fmt.Errorf("Vec.get requires vec receiver")
+					}
+					if idx < 0 || idx >= len(recv.A) {
+						return unit(), fmt.Errorf("Vec.get index out of bounds")
 				}
 				return cloneValue(recv.A[idx]), nil
 			default:
 				return unit(), fmt.Errorf("unsupported vec call")
 			}
-		}
+			}
 
-		if sc, ok := rt.prog.StrCalls[e]; ok {
-			fr, ok := rt.lookup(sc.RecvName)
-			if !ok {
-				return unit(), fmt.Errorf("unknown variable: %s", sc.RecvName)
-			}
-			recv := fr[sc.RecvName]
-			if recv.K != VString {
-				return unit(), fmt.Errorf("String method requires string receiver")
-			}
-			switch sc.Kind {
+			if sc, ok := rt.prog.StrCalls[e]; ok {
+				var recv Value
+				if sc.Recv != nil {
+					rv, err := rt.evalExpr(sc.Recv)
+					if err != nil {
+						return unit(), err
+					}
+					recv = rv
+				} else {
+					fr, ok := rt.lookup(sc.RecvName)
+					if !ok {
+						return unit(), fmt.Errorf("unknown variable: %s", sc.RecvName)
+					}
+					recv = fr[sc.RecvName]
+				}
+				if recv.K != VString {
+					return unit(), fmt.Errorf("String method requires string receiver")
+				}
+				switch sc.Kind {
 			case typecheck.StrCallLen:
 				return Value{K: VInt, I: int64(len(recv.S))}, nil
 			case typecheck.StrCallByteAt:

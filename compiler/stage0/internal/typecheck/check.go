@@ -261,6 +261,17 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 	case *ast.CallExpr:
+		// Intrinsic method calls on values (stage0 subset).
+		//
+		// We only treat a callee as a value method call when the receiver expression
+		// is rooted in a local variable. This avoids stealing syntax from enum
+		// constructors like `Option.Some(1)`.
+		if me, ok := e.Callee.(*ast.MemberExpr); ok {
+			if ty, handled := c.tryIntrinsicMethodCall(ex, e, me); handled {
+				return ty
+			}
+		}
+
 		// Vec constructor: `Vec()` with expected type `Vec[T]`.
 		if cal, ok := e.Callee.(*ast.IdentExpr); ok && cal.Name == "Vec" && expected.K == TyVec {
 			if len(e.Args) != 0 {
@@ -662,6 +673,129 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		c.errorAt(ex.Span(), "unsupported expression")
 		return c.setExprType(ex, Type{K: TyBad})
 	}
+}
+
+func rootIdentName(ex ast.Expr) (string, bool) {
+	switch e := ex.(type) {
+	case *ast.IdentExpr:
+		return e.Name, true
+	case *ast.MemberExpr:
+		return rootIdentName(e.Recv)
+	default:
+		return "", false
+	}
+}
+
+func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *ast.MemberExpr) (Type, bool) {
+	root, ok := rootIdentName(me.Recv)
+	if !ok {
+		return Type{K: TyBad}, false
+	}
+	if _, ok := c.lookupVar(root); !ok {
+		// Likely a type/module path (e.g. Enum.Variant(...)); let the normal call resolver handle it.
+		return Type{K: TyBad}, false
+	}
+
+	recvTy := c.checkExpr(me.Recv, Type{K: TyBad})
+	method := me.Name
+
+	// Vec methods.
+	if recvTy.K == TyVec && recvTy.Elem != nil {
+		// Optimization: if receiver is a simple local variable, keep RecvName to allow
+		// direct lowering to slot-based IR for len/get and required for push.
+		recvName := ""
+		if id, ok := me.Recv.(*ast.IdentExpr); ok {
+			recvName = id.Name
+		}
+
+		switch method {
+		case "push":
+			if len(call.Args) != 1 {
+				c.errorAt(call.S, "Vec.push expects 1 arg")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			if recvName == "" {
+				c.errorAt(call.S, "Vec.push receiver must be a local variable in stage0")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			vi, ok := c.lookupVar(recvName)
+			if !ok {
+				c.errorAt(call.S, "unknown variable: "+recvName)
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			if !vi.mutable {
+				c.errorAt(call.S, "cannot call push on immutable variable: "+recvName)
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			at := c.checkExpr(call.Args[0], *recvTy.Elem)
+			if !sameType(*recvTy.Elem, at) {
+				c.errorAt(call.Args[0].Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", recvTy.Elem.String(), at.String()))
+			}
+			c.vecCalls[call] = VecCallTarget{Kind: VecCallPush, RecvName: recvName, Recv: me.Recv, Elem: *recvTy.Elem}
+			return c.setExprType(ex, Type{K: TyUnit}), true
+		case "len":
+			if len(call.Args) != 0 {
+				c.errorAt(call.S, "Vec.len expects 0 args")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			c.vecCalls[call] = VecCallTarget{Kind: VecCallLen, RecvName: recvName, Recv: me.Recv, Elem: *recvTy.Elem}
+			return c.setExprType(ex, Type{K: TyI32}), true
+		case "get":
+			if len(call.Args) != 1 {
+				c.errorAt(call.S, "Vec.get expects 1 arg")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			idxTy := c.checkExpr(call.Args[0], Type{K: TyI32})
+			if idxTy.K != TyI32 {
+				c.errorAt(call.Args[0].Span(), "Vec.get index must be i32")
+			}
+			c.vecCalls[call] = VecCallTarget{Kind: VecCallGet, RecvName: recvName, Recv: me.Recv, Elem: *recvTy.Elem}
+			return c.setExprType(ex, *recvTy.Elem), true
+		}
+	}
+
+	// String methods.
+	if recvTy.K == TyString {
+		recvName := ""
+		if id, ok := me.Recv.(*ast.IdentExpr); ok {
+			recvName = id.Name
+		}
+		switch method {
+		case "len":
+			if len(call.Args) != 0 {
+				c.errorAt(call.S, "String.len expects 0 args")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			c.strCalls[call] = StrCallTarget{Kind: StrCallLen, RecvName: recvName, Recv: me.Recv}
+			return c.setExprType(ex, Type{K: TyI32}), true
+		case "byte_at":
+			if len(call.Args) != 1 {
+				c.errorAt(call.S, "String.byte_at expects 1 arg")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			idxTy := c.checkExpr(call.Args[0], Type{K: TyI32})
+			if idxTy.K != TyI32 {
+				c.errorAt(call.Args[0].Span(), "String.byte_at index must be i32")
+			}
+			c.strCalls[call] = StrCallTarget{Kind: StrCallByteAt, RecvName: recvName, Recv: me.Recv}
+			return c.setExprType(ex, Type{K: TyI32}), true
+		case "slice":
+			if len(call.Args) != 2 {
+				c.errorAt(call.S, "String.slice expects 2 args")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			sTy := c.checkExpr(call.Args[0], Type{K: TyI32})
+			eTy := c.checkExpr(call.Args[1], Type{K: TyI32})
+			if sTy.K != TyI32 || eTy.K != TyI32 {
+				c.errorAt(call.S, "String.slice indices must be i32")
+				return c.setExprType(ex, Type{K: TyBad}), true
+			}
+			c.strCalls[call] = StrCallTarget{Kind: StrCallSlice, RecvName: recvName, Recv: me.Recv}
+			return c.setExprType(ex, Type{K: TyString}), true
+		}
+	}
+
+	return Type{K: TyBad}, false
 }
 
 func (c *checker) forceIntType(ex ast.Expr, got Type, want Type) Type {

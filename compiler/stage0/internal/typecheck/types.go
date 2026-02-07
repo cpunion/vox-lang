@@ -109,7 +109,12 @@ const (
 
 type VecCallTarget struct {
 	Kind     VecCallKind
-	RecvName string // for methods on local variables
+	// RecvName is used when the receiver is a local variable (addressable slot).
+	// This is required for operations that mutate the receiver (e.g. Vec.push).
+	RecvName string
+	// Recv is used for non-mutating operations where the receiver can be any value
+	// expression (e.g. s.items.len()).
+	Recv ast.Expr
 	Elem     Type
 }
 
@@ -124,7 +129,8 @@ const (
 
 type StrCallTarget struct {
 	Kind     StrCallKind
-	RecvName string // for methods on local variables
+	RecvName string
+	Recv     ast.Expr
 }
 
 type Options struct {

@@ -123,14 +123,40 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 		default:
 			return nil, fmt.Errorf("unsupported binary op: %s", e.Op)
 		}
-	case *ast.CallExpr:
-		// Vec ops are special-cased in stage0 and lowered to dedicated IR.
-		if vc, ok := g.p.VecCalls[e]; ok {
-			switch vc.Kind {
-			case typecheck.VecCallNew:
-				ty := g.p.ExprTypes[ex]
-				irty, err := g.irTypeFromChecked(ty)
-				if err != nil {
+		case *ast.CallExpr:
+			// Vec ops are special-cased in stage0 and lowered to dedicated IR.
+			if vc, ok := g.p.VecCalls[e]; ok {
+				recvSlotFrom := func() (*ir.Slot, error) {
+					if vc.RecvName != "" {
+						slot, ok := g.lookup(vc.RecvName)
+						if !ok {
+							return nil, fmt.Errorf("unknown vec receiver: %s", vc.RecvName)
+						}
+						return slot, nil
+					}
+					if vc.Recv == nil {
+						return nil, fmt.Errorf("missing vec receiver")
+					}
+					rv, err := g.genExpr(vc.Recv)
+					if err != nil {
+						return nil, err
+					}
+					ty := g.p.ExprTypes[vc.Recv]
+					irty, err := g.irTypeFromChecked(ty)
+					if err != nil {
+						return nil, err
+					}
+					slot := g.newSlot()
+					g.slotTypes[slot.ID] = irty
+					g.emit(&ir.SlotDecl{Slot: slot, Ty: irty})
+					g.emit(&ir.Store{Slot: slot, Val: rv})
+					return slot, nil
+				}
+				switch vc.Kind {
+				case typecheck.VecCallNew:
+					ty := g.p.ExprTypes[ex]
+					irty, err := g.irTypeFromChecked(ty)
+					if err != nil {
 					return nil, err
 				}
 				elem, err := g.irTypeFromChecked(vc.Elem)
@@ -153,25 +179,25 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 				if err != nil {
 					return nil, err
 				}
-				g.emit(&ir.VecPush{Recv: slot, Elem: elem, Val: val})
-				return nil, nil
-			case typecheck.VecCallLen:
-				slot, ok := g.lookup(vc.RecvName)
-				if !ok {
-					return nil, fmt.Errorf("unknown vec receiver: %s", vc.RecvName)
-				}
-				tmp := g.newTemp()
-				g.emit(&ir.VecLen{Dst: tmp, Recv: slot})
-				return tmp, nil
-			case typecheck.VecCallGet:
-				slot, ok := g.lookup(vc.RecvName)
-				if !ok {
-					return nil, fmt.Errorf("unknown vec receiver: %s", vc.RecvName)
-				}
-				idx, err := g.genExpr(e.Args[0])
-				if err != nil {
-					return nil, err
-				}
+					g.emit(&ir.VecPush{Recv: slot, Elem: elem, Val: val})
+					return nil, nil
+				case typecheck.VecCallLen:
+					slot, err := recvSlotFrom()
+					if err != nil {
+						return nil, err
+					}
+					tmp := g.newTemp()
+					g.emit(&ir.VecLen{Dst: tmp, Recv: slot})
+					return tmp, nil
+				case typecheck.VecCallGet:
+					slot, err := recvSlotFrom()
+					if err != nil {
+						return nil, err
+					}
+					idx, err := g.genExpr(e.Args[0])
+					if err != nil {
+						return nil, err
+					}
 				elem, err := g.irTypeFromChecked(vc.Elem)
 				if err != nil {
 					return nil, err
@@ -184,19 +210,32 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			}
 		}
 
-		// String ops are special-cased in stage0 and lowered to dedicated IR.
-		if sc, ok := g.p.StrCalls[e]; ok {
-			slot, ok := g.lookup(sc.RecvName)
-			if !ok {
-				return nil, fmt.Errorf("unknown string receiver: %s", sc.RecvName)
-			}
-			recv := g.newTemp()
-			g.emit(&ir.Load{Dst: recv, Ty: ir.Type{K: ir.TString}, Slot: slot})
-			switch sc.Kind {
-			case typecheck.StrCallLen:
-				tmp := g.newTemp()
-				g.emit(&ir.StrLen{Dst: tmp, Recv: recv})
-				return tmp, nil
+			// String ops are special-cased in stage0 and lowered to dedicated IR.
+			if sc, ok := g.p.StrCalls[e]; ok {
+				var recv ir.Value
+				var err error
+				if sc.Recv != nil {
+					recv, err = g.genExpr(sc.Recv)
+				} else if sc.RecvName != "" {
+					// Back-compat: old checked programs used RecvName.
+					slot, ok := g.lookup(sc.RecvName)
+					if !ok {
+						return nil, fmt.Errorf("unknown string receiver: %s", sc.RecvName)
+					}
+					tmp := g.newTemp()
+					g.emit(&ir.Load{Dst: tmp, Ty: ir.Type{K: ir.TString}, Slot: slot})
+					recv = tmp
+				} else {
+					return nil, fmt.Errorf("missing string receiver")
+				}
+				if err != nil {
+					return nil, err
+				}
+				switch sc.Kind {
+				case typecheck.StrCallLen:
+					tmp := g.newTemp()
+					g.emit(&ir.StrLen{Dst: tmp, Recv: recv})
+					return tmp, nil
 			case typecheck.StrCallByteAt:
 				idx, err := g.genExpr(e.Args[0])
 				if err != nil {
