@@ -38,6 +38,14 @@ struct Point {
 let p = Point { x: 1.0, y: 2.0 }
 ```
 
+字段访问与更新（草案，Stage0 优先支持）：
+
+```vox
+let mut p = Point { x: 1, y: 2 };
+let a = p.x;
+p.x = a + 1;
+```
+
 ## 枚举（代数数据类型）
 
 ```vox
