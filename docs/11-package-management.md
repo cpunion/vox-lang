@@ -20,7 +20,6 @@ my_app/
   vox.toml
   src/
     main.vox   # 可执行入口
-    lib.vox    # 库入口（可选）
   tests/
   examples/
   target/
@@ -35,4 +34,3 @@ my_app/
 ## 锁文件（deferred）
 
 是否引入 `vox.lock`、其格式与可复现策略待定。
-

@@ -15,11 +15,11 @@ project/
   src/
     main.vox
     utils/
-      lib.vox   // 可选：约定的“入口文件名”，不影响语义
-      io.vox    // 与 lib.vox 同属 utils 模块
-      more.vox  // 与 lib.vox 同属 utils 模块
+      fs.vox    // 与其他文件同属 utils 模块
+      math.vox  // 与其他文件同属 utils 模块
+      more.vox  // 与其他文件同属 utils 模块
     utils/io/
-      lib.vox   // 子模块 utils/io
+      file.vox  // 子模块 utils/io
 ```
 
 模块路径规则（当前决策）：
@@ -86,4 +86,4 @@ pub struct Api {
 ## 包（草案）
 
 - 包清单文件：`vox.toml`（字段与语义待定）
-- `src/main.vox` 作为可执行入口，`src/lib.vox` 作为库入口（可同时存在）
+- `src/main.vox` 作为可执行入口，`src/` 下的其他 `.vox` 文件共同构成包的源码（库入口不依赖特定文件名）

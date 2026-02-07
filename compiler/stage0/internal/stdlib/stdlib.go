@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
 
 	"voxlang/internal/source"
@@ -46,25 +48,13 @@ func load() {
 	// Single source of truth: stage1 stdlib sources are written in Vox and live under
 	// compiler/stage1/src/std/** so stage1 can directly ship/use them.
 	stage1Root := filepath.Clean(filepath.Join(root, "..", "stage1"))
-	preludePath := filepath.Join(stage1Root, "src", "std", "prelude", "lib.vox")
-	testingPath := filepath.Join(stage1Root, "src", "std", "testing", "lib.vox")
-
-	preludeSrc, err := os.ReadFile(preludePath)
+	stdRoot := filepath.Join(stage1Root, "src", "std")
+	files, err := readStdlibDir(stdRoot)
 	if err != nil {
-		loadErr = fmt.Errorf("read stdlib file %q: %w", preludePath, err)
+		loadErr = err
 		return
 	}
-	testingSrc, err := os.ReadFile(testingPath)
-	if err != nil {
-		loadErr = fmt.Errorf("read stdlib file %q: %w", testingPath, err)
-		return
-	}
-
-	loaded = []*source.File{
-		// Note: file names are virtualized to keep module resolution stable.
-		source.NewFile("src/std/prelude/lib.vox", string(preludeSrc)),
-		source.NewFile("src/std/testing/lib.vox", string(testingSrc)),
-	}
+	loaded = files
 }
 
 func stage0RootDir() (string, error) {
@@ -76,4 +66,55 @@ func stage0RootDir() (string, error) {
 	// stage0 root is:      <repo>/compiler/stage0
 	dir := filepath.Dir(file)
 	return filepath.Clean(filepath.Join(dir, "..", "..")), nil
+}
+
+func readStdlibDir(stdRoot string) ([]*source.File, error) {
+	var paths []string
+	err := filepath.WalkDir(stdRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			base := filepath.Base(path)
+			if strings.HasPrefix(base, ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".vox" {
+			return nil
+		}
+		rel, err := filepath.Rel(stdRoot, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		// Don't inject stdlib tests as part of every build.
+		if strings.HasSuffix(rel, "_test.vox") {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read stdlib dir %q: %w", stdRoot, err)
+	}
+	sort.Strings(paths)
+	out := make([]*source.File, 0, len(paths))
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil, fmt.Errorf("read stdlib file %q: %w", p, err)
+		}
+		rel, err := filepath.Rel(stdRoot, p)
+		if err != nil {
+			return nil, err
+		}
+		rel = filepath.ToSlash(rel)
+		out = append(out, source.NewFile("src/std/"+rel, string(b)))
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("stdlib directory is empty: %s", stdRoot)
+	}
+	return out, nil
 }

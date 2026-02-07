@@ -49,7 +49,7 @@ edition = "2026"
 `)
 	mustWrite(t, filepath.Join(dir, "src", "main.vox"), `import "utils"
 fn main() -> i32 { return utils.one(); }`)
-	mustWrite(t, filepath.Join(dir, "src", "utils", "lib.vox"), `pub fn one() -> i32 { return 1; }`)
+	mustWrite(t, filepath.Join(dir, "src", "utils", "one.vox"), `pub fn one() -> i32 { return 1; }`)
 
 	_, diags, err := BuildPackage(dir, false)
 	if err != nil {
@@ -118,7 +118,7 @@ edition = "2026"
 
 [dependencies]
 `)
-	mustWrite(t, filepath.Join(depDir, "src", "lib.vox"), `pub fn one() -> i32 { return 1; }`)
+	mustWrite(t, filepath.Join(depDir, "src", "dep.vox"), `pub fn one() -> i32 { return 1; }`)
 
 	// root package
 	rootDir := filepath.Join(dir, "app")
@@ -166,7 +166,7 @@ edition = "2026"
 
 [dependencies]
 `)
-	mustWrite(t, filepath.Join(depDir, "src", "lib.vox"), `pub fn one() -> i32 { return 1; }`)
+	mustWrite(t, filepath.Join(depDir, "src", "dep.vox"), `pub fn one() -> i32 { return 1; }`)
 
 	// root package
 	rootDir := filepath.Join(dir, "app")
@@ -213,7 +213,7 @@ edition = "2026"
 
 [dependencies]
 `)
-	mustWrite(t, filepath.Join(bDir, "src", "lib.vox"), `pub fn one() -> i32 { return 1; }`)
+	mustWrite(t, filepath.Join(bDir, "src", "b.vox"), `pub fn one() -> i32 { return 1; }`)
 
 	// a depends on b
 	aDir := filepath.Join(dir, "a")
@@ -225,7 +225,7 @@ edition = "2026"
 [dependencies]
 b = { path = "../b" }
 `)
-	mustWrite(t, filepath.Join(aDir, "src", "lib.vox"), `import "b"
+	mustWrite(t, filepath.Join(aDir, "src", "a.vox"), `import "b"
 fn a_one() -> i32 { return b.one(); }`)
 
 	// app depends on a; app imports b directly (transitive import)
@@ -265,7 +265,7 @@ edition = "2026"
 b = { path = "../b" }
 `)
 	mustWrite(t, filepath.Join(aDir, "src", "main.vox"), `fn main() -> i32 { return 0; }`)
-	mustWrite(t, filepath.Join(aDir, "src", "lib.vox"), `fn a() -> i32 { return 0; }`)
+	mustWrite(t, filepath.Join(aDir, "src", "a.vox"), `fn a() -> i32 { return 0; }`)
 
 	mustWrite(t, filepath.Join(bDir, "vox.toml"), `[package]
 name = "b"
@@ -275,7 +275,7 @@ edition = "2026"
 [dependencies]
 a = { path = "../a" }
 `)
-	mustWrite(t, filepath.Join(bDir, "src", "lib.vox"), `fn b() -> i32 { return 0; }`)
+	mustWrite(t, filepath.Join(bDir, "src", "b.vox"), `fn b() -> i32 { return 0; }`)
 
 	_, _, err := BuildPackage(aDir, false)
 	if err == nil {

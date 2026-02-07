@@ -81,7 +81,7 @@ func TestPipelineCompilesAndRunsWithDepQualifiedNames(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "dep"
 fn main() -> i32 { return dep.one(); }`),
-		source.NewFile("dep/src/lib.vox", `pub fn one() -> i32 { return 1; }`),
+		source.NewFile("dep/src/dep.vox", `pub fn one() -> i32 { return 1; }`),
 	}
 	checked := parseAndCheckWithStdlib(t, files)
 	irp, err := irgen.Generate(checked)
@@ -405,7 +405,7 @@ fn main() -> i32 {
   };
   return one() + s.x + v;
 }`),
-		source.NewFile("dep/src/lib.vox", `pub fn one() -> i32 { return 10; }
+		source.NewFile("dep/src/dep.vox", `pub fn one() -> i32 { return 10; }
 pub struct S { pub x: i32 }
 pub enum E { A(i32), None }
 `),
@@ -458,7 +458,7 @@ fn a__b() -> i32 { return 1; }
 fn main() -> i32 {
   return a__b() + a.b();
 }`),
-		source.NewFile("src/a/lib.vox", `pub fn b() -> i32 { return 2; }`),
+		source.NewFile("src/a/a.vox", `pub fn b() -> i32 { return 2; }`),
 	}
 	checked := parseAndCheckWithStdlib(t, files)
 	irp, err := irgen.Generate(checked)

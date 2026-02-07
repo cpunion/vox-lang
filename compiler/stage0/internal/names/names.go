@@ -11,11 +11,12 @@ import (
 // Root package files keep relPath like "src/main.vox" or "tests/basic.vox".
 //
 // Module path rules (stage0):
-// - src/main.vox and src/lib.vox are the root module (empty module path).
+// - src/main.vox is the executable entrypoint but still belongs to the root module.
+// - Any file directly under src/ belongs to the root module (file name doesn't affect module path).
 // - src/**.vox files belong to the module represented by their directory path under src/.
 //   Examples:
-//   - src/a/lib.vox, src/a/x.vox         -> module ["a"]
-//   - src/utils/io/lib.vox, src/utils/io/x.vox -> module ["utils","io"]
+//   - src/a/a.vox, src/a/x.vox              -> module ["a"]
+//   - src/utils/io/file.vox, src/utils/io/x.vox -> module ["utils","io"]
 // - src/**/*_test.vox are treated as part of the directory module (file name doesn't form a module segment).
 // - tests/**.vox are treated as belonging to a separate top-level module "tests" (and its subdirectories),
 //   so they cannot access private symbols from src/** by default (Go-like "external tests" behavior).
@@ -59,10 +60,6 @@ func SplitOwnerAndModule(fileName string) (pkg string, mod []string, isTest bool
 	path := strings.TrimPrefix(rel, "src/")
 	if strings.HasSuffix(path, "_test.vox") {
 		isTest = true
-	}
-	// Root module files are always in the root module.
-	if path == "main.vox" || path == "lib.vox" {
-		return pkg, nil, isTest
 	}
 
 	// Directory-as-module: module path is the directory segments under src/.

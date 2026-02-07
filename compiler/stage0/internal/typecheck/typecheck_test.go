@@ -48,7 +48,7 @@ func TestImportAliasResolvesCallTarget(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "mathlib" as m
 fn main() -> i32 { return m.one(); }`),
-		source.NewFile("mathlib/src/lib.vox", `pub fn one() -> i32 { return 1; }`),
+		source.NewFile("mathlib/src/mathlib.vox", `pub fn one() -> i32 { return 1; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
@@ -137,7 +137,7 @@ fn main() -> i32 {
   let dep: i32 = 0;
   return dep.one();
 }`),
-		source.NewFile("dep/src/lib.vox", `fn one() -> i32 { return 1; }`),
+		source.NewFile("dep/src/dep.vox", `fn one() -> i32 { return 1; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
@@ -249,7 +249,7 @@ fn main() -> i32 {
   // calling a private function must fail
   return a.secret();
 }`),
-		source.NewFile("src/a/lib.vox", `fn secret() -> i32 { return 1; }`),
+		source.NewFile("src/a/a.vox", `fn secret() -> i32 { return 1; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
@@ -280,7 +280,7 @@ fn main() -> i32 {
   let s = a.S { x: 1 };
   return 0;
 }`),
-			source.NewFile("src/a/lib.vox", `struct S { x: i32 }`),
+			source.NewFile("src/a/a.vox", `struct S { x: i32 }`),
 		}
 		prog, pdiags := parser.ParseFiles(files)
 		if pdiags != nil && len(pdiags.Items) > 0 {
@@ -310,7 +310,7 @@ fn main() -> i32 {
   let s = a.make();
   return s.y;
 }`),
-			source.NewFile("src/a/lib.vox", `pub struct S { pub x: i32, y: i32 }
+			source.NewFile("src/a/a.vox", `pub struct S { pub x: i32, y: i32 }
 pub fn make() -> S { return S { x: 1, y: 2 }; }`),
 		}
 		prog, pdiags := parser.ParseFiles(files)
@@ -338,7 +338,7 @@ func TestPubInterfaceCannotExposePrivateTypes(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "a"
 fn main() -> i32 { return a.f(); }`),
-		source.NewFile("src/a/lib.vox", `struct Hidden { x: i32 }
+		source.NewFile("src/a/a.vox", `struct Hidden { x: i32 }
 pub fn f() -> Hidden { return Hidden { x: 1 }; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
@@ -370,7 +370,7 @@ fn main() -> i32 {
   let t: a.S = id(s);
   return t.x;
 }`),
-		source.NewFile("src/a/lib.vox", `pub struct S { pub x: i32 }
+		source.NewFile("src/a/a.vox", `pub struct S { pub x: i32 }
 `),
 	}
 	prog, pdiags := parser.ParseFiles(files)
@@ -387,7 +387,7 @@ func TestNamedImportResolvesFunctionCall(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import { one as uno } from "dep"
 fn main() -> i32 { return uno(); }`),
-		source.NewFile("dep/src/lib.vox", `pub fn one() -> i32 { return 1; }`),
+		source.NewFile("dep/src/dep.vox", `pub fn one() -> i32 { return 1; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
@@ -417,7 +417,7 @@ func TestNamedImportRequiresPub(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import { one } from "dep"
 fn main() -> i32 { return one(); }`),
-		source.NewFile("dep/src/lib.vox", `fn one() -> i32 { return 1; }`),
+		source.NewFile("dep/src/dep.vox", `fn one() -> i32 { return 1; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
@@ -446,7 +446,7 @@ fn main() -> i32 {
   let s: S = S { x: 1 };
   return s.x;
 }`),
-		source.NewFile("dep/src/lib.vox", `pub struct S { pub x: i32 }`),
+		source.NewFile("dep/src/dep.vox", `pub struct S { pub x: i32 }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
@@ -468,7 +468,7 @@ fn main() -> i32 {
     E.None => 0,
   };
 }`),
-		source.NewFile("dep/src/lib.vox", `pub enum E { A(i32), None }`),
+		source.NewFile("dep/src/dep.vox", `pub enum E { A(i32), None }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {

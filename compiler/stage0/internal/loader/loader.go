@@ -234,10 +234,6 @@ func validateDeps(root string, mani *manifest.Manifest) error {
 		if _, err := os.Stat(p); err != nil {
 			return fmt.Errorf("dependency %q path not found: %s", name, p)
 		}
-		// For stage0, dependency packages are treated as libraries and must have src/lib.vox.
-		if _, err := os.Stat(filepath.Join(p, "src", "lib.vox")); err != nil {
-			return fmt.Errorf("dependency %q missing src/lib.vox: %s", name, p)
-		}
 	}
 	return nil
 }
@@ -294,10 +290,6 @@ func resolveAllPathDeps(root string, mani *manifest.Manifest) (map[string]string
 		}
 		if _, err := os.Stat(abs); err != nil {
 			return fmt.Errorf("dependency %q path not found: %s", name, abs)
-		}
-		// Dependency packages are treated as libraries and must have src/lib.vox.
-		if _, err := os.Stat(filepath.Join(abs, "src", "lib.vox")); err != nil {
-			return fmt.Errorf("dependency %q missing src/lib.vox: %s", name, abs)
 		}
 		if prev, ok := resolved[name]; ok && prev != abs {
 			return fmt.Errorf("dependency %q resolved to multiple paths: %s and %s", name, prev, abs)
@@ -356,9 +348,6 @@ func collectLocalModules(root string) (map[string]bool, error) {
 		rel = filepath.ToSlash(rel)
 		// Test files are not importable modules.
 		if strings.HasSuffix(rel, "_test.vox") {
-			return nil
-		}
-		if rel == "main.vox" || rel == "lib.vox" {
 			return nil
 		}
 		dir := filepath.ToSlash(filepath.Dir(rel))
