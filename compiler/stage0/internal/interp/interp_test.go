@@ -179,6 +179,17 @@ func TestInterpStringLenAndByteAt(t *testing.T) {
 	}
 }
 
+func TestInterpStringSlice(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+  let s: String = "abc";
+  let t: String = s.slice(1, 3); // "bc"
+  return t.len() + t.byte_at(0); // 2 + 'b'(98) = 100
+}`)
+	if out != "100" {
+		t.Fatalf("expected 100, got %q", out)
+	}
+}
+
 func runMain(t *testing.T, src string) string {
 	t.Helper()
 	f := source.NewFile("src/main.vox", src)

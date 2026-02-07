@@ -205,6 +205,21 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 				tmp := g.newTemp()
 				g.emit(&ir.StrByteAt{Dst: tmp, Recv: recv, Idx: idx})
 				return tmp, nil
+			case typecheck.StrCallSlice:
+				if len(e.Args) != 2 {
+					return nil, fmt.Errorf("String.slice expects 2 args")
+				}
+				sv, err := g.genExpr(e.Args[0])
+				if err != nil {
+					return nil, err
+				}
+				ev, err := g.genExpr(e.Args[1])
+				if err != nil {
+					return nil, err
+				}
+				tmp := g.newTemp()
+				g.emit(&ir.StrSlice{Dst: tmp, Recv: recv, Start: sv, End: ev})
+				return tmp, nil
 			default:
 				return nil, fmt.Errorf("unsupported string call kind")
 			}

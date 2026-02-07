@@ -51,6 +51,8 @@ func emitFunc(out *bytes.Buffer, p *ir.Program, f *ir.Func) error {
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TI32}
 			case *ir.StrByteAt:
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TI32}
+			case *ir.StrSlice:
+				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
 			case *ir.Call:
 				if i.Ret.K != ir.TUnit && i.Dst != nil {
 					tempTypes[i.Dst.ID] = i.Ret
@@ -369,6 +371,17 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		out.WriteString(cValue(i.Recv))
 		out.WriteString(", ")
 		out.WriteString(cValue(i.Idx))
+		out.WriteString(");\n")
+		return nil
+	case *ir.StrSlice:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = vox_str_slice(")
+		out.WriteString(cValue(i.Recv))
+		out.WriteString(", ")
+		out.WriteString(cValue(i.Start))
+		out.WriteString(", ")
+		out.WriteString(cValue(i.End))
 		out.WriteString(");\n")
 		return nil
 	case *ir.Call:

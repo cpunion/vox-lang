@@ -322,6 +322,27 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 					return unit(), fmt.Errorf("String.byte_at index out of bounds")
 				}
 				return Value{K: VInt, I: int64(recv.S[idx])}, nil
+			case typecheck.StrCallSlice:
+				if len(e.Args) != 2 {
+					return unit(), fmt.Errorf("String.slice expects 2 args")
+				}
+				sv, err := rt.evalExpr(e.Args[0])
+				if err != nil {
+					return unit(), err
+				}
+				ev, err := rt.evalExpr(e.Args[1])
+				if err != nil {
+					return unit(), err
+				}
+				if sv.K != VInt || ev.K != VInt {
+					return unit(), fmt.Errorf("String.slice indices must be int")
+				}
+				start := int(sv.I)
+				end := int(ev.I)
+				if start < 0 || end < start || end > len(recv.S) {
+					return unit(), fmt.Errorf("String.slice index out of bounds")
+				}
+				return Value{K: VString, S: recv.S[start:end]}, nil
 			default:
 				return unit(), fmt.Errorf("unsupported string call")
 			}

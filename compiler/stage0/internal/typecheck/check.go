@@ -350,6 +350,19 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 						}
 						c.strCalls[e] = StrCallTarget{Kind: StrCallByteAt, RecvName: alias}
 						return c.setExprType(ex, Type{K: TyI32})
+					case "slice":
+						if len(e.Args) != 2 {
+							c.errorAt(e.S, "String.slice expects 2 args")
+							return c.setExprType(ex, Type{K: TyBad})
+						}
+						sTy := c.checkExpr(e.Args[0], Type{K: TyI32})
+						eTy := c.checkExpr(e.Args[1], Type{K: TyI32})
+						if sTy.K != TyI32 || eTy.K != TyI32 {
+							c.errorAt(e.S, "String.slice indices must be i32")
+							return c.setExprType(ex, Type{K: TyBad})
+						}
+						c.strCalls[e] = StrCallTarget{Kind: StrCallSlice, RecvName: alias}
+						return c.setExprType(ex, Type{K: TyString})
 					default:
 						c.errorAt(e.S, "unknown String method: "+method)
 						return c.setExprType(ex, Type{K: TyBad})

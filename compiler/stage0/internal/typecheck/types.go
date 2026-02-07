@@ -119,6 +119,7 @@ const (
 	StrCallBad StrCallKind = iota
 	StrCallLen
 	StrCallByteAt
+	StrCallSlice
 )
 
 type StrCallTarget struct {

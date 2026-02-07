@@ -470,6 +470,18 @@ func (i *StrByteAt) fmtString() string {
 	return fmt.Sprintf("%s = str_byte_at %s %s", i.Dst.fmtString(), i.Recv.fmtString(), i.Idx.fmtString())
 }
 
+type StrSlice struct {
+	Dst   *Temp
+	Recv  Value
+	Start Value
+	End   Value
+}
+
+func (*StrSlice) instrNode() {}
+func (i *StrSlice) fmtString() string {
+	return fmt.Sprintf("%s = str_slice %s %s %s", i.Dst.fmtString(), i.Recv.fmtString(), i.Start.fmtString(), i.End.fmtString())
+}
+
 type Call struct {
 	Dst  *Temp // optional when Ret is unit
 	Ret  Type

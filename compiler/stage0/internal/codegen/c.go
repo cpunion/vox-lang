@@ -64,6 +64,16 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	out.WriteString("  if (idx < 0 || idx >= n) { fprintf(stderr, \"string index out of bounds\\n\"); exit(1); }\n")
 	out.WriteString("  return (int32_t)(uint8_t)s[idx];\n")
 	out.WriteString("}\n\n")
+	out.WriteString("static const char* vox_str_slice(const char* s, int32_t start, int32_t end) {\n")
+	out.WriteString("  int32_t n = vox_str_len(s);\n")
+	out.WriteString("  if (start < 0 || end < start || end > n) { fprintf(stderr, \"string slice out of bounds\\n\"); exit(1); }\n")
+	out.WriteString("  int32_t m = end - start;\n")
+	out.WriteString("  char* out = (char*)malloc((size_t)m + 1);\n")
+	out.WriteString("  if (!out) { fprintf(stderr, \"out of memory\\n\"); exit(1); }\n")
+	out.WriteString("  memcpy(out, s + start, (size_t)m);\n")
+	out.WriteString("  out[m] = '\\0';\n")
+	out.WriteString("  return out;\n")
+	out.WriteString("}\n\n")
 
 	// Runtime builtins
 	out.WriteString("static void vox_builtin_panic(const char* msg) {\n")

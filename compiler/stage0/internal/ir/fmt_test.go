@@ -57,6 +57,7 @@ func TestFmtStringInstrAndTerm(t *testing.T) {
 		{name: "vec_push", ins: &VecPush{Recv: s0, Elem: Type{K: TI32}, Val: t0}, want: "vec_push $v0 %t0"},
 		{name: "vec_len", ins: &VecLen{Dst: &Temp{ID: 13}, Recv: s0}, want: "%t13 = vec_len $v0"},
 		{name: "vec_get", ins: &VecGet{Dst: &Temp{ID: 14}, Ty: Type{K: TI32}, Recv: s0, Idx: &ConstInt{Ty: Type{K: TI32}, V: 0}}, want: "%t14 = vec_get i32 $v0 0"},
+		{name: "str_slice", ins: &StrSlice{Dst: &Temp{ID: 15}, Recv: &ConstStr{S: "abc"}, Start: &ConstInt{Ty: Type{K: TI32}, V: 1}, End: &ConstInt{Ty: Type{K: TI32}, V: 3}}, want: "%t15 = str_slice \"abc\" 1 3"},
 	}
 	for _, tc := range insCases {
 		t.Run("ins_"+tc.name, func(t *testing.T) {
