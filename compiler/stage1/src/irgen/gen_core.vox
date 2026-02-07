@@ -1,0 +1,112 @@
+import "ast" as ast
+import "ir" as ir
+import "typecheck" as tc
+
+struct SlotEntry { name: String, slot: i32, ty: i32, depth: i32, mutable: bool }
+struct Slots { es: Vec[SlotEntry], depth: i32 }
+struct LookupSlotResult { found: bool, slot: i32, ty: i32, mutable: bool }
+
+fn slots_new() -> Slots { return Slots { es: Vec(), depth: 0 }; }
+fn slots_enter(s: Slots) -> Slots { let mut q: Slots = s; q.depth = q.depth + 1; return q; }
+fn slots_exit(s: Slots) -> Slots { let mut q: Slots = s; q.depth = q.depth - 1; return q; }
+
+fn slots_decl(s: Slots, name: String, slot: i32, ty: i32, mutable: bool) -> Slots {
+  let mut q: Slots = s;
+  q.es.push(SlotEntry { name: name, slot: slot, ty: ty, depth: q.depth, mutable: mutable });
+  return q;
+}
+
+fn slots_lookup(s: Slots, name: String) -> LookupSlotResult {
+  let vs: Vec[SlotEntry] = s.es;
+  let mut i: i32 = vs.len() - 1;
+  while i >= 0 {
+    let e: SlotEntry = vs.get(i);
+    if e.depth <= s.depth && e.name == name {
+      return LookupSlotResult { found: true, slot: e.slot, ty: e.ty, mutable: e.mutable };
+    }
+    i = i - 1;
+  }
+  return LookupSlotResult { found: false, slot: -1, ty: -1, mutable: false };
+}
+
+struct LoopCtx { break_blk: String, cont_blk: String }
+
+struct Gen {
+  ctx: tc.Ctx,
+  w: tc.World,
+  mod_path: String,
+  aliases: Vec[tc.ImportAlias],
+  exprs: ast.ExprPool,
+
+  tmp_id: i32,
+  slot_id: i32,
+
+  blocks: Vec[ir.Block],
+  cur: i32, // block index
+
+  slots: Slots,
+  locals: tc.Locals, // type environment for tc.tc_expr
+
+  loops: Vec[LoopCtx],
+  ret_ty: i32,
+}
+
+struct GenFuncResult { ok: bool, err: String, f: ir.Func }
+
+struct GenNewIdResult { g: Gen, id: i32 }
+
+fn mk_empty_block(name: String) -> ir.Block {
+  // Term is a dummy; has_term gates it.
+  return ir.Block { name: name, instrs: Vec(), has_term: false, term: ir.Term.Br("") };
+}
+
+fn blocks_replace(bs: Vec[ir.Block], idx: i32, b: ir.Block) -> Vec[ir.Block] {
+  let mut out: Vec[ir.Block] = Vec();
+  let mut i: i32 = 0;
+  while i < bs.len() {
+    out.push(if i == idx { b } else { bs.get(i) });
+    i = i + 1;
+  }
+  return out;
+}
+
+fn gen_new_temp(g: Gen) -> GenNewIdResult {
+  let mut q: Gen = g;
+  let id: i32 = q.tmp_id;
+  q.tmp_id = q.tmp_id + 1;
+  return GenNewIdResult { g: q, id: id };
+}
+
+fn gen_new_slot(g: Gen) -> GenNewIdResult {
+  let mut q: Gen = g;
+  let id: i32 = q.slot_id;
+  q.slot_id = q.slot_id + 1;
+  return GenNewIdResult { g: q, id: id };
+}
+
+fn gen_new_block(g: Gen, name: String) -> GenNewIdResult {
+  let mut q: Gen = g;
+  q.blocks.push(mk_empty_block(name));
+  return GenNewIdResult { g: q, id: q.blocks.len() - 1 };
+}
+
+fn gen_set_block(g: Gen, idx: i32) -> Gen { let mut q: Gen = g; q.cur = idx; return q; }
+
+fn gen_emit(g: Gen, ins: ir.Instr) -> Gen {
+  let mut q: Gen = g;
+  let mut b: ir.Block = q.blocks.get(q.cur);
+  let mut is: Vec[ir.Instr] = b.instrs;
+  is.push(ins);
+  b.instrs = is;
+  q.blocks = blocks_replace(q.blocks, q.cur, b);
+  return q;
+}
+
+fn gen_term(g: Gen, t: ir.Term) -> Gen {
+  let mut q: Gen = g;
+  let mut b: ir.Block = q.blocks.get(q.cur);
+  b.has_term = true;
+  b.term = t;
+  q.blocks = blocks_replace(q.blocks, q.cur, b);
+  return q;
+}

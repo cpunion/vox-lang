@@ -1,0 +1,82 @@
+import "ast" as ast
+import "ir" as ir
+import "typecheck" as tc
+
+pub struct GenResult {
+  pub ok: bool,
+  pub err: String,
+  pub prog: ir.Program,
+}
+
+fn ok0(p: ir.Program) -> GenResult { return GenResult { ok: true, err: "", prog: p }; }
+fn err0(p: ir.Program, msg: String) -> GenResult { return GenResult { ok: false, err: msg, prog: p }; }
+
+fn qname(mod_path: String, name: String) -> String {
+  // Root module uses plain names (stage0-like); others use `a.b::name`.
+  if mod_path == "" || mod_path == "main" { return name; }
+  // Replace '/' with '.'.
+  let mut s: String = mod_path;
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == 47 { // '/'
+      s = s.slice(0, i).concat(".").concat(s.slice(i + 1, s.len()));
+    }
+    i = i + 1;
+  }
+  return s.concat("::").concat(name);
+}
+
+pub fn generate_world(w: tc.World) -> GenResult {
+  let br: tc.BuildCtxResult = tc.build_ctx(w);
+  let mut p: ir.Program = ir.program(br.ctx.pool);
+  if !br.ok { return err0(p, "build_ctx failed"); }
+
+  // Nominal defs from collected signatures.
+  let mut si: i32 = 0;
+  while si < br.ctx.structs.len() {
+    let s: tc.StructSig = br.ctx.structs.get(si);
+    let mut fields: Vec[ir.StructField] = Vec();
+    let mut fi: i32 = 0;
+    while fi < s.fields.len() {
+      let f: tc.StructFieldSig = s.fields.get(fi);
+      fields.push(ir.StructField { name: f.name, ty: f.ty });
+      fi = fi + 1;
+    }
+    p.structs.push(ir.StructDecl { name: qname(s.mod_path, s.name), fields: fields });
+    si = si + 1;
+  }
+
+  let mut ei: i32 = 0;
+  while ei < br.ctx.enums.len() {
+    let e: tc.EnumSig = br.ctx.enums.get(ei);
+    let mut vars: Vec[ir.EnumVariant] = Vec();
+    let mut vi: i32 = 0;
+    while vi < e.vars.len() {
+      let v: tc.EnumVariantSig = e.vars.get(vi);
+      vars.push(ir.EnumVariant { name: v.name, fields: v.fields });
+      vi = vi + 1;
+    }
+    p.enums.push(ir.EnumDecl { name: qname(e.mod_path, e.name), variants: vars });
+    ei = ei + 1;
+  }
+
+  // Functions (bodies).
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(mi);
+    let aliases: Vec[tc.ImportAlias] = tc.build_import_aliases(m.prog.imports);
+    let mut fi: i32 = 0;
+    while fi < m.prog.funcs.len() {
+      let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+      if fd.type_params.len() != 0 { fi = fi + 1; continue; }
+      let r: GenFuncResult = gen_func(br.ctx, w, m.path, aliases, m.prog.exprs, fd);
+      if !r.ok { return err0(p, r.err); }
+      p.funcs.push(r.f);
+      fi = fi + 1;
+    }
+    mi = mi + 1;
+  }
+
+  return ok0(p);
+}
+
