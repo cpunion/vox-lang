@@ -250,6 +250,65 @@ fn main() -> i32 { return b.one(); }`)
 	}
 }
 
+func TestBuildPackage_MultiFileSameModuleSharesPrivateSymbols(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "vox.toml"), `[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+`)
+	// root module imports a; a is implemented across multiple files in the same directory.
+	mustWrite(t, filepath.Join(dir, "src", "main.vox"), `import "a" as a
+fn main() -> i32 { return a.one(); }`)
+	mustWrite(t, filepath.Join(dir, "src", "a", "x.vox"), `fn hidden() -> i32 { return 1; }`)
+	mustWrite(t, filepath.Join(dir, "src", "a", "y.vox"), `pub fn one() -> i32 { return hidden(); }`)
+
+	_, diags, err := BuildPackage(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags.Items)
+	}
+}
+
+func TestTestPackage_ExternalTestsCannotCallPrivate(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "vox.toml"), `[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+`)
+	mustWrite(t, filepath.Join(dir, "src", "main.vox"), `fn main() -> i32 { return 0; }`)
+	mustWrite(t, filepath.Join(dir, "src", "a", "a.vox"), `pub fn one() -> i32 { return hidden(); }
+fn hidden() -> i32 { return 1; }`)
+	// External tests (tests/**) can only access pub API.
+	mustWrite(t, filepath.Join(dir, "tests", "basic.vox"), `import "a" as a
+fn test_private_is_not_accessible() -> () { a.hidden(); }`)
+
+	_, diags, err := TestPackage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diags == nil || len(diags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range diags.Items {
+		if strings.Contains(it.Msg, "function is private:") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected private function diag, got: %+v", diags.Items)
+	}
+}
+
 func TestBuildPackage_DependencyCycleIsError(t *testing.T) {
 	dir := t.TempDir()
 
