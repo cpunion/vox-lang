@@ -223,13 +223,13 @@ func (g *gen) zeroValue(t ir.Type) (ir.Value, error) {
 		}
 		// Deterministic zero value: first variant, with zero payload if needed.
 		v0 := en.Variants[0]
-		var payload ir.Value
-		if v0.Payload != nil {
-			z, err := g.zeroValue(*v0.Payload)
+		payload := make([]ir.Value, 0, len(v0.Fields))
+		for _, ft := range v0.Fields {
+			z, err := g.zeroValue(ft)
 			if err != nil {
 				return nil, err
 			}
-			payload = z
+			payload = append(payload, z)
 		}
 		tmp := g.newTemp()
 		g.emit(&ir.EnumInit{Dst: tmp, Ty: t, Variant: v0.Name, Payload: payload})

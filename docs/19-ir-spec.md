@@ -43,7 +43,7 @@ IR v0 只定义 stage0 必需类型：
 
 - `enum` 在 stage0 C 后端降低为 tagged union：
   - `tag: i32`（variant index）
-  - `union { ... } payload`（每个 variant 一个 union member；payload arity 目前仅支持 0/1）
+  - `union { ... } payload`（每个 variant 一个 union member；每个 member 是一个 `struct`，字段名为 `_%d`；payload arity 支持 0..N）
 
 ## 4. 程序结构
 
@@ -137,6 +137,7 @@ store_field $v0 .x %t1
 ```
 %t0 = enum_init enum(Option) Some(1)
 %t1 = enum_init enum(Option) None
+%t2 = enum_init enum(Pair) Pair(1, 2)
 ```
 
 读取 tag：
@@ -145,10 +146,11 @@ store_field $v0 .x %t1
 %t2 = enum_tag %t0
 ```
 
-读取 payload（仅当该 variant 带 payload）：
+读取 payload 字段（仅当该 variant 带 payload，`index` 为 0-based）：
 
 ```
-%t3 = enum_payload i32 %t0 Some
+%t3 = enum_payload i32 %t0 Some 0
+%t4 = enum_payload i32 %t2 Pair 1
 ```
 
 ## 6. 终结指令（terminator）

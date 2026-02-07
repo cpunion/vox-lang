@@ -20,7 +20,7 @@ type Value struct {
 	M map[string]Value // VStruct fields
 	E string           // VEnum qualified enum name
 	T int              // VEnum tag
-	P *Value           // VEnum payload (nil when no payload)
+	P []Value          // VEnum payload fields (nil/empty when no payload)
 	A []Value          // VVec elements
 }
 
@@ -36,9 +36,11 @@ func cloneValue(v Value) Value {
 		return out
 	case VEnum:
 		out := Value{K: VEnum, E: v.E, T: v.T}
-		if v.P != nil {
-			p := cloneValue(*v.P)
-			out.P = &p
+		if len(v.P) != 0 {
+			out.P = make([]Value, 0, len(v.P))
+			for _, pv := range v.P {
+				out.P = append(out.P, cloneValue(pv))
+			}
 		}
 		return out
 	case VVec:
@@ -50,21 +52,6 @@ func cloneValue(v Value) Value {
 	default:
 		return v
 	}
-}
-
-func derefOrUnit(v *Value) Value {
-	if v == nil {
-		return unit()
-	}
-	return *v
-}
-
-func cloneValuePtr(v *Value) *Value {
-	if v == nil {
-		return nil
-	}
-	c := cloneValue(*v)
-	return &c
 }
 
 func valueEq(a, b Value) bool {
@@ -87,13 +74,15 @@ func valueEq(a, b Value) bool {
 		if a.E != b.E || a.T != b.T {
 			return false
 		}
-		if a.P == nil && b.P == nil {
-			return true
-		}
-		if a.P == nil || b.P == nil {
+		if len(a.P) != len(b.P) {
 			return false
 		}
-		return valueEq(*a.P, *b.P)
+		for i := 0; i < len(a.P); i++ {
+			if !valueEq(a.P[i], b.P[i]) {
+				return false
+			}
+		}
+		return true
 	case VVec:
 		// Not needed for stage0 yet; keep it conservative.
 		return false

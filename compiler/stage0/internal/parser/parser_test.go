@@ -143,6 +143,21 @@ fn main() -> i32 {
 	}
 }
 
+func TestParseEnumMultiPayload(t *testing.T) {
+	f := source.NewFile("test.vox", `enum E { Pair(i32, i32), None }
+fn main() -> i32 {
+  let x: E = E.Pair(40, 2);
+  return match x {
+    E.Pair(a, b) => a + b,
+    E.None => 0,
+  };
+}`)
+	_, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+}
+
 func TestParsePubDecls(t *testing.T) {
 	f := source.NewFile("test.vox", `pub struct S { pub x: i32, y: i32 }
 pub enum E { A(i32), None }

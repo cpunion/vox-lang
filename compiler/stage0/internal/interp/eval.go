@@ -327,18 +327,21 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		}
 
 		if ctor, ok := rt.prog.EnumCtors[e]; ok {
-			if ctor.Payload.K == typecheck.TyUnit {
+			if len(ctor.Fields) == 0 {
 				return Value{K: VEnum, E: ctor.Enum.Name, T: ctor.Tag}, nil
 			}
-			if len(e.Args) != 1 {
-				return unit(), fmt.Errorf("enum constructor expects 1 arg")
+			if len(e.Args) != len(ctor.Fields) {
+				return unit(), fmt.Errorf("enum constructor expects %d args", len(ctor.Fields))
 			}
-			v, err := rt.evalExpr(e.Args[0])
-			if err != nil {
-				return unit(), err
+			payload := make([]Value, 0, len(e.Args))
+			for _, a := range e.Args {
+				v, err := rt.evalExpr(a)
+				if err != nil {
+					return unit(), err
+				}
+				payload = append(payload, cloneValue(v))
 			}
-			p := cloneValue(v)
-			return Value{K: VEnum, E: ctor.Enum.Name, T: ctor.Tag, P: &p}, nil
+			return Value{K: VEnum, E: ctor.Enum.Name, T: ctor.Tag, P: payload}, nil
 		}
 
 		target := rt.prog.CallTargets[e]
@@ -428,8 +431,12 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 					continue
 				}
 				rt.pushFrame()
-				if len(p.Binds) == 1 {
-					rt.frame()[p.Binds[0]] = derefOrUnit(cloneValuePtr(sv.P))
+				for i := 0; i < len(p.Binds); i++ {
+					if i < len(sv.P) {
+						rt.frame()[p.Binds[i]] = cloneValue(sv.P[i])
+					} else {
+						rt.frame()[p.Binds[i]] = unit()
+					}
 				}
 				v, err := rt.evalExpr(arm.Expr)
 				rt.popFrame()

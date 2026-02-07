@@ -119,6 +119,20 @@ fn main() -> i32 {
 	}
 }
 
+func TestInterpEnumMultiPayload(t *testing.T) {
+	out := runMain(t, `enum E { Pair(i32, i32), None }
+fn main() -> i32 {
+  let x: E = E.Pair(40, 2);
+  return match x {
+    E.Pair(a, b) => a + b,
+    E.None => 0,
+  };
+}`)
+	if out != "42" {
+		t.Fatalf("expected 42, got %q", out)
+	}
+}
+
 func TestInterpStructFieldOfEnumType(t *testing.T) {
 	out := runMain(t, `enum K { A, B }
 struct S { k: K }

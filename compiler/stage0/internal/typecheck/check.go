@@ -376,10 +376,6 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 					return c.setExprType(ex, Type{K: TyBad})
 				}
 				vs := es.Variants[vidx]
-				if len(vs.Fields) > 1 {
-					c.errorAt(e.S, "stage0 enum payload arity > 1 is not supported yet")
-					return c.setExprType(ex, Type{K: TyBad})
-				}
 				if len(e.Args) != len(vs.Fields) {
 					c.errorAt(e.S, fmt.Sprintf("wrong number of arguments: expected %d, got %d", len(vs.Fields), len(e.Args)))
 					return c.setExprType(ex, Type{K: TyBad})
@@ -390,11 +386,9 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 						c.errorAt(a.Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", vs.Fields[i].String(), at.String()))
 					}
 				}
-				payload := Type{K: TyUnit}
-				if len(vs.Fields) == 1 {
-					payload = vs.Fields[0]
-				}
-				c.enumCtors[e] = EnumCtorTarget{Enum: ety, Variant: varName, Tag: vidx, Payload: payload}
+				fields := make([]Type, 0, len(vs.Fields))
+				fields = append(fields, vs.Fields...)
+				c.enumCtors[e] = EnumCtorTarget{Enum: ety, Variant: varName, Tag: vidx, Fields: fields}
 				return c.setExprType(ex, ety)
 			}
 		}
@@ -507,7 +501,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 						vname := parts[len(parts)-1]
 						vidx, vok := es.VariantIndex[vname]
 						if vok && len(es.Variants[vidx].Fields) == 0 {
-							c.enumUnits[e] = EnumCtorTarget{Enum: ety, Variant: vname, Tag: vidx, Payload: Type{K: TyUnit}}
+							c.enumUnits[e] = EnumCtorTarget{Enum: ety, Variant: vname, Tag: vidx}
 							return c.setExprType(ex, ety)
 						}
 					}
@@ -620,9 +614,6 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				}
 				seenVariants[p.Variant] = true
 				v := psig.Variants[vidx]
-				if len(v.Fields) > 1 {
-					c.errorAt(p.S, "stage0 enum payload arity > 1 is not supported yet")
-				}
 				if len(p.Binds) != len(v.Fields) {
 					c.errorAt(p.S, fmt.Sprintf("wrong number of binders: expected %d, got %d", len(v.Fields), len(p.Binds)))
 				}

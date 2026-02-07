@@ -216,16 +216,16 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			if err != nil {
 				return nil, err
 			}
-			var payload ir.Value
-			if ctor.Payload.K != typecheck.TyUnit {
-				if len(e.Args) != 1 {
-					return nil, fmt.Errorf("enum constructor expects 1 arg")
-				}
-				pv, err := g.genExpr(e.Args[0])
+			if len(e.Args) != len(ctor.Fields) {
+				return nil, fmt.Errorf("enum constructor arity mismatch: expected %d args, got %d", len(ctor.Fields), len(e.Args))
+			}
+			payload := make([]ir.Value, 0, len(e.Args))
+			for _, a := range e.Args {
+				pv, err := g.genExpr(a)
 				if err != nil {
 					return nil, err
 				}
-				payload = pv
+				payload = append(payload, pv)
 			}
 			tmp := g.newTemp()
 			g.emit(&ir.EnumInit{Dst: tmp, Ty: ety, Variant: ctor.Variant, Payload: payload})

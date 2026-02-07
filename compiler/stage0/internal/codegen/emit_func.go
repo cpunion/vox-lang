@@ -265,6 +265,14 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		if !ok {
 			return fmt.Errorf("unknown enum variant: %s.%s", i.Ty.Name, i.Variant)
 		}
+		vidx := tag
+		if vidx < 0 || vidx >= len(en.Variants) {
+			return fmt.Errorf("invalid enum variant index: %s.%s", i.Ty.Name, i.Variant)
+		}
+		v := en.Variants[vidx]
+		if len(i.Payload) != len(v.Fields) {
+			return fmt.Errorf("enum_init payload arity mismatch: %s.%s expects %d fields, got %d", i.Ty.Name, i.Variant, len(v.Fields), len(i.Payload))
+		}
 		out.WriteString("  ")
 		out.WriteString(cTempName(i.Dst.ID))
 		out.WriteString(" = (")
@@ -274,7 +282,7 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		// payload
 		hasPayloadUnion := false
 		for _, v := range en.Variants {
-			if v.Payload != nil {
+			if len(v.Fields) != 0 {
 				hasPayloadUnion = true
 				break
 			}
@@ -283,9 +291,14 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 			out.WriteString(", .payload.")
 			out.WriteString(cIdent(i.Variant))
 			out.WriteString(" = {")
-			if i.Payload != nil {
-				out.WriteString("._0 = ")
-				out.WriteString(cValue(i.Payload))
+			if len(i.Payload) != 0 {
+				for idx, pv := range i.Payload {
+					if idx != 0 {
+						out.WriteString(", ")
+					}
+					out.WriteString(fmt.Sprintf("._%d = ", idx))
+					out.WriteString(cValue(pv))
+				}
 			} else {
 				out.WriteString("._ = 0")
 			}
@@ -307,7 +320,7 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		out.WriteString(cValue(i.Recv))
 		out.WriteString(".payload.")
 		out.WriteString(cIdent(i.Variant))
-		out.WriteString("._0;\n")
+		out.WriteString(fmt.Sprintf("._%d;\n", i.Index))
 		return nil
 	case *ir.VecNew:
 		if i.Ty.K != ir.TVec || i.Ty.Elem == nil {

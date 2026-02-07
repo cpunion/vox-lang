@@ -242,6 +242,29 @@ fn main() -> i32 {
 	}
 }
 
+func TestEnumMultiPayload(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum E { Pair(i32, i32), None }
+fn main() -> i32 {
+  let x: E = E.Pair(40, 2);
+  return match x {
+    E.Pair(a, b) => a + b,
+    E.None => 0,
+  };
+}`)
+	stdFiles, err := stdlib.Files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, pdiags := parser.ParseFiles(append(stdFiles, f))
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestPubVisibilityForCrossModuleAccess(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "a"

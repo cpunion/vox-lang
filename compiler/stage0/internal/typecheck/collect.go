@@ -89,9 +89,6 @@ func (c *checker) fillEnumSigs() {
 				c.errorAt(v.Span, "duplicate variant: "+v.Name)
 				continue
 			}
-			if len(v.Fields) > 1 {
-				c.errorAt(v.Span, "stage0 enum payload arity > 1 is not supported yet")
-			}
 			fields := []Type{}
 			for _, ft := range v.Fields {
 				fty := c.typeFromAstInFile(ft, en.Span.File)

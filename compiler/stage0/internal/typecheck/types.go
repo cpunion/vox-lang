@@ -86,15 +86,15 @@ type EnumSig struct {
 
 type EnumVariantSig struct {
 	Name   string
-	Fields []Type // stage0: arity 0/1
+	Fields []Type // tuple-like payload, arity 0..N
 }
 
 type EnumCtorTarget struct {
 	Enum    Type // TyEnum
 	Variant string
 	Tag     int
-	// Payload is TyUnit for unit variants.
-	Payload Type
+	// Fields is empty for unit variants.
+	Fields []Type
 }
 
 type VecCallKind int

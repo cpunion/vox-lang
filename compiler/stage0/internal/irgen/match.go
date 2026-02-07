@@ -53,8 +53,8 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 		blk     *ir.Block
 		variant string
 		tag     *int
-		bind    string
-		bindTy  *typecheck.Type
+		binds   []string
+		bindTys []typecheck.Type
 	}
 	var arms []armInfo
 	var wildBlk *ir.Block
@@ -68,11 +68,15 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 			t := es.VariantIndex[p.Variant]
 			info.variant = p.Variant
 			info.tag = &t
-			if len(p.Binds) == 1 {
-				info.bind = p.Binds[0]
-				if len(es.Variants[t].Fields) == 1 {
-					bt := es.Variants[t].Fields[0]
-					info.bindTy = &bt
+			if len(p.Binds) != 0 {
+				fields := es.Variants[t].Fields
+				n := len(p.Binds)
+				if n > len(fields) {
+					n = len(fields)
+				}
+				info.binds = append([]string{}, p.Binds[:n]...)
+				for i := 0; i < n; i++ {
+					info.bindTys = append(info.bindTys, fields[i])
 				}
 			}
 		default:
@@ -112,18 +116,18 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 		g.setBlock(info.blk)
 		g.pushScope()
 
-		if info.bind != "" && info.bindTy != nil {
-			pty, err := g.irTypeFromChecked(*info.bindTy)
+		for i := 0; i < len(info.binds) && i < len(info.bindTys); i++ {
+			pty, err := g.irTypeFromChecked(info.bindTys[i])
 			if err != nil {
 				return nil, err
 			}
 			tmp := g.newTemp()
-			g.emit(&ir.EnumPayload{Dst: tmp, Ty: pty, Recv: scrut, Variant: info.variant})
+			g.emit(&ir.EnumPayload{Dst: tmp, Ty: pty, Recv: scrut, Variant: info.variant, Index: i})
 			slot := g.newSlot()
 			g.slotTypes[slot.ID] = pty
 			g.emit(&ir.SlotDecl{Slot: slot, Ty: pty})
 			g.emit(&ir.Store{Slot: slot, Val: tmp})
-			g.declare(info.bind, slot)
+			g.declare(info.binds[i], slot)
 		}
 
 		v, err := g.genExpr(info.arm.Expr)

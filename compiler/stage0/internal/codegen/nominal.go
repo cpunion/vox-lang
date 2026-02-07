@@ -80,13 +80,12 @@ func emitNominalTypes(out *bytes.Buffer, p *ir.Program) error {
 			continue
 		}
 		for _, v := range en.Variants {
-			if v.Payload == nil {
-				continue
-			}
-			switch v.Payload.K {
-			case ir.TStruct, ir.TEnum:
-				if err := addDep(name, v.Payload.Name); err != nil {
-					return err
+			for _, ft := range v.Fields {
+				switch ft.K {
+				case ir.TStruct, ir.TEnum:
+					if err := addDep(name, ft.Name); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -171,14 +170,14 @@ func emitStructTypedef(out *bytes.Buffer, st *ir.Struct) {
 func emitEnumTypedef(out *bytes.Buffer, en *ir.Enum) {
 	hasPayload := false
 	for _, v := range en.Variants {
-		if v.Payload != nil {
+		if len(v.Fields) != 0 {
 			hasPayload = true
 			break
 		}
 	}
 
 	// Tagged-union layout:
-	//   { int32_t tag; union { struct { T _0; } Variant; struct { uint8_t _; } Unit; ... } payload; }
+	//   { int32_t tag; union { struct { T _0; U _1; } Variant; struct { uint8_t _; } Unit; ... } payload; }
 	// Using per-variant structs keeps the emitted initializers and payload reads simple.
 	out.WriteString("typedef struct {\n")
 	out.WriteString("  int32_t tag;\n")
@@ -186,13 +185,17 @@ func emitEnumTypedef(out *bytes.Buffer, en *ir.Enum) {
 		out.WriteString("  union {\n")
 		for _, v := range en.Variants {
 			out.WriteString("    struct {\n")
-			out.WriteString("      ")
-			if v.Payload != nil {
-				out.WriteString(cType(*v.Payload))
-				out.WriteString(" _0;\n")
+			if len(v.Fields) != 0 {
+				for i, fty := range v.Fields {
+					out.WriteString("      ")
+					out.WriteString(cType(fty))
+					out.WriteByte(' ')
+					out.WriteString(fmt.Sprintf("_%d", i))
+					out.WriteString(";\n")
+				}
 			} else {
 				// Dummy field for unit variants so `.payload.V = { ._ = 0 }` is always valid C.
-				out.WriteString("uint8_t _;\n")
+				out.WriteString("      uint8_t _;\n")
 			}
 			out.WriteString("    } ")
 			out.WriteString(cIdent(v.Name))

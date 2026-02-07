@@ -39,16 +39,16 @@ func (g *gen) genNominalDefs() error {
 		es := g.p.EnumSigs[name]
 		en := &ir.Enum{Name: es.Name, VariantIndex: map[string]int{}}
 		for i, v := range es.Variants {
-			var payload *ir.Type
-			if len(v.Fields) == 1 {
-				pty, err := g.irTypeFromChecked(v.Fields[0])
+			fields := make([]ir.Type, 0, len(v.Fields))
+			for _, ft := range v.Fields {
+				pty, err := g.irTypeFromChecked(ft)
 				if err != nil {
 					return err
 				}
-				payload = &pty
+				fields = append(fields, pty)
 			}
 			en.VariantIndex[v.Name] = i
-			en.Variants = append(en.Variants, ir.EnumVariant{Name: v.Name, Payload: payload})
+			en.Variants = append(en.Variants, ir.EnumVariant{Name: v.Name, Fields: fields})
 		}
 		g.out.Enums[en.Name] = en
 	}

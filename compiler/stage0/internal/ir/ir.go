@@ -78,8 +78,8 @@ type Enum struct {
 }
 
 type EnumVariant struct {
-	Name    string
-	Payload *Type // nil for unit variants
+	Name   string
+	Fields []Type // empty for unit variants
 }
 
 type Func struct {
@@ -357,7 +357,7 @@ type EnumInit struct {
 	Dst     *Temp
 	Ty      Type   // enum type
 	Variant string // variant name
-	Payload Value  // optional (nil for unit variants)
+	Payload []Value // empty for unit variants
 }
 
 func (*EnumInit) instrNode() {}
@@ -368,9 +368,14 @@ func (i *EnumInit) fmtString() string {
 	sb.WriteString(i.Ty.String())
 	sb.WriteByte(' ')
 	sb.WriteString(i.Variant)
-	if i.Payload != nil {
+	if len(i.Payload) != 0 {
 		sb.WriteByte('(')
-		sb.WriteString(i.Payload.fmtString())
+		for idx, v := range i.Payload {
+			if idx != 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(v.fmtString())
+		}
 		sb.WriteByte(')')
 	}
 	return sb.String()
@@ -391,11 +396,12 @@ type EnumPayload struct {
 	Ty      Type
 	Recv    Value
 	Variant string
+	Index   int
 }
 
 func (*EnumPayload) instrNode() {}
 func (i *EnumPayload) fmtString() string {
-	return fmt.Sprintf("%s = enum_payload %s %s %s", i.Dst.fmtString(), i.Ty.String(), i.Recv.fmtString(), i.Variant)
+	return fmt.Sprintf("%s = enum_payload %s %s %s %d", i.Dst.fmtString(), i.Ty.String(), i.Recv.fmtString(), i.Variant, i.Index)
 }
 
 type VecNew struct {
@@ -570,9 +576,14 @@ func (p *Program) Format() string {
 					sb.WriteString(", ")
 				}
 				sb.WriteString(v.Name)
-				if v.Payload != nil {
+				if len(v.Fields) != 0 {
 					sb.WriteByte('(')
-					sb.WriteString(v.Payload.String())
+					for j, ft := range v.Fields {
+						if j != 0 {
+							sb.WriteString(", ")
+						}
+						sb.WriteString(ft.String())
+					}
 					sb.WriteByte(')')
 				}
 			}

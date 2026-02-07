@@ -55,7 +55,7 @@ type EnumDecl struct {
 
 type EnumVariant struct {
 	Name   string
-	Fields []Type // stage0: tuple-like payload, arity 0/1 (typechecker enforces)
+	Fields []Type // tuple-like payload, arity 0..N
 	Span   source.Span
 }
 
@@ -302,7 +302,7 @@ func (p *WildPat) Span() source.Span { return p.S }
 type VariantPat struct {
 	TypeParts []string // enum type path segments
 	Variant   string
-	Binds     []string // payload binders (stage0: arity 0/1)
+	Binds     []string // payload binders (arity 0..N)
 	S         source.Span
 }
 
