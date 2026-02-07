@@ -308,10 +308,19 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			switch cal := e.Callee.(type) {
 			case *ast.IdentExpr:
 				target = cal.Name
-			case *ast.PathExpr:
-				target = strings.Join(cal.Parts, "::")
+			case *ast.MemberExpr:
+				parts, ok := interpCalleeParts(cal)
+				if !ok || len(parts) == 0 {
+					return unit(), fmt.Errorf("callee must be ident or member path (stage0)")
+				}
+				if len(parts) == 1 {
+					target = parts[0]
+				} else {
+					qual := strings.Join(parts[:len(parts)-1], ".")
+					target = qual + "::" + parts[len(parts)-1]
+				}
 			default:
-				return unit(), fmt.Errorf("callee must be ident or path (stage0)")
+				return unit(), fmt.Errorf("callee must be ident or member path (stage0)")
 			}
 		}
 		args := make([]Value, 0, len(e.Args))
@@ -325,6 +334,21 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		return rt.call(target, args)
 	default:
 		return unit(), fmt.Errorf("unsupported expr")
+	}
+}
+
+func interpCalleeParts(ex ast.Expr) ([]string, bool) {
+	switch e := ex.(type) {
+	case *ast.IdentExpr:
+		return []string{e.Name}, true
+	case *ast.MemberExpr:
+		p, ok := interpCalleeParts(e.Recv)
+		if !ok {
+			return nil, false
+		}
+		return append(p, e.Name), true
+	default:
+		return nil, false
 	}
 }
 

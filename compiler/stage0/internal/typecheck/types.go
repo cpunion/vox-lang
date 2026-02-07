@@ -65,6 +65,9 @@ type Options struct {
 	// AllowedPkgs is the set of importable package names in the current build.
 	// When nil, imports are accepted without validation.
 	AllowedPkgs map[string]bool
+	// LocalModules is the set of importable local modules (paths like "utils" or "utils/io").
+	// When nil, local module imports are accepted without validation.
+	LocalModules map[string]bool
 }
 
 func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
@@ -75,7 +78,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		exprTypes: map[ast.Expr]Type{},
 		callTgts:  map[*ast.CallExpr]string{},
 		opts:      opts,
-		imports:   map[*source.File]map[string]string{},
+		imports:   map[*source.File]map[string]importTarget{},
 	}
 	c.collectFuncSigs()
 	c.collectImports()
@@ -94,12 +97,17 @@ type checker struct {
 	scope []map[string]varInfo
 
 	opts    Options
-	imports map[*source.File]map[string]string // file -> qualifier -> package name
+	imports map[*source.File]map[string]importTarget // file -> qualifier -> target
 }
 
 type varInfo struct {
 	ty      Type
 	mutable bool
+}
+
+type importTarget struct {
+	Pkg string   // dependency package name; empty for local modules
+	Mod []string // base module path segments
 }
 
 func (c *checker) collectFuncSigs() {
@@ -125,33 +133,6 @@ func (c *checker) collectFuncSigs() {
 	}
 }
 
-func (c *checker) collectImports() {
-	for _, imp := range c.prog.Imports {
-		if imp == nil || imp.Span.File == nil {
-			continue
-		}
-		pkg := imp.Path
-		if c.opts.AllowedPkgs != nil && !c.opts.AllowedPkgs[pkg] {
-			c.errorAt(imp.Span, "unknown dependency package: "+pkg)
-			continue
-		}
-		alias := imp.Alias
-		if alias == "" {
-			alias = defaultImportAlias(pkg)
-		}
-		m := c.imports[imp.Span.File]
-		if m == nil {
-			m = map[string]string{}
-			c.imports[imp.Span.File] = m
-		}
-		if _, exists := m[alias]; exists {
-			c.errorAt(imp.Span, "duplicate import alias: "+alias)
-			continue
-		}
-		m[alias] = pkg
-	}
-}
-
 func (c *checker) checkAll() {
 	for _, fn := range c.prog.Funcs {
 		c.curFn = fn
@@ -163,6 +144,47 @@ func (c *checker) checkAll() {
 		}
 		c.checkBlock(fn.Body, sig.Ret)
 		c.popScope()
+	}
+}
+
+func (c *checker) collectImports() {
+	for _, imp := range c.prog.Imports {
+		if imp == nil || imp.Span.File == nil {
+			continue
+		}
+
+		path := imp.Path
+		alias := imp.Alias
+
+		var tgt importTarget
+		if c.opts.AllowedPkgs != nil && c.opts.AllowedPkgs[path] {
+			// dependency root import
+			tgt = importTarget{Pkg: path, Mod: nil}
+			if alias == "" {
+				alias = path
+			}
+		} else {
+			// local module import
+			if c.opts.LocalModules != nil && !c.opts.LocalModules[path] {
+				c.errorAt(imp.Span, "unknown local module: "+path)
+				continue
+			}
+			tgt = importTarget{Pkg: "", Mod: splitModPath(path)}
+			if alias == "" {
+				alias = defaultImportAlias(path)
+			}
+		}
+
+		m := c.imports[imp.Span.File]
+		if m == nil {
+			m = map[string]importTarget{}
+			c.imports[imp.Span.File] = m
+		}
+		if _, exists := m[alias]; exists {
+			c.errorAt(imp.Span, "duplicate import alias: "+alias)
+			continue
+		}
+		m[alias] = tgt
 	}
 }
 
@@ -335,45 +357,53 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 	case *ast.CallExpr:
-		var target string
-		switch cal := e.Callee.(type) {
-		case *ast.IdentExpr:
-			// Unqualified call: resolve within the current package first.
-			target = cal.Name
-			if _, ok := c.funcSigs[target]; !ok {
-				pkg := names.PackageFromFileName(c.curFn.Span.File.Name)
-				if pkg != "" {
-					if _, ok := c.funcSigs[pkg+"::"+cal.Name]; ok {
-						target = pkg + "::" + cal.Name
+		parts, ok := calleeParts(e.Callee)
+		if !ok || len(parts) == 0 {
+			c.errorAt(e.S, "callee must be an identifier or member path (stage0)")
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+
+		target := ""
+		if len(parts) == 1 {
+			name := parts[0]
+			if _, ok := c.funcSigs[name]; ok {
+				target = name // builtins
+			} else {
+				pkg, mod, _ := names.SplitOwnerAndModule(c.curFn.Span.File.Name)
+				q := names.QualifyParts(pkg, mod, name)
+				if _, ok := c.funcSigs[q]; ok {
+					target = q
+				} else {
+					// fallback: root module of the same package
+					q2 := names.QualifyParts(pkg, nil, name)
+					if _, ok := c.funcSigs[q2]; ok {
+						target = q2
 					}
 				}
 			}
-		case *ast.PathExpr:
-			if len(cal.Parts) != 2 {
-				c.errorAt(e.S, "stage0 only supports `pkg.fn(...)` calls for qualified names")
-				return c.setExprType(ex, Type{K: TyBad})
-			}
-			qual := cal.Parts[0]
-			member := cal.Parts[1]
-			curPkg := names.PackageFromFileName(c.curFn.Span.File.Name)
-			if curPkg != "" && qual == curPkg {
-				// Allow self-qualified calls within a dependency package without import.
-				target = curPkg + "::" + member
-				break
-			}
+		} else {
+			// Qualified call: first segment must be an imported alias.
+			qualParts := parts[:len(parts)-1]
+			member := parts[len(parts)-1]
+			alias := qualParts[0]
+			extraMods := qualParts[1:]
+
 			if c.curFn.Span.File == nil {
 				c.errorAt(e.S, "internal error: missing file for import resolution")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
 			m := c.imports[c.curFn.Span.File]
-			pkg, ok := m[qual]
+			tgt, ok := m[alias]
 			if !ok {
-				c.errorAt(e.S, "unknown package qualifier: "+qual+" (did you forget `import \""+qual+"\"`?)")
+				c.errorAt(e.S, "unknown package qualifier: "+alias+" (did you forget `import \""+alias+"\"`?)")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
-			target = pkg + "::" + member
-		default:
-			c.errorAt(e.S, "callee must be an identifier (stage0)")
+			mod := append(append([]string{}, tgt.Mod...), extraMods...)
+			target = names.QualifyParts(tgt.Pkg, mod, member)
+		}
+
+		if target == "" {
+			c.errorAt(e.S, "unknown function")
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 		sig, ok := c.funcSigs[target]
@@ -487,4 +517,34 @@ func defaultImportAlias(path string) string {
 		return path[i+1:]
 	}
 	return path
+}
+
+func splitModPath(path string) []string {
+	if path == "" {
+		return nil
+	}
+	parts := strings.Split(path, "/")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p == "" || p == "." {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func calleeParts(ex ast.Expr) ([]string, bool) {
+	switch e := ex.(type) {
+	case *ast.IdentExpr:
+		return []string{e.Name}, true
+	case *ast.MemberExpr:
+		p, ok := calleeParts(e.Recv)
+		if !ok {
+			return nil, false
+		}
+		return append(p, e.Name), true
+	default:
+		return nil, false
+	}
 }

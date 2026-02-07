@@ -46,11 +46,15 @@ fn main() -> i32 { return dep.one(); }`)
 	if !ok {
 		t.Fatalf("expected call expr, got %T", ret.Expr)
 	}
-	path, ok := call.Callee.(*ast.PathExpr)
+	mem, ok := call.Callee.(*ast.MemberExpr)
 	if !ok {
-		t.Fatalf("expected path callee, got %T", call.Callee)
+		t.Fatalf("expected member callee, got %T", call.Callee)
 	}
-	if len(path.Parts) != 2 || path.Parts[0] != "dep" || path.Parts[1] != "one" {
-		t.Fatalf("unexpected path parts: %#v", path.Parts)
+	recv, ok := mem.Recv.(*ast.IdentExpr)
+	if !ok {
+		t.Fatalf("expected ident recv, got %T", mem.Recv)
+	}
+	if recv.Name != "dep" || mem.Name != "one" {
+		t.Fatalf("unexpected member: %s.%s", recv.Name, mem.Name)
 	}
 }

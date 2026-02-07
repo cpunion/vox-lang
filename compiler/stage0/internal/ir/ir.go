@@ -3,6 +3,7 @@ package ir
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -14,6 +15,7 @@ const (
 	TBool
 	TI32
 	TI64
+	TString
 )
 
 type Type struct {
@@ -30,6 +32,8 @@ func (t Type) String() string {
 		return "i32"
 	case TI64:
 		return "i64"
+	case TString:
+		return "str"
 	default:
 		return "<bad>"
 	}
@@ -124,11 +128,21 @@ func (c *ConstBool) fmtString() string {
 	return "false"
 }
 
+type ConstStr struct {
+	S string // unescaped content
+}
+
+func (*ConstStr) valueNode() {}
+func (c *ConstStr) fmtString() string {
+	// Keep IR round-trippable and readable.
+	return strconv.Quote(c.S)
+}
+
 // Instructions
 type Const struct {
 	Dst *Temp
 	Ty  Type
-	Val Value // ConstInt/ConstBool only
+	Val Value // ConstInt/ConstBool/ConstStr only
 }
 
 func (*Const) instrNode() {}

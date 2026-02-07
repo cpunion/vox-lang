@@ -2,6 +2,7 @@ package irgen
 
 import (
 	"fmt"
+	"strconv"
 
 	"voxlang/internal/ast"
 	"voxlang/internal/ir"
@@ -151,7 +152,7 @@ func (g *gen) irTypeFromChecked(t typecheck.Type) (ir.Type, error) {
 	case typecheck.TyI64:
 		return ir.Type{K: ir.TI64}, nil
 	case typecheck.TyString:
-		return ir.Type{}, fmt.Errorf("String not supported by stage0 IR backend")
+		return ir.Type{K: ir.TString}, nil
 	default:
 		return ir.Type{}, fmt.Errorf("unsupported type")
 	}
@@ -290,6 +291,14 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 	case *ast.BoolLit:
 		tmp := g.newTemp()
 		g.emit(&ir.Const{Dst: tmp, Ty: ir.Type{K: ir.TBool}, Val: &ir.ConstBool{V: e.Value}})
+		return tmp, nil
+	case *ast.StringLit:
+		tmp := g.newTemp()
+		s, err := unquoteUnescape(e.Text)
+		if err != nil {
+			return nil, err
+		}
+		g.emit(&ir.Const{Dst: tmp, Ty: ir.Type{K: ir.TString}, Val: &ir.ConstStr{S: s}})
 		return tmp, nil
 	case *ast.IdentExpr:
 		slot, ok := g.lookup(e.Name)
@@ -458,4 +467,10 @@ func typeFromAstLimited(t ast.Type) typecheck.Type {
 	default:
 		return typecheck.Type{K: typecheck.TyBad}
 	}
+}
+
+func unquoteUnescape(lit string) (string, error) {
+	// Lexer keeps the full token lexeme including quotes; reuse Go-like unquoting.
+	// This accepts standard escapes like \n, \t, \\, \", \r.
+	return strconv.Unquote(lit)
 }

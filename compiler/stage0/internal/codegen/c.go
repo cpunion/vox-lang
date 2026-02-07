@@ -26,6 +26,7 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	out.WriteString("#include <inttypes.h>\n")
 	out.WriteString("#include <stdio.h>\n")
 	out.WriteString("#include <stdlib.h>\n\n")
+	out.WriteString("#include <string.h>\n\n")
 
 	// Runtime builtins
 	out.WriteString("static void vox_builtin_assert(bool cond) {\n")
@@ -91,6 +92,11 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 			out.WriteString(cFnName("main"))
 			out.WriteString("();\n")
 			out.WriteString("  printf(\"%\" PRId64 \"\\n\", v);\n")
+		case ir.TString:
+			out.WriteString("  const char* v = ")
+			out.WriteString(cFnName("main"))
+			out.WriteString("();\n")
+			out.WriteString("  printf(\"%s\\n\", v ? v : \"\");\n")
 		default:
 			return "", fmt.Errorf("unsupported main return type in driver")
 		}
@@ -225,6 +231,26 @@ func emitInstr(out *bytes.Buffer, ins ir.Instr) error {
 		out.WriteString(";\n")
 		return nil
 	case *ir.Cmp:
+		if i.Ty.K == ir.TString {
+			// Only equality is supported for strings in stage0 backend.
+			if i.Op != ir.CmpEq && i.Op != ir.CmpNe {
+				return fmt.Errorf("unsupported string comparison")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = (strcmp(")
+			out.WriteString(cValue(i.A))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.B))
+			out.WriteString(") ")
+			if i.Op == ir.CmpEq {
+				out.WriteString("==")
+			} else {
+				out.WriteString("!=")
+			}
+			out.WriteString(" 0);\n")
+			return nil
+		}
 		out.WriteString("  ")
 		out.WriteString(cTempName(i.Dst.ID))
 		out.WriteString(" = (")
@@ -344,6 +370,8 @@ func cType(t ir.Type) string {
 		return "int32_t"
 	case ir.TI64:
 		return "int64_t"
+	case ir.TString:
+		return "const char*"
 	default:
 		return "void"
 	}
@@ -398,9 +426,42 @@ func cValue(v ir.Value) string {
 			return "true"
 		}
 		return "false"
+	case *ir.ConstStr:
+		return cStringLit(x.S)
 	default:
 		return "0"
 	}
+}
+
+func cStringLit(s string) string {
+	// Emit a valid C string literal.
+	// Keep it ASCII-ish; escape control chars and quotes/backslashes.
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch ch {
+		case '\\':
+			b.WriteString("\\\\")
+		case '"':
+			b.WriteString("\\\"")
+		case '\n':
+			b.WriteString("\\n")
+		case '\r':
+			b.WriteString("\\r")
+		case '\t':
+			b.WriteString("\\t")
+		default:
+			if ch < 0x20 {
+				// generic hex escape
+				fmt.Fprintf(&b, "\\x%02x", ch)
+			} else {
+				b.WriteByte(ch)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func stringToCOp(op string) string {

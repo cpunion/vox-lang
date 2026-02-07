@@ -135,11 +135,15 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		return &BuildResult{Manifest: mani}, pdiags, nil
 	}
+	localMods, err := collectLocalModules(root)
+	if err != nil {
+		return nil, nil, err
+	}
 	allowed := map[string]bool{}
 	for name := range mani.Dependencies {
 		allowed[name] = true
 	}
-	checked, tdiags := typecheck.Check(prog, typecheck.Options{AllowedPkgs: allowed})
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{AllowedPkgs: allowed, LocalModules: localMods})
 	if tdiags != nil && len(tdiags.Items) > 0 {
 		return &BuildResult{Manifest: mani}, tdiags, nil
 	}
@@ -204,9 +208,53 @@ func validateDeps(root string, mani *manifest.Manifest) error {
 		if _, err := os.Stat(p); err != nil {
 			return fmt.Errorf("dependency %q path not found: %s", name, p)
 		}
-		// If the dependency is a Vox package, it should have vox.toml (soft requirement for now).
+		// For stage0, dependency packages are treated as libraries and must have src/lib.vox.
+		if _, err := os.Stat(filepath.Join(p, "src", "lib.vox")); err != nil {
+			return fmt.Errorf("dependency %q missing src/lib.vox: %s", name, p)
+		}
 	}
 	return nil
+}
+
+func collectLocalModules(root string) (map[string]bool, error) {
+	// Module paths are import paths relative to src/ without ".vox".
+	// Directory modules are represented by src/<dir>/lib.vox and imported as "<dir>".
+	srcDir := filepath.Join(root, "src")
+	out := map[string]bool{}
+	err := filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			base := filepath.Base(path)
+			if base == "target" || strings.HasPrefix(base, ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".vox" {
+			return nil
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "main.vox" || rel == "lib.vox" {
+			return nil
+		}
+		if strings.HasSuffix(rel, "/lib.vox") {
+			mod := strings.TrimSuffix(rel, "/lib.vox")
+			out[mod] = true
+			return nil
+		}
+		out[strings.TrimSuffix(rel, ".vox")] = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 type collectOptions struct {
