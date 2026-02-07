@@ -29,6 +29,7 @@ func ParseFiles(files []*source.File) (*ast.Program, *diag.Bag) {
 		prog, d := Parse(f)
 		if prog != nil {
 			merged.Imports = append(merged.Imports, prog.Imports...)
+			merged.Structs = append(merged.Structs, prog.Structs...)
 			merged.Funcs = append(merged.Funcs, prog.Funcs...)
 		}
 		if d != nil && len(d.Items) > 0 {
@@ -51,6 +52,13 @@ func (p *Parser) parseProgram() *ast.Program {
 			}
 			continue
 		}
+		if p.match(lexer.TokenStruct) {
+			st := p.parseStructDecl()
+			if st != nil {
+				prog.Structs = append(prog.Structs, st)
+			}
+			continue
+		}
 		if p.match(lexer.TokenFn) {
 			fn := p.parseFuncDecl()
 			if fn != nil {
@@ -58,7 +66,7 @@ func (p *Parser) parseProgram() *ast.Program {
 			}
 			continue
 		}
-		p.errorHere("expected `import` or `fn`")
+		p.errorHere("expected `import`, `struct`, or `fn`")
 		p.advance()
 	}
 	return prog
@@ -84,13 +92,44 @@ func (p *Parser) parseImportDecl() *ast.ImportDecl {
 		endTok = p.prev()
 	} else {
 		switch p.peek().Kind {
-		case lexer.TokenFn, lexer.TokenImport, lexer.TokenEOF:
+		case lexer.TokenFn, lexer.TokenStruct, lexer.TokenImport, lexer.TokenEOF:
 			// ok
 		default:
 			p.errorHere("expected `;` or next top-level item after import")
 		}
 	}
 	return &ast.ImportDecl{Path: path, Alias: alias, Span: joinSpan(start.Span, endTok.Span)}
+}
+
+func (p *Parser) parseStructDecl() *ast.StructDecl {
+	startTok := p.prev() // `struct`
+	nameTok := p.expect(lexer.TokenIdent, "expected struct name")
+	if nameTok.Kind != lexer.TokenIdent {
+		return nil
+	}
+	lbrace := p.expect(lexer.TokenLBrace, "expected `{` after struct name")
+	if lbrace.Kind != lexer.TokenLBrace {
+		return nil
+	}
+	fields := []ast.StructField{}
+	for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
+		fname := p.expect(lexer.TokenIdent, "expected field name")
+		p.expect(lexer.TokenColon, "expected `:` after field name")
+		ty := p.parseType()
+		fields = append(fields, ast.StructField{Name: fname.Lexeme, Type: ty, Span: joinSpan(fname.Span, ty.Span())})
+		if p.match(lexer.TokenComma) {
+			// allow trailing comma before }
+			continue
+		}
+		break
+	}
+	rbrace := p.expect(lexer.TokenRBrace, "expected `}`")
+	endTok := rbrace
+	_ = p.match(lexer.TokenSemicolon) // optional
+	if p.prev().Kind == lexer.TokenSemicolon {
+		endTok = p.prev()
+	}
+	return &ast.StructDecl{Name: nameTok.Lexeme, Fields: fields, Span: joinSpan(startTok.Span, endTok.Span)}
 }
 
 func (p *Parser) parseFuncDecl() *ast.FuncDecl {
@@ -168,6 +207,9 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseBlock()
 	case lexer.TokenIdent:
 		// assignment or expr stmt
+		if p.peekN(1).Kind == lexer.TokenDot && p.peekN(2).Kind == lexer.TokenIdent && p.peekN(3).Kind == lexer.TokenEq {
+			return p.parseFieldAssign()
+		}
 		if p.peekN(1).Kind == lexer.TokenEq {
 			return p.parseAssign()
 		}
@@ -207,6 +249,21 @@ func (p *Parser) parseAssign() ast.Stmt {
 	ex := p.parseExpr(0)
 	semi := p.expect(lexer.TokenSemicolon, "expected `;`")
 	return &ast.AssignStmt{Name: nameTok.Lexeme, Expr: ex, S: joinSpan(nameTok.Span, semi.Span)}
+}
+
+func (p *Parser) parseFieldAssign() ast.Stmt {
+	recvTok := p.expect(lexer.TokenIdent, "expected name")
+	p.expect(lexer.TokenDot, "expected `.`")
+	fieldTok := p.expect(lexer.TokenIdent, "expected field name")
+	p.expect(lexer.TokenEq, "expected `=`")
+	ex := p.parseExpr(0)
+	semi := p.expect(lexer.TokenSemicolon, "expected `;`")
+	return &ast.FieldAssignStmt{
+		Recv:  recvTok.Lexeme,
+		Field: fieldTok.Lexeme,
+		Expr:  ex,
+		S:     joinSpan(recvTok.Span, semi.Span),
+	}
 }
 
 func (p *Parser) parseReturn() ast.Stmt {
@@ -351,6 +408,13 @@ func (p *Parser) parsePrefix() ast.Expr {
 
 func (p *Parser) parsePostfix(ex ast.Expr) ast.Expr {
 	for {
+		if p.at(lexer.TokenLBrace) {
+			parts, ok := exprPathParts(ex)
+			if ok {
+				ex = p.parseStructLit(parts, ex.Span())
+				continue
+			}
+		}
 		if p.match(lexer.TokenDot) {
 			id := p.expect(lexer.TokenIdent, "expected identifier after `.`")
 			ex = &ast.MemberExpr{Recv: ex, Name: id.Lexeme, S: joinSpan(ex.Span(), id.Span)}
@@ -374,6 +438,45 @@ func (p *Parser) parsePostfix(ex ast.Expr) ast.Expr {
 		break
 	}
 	return ex
+}
+
+func (p *Parser) parseStructLit(typeParts []string, typeSpan source.Span) ast.Expr {
+	lb := p.expect(lexer.TokenLBrace, "expected `{`")
+	inits := []ast.FieldInit{}
+	if !p.at(lexer.TokenRBrace) {
+		for {
+			fname := p.expect(lexer.TokenIdent, "expected field name")
+			p.expect(lexer.TokenColon, "expected `:` after field name")
+			val := p.parseExpr(0)
+			inits = append(inits, ast.FieldInit{Name: fname.Lexeme, Expr: val, Span: joinSpan(fname.Span, val.Span())})
+			if p.match(lexer.TokenComma) {
+				// allow trailing comma
+				if p.at(lexer.TokenRBrace) {
+					break
+				}
+				continue
+			}
+			break
+		}
+	}
+	rb := p.expect(lexer.TokenRBrace, "expected `}`")
+	_ = lb
+	return &ast.StructLitExpr{TypeParts: typeParts, Inits: inits, S: joinSpan(typeSpan, rb.Span)}
+}
+
+func exprPathParts(ex ast.Expr) ([]string, bool) {
+	switch e := ex.(type) {
+	case *ast.IdentExpr:
+		return []string{e.Name}, true
+	case *ast.MemberExpr:
+		p, ok := exprPathParts(e.Recv)
+		if !ok {
+			return nil, false
+		}
+		return append(p, e.Name), true
+	default:
+		return nil, false
+	}
 }
 
 func (p *Parser) peekInfix() (op string, prec int, rightAssoc bool) {

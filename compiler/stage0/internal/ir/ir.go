@@ -16,10 +16,13 @@ const (
 	TI32
 	TI64
 	TString
+	TStruct
 )
 
 type Type struct {
 	K TypeKind
+	// Name is set when K == TStruct (qualified name).
+	Name string
 }
 
 func (t Type) String() string {
@@ -34,13 +37,26 @@ func (t Type) String() string {
 		return "i64"
 	case TString:
 		return "str"
+	case TStruct:
+		return "struct(" + t.Name + ")"
 	default:
 		return "<bad>"
 	}
 }
 
 type Program struct {
-	Funcs map[string]*Func
+	Structs map[string]*Struct
+	Funcs   map[string]*Func
+}
+
+type Struct struct {
+	Name   string
+	Fields []StructField
+}
+
+type StructField struct {
+	Name string
+	Ty   Type
 }
 
 type Func struct {
@@ -260,6 +276,60 @@ func (i *Load) fmtString() string {
 	return fmt.Sprintf("%s = load %s %s", i.Dst.fmtString(), i.Ty.String(), i.Slot.fmtString())
 }
 
+type StructInit struct {
+	Dst    *Temp
+	Ty     Type // struct type
+	Fields []StructInitField
+}
+
+type StructInitField struct {
+	Name string
+	Val  Value
+}
+
+func (*StructInit) instrNode() {}
+func (i *StructInit) fmtString() string {
+	var sb strings.Builder
+	sb.WriteString(i.Dst.fmtString())
+	sb.WriteString(" = struct_init ")
+	sb.WriteString(i.Ty.String())
+	sb.WriteByte(' ')
+	sb.WriteByte('{')
+	for j, f := range i.Fields {
+		if j > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(f.Name)
+		sb.WriteString(": ")
+		sb.WriteString(f.Val.fmtString())
+	}
+	sb.WriteByte('}')
+	return sb.String()
+}
+
+type FieldGet struct {
+	Dst   *Temp
+	Ty    Type
+	Recv  Value
+	Field string
+}
+
+func (*FieldGet) instrNode() {}
+func (i *FieldGet) fmtString() string {
+	return fmt.Sprintf("%s = field_get %s %s .%s", i.Dst.fmtString(), i.Ty.String(), i.Recv.fmtString(), i.Field)
+}
+
+type StoreField struct {
+	Slot  *Slot
+	Field string
+	Val   Value
+}
+
+func (*StoreField) instrNode() {}
+func (i *StoreField) fmtString() string {
+	return fmt.Sprintf("store_field %s .%s %s", i.Slot.fmtString(), i.Field, i.Val.fmtString())
+}
+
 type Call struct {
 	Dst  *Temp // optional when Ret is unit
 	Ret  Type
@@ -323,7 +393,34 @@ func (t *CondBr) fmtString() string {
 func (p *Program) Format() string {
 	var sb strings.Builder
 	sb.WriteString("ir v0\n")
-	if p == nil || len(p.Funcs) == 0 {
+	if p == nil {
+		return sb.String()
+	}
+
+	if len(p.Structs) > 0 {
+		snames := make([]string, 0, len(p.Structs))
+		for name := range p.Structs {
+			snames = append(snames, name)
+		}
+		sort.Strings(snames)
+		for _, name := range snames {
+			st := p.Structs[name]
+			sb.WriteString("struct ")
+			sb.WriteString(st.Name)
+			sb.WriteString(" { ")
+			for i, f := range st.Fields {
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(f.Name)
+				sb.WriteString(": ")
+				sb.WriteString(f.Ty.String())
+			}
+			sb.WriteString(" }\n")
+		}
+	}
+
+	if len(p.Funcs) == 0 {
 		return sb.String()
 	}
 	names := make([]string, 0, len(p.Funcs))

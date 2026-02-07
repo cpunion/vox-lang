@@ -107,6 +107,57 @@ fn main() -> i32 { return dep.one(); }`),
 	}
 }
 
+func TestPipelineStructCompilesAndRuns(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("cc not found")
+	}
+
+	f := source.NewFile("src/main.vox", `struct Point { x: i32, y: i32 }
+fn main() -> i32 {
+  let mut p: Point = Point { x: 1, y: 2 };
+  let a: i32 = p.x;
+  p.x = a + 1;
+  return p.x + p.y;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	irp, err := irgen.Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrc, err := EmitC(irp, EmitOptions{EmitDriverMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	cPath := filepath.Join(dir, "a.c")
+	binPath := filepath.Join(dir, "a.out")
+	if err := writeFile(cPath, csrc); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(cc, "-std=c11", "-O0", "-g", cPath, "-o", binPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, string(out))
+	}
+	run := exec.Command(binPath)
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "4" {
+		t.Fatalf("expected output 4, got %q", got)
+	}
+}
+
 func writeFile(path string, s string) error {
 	// Keep helper local to avoid pulling additional deps into stage0.
 	return os.WriteFile(path, []byte(s), 0o644)

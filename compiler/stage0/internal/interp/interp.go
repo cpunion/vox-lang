@@ -18,6 +18,7 @@ const (
 	VBool
 	VInt
 	VString
+	VStruct
 )
 
 type Value struct {
@@ -25,9 +26,21 @@ type Value struct {
 	I int64
 	B bool
 	S string
+	M map[string]Value // VStruct fields
 }
 
 func unit() Value { return Value{K: VUnit} }
+
+func cloneValue(v Value) Value {
+	if v.K != VStruct {
+		return v
+	}
+	out := Value{K: VStruct, M: map[string]Value{}}
+	for k, fv := range v.M {
+		out.M[k] = cloneValue(fv)
+	}
+	return out
+}
 
 type Runtime struct {
 	prog  *typecheck.CheckedProgram
@@ -187,7 +200,7 @@ func (rt *Runtime) evalStmt(st ast.Stmt) (Value, error) {
 				return unit(), err
 			}
 		}
-		rt.frame()[s.Name] = v
+		rt.frame()[s.Name] = cloneValue(v)
 		return unit(), nil
 	case *ast.AssignStmt:
 		v, err := rt.evalExpr(s.Expr)
@@ -198,7 +211,23 @@ func (rt *Runtime) evalStmt(st ast.Stmt) (Value, error) {
 		if !ok {
 			return unit(), fmt.Errorf("unknown variable: %s", s.Name)
 		}
-		fr[s.Name] = v
+		fr[s.Name] = cloneValue(v)
+		return unit(), nil
+	case *ast.FieldAssignStmt:
+		v, err := rt.evalExpr(s.Expr)
+		if err != nil {
+			return unit(), err
+		}
+		fr, ok := rt.lookup(s.Recv)
+		if !ok {
+			return unit(), fmt.Errorf("unknown variable: %s", s.Recv)
+		}
+		recv := fr[s.Recv]
+		if recv.K != VStruct || recv.M == nil {
+			return unit(), fmt.Errorf("field assignment requires struct receiver")
+		}
+		recv.M[s.Field] = cloneValue(v)
+		fr[s.Recv] = recv
 		return unit(), nil
 	case *ast.ReturnStmt:
 		v := unit()
@@ -387,6 +416,29 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			args = append(args, v)
 		}
 		return rt.call(target, args)
+	case *ast.MemberExpr:
+		recv, err := rt.evalExpr(e.Recv)
+		if err != nil {
+			return unit(), err
+		}
+		if recv.K != VStruct || recv.M == nil {
+			return unit(), fmt.Errorf("member access requires struct receiver")
+		}
+		v, ok := recv.M[e.Name]
+		if !ok {
+			return unit(), fmt.Errorf("unknown field: %s", e.Name)
+		}
+		return v, nil
+	case *ast.StructLitExpr:
+		m := map[string]Value{}
+		for _, init := range e.Inits {
+			v, err := rt.evalExpr(init.Expr)
+			if err != nil {
+				return unit(), err
+			}
+			m[init.Name] = cloneValue(v)
+		}
+		return Value{K: VStruct, M: m}, nil
 	default:
 		return unit(), fmt.Errorf("unsupported expr")
 	}
@@ -420,6 +472,9 @@ func valueEq(a, b Value) bool {
 		return a.I == b.I
 	case VString:
 		return a.S == b.S
+	case VStruct:
+		// Not needed for stage0 yet; keep it conservative.
+		return false
 	default:
 		return false
 	}

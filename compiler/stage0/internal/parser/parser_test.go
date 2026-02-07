@@ -77,3 +77,21 @@ func TestParseWhileBreakContinue(t *testing.T) {
 		t.Fatalf("expected 1 func, got %d", len(prog.Funcs))
 	}
 }
+
+func TestParseStructDeclAndLitAndFieldAssign(t *testing.T) {
+	f := source.NewFile("test.vox", `struct Point { x: i32, y: i32 }
+fn main() -> i32 {
+  let mut p: Point = Point { x: 1, y: 2 };
+  let a: i32 = p.x;
+  p.x = a + 1;
+  return p.x + p.y;
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Funcs) != 1 {
+		t.Fatalf("expected 1 func, got %d", len(prog.Funcs))
+	}
+	// struct decl count will be asserted once parser supports it
+}

@@ -156,3 +156,21 @@ fn main() -> i32 {
 		t.Fatalf("expected member-call-on-value diag, got: %+v", tdiags.Items)
 	}
 }
+
+func TestStructFieldReadWrite(t *testing.T) {
+	f := source.NewFile("src/main.vox", `struct Point { x: i32, y: i32 }
+fn main() -> i32 {
+  let mut p: Point = Point { x: 1, y: 2 };
+  let a: i32 = p.x;
+  p.x = a + 1;
+  return p.x + p.y;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}

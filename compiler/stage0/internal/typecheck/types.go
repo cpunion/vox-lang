@@ -21,10 +21,14 @@ const (
 	TyI64
 	TyString
 	TyUntypedInt
+	TyStruct
 )
 
 type Type struct {
 	K Kind
+	// Name is set when K == TyStruct, using the qualified name format:
+	//   "<pkg>::<mod.path>::<Name>" or "<Name>" for root package/root module.
+	Name string
 }
 
 func (t Type) String() string {
@@ -41,15 +45,18 @@ func (t Type) String() string {
 		return "String"
 	case TyUntypedInt:
 		return "untyped-int"
+	case TyStruct:
+		return t.Name
 	default:
 		return "<bad>"
 	}
 }
 
 type CheckedProgram struct {
-	Prog      *ast.Program
-	FuncSigs  map[string]FuncSig
-	ExprTypes map[ast.Expr]Type
+	Prog       *ast.Program
+	FuncSigs   map[string]FuncSig
+	StructSigs map[string]StructSig
+	ExprTypes  map[ast.Expr]Type
 	// CallTargets stores the resolved function name (possibly qualified, e.g. "dep::foo").
 	// Note: Vox surface syntax may use `dep.foo(...)`; it still resolves to `dep::foo` internally.
 	// for each call expression.
@@ -59,6 +66,17 @@ type CheckedProgram struct {
 type FuncSig struct {
 	Params []Type
 	Ret    Type
+}
+
+type StructSig struct {
+	Name       string
+	Fields     []StructFieldSig
+	FieldIndex map[string]int
+}
+
+type StructFieldSig struct {
+	Name string
+	Ty   Type
 }
 
 type Options struct {
@@ -76,26 +94,29 @@ type Options struct {
 
 func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 	c := &checker{
-		prog:      prog,
-		diags:     &diag.Bag{},
-		funcSigs:  map[string]FuncSig{},
-		exprTypes: map[ast.Expr]Type{},
-		callTgts:  map[*ast.CallExpr]string{},
-		opts:      opts,
-		imports:   map[*source.File]map[string]importTarget{},
+		prog:       prog,
+		diags:      &diag.Bag{},
+		funcSigs:   map[string]FuncSig{},
+		structSigs: map[string]StructSig{},
+		exprTypes:  map[ast.Expr]Type{},
+		callTgts:   map[*ast.CallExpr]string{},
+		opts:       opts,
+		imports:    map[*source.File]map[string]importTarget{},
 	}
+	c.collectStructSigs()
 	c.collectFuncSigs()
 	c.collectImports()
 	c.checkAll()
-	return &CheckedProgram{Prog: prog, FuncSigs: c.funcSigs, ExprTypes: c.exprTypes, CallTargets: c.callTgts}, c.diags
+	return &CheckedProgram{Prog: prog, FuncSigs: c.funcSigs, StructSigs: c.structSigs, ExprTypes: c.exprTypes, CallTargets: c.callTgts}, c.diags
 }
 
 type checker struct {
-	prog      *ast.Program
-	diags     *diag.Bag
-	funcSigs  map[string]FuncSig
-	exprTypes map[ast.Expr]Type
-	callTgts  map[*ast.CallExpr]string
+	prog       *ast.Program
+	diags      *diag.Bag
+	funcSigs   map[string]FuncSig
+	structSigs map[string]StructSig
+	exprTypes  map[ast.Expr]Type
+	callTgts   map[*ast.CallExpr]string
 
 	curFn     *ast.FuncDecl
 	scope     []map[string]varInfo
@@ -113,6 +134,42 @@ type varInfo struct {
 type importTarget struct {
 	Pkg string   // dependency package name; empty for local modules
 	Mod []string // base module path segments
+}
+
+func (c *checker) collectStructSigs() {
+	// First pass: register all struct names so field types can reference other structs.
+	for _, st := range c.prog.Structs {
+		if st == nil || st.Span.File == nil {
+			continue
+		}
+		qname := names.QualifyFunc(st.Span.File.Name, st.Name)
+		if _, exists := c.structSigs[qname]; exists {
+			c.errorAt(st.Span, "duplicate struct: "+qname)
+			continue
+		}
+		c.structSigs[qname] = StructSig{Name: qname, FieldIndex: map[string]int{}}
+	}
+
+	// Second pass: fill fields.
+	for _, st := range c.prog.Structs {
+		if st == nil || st.Span.File == nil {
+			continue
+		}
+		qname := names.QualifyFunc(st.Span.File.Name, st.Name)
+		sig := c.structSigs[qname]
+		sig.Fields = nil
+		sig.FieldIndex = map[string]int{}
+		for _, f := range st.Fields {
+			if _, exists := sig.FieldIndex[f.Name]; exists {
+				c.errorAt(f.Span, "duplicate field: "+f.Name)
+				continue
+			}
+			fty := c.typeFromAstInFile(f.Type, st.Span.File)
+			sig.FieldIndex[f.Name] = len(sig.Fields)
+			sig.Fields = append(sig.Fields, StructFieldSig{Name: f.Name, Ty: fty})
+		}
+		c.structSigs[qname] = sig
+	}
 }
 
 func (c *checker) collectFuncSigs() {
@@ -133,9 +190,9 @@ func (c *checker) collectFuncSigs() {
 		}
 		sig := FuncSig{}
 		for _, p := range fn.Params {
-			sig.Params = append(sig.Params, c.typeFromAst(p.Type))
+			sig.Params = append(sig.Params, c.typeFromAstInFile(p.Type, fn.Span.File))
 		}
-		sig.Ret = c.typeFromAst(fn.Ret)
+		sig.Ret = c.typeFromAstInFile(fn.Ret, fn.Span.File)
 		c.funcSigs[qname] = sig
 	}
 	// main presence check (stage0)
@@ -214,7 +271,7 @@ func (c *checker) checkStmt(st ast.Stmt, expectedRet Type) {
 	case *ast.LetStmt:
 		var ann Type
 		if s.AnnType != nil {
-			ann = c.typeFromAst(s.AnnType)
+			ann = c.typeFromAstInFile(s.AnnType, c.curFn.Span.File)
 		}
 		var initTy Type
 		if s.Init != nil {
@@ -246,6 +303,35 @@ func (c *checker) checkStmt(st ast.Stmt, expectedRet Type) {
 		rhs := c.checkExpr(s.Expr, vi.ty)
 		if !sameType(vi.ty, rhs) {
 			c.errorAt(s.S, fmt.Sprintf("type mismatch: expected %s, got %s", vi.ty.String(), rhs.String()))
+		}
+	case *ast.FieldAssignStmt:
+		vi, ok := c.lookupVar(s.Recv)
+		if !ok {
+			c.errorAt(s.S, "unknown variable: "+s.Recv)
+			return
+		}
+		if !vi.mutable {
+			c.errorAt(s.S, "cannot assign to immutable variable: "+s.Recv)
+			return
+		}
+		if vi.ty.K != TyStruct {
+			c.errorAt(s.S, "field assignment requires a struct receiver")
+			return
+		}
+		ss, ok := c.structSigs[vi.ty.Name]
+		if !ok {
+			c.errorAt(s.S, "unknown struct type: "+vi.ty.Name)
+			return
+		}
+		idx, ok := ss.FieldIndex[s.Field]
+		if !ok {
+			c.errorAt(s.S, "unknown field: "+s.Field)
+			return
+		}
+		want := ss.Fields[idx].Ty
+		got := c.checkExpr(s.Expr, want)
+		if !sameType(want, got) {
+			c.errorAt(s.S, fmt.Sprintf("type mismatch: expected %s, got %s", want.String(), got.String()))
 		}
 	case *ast.ReturnStmt:
 		var ty Type
@@ -455,6 +541,56 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 		}
 		return c.setExprType(ex, sig.Ret)
+	case *ast.MemberExpr:
+		recvTy := c.checkExpr(e.Recv, Type{K: TyBad})
+		if recvTy.K != TyStruct {
+			c.errorAt(e.S, "member access requires a struct receiver")
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		ss, ok := c.structSigs[recvTy.Name]
+		if !ok {
+			c.errorAt(e.S, "unknown struct type: "+recvTy.Name)
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		idx, ok := ss.FieldIndex[e.Name]
+		if !ok {
+			c.errorAt(e.S, "unknown field: "+e.Name)
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		return c.setExprType(ex, ss.Fields[idx].Ty)
+	case *ast.StructLitExpr:
+		if e.S.File == nil {
+			c.errorAt(e.S, "internal error: missing file for struct literal")
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		sty, ss, ok := c.resolveStructByParts(e.S.File, e.TypeParts, e.S)
+		if !ok {
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		seen := map[string]bool{}
+		for _, init := range e.Inits {
+			if seen[init.Name] {
+				c.errorAt(init.Span, "duplicate field init: "+init.Name)
+				continue
+			}
+			seen[init.Name] = true
+			idx, ok := ss.FieldIndex[init.Name]
+			if !ok {
+				c.errorAt(init.Span, "unknown field: "+init.Name)
+				continue
+			}
+			want := ss.Fields[idx].Ty
+			got := c.checkExpr(init.Expr, want)
+			if !sameType(want, got) {
+				c.errorAt(init.Expr.Span(), fmt.Sprintf("field %s type mismatch: expected %s, got %s", init.Name, want.String(), got.String()))
+			}
+		}
+		for _, f := range ss.Fields {
+			if !seen[f.Name] {
+				c.errorAt(e.S, "missing field init: "+f.Name)
+			}
+		}
+		return c.setExprType(ex, sty)
 	default:
 		c.errorAt(ex.Span(), "unsupported expression")
 		return c.setExprType(ex, Type{K: TyBad})
@@ -475,7 +611,7 @@ func (c *checker) forceIntType(ex ast.Expr, got Type, want Type) Type {
 	return got
 }
 
-func (c *checker) typeFromAst(t ast.Type) Type {
+func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 	switch tt := t.(type) {
 	case *ast.UnitType:
 		return Type{K: TyUnit}
@@ -490,6 +626,17 @@ func (c *checker) typeFromAst(t ast.Type) Type {
 		case "String":
 			return Type{K: TyString}
 		default:
+			if file != nil {
+				pkg, mod, _ := names.SplitOwnerAndModule(file.Name)
+				q1 := names.QualifyParts(pkg, mod, tt.Name)
+				if _, ok := c.structSigs[q1]; ok {
+					return Type{K: TyStruct, Name: q1}
+				}
+				q2 := names.QualifyParts(pkg, nil, tt.Name)
+				if _, ok := c.structSigs[q2]; ok {
+					return Type{K: TyStruct, Name: q2}
+				}
+			}
 			c.errorAt(tt.S, "unknown type: "+tt.Name)
 			return Type{K: TyBad}
 		}
@@ -532,7 +679,13 @@ func sameType(a, b Type) bool {
 	if a.K == TyUntypedInt || b.K == TyUntypedInt {
 		return false
 	}
-	return a.K == b.K
+	if a.K != b.K {
+		return false
+	}
+	if a.K == TyStruct {
+		return a.Name == b.Name
+	}
+	return true
 }
 
 func chooseType(ann, init Type) Type {
@@ -579,6 +732,45 @@ func calleeParts(ex ast.Expr) ([]string, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func (c *checker) resolveStructByParts(file *source.File, parts []string, s source.Span) (Type, StructSig, bool) {
+	if len(parts) == 0 {
+		c.errorAt(s, "missing struct name")
+		return Type{K: TyBad}, StructSig{}, false
+	}
+	if len(parts) == 1 {
+		pkg, mod, _ := names.SplitOwnerAndModule(file.Name)
+		q1 := names.QualifyParts(pkg, mod, parts[0])
+		if ss, ok := c.structSigs[q1]; ok {
+			return Type{K: TyStruct, Name: q1}, ss, true
+		}
+		q2 := names.QualifyParts(pkg, nil, parts[0])
+		if ss, ok := c.structSigs[q2]; ok {
+			return Type{K: TyStruct, Name: q2}, ss, true
+		}
+		c.errorAt(s, "unknown type: "+parts[0])
+		return Type{K: TyBad}, StructSig{}, false
+	}
+
+	alias := parts[0]
+	extraMods := parts[1 : len(parts)-1]
+	name := parts[len(parts)-1]
+
+	m := c.imports[file]
+	tgt, ok := m[alias]
+	if !ok {
+		c.errorAt(s, "unknown module qualifier: "+alias+" (did you forget `import \""+alias+"\"`?)")
+		return Type{K: TyBad}, StructSig{}, false
+	}
+	mod := append(append([]string{}, tgt.Mod...), extraMods...)
+	q := names.QualifyParts(tgt.Pkg, mod, name)
+	ss, ok := c.structSigs[q]
+	if !ok {
+		c.errorAt(s, "unknown type: "+q)
+		return Type{K: TyBad}, StructSig{}, false
+	}
+	return Type{K: TyStruct, Name: q}, ss, true
 }
 
 func (c *checker) isKnownLocalModule(fileName string, importPath string) bool {

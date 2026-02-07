@@ -80,6 +80,8 @@ func (lx *lexer) lexIdentOrKeyword() {
 	switch lex {
 	case "fn":
 		lx.emit(TokenFn, lex, start, lx.pos)
+	case "struct":
+		lx.emit(TokenStruct, lex, start, lx.pos)
 	case "let":
 		lx.emit(TokenLet, lex, start, lx.pos)
 	case "mut":

@@ -15,6 +15,7 @@ const (
 
 	// Keywords
 	TokenFn
+	TokenStruct
 	TokenLet
 	TokenMut
 	TokenReturn

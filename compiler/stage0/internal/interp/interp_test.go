@@ -77,6 +77,19 @@ func TestRunTestsIgnoresTestPrefixInNonTestFiles(t *testing.T) {
 	}
 }
 
+func TestInterpStructFieldReadWrite(t *testing.T) {
+	out := runMain(t, `struct Point { x: i32, y: i32 }
+fn main() -> i32 {
+  let mut p: Point = Point { x: 1, y: 2 };
+  let a: i32 = p.x;
+  p.x = a + 1;
+  return p.x + p.y;
+}`)
+	if out != "4" {
+		t.Fatalf("expected 4, got %q", out)
+	}
+}
+
 func runMain(t *testing.T, src string) string {
 	t.Helper()
 	f := source.NewFile("src/main.vox", src)

@@ -38,6 +38,29 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	out.WriteString("  exit(1);\n")
 	out.WriteString("}\n\n")
 
+	// Struct typedefs (must come before function decls).
+	if p.Structs != nil && len(p.Structs) > 0 {
+		snames := make([]string, 0, len(p.Structs))
+		for name := range p.Structs {
+			snames = append(snames, name)
+		}
+		sort.Strings(snames)
+		for _, name := range snames {
+			st := p.Structs[name]
+			out.WriteString("typedef struct {\n")
+			for _, f := range st.Fields {
+				out.WriteString("  ")
+				out.WriteString(cType(f.Ty))
+				out.WriteByte(' ')
+				out.WriteString(cIdent(f.Name))
+				out.WriteString(";\n")
+			}
+			out.WriteString("} ")
+			out.WriteString(cStructTypeName(st.Name))
+			out.WriteString(";\n\n")
+		}
+	}
+
 	// Forward decls
 	names := make([]string, 0, len(p.Funcs))
 	for name := range p.Funcs {
@@ -134,6 +157,10 @@ func emitFunc(out *bytes.Buffer, f *ir.Func) error {
 			case *ir.Not:
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TBool}
 			case *ir.Load:
+				tempTypes[i.Dst.ID] = i.Ty
+			case *ir.StructInit:
+				tempTypes[i.Dst.ID] = i.Ty
+			case *ir.FieldGet:
 				tempTypes[i.Dst.ID] = i.Ty
 			case *ir.Call:
 				if i.Ret.K != ir.TUnit && i.Dst != nil {
@@ -305,6 +332,41 @@ func emitInstr(out *bytes.Buffer, ins ir.Instr) error {
 		out.WriteString(cSlotName(i.Slot.ID))
 		out.WriteString(";\n")
 		return nil
+	case *ir.StructInit:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = (")
+		out.WriteString(cType(i.Ty))
+		out.WriteString("){")
+		for j, f := range i.Fields {
+			if j > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteByte('.')
+			out.WriteString(cIdent(f.Name))
+			out.WriteString(" = ")
+			out.WriteString(cValue(f.Val))
+		}
+		out.WriteString("};\n")
+		return nil
+	case *ir.FieldGet:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = ")
+		out.WriteString(cValue(i.Recv))
+		out.WriteByte('.')
+		out.WriteString(cIdent(i.Field))
+		out.WriteString(";\n")
+		return nil
+	case *ir.StoreField:
+		out.WriteString("  ")
+		out.WriteString(cSlotName(i.Slot.ID))
+		out.WriteByte('.')
+		out.WriteString(cIdent(i.Field))
+		out.WriteString(" = ")
+		out.WriteString(cValue(i.Val))
+		out.WriteString(";\n")
+		return nil
 	case *ir.Call:
 		// builtin assert
 		if i.Name == "assert" || i.Name == "std.testing::assert" {
@@ -408,6 +470,8 @@ func cType(t ir.Type) string {
 		return "int64_t"
 	case ir.TString:
 		return "const char*"
+	case ir.TStruct:
+		return cStructTypeName(t.Name)
 	default:
 		return "void"
 	}
@@ -416,6 +480,8 @@ func cType(t ir.Type) string {
 func cFnName(name string) string { return "vox_fn_" + cIdent(name) }
 
 func cLabelName(name string) string { return "vox_blk_" + cIdent(name) }
+
+func cStructTypeName(name string) string { return "vox_struct_" + cIdent(name) }
 
 func cIdent(s string) string {
 	// Best-effort sanitization: keep [A-Za-z0-9_], map others to '_'.

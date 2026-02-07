@@ -4,6 +4,7 @@ import "voxlang/internal/source"
 
 type Program struct {
 	Imports []*ImportDecl
+	Structs []*StructDecl
 	Funcs   []*FuncDecl
 }
 
@@ -19,6 +20,18 @@ type FuncDecl struct {
 	Ret    Type
 	Body   *BlockStmt
 	Span   source.Span
+}
+
+type StructDecl struct {
+	Name   string
+	Fields []StructField
+	Span   source.Span
+}
+
+type StructField struct {
+	Name string
+	Type Type
+	Span source.Span
 }
 
 type Param struct {
@@ -82,6 +95,16 @@ type AssignStmt struct {
 
 func (*AssignStmt) stmtNode()           {}
 func (s *AssignStmt) Span() source.Span { return s.S }
+
+type FieldAssignStmt struct {
+	Recv  string // stage0: only `ident.field = expr;`
+	Field string
+	Expr  Expr
+	S     source.Span
+}
+
+func (*FieldAssignStmt) stmtNode()           {}
+func (s *FieldAssignStmt) Span() source.Span { return s.S }
 
 type ReturnStmt struct {
 	Expr Expr // optional
@@ -206,3 +229,18 @@ type CallExpr struct {
 
 func (*CallExpr) exprNode()           {}
 func (e *CallExpr) Span() source.Span { return e.S }
+
+type StructLitExpr struct {
+	TypeParts []string
+	Inits     []FieldInit
+	S         source.Span
+}
+
+type FieldInit struct {
+	Name string
+	Expr Expr
+	Span source.Span
+}
+
+func (*StructLitExpr) exprNode()           {}
+func (e *StructLitExpr) Span() source.Span { return e.S }

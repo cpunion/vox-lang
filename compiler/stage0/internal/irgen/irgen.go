@@ -2,6 +2,7 @@ package irgen
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 
 	"voxlang/internal/ast"
@@ -11,14 +12,16 @@ import (
 )
 
 // Generate lowers a typechecked program into IR v0.
-// Stage0 IR only supports i32/i64/bool/unit; String is rejected.
 func Generate(p *typecheck.CheckedProgram) (*ir.Program, error) {
 	g := &gen{
 		p:        p,
-		out:      &ir.Program{Funcs: map[string]*ir.Func{}},
+		out:      &ir.Program{Structs: map[string]*ir.Struct{}, Funcs: map[string]*ir.Func{}},
 		tmpID:    0,
 		slotID:   0,
 		funcSigs: p.FuncSigs,
+	}
+	if err := g.genStructDefs(); err != nil {
+		return nil, err
 	}
 	for _, fn := range p.Prog.Funcs {
 		f, err := g.genFunc(fn)
@@ -95,6 +98,31 @@ func (g *gen) emit(i ir.Instr) { g.curBlock.Instr = append(g.curBlock.Instr, i) 
 
 func (g *gen) term(t ir.Term) { g.curBlock.Term = t }
 
+func (g *gen) genStructDefs() error {
+	if g.p == nil || g.p.StructSigs == nil || len(g.p.StructSigs) == 0 {
+		return nil
+	}
+	// Stable ordering for reproducible output.
+	names := make([]string, 0, len(g.p.StructSigs))
+	for name := range g.p.StructSigs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ss := g.p.StructSigs[name]
+		st := &ir.Struct{Name: ss.Name}
+		for _, f := range ss.Fields {
+			ty, err := g.irTypeFromChecked(f.Ty)
+			if err != nil {
+				return err
+			}
+			st.Fields = append(st.Fields, ir.StructField{Name: f.Name, Ty: ty})
+		}
+		g.out.Structs[st.Name] = st
+	}
+	return nil
+}
+
 func (g *gen) genFunc(fn *ast.FuncDecl) (*ir.Func, error) {
 	g.curFn = fn
 	g.tmpID = 0
@@ -139,7 +167,10 @@ func (g *gen) genFunc(fn *ast.FuncDecl) (*ir.Func, error) {
 			g.term(&ir.Ret{})
 		} else {
 			// missing return
-			zero := g.zeroValue(ret)
+			zero, err := g.zeroValue(ret)
+			if err != nil {
+				return nil, err
+			}
 			g.term(&ir.Ret{Val: zero})
 		}
 	}
@@ -161,6 +192,8 @@ func (g *gen) irTypeFromChecked(t typecheck.Type) (ir.Type, error) {
 		return ir.Type{K: ir.TI64}, nil
 	case typecheck.TyString:
 		return ir.Type{K: ir.TString}, nil
+	case typecheck.TyStruct:
+		return ir.Type{K: ir.TStruct, Name: t.Name}, nil
 	default:
 		return ir.Type{}, fmt.Errorf("unsupported type")
 	}
@@ -201,7 +234,10 @@ func (g *gen) genStmt(st ast.Stmt, retTy ir.Type) error {
 			g.emit(&ir.Store{Slot: slot, Val: v})
 		} else {
 			// Ensure deterministic value for stage0 codegen.
-			z := g.zeroValue(irty)
+			z, err := g.zeroValue(irty)
+			if err != nil {
+				return err
+			}
 			if z != nil {
 				g.emit(&ir.Store{Slot: slot, Val: z})
 			}
@@ -219,13 +255,28 @@ func (g *gen) genStmt(st ast.Stmt, retTy ir.Type) error {
 		}
 		g.emit(&ir.Store{Slot: slot, Val: v})
 		return nil
+	case *ast.FieldAssignStmt:
+		slot, ok := g.lookup(s.Recv)
+		if !ok {
+			return fmt.Errorf("unknown variable: %s", s.Recv)
+		}
+		v, err := g.genExpr(s.Expr)
+		if err != nil {
+			return err
+		}
+		g.emit(&ir.StoreField{Slot: slot, Field: s.Field, Val: v})
+		return nil
 	case *ast.ReturnStmt:
 		if retTy.K == ir.TUnit {
 			g.term(&ir.Ret{})
 			return nil
 		}
 		if s.Expr == nil {
-			g.term(&ir.Ret{Val: g.zeroValue(retTy)})
+			z, err := g.zeroValue(retTy)
+			if err != nil {
+				return err
+			}
+			g.term(&ir.Ret{Val: z})
 			return nil
 		}
 		v, err := g.genExpr(s.Expr)
@@ -322,7 +373,7 @@ func (g *gen) typeOfLet(s *ast.LetStmt) typecheck.Type {
 		return g.p.ExprTypes[s.Init]
 	}
 	if s.AnnType != nil {
-		return typeFromAstLimited(s.AnnType)
+		return g.typeFromAstLimited(s.AnnType)
 	}
 	return typecheck.Type{K: typecheck.TyBad}
 }
@@ -470,22 +521,74 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			return call.Dst, nil
 		}
 		g.emit(call)
-		return g.zeroValue(ret), nil
+		return g.zeroValue(ret)
+	case *ast.MemberExpr:
+		recv, err := g.genExpr(e.Recv)
+		if err != nil {
+			return nil, err
+		}
+		ty := g.p.ExprTypes[ex]
+		irty, err := g.irTypeFromChecked(ty)
+		if err != nil {
+			return nil, err
+		}
+		tmp := g.newTemp()
+		g.emit(&ir.FieldGet{Dst: tmp, Ty: irty, Recv: recv, Field: e.Name})
+		return tmp, nil
+	case *ast.StructLitExpr:
+		ty := g.p.ExprTypes[ex]
+		irty, err := g.irTypeFromChecked(ty)
+		if err != nil {
+			return nil, err
+		}
+		tmp := g.newTemp()
+		fields := make([]ir.StructInitField, 0, len(e.Inits))
+		for _, init := range e.Inits {
+			v, err := g.genExpr(init.Expr)
+			if err != nil {
+				return nil, err
+			}
+			fields = append(fields, ir.StructInitField{Name: init.Name, Val: v})
+		}
+		g.emit(&ir.StructInit{Dst: tmp, Ty: irty, Fields: fields})
+		return tmp, nil
 	default:
 		return nil, fmt.Errorf("unsupported expr in IR gen")
 	}
 }
 
-func (g *gen) zeroValue(t ir.Type) ir.Value {
+func (g *gen) zeroValue(t ir.Type) (ir.Value, error) {
 	switch t.K {
 	case ir.TUnit:
-		return nil
+		return nil, nil
 	case ir.TBool:
-		return &ir.ConstBool{V: false}
+		return &ir.ConstBool{V: false}, nil
 	case ir.TI32, ir.TI64:
-		return &ir.ConstInt{Ty: t, V: 0}
+		return &ir.ConstInt{Ty: t, V: 0}, nil
+	case ir.TString:
+		return &ir.ConstStr{S: ""}, nil
+	case ir.TStruct:
+		ss, ok := g.p.StructSigs[t.Name]
+		if !ok {
+			return nil, fmt.Errorf("unknown struct: %s", t.Name)
+		}
+		tmp := g.newTemp()
+		fields := make([]ir.StructInitField, 0, len(ss.Fields))
+		for _, f := range ss.Fields {
+			fty, err := g.irTypeFromChecked(f.Ty)
+			if err != nil {
+				return nil, err
+			}
+			fv, err := g.zeroValue(fty)
+			if err != nil {
+				return nil, err
+			}
+			fields = append(fields, ir.StructInitField{Name: f.Name, Val: fv})
+		}
+		g.emit(&ir.StructInit{Dst: tmp, Ty: t, Fields: fields})
+		return tmp, nil
 	default:
-		return &ir.ConstInt{Ty: t, V: 0}
+		return &ir.ConstInt{Ty: t, V: 0}, nil
 	}
 }
 
@@ -497,7 +600,7 @@ func parseInt64(text string) int64 {
 	return n
 }
 
-func typeFromAstLimited(t ast.Type) typecheck.Type {
+func (g *gen) typeFromAstLimited(t ast.Type) typecheck.Type {
 	switch tt := t.(type) {
 	case *ast.UnitType:
 		return typecheck.Type{K: typecheck.TyUnit}
@@ -512,6 +615,17 @@ func typeFromAstLimited(t ast.Type) typecheck.Type {
 		case "String":
 			return typecheck.Type{K: typecheck.TyString}
 		default:
+			if g != nil && g.p != nil && g.p.StructSigs != nil && g.curFn != nil && g.curFn.Span.File != nil {
+				pkg, mod, _ := names.SplitOwnerAndModule(g.curFn.Span.File.Name)
+				q1 := names.QualifyParts(pkg, mod, tt.Name)
+				if _, ok := g.p.StructSigs[q1]; ok {
+					return typecheck.Type{K: typecheck.TyStruct, Name: q1}
+				}
+				q2 := names.QualifyParts(pkg, nil, tt.Name)
+				if _, ok := g.p.StructSigs[q2]; ok {
+					return typecheck.Type{K: typecheck.TyStruct, Name: q2}
+				}
+			}
 			return typecheck.Type{K: typecheck.TyBad}
 		}
 	default:
