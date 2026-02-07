@@ -12,6 +12,13 @@ type Program struct {
 type ImportDecl struct {
 	Path  string // string literal content, unquoted
 	Alias string // optional; when empty, defaults to last path segment
+	Names []ImportName
+	Span  source.Span
+}
+
+type ImportName struct {
+	Name  string
+	Alias string // optional local alias
 	Span  source.Span
 }
 

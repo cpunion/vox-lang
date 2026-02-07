@@ -141,11 +141,13 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		enumCtors:  map[*ast.CallExpr]EnumCtorTarget{},
 		opts:       opts,
 		imports:    map[*source.File]map[string]importTarget{},
+		namedFuncs: map[*source.File]map[string]string{},
 	}
 	c.collectImports()
 	c.collectStructSigs()
 	c.collectEnumSigs()
 	c.collectFuncSigs()
+	c.resolveNamedImports()
 	c.checkPubInterfaces()
 	c.checkAll()
 	return &CheckedProgram{
@@ -177,6 +179,10 @@ type checker struct {
 
 	opts    Options
 	imports map[*source.File]map[string]importTarget // file -> qualifier -> target
+
+	// Named function imports: file -> localName -> qualifiedTarget.
+	namedFuncs map[*source.File]map[string]string
+	pending    []pendingNamedImport
 }
 
 type varInfo struct {
@@ -187,6 +193,13 @@ type varInfo struct {
 type importTarget struct {
 	Pkg string   // dependency package name; empty for local modules
 	Mod []string // base module path segments
+}
+
+type pendingNamedImport struct {
+	File  *source.File
+	Names []ast.ImportName
+	Tgt   importTarget
+	Span  source.Span
 }
 
 func sameModPath(a, b []string) bool {
@@ -467,6 +480,12 @@ func (c *checker) collectImports() {
 			}
 		}
 
+		// Named imports are resolved after function signatures are known.
+		if len(imp.Names) > 0 {
+			c.pending = append(c.pending, pendingNamedImport{File: imp.Span.File, Names: imp.Names, Tgt: tgt, Span: imp.Span})
+			continue
+		}
+
 		m := c.imports[imp.Span.File]
 		if m == nil {
 			m = map[string]importTarget{}
@@ -477,6 +496,44 @@ func (c *checker) collectImports() {
 			continue
 		}
 		m[alias] = tgt
+	}
+}
+
+func (c *checker) resolveNamedImports() {
+	for _, pi := range c.pending {
+		if pi.File == nil {
+			continue
+		}
+		m := c.namedFuncs[pi.File]
+		if m == nil {
+			m = map[string]string{}
+			c.namedFuncs[pi.File] = m
+		}
+		for _, nm := range pi.Names {
+			local := nm.Alias
+			if local == "" {
+				local = nm.Name
+			}
+			if local == "" {
+				continue
+			}
+			if _, exists := m[local]; exists {
+				c.errorAt(pi.Span, "duplicate imported name: "+local)
+				continue
+			}
+
+			target := names.QualifyParts(pi.Tgt.Pkg, pi.Tgt.Mod, nm.Name)
+			sig, ok := c.funcSigs[target]
+			if !ok {
+				c.errorAt(pi.Span, "unknown imported function: "+target)
+				continue
+			}
+			if !c.canAccess(pi.File, sig.OwnerPkg, sig.OwnerMod, sig.Pub) {
+				c.errorAt(pi.Span, "function is private: "+target)
+				continue
+			}
+			m[local] = target
+		}
 	}
 }
 
@@ -752,15 +809,22 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		target := ""
 		if len(parts) == 1 {
 			name := parts[0]
-			if _, ok := c.funcSigs[name]; ok {
-				target = name // builtins
+			pkg, mod, _ := names.SplitOwnerAndModule(c.curFn.Span.File.Name)
+			// 1) current module
+			q := names.QualifyParts(pkg, mod, name)
+			if _, ok := c.funcSigs[q]; ok {
+				target = q
 			} else {
-				pkg, mod, _ := names.SplitOwnerAndModule(c.curFn.Span.File.Name)
-				q := names.QualifyParts(pkg, mod, name)
-				if _, ok := c.funcSigs[q]; ok {
-					target = q
-				} else {
-					// fallback: root module of the same package
+				// 2) named imports for this file
+				if c.curFn.Span.File != nil {
+					if m := c.namedFuncs[c.curFn.Span.File]; m != nil {
+						if tgt, ok := m[name]; ok {
+							target = tgt
+						}
+					}
+				}
+				// 3) fallback: root module of the same package
+				if target == "" {
 					q2 := names.QualifyParts(pkg, nil, name)
 					if _, ok := c.funcSigs[q2]; ok {
 						target = q2

@@ -111,16 +111,48 @@ func (p *Parser) parseProgram() *ast.Program {
 
 func (p *Parser) parseImportDecl() *ast.ImportDecl {
 	start := p.prev()
-	pathTok := p.expect(lexer.TokenString, "expected string literal import path")
-	if pathTok.Kind != lexer.TokenString {
-		return nil
-	}
-	path := unquote(pathTok.Lexeme)
+	var path string
 	alias := ""
-	if p.match(lexer.TokenAs) {
-		id := p.expect(lexer.TokenIdent, "expected alias after `as`")
-		if id.Kind == lexer.TokenIdent {
-			alias = id.Lexeme
+	var names []ast.ImportName
+
+	// Named import: import { a, b as c } from "path"
+	if p.match(lexer.TokenLBrace) {
+		for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
+			id := p.expect(lexer.TokenIdent, "expected imported name")
+			local := ""
+			if p.match(lexer.TokenAs) {
+				a := p.expect(lexer.TokenIdent, "expected alias after `as`")
+				if a.Kind == lexer.TokenIdent {
+					local = a.Lexeme
+				}
+			}
+			if id.Kind == lexer.TokenIdent {
+				names = append(names, ast.ImportName{Name: id.Lexeme, Alias: local, Span: joinSpan(id.Span, id.Span)})
+			}
+			if p.match(lexer.TokenComma) {
+				continue
+			}
+			break
+		}
+		p.expect(lexer.TokenRBrace, "expected `}` to end import list")
+		pathTok := p.expect(lexer.TokenFrom, "expected `from` in named import")
+		_ = pathTok
+		strTok := p.expect(lexer.TokenString, "expected string literal import path")
+		if strTok.Kind != lexer.TokenString {
+			return nil
+		}
+		path = unquote(strTok.Lexeme)
+	} else {
+		pathTok := p.expect(lexer.TokenString, "expected string literal import path")
+		if pathTok.Kind != lexer.TokenString {
+			return nil
+		}
+		path = unquote(pathTok.Lexeme)
+		if p.match(lexer.TokenAs) {
+			id := p.expect(lexer.TokenIdent, "expected alias after `as`")
+			if id.Kind == lexer.TokenIdent {
+				alias = id.Lexeme
+			}
 		}
 	}
 	// Optional semicolon: if absent, next token must start a new top-level item.
@@ -135,7 +167,7 @@ func (p *Parser) parseImportDecl() *ast.ImportDecl {
 			p.errorHere("expected `;` or next top-level item after import")
 		}
 	}
-	return &ast.ImportDecl{Path: path, Alias: alias, Span: joinSpan(start.Span, endTok.Span)}
+	return &ast.ImportDecl{Path: path, Alias: alias, Names: names, Span: joinSpan(start.Span, endTok.Span)}
 }
 
 func (p *Parser) parseStructDecl() *ast.StructDecl {

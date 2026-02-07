@@ -59,6 +59,28 @@ fn main() -> i32 { return dep.one(); }`)
 	}
 }
 
+func TestParseNamedImportDecl(t *testing.T) {
+	f := source.NewFile("test.vox", `import { one as uno, two } from "dep"
+fn main() -> i32 { return uno(); }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Imports) != 1 {
+		t.Fatalf("expected 1 import, got %d", len(prog.Imports))
+	}
+	imp := prog.Imports[0]
+	if imp.Path != "dep" || len(imp.Names) != 2 {
+		t.Fatalf("unexpected import: %#v", imp)
+	}
+	if imp.Names[0].Name != "one" || imp.Names[0].Alias != "uno" {
+		t.Fatalf("unexpected named import[0]: %#v", imp.Names[0])
+	}
+	if imp.Names[1].Name != "two" || imp.Names[1].Alias != "" {
+		t.Fatalf("unexpected named import[1]: %#v", imp.Names[1])
+	}
+}
+
 func TestParseWhileBreakContinue(t *testing.T) {
 	f := source.NewFile("test.vox", `fn main() -> i32 {
   let mut x: i32 = 0;

@@ -112,6 +112,8 @@ func (lx *lexer) lexIdentOrKeyword() {
 		lx.emit(TokenMatch, lex, start, lx.pos)
 	case "as":
 		lx.emit(TokenAs, lex, start, lx.pos)
+	case "from":
+		lx.emit(TokenFrom, lex, start, lx.pos)
 	case "while":
 		lx.emit(TokenWhile, lex, start, lx.pos)
 	case "break":

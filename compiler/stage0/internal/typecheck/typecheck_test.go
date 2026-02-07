@@ -344,3 +344,59 @@ fn main() -> i32 {
 		t.Fatalf("type diags: %+v", tdiags.Items)
 	}
 }
+
+func TestNamedImportResolvesFunctionCall(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import { one as uno } from "dep"
+fn main() -> i32 { return uno(); }`),
+		source.NewFile("dep/src/lib.vox", `pub fn one() -> i32 { return 1; }`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	var call *ast.CallExpr
+	for _, fn := range prog.Funcs {
+		if fn.Name != "main" {
+			continue
+		}
+		ret := fn.Body.Stmts[0].(*ast.ReturnStmt)
+		call = ret.Expr.(*ast.CallExpr)
+	}
+	if call == nil {
+		t.Fatalf("missing call expr")
+	}
+	if got := checked.CallTargets[call]; got != "dep::one" {
+		t.Fatalf("expected call target dep::one, got %q", got)
+	}
+}
+
+func TestNamedImportRequiresPub(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import { one } from "dep"
+fn main() -> i32 { return one(); }`),
+		source.NewFile("dep/src/lib.vox", `fn one() -> i32 { return 1; }`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "function is private: dep::one" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected private function diagnostic, got: %+v", tdiags.Items)
+	}
+}

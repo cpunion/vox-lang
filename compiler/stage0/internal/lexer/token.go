@@ -31,6 +31,7 @@ const (
 	TokenPub
 	TokenMatch
 	TokenAs
+	TokenFrom
 	TokenWhile
 	TokenBreak
 	TokenContinue
