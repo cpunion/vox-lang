@@ -15,6 +15,7 @@ import (
 // - src/foo.vox -> module ["foo"]
 // - src/utils/lib.vox -> module ["utils"]
 // - src/utils/io.vox -> module ["utils","io"]
+// - src/**/*_test.vox are treated as part of the directory module (file name doesn't form a module segment).
 // - tests/**.vox are treated as root module for now (empty module path), to keep test discovery simple.
 func SplitOwnerAndModule(fileName string) (pkg string, mod []string, isTest bool) {
 	rel := filepath.ToSlash(fileName)
@@ -38,6 +39,24 @@ func SplitOwnerAndModule(fileName string) (pkg string, mod []string, isTest bool
 	}
 
 	path := strings.TrimPrefix(rel, "src/")
+	// Go-like test files live "in the package/module" and should not introduce an extra module segment.
+	// Example: src/stage1_tests/smoke_test.vox => module ["stage1_tests"] (not ["stage1_tests","smoke_test"]).
+	if strings.HasSuffix(path, "_test.vox") {
+		isTest = true
+		dir := filepath.ToSlash(filepath.Dir(path))
+		if dir == "." || dir == "" {
+			return pkg, nil, true
+		}
+		segs := strings.Split(dir, "/")
+		out := make([]string, 0, len(segs))
+		for _, s := range segs {
+			if s == "" || s == "." {
+				continue
+			}
+			out = append(out, s)
+		}
+		return pkg, out, true
+	}
 	path = strings.TrimSuffix(path, ".vox")
 	if path == "main" || path == "lib" {
 		return pkg, nil, false

@@ -355,6 +355,10 @@ func collectLocalModules(root string) (map[string]bool, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		// Test files are not importable modules.
+		if strings.HasSuffix(rel, "_test.vox") {
+			return nil
+		}
 		if rel == "main.vox" || rel == "lib.vox" {
 			return nil
 		}
