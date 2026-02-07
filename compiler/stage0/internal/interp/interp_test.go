@@ -5,6 +5,7 @@ import (
 
 	"voxlang/internal/parser"
 	"voxlang/internal/source"
+	"voxlang/internal/stdlib"
 	"voxlang/internal/typecheck"
 )
 
@@ -59,8 +60,8 @@ func TestContinueSkipsRestOfBody(t *testing.T) {
 }
 
 func TestRunTestsIgnoresTestPrefixInNonTestFiles(t *testing.T) {
-	f := source.NewFile("src/main.vox", `fn test_not_a_test() -> () { assert(true); }`)
-	prog, pdiags := parser.Parse(f)
+	f := source.NewFile("src/main.vox", `fn test_not_a_test() -> () { }`)
+	prog, pdiags := parser.ParseFiles(append(stdlib.Files(), f))
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		t.Fatalf("parse diags: %+v", pdiags.Items)
 	}
@@ -138,7 +139,7 @@ fn main() -> i32 { return id(41) + 1; }`)
 func runMain(t *testing.T, src string) string {
 	t.Helper()
 	f := source.NewFile("src/main.vox", src)
-	prog, pdiags := parser.Parse(f)
+	prog, pdiags := parser.ParseFiles(append(stdlib.Files(), f))
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		t.Fatalf("parse diags: %+v", pdiags.Items)
 	}

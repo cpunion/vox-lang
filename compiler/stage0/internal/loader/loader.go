@@ -12,6 +12,7 @@ import (
 	"voxlang/internal/manifest"
 	"voxlang/internal/parser"
 	"voxlang/internal/source"
+	"voxlang/internal/stdlib"
 	"voxlang/internal/typecheck"
 )
 
@@ -109,6 +110,9 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 	if err != nil {
 		return nil, nil, err
 	}
+	// Stage0 stdlib is always available and is compiled as part of the root package.
+	files = append(files, stdlib.Files()...)
+
 	// Load path dependencies (including transitive).
 	depNames := make([]string, 0, len(deps))
 	for name := range deps {
@@ -139,6 +143,7 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 		return nil, nil, err
 	}
 	// Built-in std modules (stage0 subset).
+	rootMods["std/prelude"] = true
 	rootMods["std/testing"] = true
 	modByPkg[""] = rootMods
 	for depName, depRoot := range deps {
@@ -146,6 +151,7 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 		if err != nil {
 			return nil, nil, err
 		}
+		mods["std/prelude"] = true
 		mods["std/testing"] = true
 		modByPkg[depName] = mods
 	}

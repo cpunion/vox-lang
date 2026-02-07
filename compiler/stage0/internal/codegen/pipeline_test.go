@@ -10,17 +10,15 @@ import (
 	"voxlang/internal/irgen"
 	"voxlang/internal/parser"
 	"voxlang/internal/source"
+	"voxlang/internal/stdlib"
 	"voxlang/internal/typecheck"
 )
 
-func TestPipelineCompilesAndRuns(t *testing.T) {
-	cc, err := exec.LookPath("cc")
-	if err != nil {
-		t.Skip("cc not found")
-	}
-
-	f := source.NewFile("main.vox", `fn main() -> i32 { return 0; }`)
-	prog, pdiags := parser.Parse(f)
+func parseAndCheckWithStdlib(t *testing.T, files []*source.File) *typecheck.CheckedProgram {
+	t.Helper()
+	all := append([]*source.File{}, stdlib.Files()...)
+	all = append(all, files...)
+	prog, pdiags := parser.ParseFiles(all)
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		t.Fatalf("parse diags: %+v", pdiags.Items)
 	}
@@ -28,6 +26,18 @@ func TestPipelineCompilesAndRuns(t *testing.T) {
 	if tdiags != nil && len(tdiags.Items) > 0 {
 		t.Fatalf("type diags: %+v", tdiags.Items)
 	}
+	return checked
+}
+
+func TestPipelineCompilesAndRuns(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("cc not found")
+	}
+
+	checked := parseAndCheckWithStdlib(t, []*source.File{
+		source.NewFile("main.vox", `fn main() -> i32 { return 0; }`),
+	})
 	irp, err := irgen.Generate(checked)
 	if err != nil {
 		t.Fatal(err)
@@ -69,14 +79,7 @@ func TestPipelineCompilesAndRunsWithDepQualifiedNames(t *testing.T) {
 fn main() -> i32 { return dep.one(); }`),
 		source.NewFile("dep/src/lib.vox", `pub fn one() -> i32 { return 1; }`),
 	}
-	prog, pdiags := parser.ParseFiles(files)
-	if pdiags != nil && len(pdiags.Items) > 0 {
-		t.Fatalf("parse diags: %+v", pdiags.Items)
-	}
-	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
-	if tdiags != nil && len(tdiags.Items) > 0 {
-		t.Fatalf("type diags: %+v", tdiags.Items)
-	}
+	checked := parseAndCheckWithStdlib(t, files)
 	irp, err := irgen.Generate(checked)
 	if err != nil {
 		t.Fatal(err)
@@ -113,21 +116,15 @@ func TestPipelineStructCompilesAndRuns(t *testing.T) {
 		t.Skip("cc not found")
 	}
 
-	f := source.NewFile("src/main.vox", `struct Point { x: i32, y: i32 }
+	checked := parseAndCheckWithStdlib(t, []*source.File{
+		source.NewFile("src/main.vox", `struct Point { x: i32, y: i32 }
 fn main() -> i32 {
   let mut p: Point = Point { x: 1, y: 2 };
   let a: i32 = p.x;
   p.x = a + 1;
   return p.x + p.y;
-}`)
-	prog, pdiags := parser.Parse(f)
-	if pdiags != nil && len(pdiags.Items) > 0 {
-		t.Fatalf("parse diags: %+v", pdiags.Items)
-	}
-	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
-	if tdiags != nil && len(tdiags.Items) > 0 {
-		t.Fatalf("type diags: %+v", tdiags.Items)
-	}
+}`),
+	})
 	irp, err := irgen.Generate(checked)
 	if err != nil {
 		t.Fatal(err)
@@ -164,16 +161,10 @@ func TestPipelineGenericFuncCompilesAndRuns(t *testing.T) {
 		t.Skip("cc not found")
 	}
 
-	f := source.NewFile("src/main.vox", `fn id[T](x: T) -> T { return x; }
-fn main() -> i32 { return id(41) + 1; }`)
-	prog, pdiags := parser.Parse(f)
-	if pdiags != nil && len(pdiags.Items) > 0 {
-		t.Fatalf("parse diags: %+v", pdiags.Items)
-	}
-	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
-	if tdiags != nil && len(tdiags.Items) > 0 {
-		t.Fatalf("type diags: %+v", tdiags.Items)
-	}
+	checked := parseAndCheckWithStdlib(t, []*source.File{
+		source.NewFile("src/main.vox", `fn id[T](x: T) -> T { return x; }
+fn main() -> i32 { return id(41) + 1; }`),
+	})
 	irp, err := irgen.Generate(checked)
 	if err != nil {
 		t.Fatal(err)
@@ -210,20 +201,14 @@ func TestPipelineVecCompilesAndRuns(t *testing.T) {
 		t.Skip("cc not found")
 	}
 
-	f := source.NewFile("src/main.vox", `fn main() -> i32 {
+	checked := parseAndCheckWithStdlib(t, []*source.File{
+		source.NewFile("src/main.vox", `fn main() -> i32 {
   let mut v: Vec[i32] = Vec();
   v.push(41);
   v.push(1);
   return v.get(0) + v.get(1) + v.len();
-}`)
-	prog, pdiags := parser.Parse(f)
-	if pdiags != nil && len(pdiags.Items) > 0 {
-		t.Fatalf("parse diags: %+v", pdiags.Items)
-	}
-	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
-	if tdiags != nil && len(tdiags.Items) > 0 {
-		t.Fatalf("type diags: %+v", tdiags.Items)
-	}
+}`),
+	})
 	irp, err := irgen.Generate(checked)
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +245,8 @@ func TestPipelineEnumCtorAndMatchCompilesAndRuns(t *testing.T) {
 		t.Skip("cc not found")
 	}
 
-	f := source.NewFile("src/main.vox", `enum E { A(i32), B(String), None }
+	checked := parseAndCheckWithStdlib(t, []*source.File{
+		source.NewFile("src/main.vox", `enum E { A(i32), B(String), None }
 fn main() -> i32 {
   // enum constructor call + match expression (payload types differ across variants)
   let x: E = E.B("hi");
@@ -277,15 +263,8 @@ fn main() -> i32 {
     E.B(s) => 0,
     E.None => 0,
   };
-}`)
-	prog, pdiags := parser.Parse(f)
-	if pdiags != nil && len(pdiags.Items) > 0 {
-		t.Fatalf("parse diags: %+v", pdiags.Items)
-	}
-	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
-	if tdiags != nil && len(tdiags.Items) > 0 {
-		t.Fatalf("type diags: %+v", tdiags.Items)
-	}
+}`),
+	})
 	irp, err := irgen.Generate(checked)
 	if err != nil {
 		t.Fatal(err)
@@ -338,14 +317,7 @@ pub struct S { pub x: i32 }
 pub enum E { A(i32), None }
 `),
 	}
-	prog, pdiags := parser.ParseFiles(files)
-	if pdiags != nil && len(pdiags.Items) > 0 {
-		t.Fatalf("parse diags: %+v", pdiags.Items)
-	}
-	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
-	if tdiags != nil && len(tdiags.Items) > 0 {
-		t.Fatalf("type diags: %+v", tdiags.Items)
-	}
+	checked := parseAndCheckWithStdlib(t, files)
 	irp, err := irgen.Generate(checked)
 	if err != nil {
 		t.Fatal(err)
@@ -395,14 +367,7 @@ fn main() -> i32 {
 }`),
 		source.NewFile("src/a.vox", `pub fn b() -> i32 { return 2; }`),
 	}
-	prog, pdiags := parser.ParseFiles(files)
-	if pdiags != nil && len(pdiags.Items) > 0 {
-		t.Fatalf("parse diags: %+v", pdiags.Items)
-	}
-	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
-	if tdiags != nil && len(tdiags.Items) > 0 {
-		t.Fatalf("type diags: %+v", tdiags.Items)
-	}
+	checked := parseAndCheckWithStdlib(t, files)
 	irp, err := irgen.Generate(checked)
 	if err != nil {
 		t.Fatal(err)

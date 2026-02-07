@@ -111,7 +111,7 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 			want: "true",
 		},
 		{
-			name: "call_and_assert",
+			name: "call_and_print",
 			prog: &ir.Program{Funcs: map[string]*ir.Func{
 				"main": {
 					Name: "main",
@@ -120,8 +120,8 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 						{
 							Name: "entry",
 							Instr: []ir.Instr{
-								&ir.Const{Dst: &ir.Temp{ID: 0}, Ty: ir.Type{K: ir.TBool}, Val: &ir.ConstBool{V: true}},
-								&ir.Call{Ret: ir.Type{K: ir.TUnit}, Name: "assert", Args: []ir.Value{&ir.Temp{ID: 0}}},
+								&ir.Const{Dst: &ir.Temp{ID: 0}, Ty: ir.Type{K: ir.TString}, Val: &ir.ConstStr{S: "x"}},
+								&ir.Call{Ret: ir.Type{K: ir.TUnit}, Name: "print", Args: []ir.Value{&ir.Temp{ID: 0}}},
 								&ir.Call{Dst: &ir.Temp{ID: 1}, Ret: ir.Type{K: ir.TI32}, Name: "callee", Args: nil},
 							},
 							Term: &ir.Ret{Val: &ir.Temp{ID: 1}},
@@ -142,10 +142,10 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 					},
 				},
 			}},
-			want: "7",
+			want: "x7",
 		},
 		{
-			name: "std_testing_asserts",
+			name: "panic_not_taken",
 			prog: &ir.Program{Funcs: map[string]*ir.Func{
 				"main": {
 					Name: "main",
@@ -154,17 +154,25 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 						{
 							Name: "entry",
 							Instr: []ir.Instr{
-								&ir.Const{Dst: &ir.Temp{ID: 0}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 1}},
-								&ir.Const{Dst: &ir.Temp{ID: 1}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 1}},
-								&ir.Call{Ret: ir.Type{K: ir.TUnit}, Name: "std.testing::assert_eq_i32", Args: []ir.Value{&ir.Temp{ID: 0}, &ir.Temp{ID: 1}}},
-								&ir.Const{Dst: &ir.Temp{ID: 2}, Ty: ir.Type{K: ir.TString}, Val: &ir.ConstStr{S: "a"}},
-								&ir.Const{Dst: &ir.Temp{ID: 3}, Ty: ir.Type{K: ir.TString}, Val: &ir.ConstStr{S: "a"}},
-								&ir.Call{Ret: ir.Type{K: ir.TUnit}, Name: "std.testing::assert_eq_str", Args: []ir.Value{&ir.Temp{ID: 2}, &ir.Temp{ID: 3}}},
-								&ir.Const{Dst: &ir.Temp{ID: 4}, Ty: ir.Type{K: ir.TBool}, Val: &ir.ConstBool{V: true}},
-								&ir.Call{Ret: ir.Type{K: ir.TUnit}, Name: "std.testing::assert", Args: []ir.Value{&ir.Temp{ID: 4}}},
-								&ir.Call{Dst: &ir.Temp{ID: 5}, Ret: ir.Type{K: ir.TI32}, Name: "callee", Args: nil},
+								&ir.Const{Dst: &ir.Temp{ID: 0}, Ty: ir.Type{K: ir.TBool}, Val: &ir.ConstBool{V: false}},
 							},
-							Term: &ir.Ret{Val: &ir.Temp{ID: 5}},
+							Term: &ir.CondBr{Cond: &ir.Temp{ID: 0}, Then: "panic", Else: "cont"},
+						},
+						{
+							Name: "cont",
+							Instr: []ir.Instr{
+								&ir.Call{Dst: &ir.Temp{ID: 1}, Ret: ir.Type{K: ir.TI32}, Name: "callee", Args: nil},
+							},
+							Term: &ir.Ret{Val: &ir.Temp{ID: 1}},
+						},
+						{
+							Name: "panic",
+							Instr: []ir.Instr{
+								&ir.Const{Dst: &ir.Temp{ID: 2}, Ty: ir.Type{K: ir.TString}, Val: &ir.ConstStr{S: "boom"}},
+								&ir.Call{Ret: ir.Type{K: ir.TUnit}, Name: "panic", Args: []ir.Value{&ir.Temp{ID: 2}}},
+								&ir.Const{Dst: &ir.Temp{ID: 3}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 0}},
+							},
+							Term: &ir.Ret{Val: &ir.Temp{ID: 3}},
 						},
 					},
 				},

@@ -108,13 +108,9 @@ func (c *checker) collectEnumSigs() {
 
 func (c *checker) collectFuncSigs() {
 	// Builtins (stage0): keep minimal and stable.
-	c.funcSigs["assert"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyBool}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::assert"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyBool}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::assert_eq_i32"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyI32}, {K: TyI32}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::assert_eq_i64"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyI64}, {K: TyI64}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::assert_eq_bool"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyBool}, {K: TyBool}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::assert_eq_str"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyString}, {K: TyString}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::fail"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
+	// Higher-level helpers (assert/testing/etc.) should live in stdlib Vox sources.
+	c.funcSigs["panic"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["print"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
 
 	for _, fn := range c.prog.Funcs {
 		qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)

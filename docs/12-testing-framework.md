@@ -25,28 +25,31 @@ Stage0 行为：
 
 ## 2. 断言（Stage0）
 
-Stage0 内建：
+Stage0 仅内建两个最底层函数：
 
 ```vox
-assert(cond);
+panic(msg: String);
+print(msg: String);
 ```
 
-同时提供一个最小的 `std/testing`（目前是编译器内建模块，而非真实源码文件）：
+断言与测试工具由标准库提供（以 `.vox` 源码形式随 stage0 一起注入）：
+
+- `std/prelude`：`assert` / `assert_eq[T]` / `fail`
+- `std/testing`：对 `std/prelude` 的薄封装，便于显式使用 `t.assert(...)` 这类风格
 
 ```vox
 import "std/testing" as t
 
 fn test_ok() -> () {
   t.assert(true);
-  t.assert_eq_i32(1 + 1, 2);
-  t.assert_eq_i64(1, 1);
-  t.assert_eq_bool(true, true);
-  t.assert_eq_str("a", "a");
-  // t.fail("message");
+  t.assert_eq(1 + 1, 2);
+  t.assert_eq(true, true);
+  t.assert_eq("a", "a");
+  // t.fail("message"); // 直接失败并打印消息
 }
 ```
 
 说明：
 
-- 由于 stage0 暂无宏/泛型/重载，`assert_eq` 暂时以 `assert_eq_i32/i64/bool/str` 的形式提供。
-- 后续引入宏/泛型后，会把这套 API 收敛成更自然的 `assert_eq!(a, b)` 或 `assert_eq(a, b)`。
+- `assert_eq` 是泛型函数（stage0 支持最小子集的泛型单态化 + 推导）。
+- 目前 `assert_eq` 依赖 `!=`：因此在 stage0 里只支持 `bool/i32/i64/String` 的比较（其他类型后续再做 lowering/trait 化）。

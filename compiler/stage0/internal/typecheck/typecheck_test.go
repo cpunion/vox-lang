@@ -7,6 +7,7 @@ import (
 	"voxlang/internal/ast"
 	"voxlang/internal/parser"
 	"voxlang/internal/source"
+	"voxlang/internal/stdlib"
 )
 
 func TestUntypedIntConstraint(t *testing.T) {
@@ -227,7 +228,7 @@ fn main() -> i32 {
     E.None => 0,
   };
 }`)
-	prog, pdiags := parser.Parse(f)
+	prog, pdiags := parser.ParseFiles(append(stdlib.Files(), f))
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		t.Fatalf("parse diags: %+v", pdiags.Items)
 	}

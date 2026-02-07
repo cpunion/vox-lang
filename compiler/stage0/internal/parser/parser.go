@@ -161,7 +161,7 @@ func (p *Parser) parseImportDecl() *ast.ImportDecl {
 		endTok = p.prev()
 	} else {
 		switch p.peek().Kind {
-		case lexer.TokenFn, lexer.TokenStruct, lexer.TokenEnum, lexer.TokenImport, lexer.TokenEOF:
+		case lexer.TokenPub, lexer.TokenFn, lexer.TokenStruct, lexer.TokenEnum, lexer.TokenImport, lexer.TokenEOF:
 			// ok
 		default:
 			p.errorHere("expected `;` or next top-level item after import")

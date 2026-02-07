@@ -236,6 +236,14 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			if !sameType(l, r) {
 				c.errorAt(e.S, "equality requires same type")
 			}
+			// Stage0 backend only supports equality on a small set of primitives.
+			// (Struct/enum/vec equality would need dedicated lowering.)
+			switch l.K {
+			case TyBad, TyBool, TyI32, TyI64, TyString:
+				// ok
+			default:
+				c.errorAt(e.S, "equality is only supported for bool/i32/i64/String in stage0")
+			}
 			return c.setExprType(ex, Type{K: TyBool})
 		case "&&", "||":
 			l := c.checkExpr(e.Left, Type{K: TyBool})
@@ -381,6 +389,19 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 					q2 := names.QualifyParts(pkg, nil, name)
 					if _, ok := c.funcSigs[q2]; ok {
 						target = q2
+					}
+				}
+				// 4) global root (builtins live here)
+				if target == "" {
+					if _, ok := c.funcSigs[name]; ok {
+						target = name
+					}
+				}
+				// 5) implicit prelude: std/prelude
+				if target == "" {
+					q3 := names.QualifyParts("", []string{"std", "prelude"}, name)
+					if _, ok := c.funcSigs[q3]; ok {
+						target = q3
 					}
 				}
 			}

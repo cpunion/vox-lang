@@ -339,45 +339,23 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		out.WriteString(");\n")
 		return nil
 	case *ir.Call:
-		// builtin assert
-		if i.Name == "assert" || i.Name == "std.testing::assert" {
+		// Stage0 builtins: panic/print only.
+		if i.Name == "panic" {
 			if len(i.Args) != 1 {
-				return fmt.Errorf("assert expects 1 arg")
+				return fmt.Errorf("panic expects 1 arg")
 			}
-			out.WriteString("  vox_builtin_assert(")
+			out.WriteString("  vox_builtin_panic(")
 			out.WriteString(cValue(i.Args[0]))
 			out.WriteString(");\n")
 			return nil
 		}
-		if i.Name == "std.testing::fail" {
+		if i.Name == "print" {
 			if len(i.Args) != 1 {
-				return fmt.Errorf("std.testing::fail expects 1 arg")
+				return fmt.Errorf("print expects 1 arg")
 			}
-			out.WriteString("  vox_builtin_fail(")
+			out.WriteString("  vox_builtin_print(")
 			out.WriteString(cValue(i.Args[0]))
 			out.WriteString(");\n")
-			return nil
-		}
-		if i.Name == "std.testing::assert_eq_i32" || i.Name == "std.testing::assert_eq_i64" || i.Name == "std.testing::assert_eq_bool" {
-			if len(i.Args) != 2 {
-				return fmt.Errorf("%s expects 2 args", i.Name)
-			}
-			out.WriteString("  vox_builtin_assert((")
-			out.WriteString(cValue(i.Args[0]))
-			out.WriteString(") == (")
-			out.WriteString(cValue(i.Args[1]))
-			out.WriteString("));\n")
-			return nil
-		}
-		if i.Name == "std.testing::assert_eq_str" {
-			if len(i.Args) != 2 {
-				return fmt.Errorf("%s expects 2 args", i.Name)
-			}
-			out.WriteString("  vox_builtin_assert(strcmp(")
-			out.WriteString(cValue(i.Args[0]))
-			out.WriteString(", ")
-			out.WriteString(cValue(i.Args[1]))
-			out.WriteString(") == 0);\n")
 			return nil
 		}
 		out.WriteString("  ")

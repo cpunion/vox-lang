@@ -52,13 +52,15 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	out.WriteString("}\n\n")
 
 	// Runtime builtins
-	out.WriteString("static void vox_builtin_assert(bool cond) {\n")
-	out.WriteString("  if (!cond) { fprintf(stderr, \"assertion failed\\n\"); exit(1); }\n")
-	out.WriteString("}\n\n")
-	out.WriteString("static void vox_builtin_fail(const char* msg) {\n")
+	out.WriteString("static void vox_builtin_panic(const char* msg) {\n")
 	out.WriteString("  if (!msg) msg = \"\";\n")
 	out.WriteString("  fprintf(stderr, \"%s\\n\", msg);\n")
 	out.WriteString("  exit(1);\n")
+	out.WriteString("}\n\n")
+	out.WriteString("static void vox_builtin_print(const char* msg) {\n")
+	out.WriteString("  if (!msg) msg = \"\";\n")
+	out.WriteString("  fputs(msg, stdout);\n")
+	out.WriteString("  fflush(stdout);\n")
 	out.WriteString("}\n\n")
 
 	// Nominal type defs (struct/enum) must come before function decls.
