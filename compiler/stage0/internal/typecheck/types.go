@@ -70,23 +70,33 @@ type CheckedProgram struct {
 }
 
 type FuncSig struct {
-	Params []Type
-	Ret    Type
+	Pub      bool
+	OwnerPkg string
+	OwnerMod []string
+	Params   []Type
+	Ret      Type
 }
 
 type StructSig struct {
 	Name       string
+	Pub        bool
+	OwnerPkg   string
+	OwnerMod   []string
 	Fields     []StructFieldSig
 	FieldIndex map[string]int
 }
 
 type StructFieldSig struct {
+	Pub  bool
 	Name string
 	Ty   Type
 }
 
 type EnumSig struct {
 	Name         string
+	Pub          bool
+	OwnerPkg     string
+	OwnerMod     []string
 	Variants     []EnumVariantSig
 	VariantIndex map[string]int
 }
@@ -134,6 +144,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 	c.collectEnumSigs()
 	c.collectFuncSigs()
 	c.collectImports()
+	c.checkPubInterfaces()
 	c.checkAll()
 	return &CheckedProgram{
 		Prog:        prog,
@@ -174,12 +185,114 @@ type importTarget struct {
 	Mod []string // base module path segments
 }
 
+func sameModPath(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *checker) isSameModule(file *source.File, ownerPkg string, ownerMod []string) bool {
+	if file == nil {
+		return false
+	}
+	pkg, mod, _ := names.SplitOwnerAndModule(file.Name)
+	return pkg == ownerPkg && sameModPath(mod, ownerMod)
+}
+
+func (c *checker) canAccess(file *source.File, ownerPkg string, ownerMod []string, pub bool) bool {
+	if c.isSameModule(file, ownerPkg, ownerMod) {
+		return true
+	}
+	return pub
+}
+
+func (c *checker) checkPubInterfaces() {
+	// Stage0 minimal rule set:
+	// - Non-pub items can reference anything in their signatures.
+	// - pub fn/struct/enum cannot expose private nominal types from their own module.
+	//
+	// This prevents "pub API that is unusable outside the module".
+	checkTy := func(at source.Span, ownerPkg string, ownerMod []string, t Type, what string) {
+		switch t.K {
+		case TyStruct:
+			ss, ok := c.structSigs[t.Name]
+			if ok && ss.OwnerPkg == ownerPkg && sameModPath(ss.OwnerMod, ownerMod) && !ss.Pub {
+				c.errorAt(at, what+" exposes private type: "+t.Name)
+			}
+		case TyEnum:
+			es, ok := c.enumSigs[t.Name]
+			if ok && es.OwnerPkg == ownerPkg && sameModPath(es.OwnerMod, ownerMod) && !es.Pub {
+				c.errorAt(at, what+" exposes private type: "+t.Name)
+			}
+		}
+	}
+
+	for _, fn := range c.prog.Funcs {
+		if fn == nil || fn.Span.File == nil || !fn.Pub {
+			continue
+		}
+		qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)
+		sig, ok := c.funcSigs[qname]
+		if !ok {
+			continue
+		}
+		ownerPkg, ownerMod, _ := names.SplitOwnerAndModule(fn.Span.File.Name)
+		for _, p := range sig.Params {
+			checkTy(fn.Span, ownerPkg, ownerMod, p, "public function "+qname)
+		}
+		checkTy(fn.Span, ownerPkg, ownerMod, sig.Ret, "public function "+qname)
+	}
+
+	for _, st := range c.prog.Structs {
+		if st == nil || st.Span.File == nil || !st.Pub {
+			continue
+		}
+		qname := names.QualifyFunc(st.Span.File.Name, st.Name)
+		ss, ok := c.structSigs[qname]
+		if !ok {
+			continue
+		}
+		ownerPkg, ownerMod, _ := names.SplitOwnerAndModule(st.Span.File.Name)
+		_ = ss
+		for _, f := range c.structSigs[qname].Fields {
+			if !f.Pub {
+				continue
+			}
+			checkTy(st.Span, ownerPkg, ownerMod, f.Ty, "public struct "+qname)
+		}
+	}
+
+	for _, en := range c.prog.Enums {
+		if en == nil || en.Span.File == nil || !en.Pub {
+			continue
+		}
+		qname := names.QualifyFunc(en.Span.File.Name, en.Name)
+		es, ok := c.enumSigs[qname]
+		if !ok {
+			continue
+		}
+		ownerPkg, ownerMod, _ := names.SplitOwnerAndModule(en.Span.File.Name)
+		for _, v := range es.Variants {
+			for _, f := range v.Fields {
+				checkTy(en.Span, ownerPkg, ownerMod, f, "public enum "+qname)
+			}
+		}
+	}
+}
+
 func (c *checker) collectStructSigs() {
 	// First pass: register all struct names so field types can reference other structs.
 	for _, st := range c.prog.Structs {
 		if st == nil || st.Span.File == nil {
 			continue
 		}
+		pkg, mod, _ := names.SplitOwnerAndModule(st.Span.File.Name)
 		qname := names.QualifyFunc(st.Span.File.Name, st.Name)
 		if _, exists := c.enumSigs[qname]; exists {
 			c.errorAt(st.Span, "duplicate nominal type name (enum already exists): "+qname)
@@ -189,7 +302,13 @@ func (c *checker) collectStructSigs() {
 			c.errorAt(st.Span, "duplicate struct: "+qname)
 			continue
 		}
-		c.structSigs[qname] = StructSig{Name: qname, FieldIndex: map[string]int{}}
+		c.structSigs[qname] = StructSig{
+			Name:       qname,
+			Pub:        st.Pub,
+			OwnerPkg:   pkg,
+			OwnerMod:   mod,
+			FieldIndex: map[string]int{},
+		}
 	}
 
 	// Second pass: fill fields.
@@ -208,7 +327,7 @@ func (c *checker) collectStructSigs() {
 			}
 			fty := c.typeFromAstInFile(f.Type, st.Span.File)
 			sig.FieldIndex[f.Name] = len(sig.Fields)
-			sig.Fields = append(sig.Fields, StructFieldSig{Name: f.Name, Ty: fty})
+			sig.Fields = append(sig.Fields, StructFieldSig{Pub: f.Pub, Name: f.Name, Ty: fty})
 		}
 		c.structSigs[qname] = sig
 	}
@@ -220,6 +339,7 @@ func (c *checker) collectEnumSigs() {
 		if en == nil || en.Span.File == nil {
 			continue
 		}
+		pkg, mod, _ := names.SplitOwnerAndModule(en.Span.File.Name)
 		qname := names.QualifyFunc(en.Span.File.Name, en.Name)
 		if _, exists := c.structSigs[qname]; exists {
 			c.errorAt(en.Span, "duplicate nominal type name (struct already exists): "+qname)
@@ -229,7 +349,13 @@ func (c *checker) collectEnumSigs() {
 			c.errorAt(en.Span, "duplicate enum: "+qname)
 			continue
 		}
-		c.enumSigs[qname] = EnumSig{Name: qname, VariantIndex: map[string]int{}}
+		c.enumSigs[qname] = EnumSig{
+			Name:         qname,
+			Pub:          en.Pub,
+			OwnerPkg:     pkg,
+			OwnerMod:     mod,
+			VariantIndex: map[string]int{},
+		}
 	}
 
 	// Second pass: fill variants.
@@ -264,13 +390,13 @@ func (c *checker) collectEnumSigs() {
 
 func (c *checker) collectFuncSigs() {
 	// Builtins (stage0): keep minimal and stable.
-	c.funcSigs["assert"] = FuncSig{Params: []Type{{K: TyBool}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::assert"] = FuncSig{Params: []Type{{K: TyBool}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::assert_eq_i32"] = FuncSig{Params: []Type{{K: TyI32}, {K: TyI32}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::assert_eq_i64"] = FuncSig{Params: []Type{{K: TyI64}, {K: TyI64}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::assert_eq_bool"] = FuncSig{Params: []Type{{K: TyBool}, {K: TyBool}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::assert_eq_str"] = FuncSig{Params: []Type{{K: TyString}, {K: TyString}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["std.testing::fail"] = FuncSig{Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["assert"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyBool}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::assert"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyBool}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::assert_eq_i32"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyI32}, {K: TyI32}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::assert_eq_i64"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyI64}, {K: TyI64}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::assert_eq_bool"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyBool}, {K: TyBool}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::assert_eq_str"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyString}, {K: TyString}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::fail"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: []string{"std", "testing"}, Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
 
 	for _, fn := range c.prog.Funcs {
 		qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)
@@ -279,6 +405,10 @@ func (c *checker) collectFuncSigs() {
 			continue
 		}
 		sig := FuncSig{}
+		pkg, mod, _ := names.SplitOwnerAndModule(fn.Span.File.Name)
+		sig.Pub = fn.Pub
+		sig.OwnerPkg = pkg
+		sig.OwnerMod = mod
 		for _, p := range fn.Params {
 			sig.Params = append(sig.Params, c.typeFromAstInFile(p.Type, fn.Span.File))
 		}
@@ -577,8 +707,12 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				c.errorAt(e.S, "internal error: missing file for call resolution")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
-			ety, es, ok := c.tryResolveEnumByParts(c.curFn.Span.File, parts[:len(parts)-1])
-			if ok {
+			ety, es, found := c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1])
+			if found {
+				if !c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Pub) {
+					c.errorAt(e.S, "type is private: "+ety.Name)
+					return c.setExprType(ex, Type{K: TyBad})
+				}
 				varName := parts[len(parts)-1]
 				vidx, vok := es.VariantIndex[varName]
 				if !vok {
@@ -657,6 +791,10 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			c.errorAt(e.S, "unknown function: "+target)
 			return c.setExprType(ex, Type{K: TyBad})
 		}
+		if c.curFn != nil && c.curFn.Span.File != nil && !c.canAccess(c.curFn.Span.File, sig.OwnerPkg, sig.OwnerMod, sig.Pub) {
+			c.errorAt(e.S, "function is private: "+target)
+			return c.setExprType(ex, Type{K: TyBad})
+		}
 		c.callTgts[e] = target
 		if len(e.Args) != len(sig.Params) {
 			c.errorAt(e.S, fmt.Sprintf("wrong number of arguments: expected %d, got %d", len(sig.Params), len(e.Args)))
@@ -676,8 +814,12 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			if ok && len(parts) >= 2 {
 				alias := parts[0]
 				if _, ok := c.lookupVar(alias); !ok {
-					ety, es, ok := c.tryResolveEnumByParts(c.curFn.Span.File, parts[:len(parts)-1])
-					if ok {
+					ety, es, found := c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1])
+					if found && !c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Pub) {
+						c.errorAt(e.S, "type is private: "+ety.Name)
+						return c.setExprType(ex, Type{K: TyBad})
+					}
+					if found && c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Pub) {
 						vname := parts[len(parts)-1]
 						vidx, vok := es.VariantIndex[vname]
 						if vok && len(es.Variants[vidx].Fields) == 0 {
@@ -703,6 +845,10 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			c.errorAt(e.S, "unknown field: "+e.Name)
 			return c.setExprType(ex, Type{K: TyBad})
 		}
+		if c.curFn != nil && c.curFn.Span.File != nil && !c.isSameModule(c.curFn.Span.File, ss.OwnerPkg, ss.OwnerMod) && !ss.Fields[idx].Pub {
+			c.errorAt(e.S, "field is private: "+recvTy.Name+"."+e.Name)
+			return c.setExprType(ex, Type{K: TyBad})
+		}
 		return c.setExprType(ex, ss.Fields[idx].Ty)
 	case *ast.StructLitExpr:
 		if e.S.File == nil {
@@ -712,6 +858,14 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		sty, ss, ok := c.resolveStructByParts(e.S.File, e.TypeParts, e.S)
 		if !ok {
 			return c.setExprType(ex, Type{K: TyBad})
+		}
+		if !c.isSameModule(e.S.File, ss.OwnerPkg, ss.OwnerMod) {
+			for _, f := range ss.Fields {
+				if !f.Pub {
+					c.errorAt(e.S, "cannot construct struct "+sty.Name+": field "+f.Name+" is private")
+					return c.setExprType(ex, Type{K: TyBad})
+				}
+			}
 		}
 		seen := map[string]bool{}
 		for _, init := range e.Inits {
@@ -723,6 +877,10 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			idx, ok := ss.FieldIndex[init.Name]
 			if !ok {
 				c.errorAt(init.Span, "unknown field: "+init.Name)
+				continue
+			}
+			if !c.isSameModule(e.S.File, ss.OwnerPkg, ss.OwnerMod) && !ss.Fields[idx].Pub {
+				c.errorAt(init.Span, "field is private: "+sty.Name+"."+init.Name)
 				continue
 			}
 			want := ss.Fields[idx].Ty
@@ -847,20 +1005,43 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 			return Type{K: TyString}
 		default:
 			if file != nil {
+				private := ""
 				pkg, mod, _ := names.SplitOwnerAndModule(file.Name)
 				q1 := names.QualifyParts(pkg, mod, tt.Name)
-				if _, ok := c.structSigs[q1]; ok {
-					return Type{K: TyStruct, Name: q1}
+				if ss, ok := c.structSigs[q1]; ok {
+					if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+						return Type{K: TyStruct, Name: q1}
+					}
+					private = q1
 				}
-				if _, ok := c.enumSigs[q1]; ok {
-					return Type{K: TyEnum, Name: q1}
+				if es, ok := c.enumSigs[q1]; ok {
+					if c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Pub) {
+						return Type{K: TyEnum, Name: q1}
+					}
+					if private == "" {
+						private = q1
+					}
 				}
 				q2 := names.QualifyParts(pkg, nil, tt.Name)
-				if _, ok := c.structSigs[q2]; ok {
-					return Type{K: TyStruct, Name: q2}
+				if ss, ok := c.structSigs[q2]; ok {
+					if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+						return Type{K: TyStruct, Name: q2}
+					}
+					if private == "" {
+						private = q2
+					}
 				}
-				if _, ok := c.enumSigs[q2]; ok {
-					return Type{K: TyEnum, Name: q2}
+				if es, ok := c.enumSigs[q2]; ok {
+					if c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Pub) {
+						return Type{K: TyEnum, Name: q2}
+					}
+					if private == "" {
+						private = q2
+					}
+				}
+				if private != "" {
+					c.errorAt(tt.S, "type is private: "+private)
+					return Type{K: TyBad}
 				}
 			}
 			c.errorAt(tt.S, "unknown type: "+tt.Name)
@@ -966,14 +1147,27 @@ func (c *checker) resolveStructByParts(file *source.File, parts []string, s sour
 		return Type{K: TyBad}, StructSig{}, false
 	}
 	if len(parts) == 1 {
+		private := ""
 		pkg, mod, _ := names.SplitOwnerAndModule(file.Name)
 		q1 := names.QualifyParts(pkg, mod, parts[0])
 		if ss, ok := c.structSigs[q1]; ok {
-			return Type{K: TyStruct, Name: q1}, ss, true
+			if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+				return Type{K: TyStruct, Name: q1}, ss, true
+			}
+			private = q1
 		}
 		q2 := names.QualifyParts(pkg, nil, parts[0])
 		if ss, ok := c.structSigs[q2]; ok {
-			return Type{K: TyStruct, Name: q2}, ss, true
+			if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+				return Type{K: TyStruct, Name: q2}, ss, true
+			}
+			if private == "" {
+				private = q2
+			}
+		}
+		if private != "" {
+			c.errorAt(s, "type is private: "+private)
+			return Type{K: TyBad}, StructSig{}, false
 		}
 		c.errorAt(s, "unknown type: "+parts[0])
 		return Type{K: TyBad}, StructSig{}, false
@@ -996,10 +1190,14 @@ func (c *checker) resolveStructByParts(file *source.File, parts []string, s sour
 		c.errorAt(s, "unknown type: "+q)
 		return Type{K: TyBad}, StructSig{}, false
 	}
+	if !c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+		c.errorAt(s, "type is private: "+q)
+		return Type{K: TyBad}, StructSig{}, false
+	}
 	return Type{K: TyStruct, Name: q}, ss, true
 }
 
-func (c *checker) tryResolveEnumByParts(file *source.File, parts []string) (Type, EnumSig, bool) {
+func (c *checker) findEnumByParts(file *source.File, parts []string) (Type, EnumSig, bool) {
 	if len(parts) == 0 {
 		return Type{K: TyBad}, EnumSig{}, false
 	}
@@ -1039,8 +1237,12 @@ func (c *checker) resolveEnumByParts(file *source.File, parts []string, s source
 		c.errorAt(s, "missing enum name")
 		return Type{K: TyBad}, EnumSig{}, false
 	}
-	if ty, es, ok := c.tryResolveEnumByParts(file, parts); ok {
-		return ty, es, true
+	if ty, es, found := c.findEnumByParts(file, parts); found {
+		if c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Pub) {
+			return ty, es, true
+		}
+		c.errorAt(s, "type is private: "+ty.Name)
+		return Type{K: TyBad}, EnumSig{}, false
 	}
 
 	if len(parts) == 1 {

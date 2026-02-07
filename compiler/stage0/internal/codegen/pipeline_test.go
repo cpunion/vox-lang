@@ -67,7 +67,7 @@ func TestPipelineCompilesAndRunsWithDepQualifiedNames(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "dep"
 fn main() -> i32 { return dep.one(); }`),
-		source.NewFile("dep/src/lib.vox", `fn one() -> i32 { return 1; }`),
+		source.NewFile("dep/src/lib.vox", `pub fn one() -> i32 { return 1; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
@@ -236,7 +236,7 @@ fn a__b() -> i32 { return 1; }
 fn main() -> i32 {
   return a__b() + a.b();
 }`),
-		source.NewFile("src/a.vox", `fn b() -> i32 { return 2; }`),
+		source.NewFile("src/a.vox", `pub fn b() -> i32 { return 2; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {

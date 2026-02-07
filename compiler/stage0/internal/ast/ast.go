@@ -16,6 +16,7 @@ type ImportDecl struct {
 }
 
 type FuncDecl struct {
+	Pub    bool
 	Name   string
 	Params []Param
 	Ret    Type
@@ -24,18 +25,21 @@ type FuncDecl struct {
 }
 
 type StructDecl struct {
+	Pub    bool
 	Name   string
 	Fields []StructField
 	Span   source.Span
 }
 
 type StructField struct {
+	Pub  bool
 	Name string
 	Type Type
 	Span source.Span
 }
 
 type EnumDecl struct {
+	Pub      bool
 	Name     string
 	Variants []EnumVariant
 	Span     source.Span

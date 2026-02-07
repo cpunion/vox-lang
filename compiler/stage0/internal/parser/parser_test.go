@@ -120,3 +120,27 @@ fn main() -> i32 {
 		t.Fatalf("unexpected diags: %+v", diags.Items)
 	}
 }
+
+func TestParsePubDecls(t *testing.T) {
+	f := source.NewFile("test.vox", `pub struct S { pub x: i32, y: i32 }
+pub enum E { A(i32), None }
+pub fn f() -> i32 { return 1; }
+fn main() -> i32 { return f(); }
+`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Structs) != 1 || !prog.Structs[0].Pub {
+		t.Fatalf("expected 1 pub struct")
+	}
+	if len(prog.Structs[0].Fields) != 2 || !prog.Structs[0].Fields[0].Pub || prog.Structs[0].Fields[1].Pub {
+		t.Fatalf("expected struct fields to have pub flags")
+	}
+	if len(prog.Enums) != 1 || !prog.Enums[0].Pub {
+		t.Fatalf("expected 1 pub enum")
+	}
+	if len(prog.Funcs) != 2 || !prog.Funcs[0].Pub {
+		t.Fatalf("expected pub fn f and non-pub main")
+	}
+}

@@ -53,6 +53,35 @@ func (p *Parser) parseProgram() *ast.Program {
 			}
 			continue
 		}
+
+		// Optional visibility modifier.
+		if p.match(lexer.TokenPub) {
+			switch {
+			case p.match(lexer.TokenStruct):
+				st := p.parseStructDecl()
+				if st != nil {
+					st.Pub = true
+					prog.Structs = append(prog.Structs, st)
+				}
+			case p.match(lexer.TokenEnum):
+				en := p.parseEnumDecl()
+				if en != nil {
+					en.Pub = true
+					prog.Enums = append(prog.Enums, en)
+				}
+			case p.match(lexer.TokenFn):
+				fn := p.parseFuncDecl()
+				if fn != nil {
+					fn.Pub = true
+					prog.Funcs = append(prog.Funcs, fn)
+				}
+			default:
+				p.errorHere("expected `fn`, `struct`, or `enum` after `pub`")
+				p.advance()
+			}
+			continue
+		}
+
 		if p.match(lexer.TokenStruct) {
 			st := p.parseStructDecl()
 			if st != nil {
@@ -121,10 +150,11 @@ func (p *Parser) parseStructDecl() *ast.StructDecl {
 	}
 	fields := []ast.StructField{}
 	for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
+		fpub := p.match(lexer.TokenPub)
 		fname := p.expect(lexer.TokenIdent, "expected field name")
 		p.expect(lexer.TokenColon, "expected `:` after field name")
 		ty := p.parseType()
-		fields = append(fields, ast.StructField{Name: fname.Lexeme, Type: ty, Span: joinSpan(fname.Span, ty.Span())})
+		fields = append(fields, ast.StructField{Pub: fpub, Name: fname.Lexeme, Type: ty, Span: joinSpan(fname.Span, ty.Span())})
 		if p.match(lexer.TokenComma) {
 			// allow trailing comma before }
 			continue

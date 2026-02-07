@@ -46,7 +46,7 @@ func TestImportAliasResolvesCallTarget(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "mathlib" as m
 fn main() -> i32 { return m.one(); }`),
-		source.NewFile("mathlib/src/lib.vox", `fn one() -> i32 { return 1; }`),
+		source.NewFile("mathlib/src/lib.vox", `pub fn one() -> i32 { return 1; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
@@ -201,5 +201,124 @@ fn main() -> i32 {
 	_, tdiags := Check(prog, Options{})
 	if tdiags != nil && len(tdiags.Items) > 0 {
 		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestPubVisibilityForCrossModuleAccess(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import "a"
+fn main() -> i32 {
+  // calling a private function must fail
+  return a.secret();
+}`),
+		source.NewFile("src/a.vox", `fn secret() -> i32 { return 1; }`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "function is private: a::secret" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected private function diagnostic, got: %+v", tdiags.Items)
+	}
+}
+
+func TestPubVisibilityForStructTypeAndField(t *testing.T) {
+	// 1) private type cannot be constructed from another module
+	{
+		files := []*source.File{
+			source.NewFile("src/main.vox", `import "a"
+fn main() -> i32 {
+  let s = a.S { x: 1 };
+  return 0;
+}`),
+			source.NewFile("src/a.vox", `struct S { x: i32 }`),
+		}
+		prog, pdiags := parser.ParseFiles(files)
+		if pdiags != nil && len(pdiags.Items) > 0 {
+			t.Fatalf("parse diags: %+v", pdiags.Items)
+		}
+		_, tdiags := Check(prog, Options{})
+		if tdiags == nil || len(tdiags.Items) == 0 {
+			t.Fatalf("expected diagnostics")
+		}
+		found := false
+		for _, it := range tdiags.Items {
+			if it.Msg == "type is private: a::S" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected private type diagnostic, got: %+v", tdiags.Items)
+		}
+	}
+
+	// 2) private field cannot be accessed from another module
+	{
+		files := []*source.File{
+			source.NewFile("src/main.vox", `import "a"
+fn main() -> i32 {
+  let s = a.make();
+  return s.y;
+}`),
+			source.NewFile("src/a.vox", `pub struct S { pub x: i32, y: i32 }
+pub fn make() -> S { return S { x: 1, y: 2 }; }`),
+		}
+		prog, pdiags := parser.ParseFiles(files)
+		if pdiags != nil && len(pdiags.Items) > 0 {
+			t.Fatalf("parse diags: %+v", pdiags.Items)
+		}
+		_, tdiags := Check(prog, Options{})
+		if tdiags == nil || len(tdiags.Items) == 0 {
+			t.Fatalf("expected diagnostics")
+		}
+		found := false
+		for _, it := range tdiags.Items {
+			if it.Msg == "field is private: a::S.y" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected private field diagnostic, got: %+v", tdiags.Items)
+		}
+	}
+}
+
+func TestPubInterfaceCannotExposePrivateTypes(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import "a"
+fn main() -> i32 { return a.f(); }`),
+		source.NewFile("src/a.vox", `struct Hidden { x: i32 }
+pub fn f() -> Hidden { return Hidden { x: 1 }; }`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "public function a::f exposes private type: a::Hidden" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected private-in-public-interface diagnostic, got: %+v", tdiags.Items)
 	}
 }
