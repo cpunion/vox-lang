@@ -1,0 +1,136 @@
+import "ir" as ir
+
+pub struct TySub { pub name: String, pub ty: i32 }
+
+pub struct UnifyResult { pub ok: bool, pub subs: Vec[TySub] }
+
+fn subs_lookup(subs: Vec[TySub], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < subs.len() {
+    let s: TySub = subs.get(i);
+    if s.name == name { return s.ty; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn subs_add(subs0: Vec[TySub], name: String, ty: i32) -> Vec[TySub] {
+  let mut subs: Vec[TySub] = subs0;
+  subs.push(TySub { name: name, ty: ty });
+  return subs;
+}
+
+fn is_param_ty(t: ir.Ty) -> bool { return match t.kind { ir.TyKind.Param => true, _ => false }; }
+fn is_vec_ty2(t: ir.Ty) -> bool { return match t.kind { ir.TyKind.Vec => true, _ => false }; }
+
+pub fn unify_ty(ctx: Ctx, pattern: i32, got: i32, subs0: Vec[TySub]) -> UnifyResult {
+  let pt: ir.Ty = ir.ty_pool_get(ctx.pool, pattern);
+  if is_param_ty(pt) {
+    let cur: i32 = subs_lookup(subs0, pt.name);
+    if cur == -1 { return UnifyResult { ok: true, subs: subs_add(subs0, pt.name, got) }; }
+    if cur == got { return UnifyResult { ok: true, subs: subs0 }; }
+    return UnifyResult { ok: false, subs: subs0 };
+  }
+
+  if is_vec_ty2(pt) {
+    let gt: ir.Ty = ir.ty_pool_get(ctx.pool, got);
+    if !is_vec_ty2(gt) { return UnifyResult { ok: false, subs: subs0 }; }
+    return unify_ty(ctx, pt.elem, gt.elem, subs0);
+  }
+
+  if pattern == got { return UnifyResult { ok: true, subs: subs0 }; }
+  return UnifyResult { ok: false, subs: subs0 };
+}
+
+fn find_vec_ty_idx(ctx: Ctx, elem: i32) -> i32 {
+  let tys: Vec[ir.Ty] = ctx.pool.tys;
+  let mut i: i32 = 0;
+  while i < tys.len() {
+    let t: ir.Ty = tys.get(i);
+    if t.kind == ir.TyKind.Vec && t.elem == elem { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+pub fn subst_ty(ctx: Ctx, ty_idx: i32, subs: Vec[TySub]) -> i32 {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty_idx);
+  if t.kind == ir.TyKind.Param {
+    let r: i32 = subs_lookup(subs, t.name);
+    if r == -1 { return ty_idx; }
+    return r;
+  }
+  if t.kind == ir.TyKind.Vec {
+    let e: i32 = subst_ty(ctx, t.elem, subs);
+    if e == t.elem { return ty_idx; }
+    let vidx: i32 = find_vec_ty_idx(ctx, e);
+    if vidx == -1 { return ctx.ty_bad; }
+    return vidx;
+  }
+  return ty_idx;
+}
+
+fn ty_inst_str(ctx: Ctx, ty_idx: i32) -> String {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty_idx);
+  if t.kind == ir.TyKind.Unit { return "()"; }
+  if t.kind == ir.TyKind.Bool { return "bool"; }
+  if t.kind == ir.TyKind.I32 { return "i32"; }
+  if t.kind == ir.TyKind.I64 { return "i64"; }
+  if t.kind == ir.TyKind.String { return "String"; }
+  if t.kind == ir.TyKind.Param { return t.name; }
+  if t.kind == ir.TyKind.Vec { return "Vec[".concat(ty_inst_str(ctx, t.elem)).concat("]"); }
+  if t.kind == ir.TyKind.Struct || t.kind == ir.TyKind.Enum {
+    // Use `mod::Name` with '/' normalized to '.' for readability.
+    if t.mod_path == "" || t.mod_path == "main" { return t.name; }
+    let mut s: String = t.mod_path;
+    let mut i: i32 = 0;
+    while i < s.len() {
+      if s.byte_at(i) == 47 { s = s.slice(0, i).concat(".").concat(s.slice(i + 1, s.len())); }
+      i = i + 1;
+    }
+    return s.concat("::").concat(t.name);
+  }
+  return "<bad>";
+}
+
+fn hex2(b: i32) -> String {
+  let hex: String = "0123456789abcdef";
+  let hi: i32 = b / 16;
+  let lo: i32 = b % 16;
+  return hex.slice(hi, hi + 1).concat(hex.slice(lo, lo + 1));
+}
+
+pub fn mangle_ident(s: String) -> String {
+  // Keep [A-Za-z0-9], hex-escape everything else. Prefix with 'g'.
+  let mut out: String = "g";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    let ok: bool = (ch >= 97 && ch <= 122) || (ch >= 65 && ch <= 90) || (ch >= 48 && ch <= 57);
+    if ok {
+      out = out.concat(s.slice(i, i + 1));
+    } else {
+      out = out.concat("_").concat(hex2(ch));
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn inst_suffix(ctx: Ctx, type_params: Vec[String], subs: Vec[TySub]) -> String {
+  let mut raw: String = "";
+  let mut i: i32 = 0;
+  while i < type_params.len() {
+    let tp: String = type_params.get(i);
+    let ty: i32 = subs_lookup(subs, tp);
+    raw = raw.concat(tp).concat("=").concat(ty_inst_str(ctx, ty));
+    if i + 1 < type_params.len() { raw = raw.concat(","); }
+    i = i + 1;
+  }
+  return mangle_ident(raw);
+}
+
+pub fn inst_name(ctx: Ctx, base: String, type_params: Vec[String], subs: Vec[TySub]) -> String {
+  return base.concat("$").concat(inst_suffix(ctx, type_params, subs));
+}
+

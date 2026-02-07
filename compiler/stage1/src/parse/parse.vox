@@ -289,10 +289,11 @@ fn parse_if_expr(p: Parser) -> ParseExprResult {
   return ParseExprResult { p: q, id: -1 };
 }
 
-	fn parse_postfix(p: Parser, base: i32) -> ParseExprResult {
-	  let mut q: Parser = p;
-	  let mut cur: i32 = base;
-	  while !q.has_err {
+		fn parse_postfix(p: Parser, base: i32) -> ParseExprResult {
+		  let mut q: Parser = p;
+		  let mut cur: i32 = base;
+		  let mut pending_targs: Vec[ast.TypeName] = Vec();
+		  while !q.has_err {
 	    // Struct literal: `TypePath { field: expr, ... }`
 	    //
 	    // Ambiguity note: blocks also start with `{`. We only parse a struct literal
@@ -322,18 +323,52 @@ fn parse_if_expr(p: Parser) -> ParseExprResult {
 	      cur = r5.id;
 	      continue;
 	    }
-	    if kind_is(peek_kind(q), lex.TokenKind.Dot) {
+		    if kind_is(peek_kind(q), lex.TokenKind.Dot) {
+		      if pending_targs.len() != 0 {
+		        let mut qq: Parser = q;
+		        let at: i32 = peek(q).start;
+		        qq.has_err = true;
+		        qq.err = ParseError.UnexpectedToken(lex.TokenKind.LParen, lex.TokenKind.Dot, at);
+		        return ParseExprResult { p: qq, id: cur };
+		      }
+		      let ar1: AdvanceResult = advance(q);
+		      let r2: ParseIdentResult = parse_ident(ar1.p);
+		      let r3: ParseExprResult = add_expr(r2.p, ast.ExprNode.Member(cur, r2.name));
+	      q = r3.p;
+	      cur = r3.id;
+	      continue;
+	    }
+	    if kind_is(peek_kind(q), lex.TokenKind.LBracket) {
+	      if pending_targs.len() != 0 {
+	        let mut qq: Parser = q;
+	        let at: i32 = peek(q).start;
+	        qq.has_err = true;
+	        qq.err = ParseError.UnexpectedToken(lex.TokenKind.LBracket, lex.TokenKind.LBracket, at);
+	        return ParseExprResult { p: qq, id: cur };
+	      }
+	      let ar0: AdvanceResult = advance(q);
+	      let mut r: Parser = ar0.p;
+	      if !kind_is(peek_kind(r), lex.TokenKind.RBracket) {
+	        while !r.has_err {
+	          let tr: ParseTypeResult = parse_type_name(r);
+	          r = tr.p;
+	          pending_targs.push(tr.ty);
+	          if kind_is(peek_kind(r), lex.TokenKind.Comma) {
+	            let arx: AdvanceResult = advance(r);
+	            r = arx.p;
+	            continue;
+	          }
+	          break;
+	        }
+	      }
+	      let ar1: AdvanceResult = expect(r, lex.TokenKind.RBracket);
+	      q = ar1.p;
+	      continue;
+	    }
+	    if kind_is(peek_kind(q), lex.TokenKind.LParen) {
 	      let ar1: AdvanceResult = advance(q);
-	      let r2: ParseIdentResult = parse_ident(ar1.p);
-	      let r3: ParseExprResult = add_expr(r2.p, ast.ExprNode.Member(cur, r2.name));
-      q = r3.p;
-      cur = r3.id;
-      continue;
-    }
-    if kind_is(peek_kind(q), lex.TokenKind.LParen) {
-      let ar1: AdvanceResult = advance(q);
-      let mut r: Parser = ar1.p;
-      let mut args: Vec[i32] = Vec();
+	      let mut r: Parser = ar1.p;
+	      let mut args: Vec[i32] = Vec();
       if !kind_is(peek_kind(r), lex.TokenKind.RParen) {
         while !r.has_err {
           let er: ParseExprResult = parse_expr(r, 0);
@@ -349,17 +384,25 @@ fn parse_if_expr(p: Parser) -> ParseExprResult {
           }
           break;
         }
-      }
-      let ar3: AdvanceResult = expect(r, lex.TokenKind.RParen);
-      let r4: ParseExprResult = add_expr(ar3.p, ast.ExprNode.Call(cur, args));
-      q = r4.p;
-      cur = r4.id;
-      continue;
-    }
-    break;
-  }
-	  return ParseExprResult { p: q, id: cur };
-	}
+	      }
+	      let ar3: AdvanceResult = expect(r, lex.TokenKind.RParen);
+	      let r4: ParseExprResult = add_expr(ar3.p, ast.ExprNode.Call(cur, pending_targs, args));
+	      q = r4.p;
+	      cur = r4.id;
+	      pending_targs = Vec();
+	      continue;
+	    }
+	    break;
+	  }
+	  if pending_targs.len() != 0 {
+	    let mut qq: Parser = q;
+	    let at: i32 = peek(q).start;
+	    qq.has_err = true;
+	    qq.err = ParseError.UnexpectedToken(lex.TokenKind.LParen, peek_kind(q), at);
+	    return ParseExprResult { p: qq, id: cur };
+	  }
+		  return ParseExprResult { p: q, id: cur };
+		}
 
 fn parse_pat(p: Parser) -> ParsePatResult {
   let k: lex.TokenKind = peek_kind(p);

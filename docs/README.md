@@ -6,7 +6,7 @@ Vox is a Rust-like systems language with strong compile-time execution and a sim
 - **No user lifetimes** (except `&'static T`)
 - Borrowed references are **ephemeral** (cannot be stored/returned/captured long-term)
 
-Note: Vox uses **square brackets** for generics: `Vec[T]`, `Result[T, E]`, turbofish `f::[T](...)`.
+Note: Vox uses **square brackets** for generics: `Vec[T]`, `Result[T, E]`, and explicit type args at call site: `f[T](...)`.
 
 Documents:
 
@@ -22,12 +22,12 @@ Documents:
 - `docs/14-syntax-details.md`
 - `docs/15-toolchain.md`
 - `docs/17-ffi-interop.md`
- - `docs/16-platform-support.md`
- - `docs/11-package-management.md`
- - `docs/12-testing-framework.md`
- - `docs/13-standard-library.md`
- - `docs/19-ir-spec.md`
- - `docs/20-bootstrap.md`
+- `docs/16-platform-support.md`
+- `docs/11-package-management.md`
+- `docs/12-testing-framework.md`
+- `docs/13-standard-library.md`
+- `docs/19-ir-spec.md`
+- `docs/20-bootstrap.md`
 
 Deferred for now:
 

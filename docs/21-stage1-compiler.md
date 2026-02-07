@@ -26,11 +26,13 @@
 
 - lexer：已覆盖常用关键字/标点、字符串/整数、注释与错误定位（byte offset）。
 - parser：已支持 `import "pkg" as alias`、`pub struct`/`enum`/`fn`，以及语句 `let`/赋值/`if`/`while`/`break`/`continue`/`return`/表达式语句；表达式包含 member/call、struct literal、`match { pat => expr }` 与常见二元/一元运算（precedence climbing）。类型名已支持 `path`（`a.b.C`）与方括号泛型（`Vec[i32]`）。
-- typecheck：已覆盖 Stage0 子集的主要路径（函数调用、member 调用、struct literal、enum ctor、match、Vec/String 最小内建）。
+- typecheck：已覆盖 Stage0 子集的主要路径（函数调用、member 调用、struct literal、enum ctor、match、Vec/String 最小内建），并支持泛型函数签名与泛型调用（可显式 `f[T](...)`，也可从参数/返回期望推导）。
 - IR v0：`compiler/stage1/src/ir/**` 已对齐 `docs/19-ir-spec.md`（TyPool、Value/Instr/Term、Program 结构与 formatter）。
-- IRGen：`compiler/stage1/src/irgen/**` 已跑通最小 end-to-end（从 AST 生成 IR；测试覆盖为 smoke level）。
+- IRGen：`compiler/stage1/src/irgen/**` 已跑通 end-to-end（从 AST 生成 IR），并对泛型调用做单态化（worklist 生成可达的实例函数）。
+- codegen（C）：`compiler/stage1/src/codegen/**` 已支持 IR v0 -> 单文件 C 源码；并通过 `compiler/stage1/src/compile/**` 提供最小串联管线（用于端到端测试）。
 
 下一步（按依赖顺序）：
 
-1. `compiler/stage1/src/codegen/**`：实现 IR -> C 源码（先 golden tests，不要求实际编译）。
-2. Stage1 loader/driver：把 `lex/parse/typecheck/irgen/codegen` 串起来，作为 `main` 的最小子集入口（暂不做包管理完善与增量构建）。
+1. Stage1 loader：按 `docs/03-module-package.md` 的包/多文件规则完善加载与诊断（当前以测试为主）。
+2. 工具链：把 C 源码接入实际编译/链接，产出可执行文件（先 `main` 模块 + 最小 std）。
+3. 逐步扩展 Stage0 子集覆盖：更多类型、更多内建/stdlib（保持测试优先）。

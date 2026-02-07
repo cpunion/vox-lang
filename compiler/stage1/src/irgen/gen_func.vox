@@ -2,11 +2,7 @@ import "ast" as ast
 import "ir" as ir
 import "typecheck" as tc
 
-fn gen_func(ctx: tc.Ctx, w: tc.World, mod_path: String, aliases: Vec[tc.ImportAlias], exprs: ast.ExprPool, fd: ast.FuncDecl) -> GenFuncResult {
-  let fr: tc.FindFuncResult = tc.find_func(ctx, mod_path, fd.name);
-  if !fr.found { return GenFuncResult { ok: false, err: "missing fn sig", f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() } }; }
-  let sig: tc.FuncSig = fr.sig;
-
+fn gen_func_impl(ctx: tc.Ctx, w: tc.World, mod_path: String, aliases: Vec[tc.ImportAlias], exprs: ast.ExprPool, fd: ast.FuncDecl, fn_name: String, sig: tc.FuncSig) -> GenFuncResult {
   let mut g: Gen = Gen{
     ctx: ctx,
     w: w,
@@ -21,6 +17,7 @@ fn gen_func(ctx: tc.Ctx, w: tc.World, mod_path: String, aliases: Vec[tc.ImportAl
     locals: tc.locals_new(),
     loops: Vec(),
     ret_ty: sig.ret,
+    pending: Vec(),
   };
 
   // Create entry block.
@@ -28,7 +25,7 @@ fn gen_func(ctx: tc.Ctx, w: tc.World, mod_path: String, aliases: Vec[tc.ImportAl
   g = r0.g;
   g = gen_set_block(g, r0.id);
 
-  let mut f: ir.Func = ir.Func { name: qname(mod_path, fd.name), params: Vec(), ret: sig.ret, blocks: Vec() };
+  let mut f: ir.Func = ir.Func { name: qname(mod_path, fn_name), params: Vec(), ret: sig.ret, blocks: Vec() };
 
   // Params: declare slots and store params.
   let mut pi: i32 = 0;
@@ -49,7 +46,7 @@ fn gen_func(ctx: tc.Ctx, w: tc.World, mod_path: String, aliases: Vec[tc.ImportAl
 
   // Body.
   let rb: GenStmtResult = gen_block(g, fd.body);
-  if !rb.ok { return GenFuncResult { ok: false, err: rb.err, f: f }; }
+  if !rb.ok { return GenFuncResult { ok: false, err: rb.err, f: f, pending: Vec() }; }
   g = rb.g;
 
   // Ensure terminator.
@@ -68,7 +65,17 @@ fn gen_func(ctx: tc.Ctx, w: tc.World, mod_path: String, aliases: Vec[tc.ImportAl
   }
 
   f.blocks = g.blocks;
-  return GenFuncResult { ok: true, err: "", f: f };
+  return GenFuncResult { ok: true, err: "", f: f, pending: g.pending };
+}
+
+fn gen_func(ctx: tc.Ctx, w: tc.World, mod_path: String, aliases: Vec[tc.ImportAlias], exprs: ast.ExprPool, fd: ast.FuncDecl) -> GenFuncResult {
+  let fr: tc.FindFuncResult = tc.find_func(ctx, mod_path, fd.name);
+  if !fr.found { return GenFuncResult { ok: false, err: "missing fn sig", f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, pending: Vec() }; }
+  return gen_func_impl(ctx, w, mod_path, aliases, exprs, fd, fd.name, fr.sig);
+}
+
+fn gen_func_inst(ctx: tc.Ctx, w: tc.World, mod_path: String, aliases: Vec[tc.ImportAlias], exprs: ast.ExprPool, fd: ast.FuncDecl, inst_name: String, inst_sig: tc.FuncSig) -> GenFuncResult {
+  return gen_func_impl(ctx, w, mod_path, aliases, exprs, fd, inst_name, inst_sig);
 }
 
 struct GenStmtResult { ok: bool, err: String, g: Gen }

@@ -26,6 +26,51 @@ fn qname(mod_path: String, name: String) -> String {
   return s.concat("::").concat(name);
 }
 
+enum TaskKind { Normal, Inst }
+
+struct FuncTask {
+  kind: TaskKind,
+  mod_path: String,
+  func_idx: i32,     // for Normal
+  base_name: String, // for Inst
+  inst_name: String, // for Inst
+  inst_sig: tc.FuncSig,
+}
+
+fn has_str(vs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < vs.len() {
+    if vs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+struct FindModResult { found: bool, m: tc.WorldModule }
+
+fn find_mod(w: tc.World, path: String) -> FindModResult {
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(i);
+    if m.path == path { return FindModResult { found: true, m: m }; }
+    i = i + 1;
+  }
+  // Dummy; caller must check found.
+  return FindModResult { found: false, m: tc.WorldModule { path: "", prog: ast.Program { imports: Vec(), structs: Vec(), enums: Vec(), funcs: Vec(), exprs: ast.expr_pool() } } };
+}
+
+struct FindFuncDeclResult { found: bool, fd: ast.FuncDecl }
+
+fn find_generic_func(m: tc.WorldModule, name: String) -> FindFuncDeclResult {
+  let mut i: i32 = 0;
+  while i < m.prog.funcs.len() {
+    let fd: ast.FuncDecl = m.prog.funcs.get(i);
+    if fd.name == name && fd.type_params.len() != 0 { return FindFuncDeclResult { found: true, fd: fd }; }
+    i = i + 1;
+  }
+  return FindFuncDeclResult { found: false, fd: ast.FuncDecl { is_pub: false, name: "", type_params: Vec(), params: Vec(), ret: ast.TypeName { parts: Vec(), args: Vec() }, body: ast.Block { stmts: Vec() } } };
+}
+
 pub fn generate_world(w: tc.World) -> GenResult {
   let br: tc.BuildCtxResult = tc.build_ctx(w);
   let mut p: ir.Program = ir.program(br.ctx.pool);
@@ -60,23 +105,66 @@ pub fn generate_world(w: tc.World) -> GenResult {
     ei = ei + 1;
   }
 
-  // Functions (bodies).
+  // Function bodies: generate all non-generic functions, then monomorphize reachable generic instantiations.
+  let mut tasks: Vec[FuncTask] = Vec();
   let mut mi: i32 = 0;
   while mi < w.mods.len() {
     let m: tc.WorldModule = w.mods.get(mi);
-    let aliases: Vec[tc.ImportAlias] = tc.build_import_aliases(m.prog.imports);
     let mut fi: i32 = 0;
     while fi < m.prog.funcs.len() {
       let fd: ast.FuncDecl = m.prog.funcs.get(fi);
-      if fd.type_params.len() != 0 { fi = fi + 1; continue; }
-      let r: GenFuncResult = gen_func(br.ctx, w, m.path, aliases, m.prog.exprs, fd);
-      if !r.ok { return err0(p, r.err); }
-      p.funcs.push(r.f);
+      if fd.type_params.len() == 0 {
+        tasks.push(FuncTask { kind: TaskKind.Normal, mod_path: m.path, func_idx: fi, base_name: "", inst_name: "", inst_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, is_pub: false, type_params: Vec() } });
+      }
       fi = fi + 1;
     }
     mi = mi + 1;
   }
 
+  let mut emitted: Vec[String] = Vec();
+  let mut ti: i32 = 0;
+  while ti < tasks.len() {
+    let t: FuncTask = tasks.get(ti);
+
+    let mr: FindModResult = find_mod(w, t.mod_path);
+    if !mr.found { return err0(p, "missing module for task"); }
+    let m2: tc.WorldModule = mr.m;
+    let aliases: Vec[tc.ImportAlias] = tc.build_import_aliases(m2.prog.imports);
+
+    let mut want_name: String = "";
+    if t.kind == TaskKind.Normal {
+      let fd0: ast.FuncDecl = m2.prog.funcs.get(t.func_idx);
+      want_name = qname(t.mod_path, fd0.name);
+    } else {
+      want_name = qname(t.mod_path, t.inst_name);
+    }
+
+    if has_str(emitted, want_name) { ti = ti + 1; continue; }
+
+    let mut r: GenFuncResult = GenFuncResult { ok: false, err: "", f: ir.Func { name: "", params: Vec(), ret: br.ctx.ty_bad, blocks: Vec() }, pending: Vec() };
+    if t.kind == TaskKind.Normal {
+      let fd: ast.FuncDecl = m2.prog.funcs.get(t.func_idx);
+      r = gen_func(br.ctx, w, t.mod_path, aliases, m2.prog.exprs, fd);
+    } else {
+      let fr: FindFuncDeclResult = find_generic_func(m2, t.base_name);
+      if !fr.found { return err0(p, "missing generic fn for instantiation"); }
+      r = gen_func_inst(br.ctx, w, t.mod_path, aliases, m2.prog.exprs, fr.fd, t.inst_name, t.inst_sig);
+    }
+
+    if !r.ok { return err0(p, r.err); }
+    emitted.push(want_name);
+    p.funcs.push(r.f);
+
+    // Enqueue pending instantiations discovered while lowering this function.
+    let mut pi: i32 = 0;
+    while pi < r.pending.len() {
+      let pend: PendingInst = r.pending.get(pi);
+      tasks.push(FuncTask { kind: TaskKind.Inst, mod_path: pend.mod_path, func_idx: -1, base_name: pend.base_name, inst_name: pend.inst_name, inst_sig: pend.sig });
+      pi = pi + 1;
+    }
+
+    ti = ti + 1;
+  }
+
   return ok0(p);
 }
-

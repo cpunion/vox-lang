@@ -2,6 +2,7 @@ import "std/testing" as t
 import "parse" as p
 import "typecheck" as tc
 import "irgen" as g
+import "ir" as ir
 
 fn add_mod(w: tc.World, path: String, src: String) -> tc.World {
   let r: p.ParseResult = p.parse_text(src);
@@ -19,3 +20,34 @@ fn test_irgen_smoke_return_const() -> () {
   t.assert_eq(f.blocks.len(), 1);
 }
 
+fn prog_has_func(p: ir.Program, name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < p.funcs.len() {
+    if p.funcs.get(i).name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn test_irgen_monomorphizes_generic_call() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn id[T](x: T) -> T { return x; } fn main() -> i32 { return id(1); }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  // Emit main + the instantiated `id[T=i32]`.
+  t.assert_eq(r.prog.funcs.len(), 2);
+  t.assert(prog_has_func(r.prog, "main"));
+  t.assert(prog_has_func(r.prog, "id$gT_3di32"));
+  t.assert(!prog_has_func(r.prog, "id"));
+}
+
+fn test_irgen_monomorphizes_multiple_instantiations() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn id[T](x: T) -> T { return x; }\nfn main() -> i32 {\n  let a: i32 = id(1);\n  let b: i64 = id[i64](1);\n  return a;\n}\n");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  t.assert_eq(r.prog.funcs.len(), 3);
+  t.assert(prog_has_func(r.prog, "main"));
+  t.assert(prog_has_func(r.prog, "id$gT_3di32"));
+  t.assert(prog_has_func(r.prog, "id$gT_3di64"));
+}

@@ -58,9 +58,10 @@ fn vec_recv_slot(g0: Gen, recv_id: i32, recv_ty: i32) -> VecRecvSlotResult {
   return VecRecvSlotResult { ok: true, err: "", g: g, slot: sid };
 }
 
-fn gen_expr_call(g0: Gen, callee: i32, args: Vec[i32], out_ty: i32, expected: i32) -> GenExprResult {
+fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i32], out_ty: i32, expected: i32) -> GenExprResult {
   let cn: ast.ExprNode = ast.expr_pool_get(g0.exprs, callee);
   let is_member: bool = match cn { ast.ExprNode.Member(_r, _n) => true, _ => false };
+  let ta: Vec[ast.TypeName] = type_args;
 
   if is_member {
     let recv_id: i32 = match cn { ast.ExprNode.Member(r, _n) => r, _ => -1 };
@@ -99,12 +100,12 @@ fn gen_expr_call(g0: Gen, callee: i32, args: Vec[i32], out_ty: i32, expected: i3
   if parts.len() == 1 {
     let name: String = parts.get(0);
     let fr0: tc.FindFuncResult = tc.find_func(g0.ctx, g0.mod_path, name);
-    if fr0.found { return gen_call_func(g0, qname(g0.mod_path, name), fr0.sig, args, out_ty); }
+    if fr0.found { return gen_call_func(g0, g0.mod_path, name, fr0.sig, ta, args, out_ty); }
     let prelude: String = "std/prelude";
     let fr1: tc.FindFuncResult = tc.find_func(g0.ctx, prelude, name);
-    if fr1.found { return gen_call_func(g0, qname(prelude, name), fr1.sig, args, out_ty); }
+    if fr1.found { return gen_call_func(g0, prelude, name, fr1.sig, ta, args, out_ty); }
     let fr2: tc.FindFuncResult = tc.find_func(g0.ctx, "", name);
-    if fr2.found { return gen_call_func(g0, name, fr2.sig, args, out_ty); }
+    if fr2.found { return gen_call_func(g0, "", name, fr2.sig, ta, args, out_ty); }
     return GenExprResult { ok: false, err: "unknown fn", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
   }
 
@@ -114,7 +115,7 @@ fn gen_expr_call(g0: Gen, callee: i32, args: Vec[i32], out_ty: i32, expected: i3
     if mp != "" {
       let fr: tc.FindFuncResult = tc.find_func(g0.ctx, mp, parts.get(1));
       if !fr.found { return GenExprResult { ok: false, err: "unknown fn", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-      return gen_call_func(g0, qname(mp, parts.get(1)), fr.sig, args, out_ty);
+      return gen_call_func(g0, mp, parts.get(1), fr.sig, ta, args, out_ty);
     }
     // Enum ctor in current module.
     return gen_call_enum_ctor(g0, g0.mod_path, parts.get(0), parts.get(1), args, out_ty);
@@ -128,31 +129,138 @@ fn gen_expr_call(g0: Gen, callee: i32, args: Vec[i32], out_ty: i32, expected: i3
   return GenExprResult { ok: false, err: "unsupported call path", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
 }
 
-fn gen_call_func(g0: Gen, qn: String, sig: tc.FuncSig, args: Vec[i32], out_ty: i32) -> GenExprResult {
-  let mut g: Gen = g0;
-  if sig.type_params != 0 { return GenExprResult { ok: false, err: "generic fn call unimplemented", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-  if args.len() != sig.params.len() { return GenExprResult { ok: false, err: "arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-
-  let mut vs: Vec[ir.Value] = Vec();
+fn subs_lookup(subs: Vec[tc.TySub], name: String) -> i32 {
   let mut i: i32 = 0;
-  while i < args.len() {
-    let want: i32 = sig.params.get(i);
-    let er: GenExprResult = gen_expr(g, args.get(i), want);
-    if !er.ok { return er; }
-    g = er.g;
-    vs.push(er.val);
+  while i < subs.len() {
+    let s: tc.TySub = subs.get(i);
+    if s.name == name { return s.ty; }
     i = i + 1;
   }
+  return -1;
+}
+
+fn pending_has(p: Vec[PendingInst], qn: String) -> bool {
+  let mut i: i32 = 0;
+  while i < p.len() {
+    if p.get(i).qname == qn { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn pending_add(p0: Vec[PendingInst], pi: PendingInst) -> Vec[PendingInst] {
+  if pending_has(p0, pi.qname) { return p0; }
+  let mut p: Vec[PendingInst] = p0;
+  p.push(pi);
+  return p;
+}
+
+fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, type_args: Vec[ast.TypeName], args: Vec[i32], out_ty: i32) -> GenExprResult {
+  let mut g: Gen = g0;
+  if args.len() != sig.params.len() { return GenExprResult { ok: false, err: "arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+  if sig.type_params.len() == 0 {
+    if type_args.len() != 0 { return GenExprResult { ok: false, err: "non-generic fn with type args", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+    let mut vs: Vec[ir.Value] = Vec();
+    let mut i: i32 = 0;
+    while i < args.len() {
+      let want: i32 = sig.params.get(i);
+      let er: GenExprResult = gen_expr(g, args.get(i), want);
+      if !er.ok { return er; }
+      g = er.g;
+      vs.push(er.val);
+      i = i + 1;
+    }
+
+    let qn: String = qname(target_mod, name);
+    if out_ty == g.ctx.ty_unit {
+      g = gen_emit(g, ir.Instr.Call(false, 0, out_ty, qn, vs));
+      return GenExprResult { ok: true, err: "", g: g, val: ir.v_int(0), ty: out_ty };
+    }
+    let nt: GenNewIdResult = gen_new_temp(g);
+    g = nt.g;
+    let tid: i32 = nt.id;
+    g = gen_emit(g, ir.Instr.Call(true, tid, out_ty, qn, vs));
+    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
+  }
+
+  // Generic call: infer substitutions and call a monomorphized instantiation.
+  if type_args.len() != 0 && type_args.len() != sig.type_params.len() {
+    return GenExprResult { ok: false, err: "type arg arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+  }
+
+  let mut subs: Vec[tc.TySub] = Vec();
+  // Return type is known at IRGen time; use it as a constraint.
+  let ur0: tc.UnifyResult = tc.unify_ty(g.ctx, sig.ret, out_ty, subs);
+  if !ur0.ok { return GenExprResult { ok: false, err: "cannot infer generic return", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  subs = ur0.subs;
+
+  // Explicit type args.
+  let mut ti: i32 = 0;
+  while ti < type_args.len() {
+    let tr: tc.ResolveTyResult = tc.resolve_type(g.ctx, g.w, g.mod_path, g.aliases, Vec(), type_args.get(ti));
+    g.ctx = tr.ctx;
+    if !tr.ok { return GenExprResult { ok: false, err: "bad type arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    let tp: String = sig.type_params.get(ti);
+    let cur: i32 = subs_lookup(subs, tp);
+    if cur != -1 && cur != tr.idx { return GenExprResult { ok: false, err: "type arg conflict", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    if cur == -1 { subs.push(tc.TySub { name: tp, ty: tr.idx }); }
+    ti = ti + 1;
+  }
+
+  // Infer from args while generating their IR values.
+  let mut vs2: Vec[ir.Value] = Vec();
+  let mut i2: i32 = 0;
+  while i2 < args.len() {
+    let want0: i32 = tc.subst_ty(g.ctx, sig.params.get(i2), subs);
+    if want0 == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad generic arg type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    let want_t: ir.Ty = ir.ty_pool_get(g.ctx.pool, want0);
+    let want: i32 = if want_t.kind == ir.TyKind.Param { -1 } else { want0 };
+    let er2: GenExprResult = gen_expr(g, args.get(i2), want);
+    if !er2.ok { return er2; }
+    g = er2.g;
+    vs2.push(er2.val);
+    let ur2: tc.UnifyResult = tc.unify_ty(g.ctx, sig.params.get(i2), er2.ty, subs);
+    if !ur2.ok { return GenExprResult { ok: false, err: "cannot infer generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    subs = ur2.subs;
+    i2 = i2 + 1;
+  }
+
+  // Ensure all type params are bound.
+  let mut j: i32 = 0;
+  while j < sig.type_params.len() {
+    let tp2: String = sig.type_params.get(j);
+    if subs_lookup(subs, tp2) == -1 { return GenExprResult { ok: false, err: "unbound type param", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    j = j + 1;
+  }
+
+  // Concrete signature.
+  let mut ps: Vec[i32] = Vec();
+  let mut pi: i32 = 0;
+  while pi < sig.params.len() {
+    let pty: i32 = tc.subst_ty(g.ctx, sig.params.get(pi), subs);
+    if pty == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad substituted param type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    ps.push(pty);
+    pi = pi + 1;
+  }
+  let rty: i32 = tc.subst_ty(g.ctx, sig.ret, subs);
+  if rty == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad substituted ret type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  let inst_sig: tc.FuncSig = tc.FuncSig { params: ps, ret: rty, is_pub: sig.is_pub, type_params: Vec() };
+
+  let inst: String = tc.inst_name(g.ctx, name, sig.type_params, subs);
+  let inst_qn: String = qname(target_mod, inst);
+  g.pending = pending_add(g.pending, PendingInst { qname: inst_qn, mod_path: target_mod, base_name: name, inst_name: inst, sig: inst_sig });
 
   if out_ty == g.ctx.ty_unit {
-    g = gen_emit(g, ir.Instr.Call(false, 0, out_ty, qn, vs));
+    g = gen_emit(g, ir.Instr.Call(false, 0, out_ty, inst_qn, vs2));
     return GenExprResult { ok: true, err: "", g: g, val: ir.v_int(0), ty: out_ty };
   }
-  let nt: GenNewIdResult = gen_new_temp(g);
-  g = nt.g;
-  let tid: i32 = nt.id;
-  g = gen_emit(g, ir.Instr.Call(true, tid, out_ty, qn, vs));
-  return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
+  let nt2: GenNewIdResult = gen_new_temp(g);
+  g = nt2.g;
+  let tid2: i32 = nt2.id;
+  g = gen_emit(g, ir.Instr.Call(true, tid2, out_ty, inst_qn, vs2));
+  return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid2), ty: out_ty };
 }
 
 fn gen_call_enum_ctor(g0: Gen, enum_mod: String, enum_name: String, var_name: String, args: Vec[i32], out_ty: i32) -> GenExprResult {
