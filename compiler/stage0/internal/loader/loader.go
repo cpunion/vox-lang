@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"voxlang/internal/diag"
@@ -12,6 +13,14 @@ import (
 	"voxlang/internal/parser"
 	"voxlang/internal/source"
 	"voxlang/internal/typecheck"
+)
+
+type depState int
+
+const (
+	depUnvisited depState = iota
+	depVisiting
+	depDone
 )
 
 type BuildResult struct {
@@ -78,15 +87,17 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := validateDeps(root, mani); err != nil {
-			return nil, nil, err
-		}
 	} else {
 		mani = &manifest.Manifest{
 			Path:         "",
 			Package:      manifest.Package{Name: filepath.Base(root), Version: "0.0.0", Edition: "2026"},
 			Dependencies: map[string]manifest.Dependency{},
 		}
+	}
+
+	deps, err := resolveAllPathDeps(root, mani)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	files, err := collectPackageFiles(root, collectOptions{
@@ -98,28 +109,14 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 	if err != nil {
 		return nil, nil, err
 	}
-	// Load direct path dependencies (registry deps are deferred).
-	for depName, dep := range mani.Dependencies {
-		if dep.Path == "" {
-			continue
-		}
-		depRoot := dep.Path
-		if !filepath.IsAbs(depRoot) {
-			depRoot = filepath.Join(root, depRoot)
-		}
-		depRoot, err = filepath.Abs(depRoot)
-		if err != nil {
-			return nil, nil, err
-		}
-		// Best-effort: require the dep's package name to match the dependency key.
-		depManiPath := filepath.Join(depRoot, "vox.toml")
-		depMani, err := manifest.Load(depManiPath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("load dependency %q manifest: %w", depName, err)
-		}
-		if depMani.Package.Name != depName {
-			return nil, nil, fmt.Errorf("dependency %q package name mismatch: vox.toml has name=%q", depName, depMani.Package.Name)
-		}
+	// Load path dependencies (including transitive).
+	depNames := make([]string, 0, len(deps))
+	for name := range deps {
+		depNames = append(depNames, name)
+	}
+	sort.Strings(depNames)
+	for _, depName := range depNames {
+		depRoot := deps[depName]
 		depFiles, err := collectPackageFiles(depRoot, collectOptions{
 			IncludeTests: false,
 			RequireMain:  false,
@@ -135,15 +132,26 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		return &BuildResult{Manifest: mani}, pdiags, nil
 	}
-	localMods, err := collectLocalModules(root)
+
+	modByPkg := map[string]map[string]bool{}
+	rootMods, err := collectLocalModules(root)
 	if err != nil {
 		return nil, nil, err
 	}
+	modByPkg[""] = rootMods
+	for depName, depRoot := range deps {
+		mods, err := collectLocalModules(depRoot)
+		if err != nil {
+			return nil, nil, err
+		}
+		modByPkg[depName] = mods
+	}
+
 	allowed := map[string]bool{}
-	for name := range mani.Dependencies {
+	for name := range deps {
 		allowed[name] = true
 	}
-	checked, tdiags := typecheck.Check(prog, typecheck.Options{AllowedPkgs: allowed, LocalModules: localMods})
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{AllowedPkgs: allowed, LocalModulesByPkg: modByPkg})
 	if tdiags != nil && len(tdiags.Items) > 0 {
 		return &BuildResult{Manifest: mani}, tdiags, nil
 	}
@@ -214,6 +222,95 @@ func validateDeps(root string, mani *manifest.Manifest) error {
 		}
 	}
 	return nil
+}
+
+func resolveAllPathDeps(root string, mani *manifest.Manifest) (map[string]string, error) {
+	// Resolve all path deps reachable from the root manifest.
+	// Output maps depName -> absolute path to package root.
+	resolved := map[string]string{}
+	state := map[string]depState{}
+	var stack []string
+
+	var visit func(pkgDir string, name string, dep manifest.Dependency) error
+	visit = func(pkgDir string, name string, dep manifest.Dependency) error {
+		if dep.Path == "" {
+			return nil
+		}
+		switch state[name] {
+		case depVisiting:
+			// Build cycle chain.
+			i := 0
+			for ; i < len(stack); i++ {
+				if stack[i] == name {
+					break
+				}
+			}
+			cycle := append(append([]string{}, stack[i:]...), name)
+			return fmt.Errorf("circular dependency: %s", strings.Join(cycle, " -> "))
+		case depDone:
+			// Ensure path matches.
+			abs := dep.Path
+			if !filepath.IsAbs(abs) {
+				abs = filepath.Join(pkgDir, abs)
+			}
+			abs, err := filepath.Abs(abs)
+			if err != nil {
+				return err
+			}
+			if prev, ok := resolved[name]; ok && prev != abs {
+				return fmt.Errorf("dependency %q resolved to multiple paths: %s and %s", name, prev, abs)
+			}
+			return nil
+		}
+
+		state[name] = depVisiting
+		stack = append(stack, name)
+
+		abs := dep.Path
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(pkgDir, abs)
+		}
+		abs, err := filepath.Abs(abs)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(abs); err != nil {
+			return fmt.Errorf("dependency %q path not found: %s", name, abs)
+		}
+		// Dependency packages are treated as libraries and must have src/lib.vox.
+		if _, err := os.Stat(filepath.Join(abs, "src", "lib.vox")); err != nil {
+			return fmt.Errorf("dependency %q missing src/lib.vox: %s", name, abs)
+		}
+		if prev, ok := resolved[name]; ok && prev != abs {
+			return fmt.Errorf("dependency %q resolved to multiple paths: %s and %s", name, prev, abs)
+		}
+		resolved[name] = abs
+
+		mp := filepath.Join(abs, "vox.toml")
+		m2, err := manifest.Load(mp)
+		if err != nil {
+			return fmt.Errorf("load dependency %q manifest: %w", name, err)
+		}
+		if m2.Package.Name != name {
+			return fmt.Errorf("dependency %q package name mismatch: vox.toml has name=%q", name, m2.Package.Name)
+		}
+		for depName, dep2 := range m2.Dependencies {
+			if err := visit(abs, depName, dep2); err != nil {
+				return err
+			}
+		}
+
+		stack = stack[:len(stack)-1]
+		state[name] = depDone
+		return nil
+	}
+
+	for depName, dep := range mani.Dependencies {
+		if err := visit(root, depName, dep); err != nil {
+			return nil, err
+		}
+	}
+	return resolved, nil
 }
 
 func collectLocalModules(root string) (map[string]bool, error) {

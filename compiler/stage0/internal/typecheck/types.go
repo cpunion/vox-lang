@@ -68,6 +68,10 @@ type Options struct {
 	// LocalModules is the set of importable local modules (paths like "utils" or "utils/io").
 	// When nil, local module imports are accepted without validation.
 	LocalModules map[string]bool
+	// LocalModulesByPkg validates local module imports per package.
+	// Key is dependency package name; root package uses "".
+	// When nil, LocalModules is used as a fallback.
+	LocalModulesByPkg map[string]map[string]bool
 }
 
 func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
@@ -166,7 +170,7 @@ func (c *checker) collectImports() {
 			}
 		} else {
 			// local module import
-			if c.opts.LocalModules != nil && !c.opts.LocalModules[path] {
+			if !c.isKnownLocalModule(imp.Span.File.Name, path) {
 				c.errorAt(imp.Span, "unknown local module: "+path)
 				continue
 			}
@@ -405,6 +409,11 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			alias := qualParts[0]
 			extraMods := qualParts[1:]
 
+			if _, ok := c.lookupVar(alias); ok {
+				c.errorAt(e.S, "member calls on values are not supported yet")
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+
 			if c.curFn.Span.File == nil {
 				c.errorAt(e.S, "internal error: missing file for import resolution")
 				return c.setExprType(ex, Type{K: TyBad})
@@ -564,4 +573,21 @@ func calleeParts(ex ast.Expr) ([]string, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func (c *checker) isKnownLocalModule(fileName string, importPath string) bool {
+	// If no validation info is provided, accept.
+	if c.opts.LocalModulesByPkg == nil && c.opts.LocalModules == nil {
+		return true
+	}
+	pkg, _, _ := names.SplitOwnerAndModule(fileName)
+	if c.opts.LocalModulesByPkg != nil {
+		m := c.opts.LocalModulesByPkg[pkg]
+		if m == nil {
+			// No data for this package; accept to avoid spurious failures.
+			return true
+		}
+		return m[importPath]
+	}
+	return c.opts.LocalModules[importPath]
 }

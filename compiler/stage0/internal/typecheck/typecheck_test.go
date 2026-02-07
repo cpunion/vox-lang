@@ -127,3 +127,32 @@ func TestWhileConditionMustBeBool(t *testing.T) {
 		t.Fatalf("expected while condition diag, got: %+v", tdiags.Items)
 	}
 }
+
+func TestModuleQualifierDoesNotOverrideLocalValue(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import "dep"
+fn main() -> i32 {
+  let dep: i32 = 0;
+  return dep.one();
+}`),
+		source.NewFile("dep/src/lib.vox", `fn one() -> i32 { return 1; }`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "member calls on values are not supported yet" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected member-call-on-value diag, got: %+v", tdiags.Items)
+	}
+}
