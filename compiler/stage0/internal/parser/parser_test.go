@@ -58,3 +58,22 @@ fn main() -> i32 { return dep.one(); }`)
 		t.Fatalf("unexpected member: %s.%s", recv.Name, mem.Name)
 	}
 }
+
+func TestParseWhileBreakContinue(t *testing.T) {
+	f := source.NewFile("test.vox", `fn main() -> i32 {
+  let mut x: i32 = 0;
+  while x < 10 {
+    x = x + 1;
+    if x == 5 { continue; }
+    if x == 9 { break; }
+  }
+  return x;
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Funcs) != 1 {
+		t.Fatalf("expected 1 func, got %d", len(prog.Funcs))
+	}
+}

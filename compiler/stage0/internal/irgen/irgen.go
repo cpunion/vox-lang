@@ -46,6 +46,13 @@ type gen struct {
 	scopes []map[string]*ir.Slot
 	// slot types
 	slotTypes map[int]ir.Type
+
+	loopStack []loopCtx
+}
+
+type loopCtx struct {
+	breakTarget    string
+	continueTarget string
 }
 
 func (g *gen) pushScope() { g.scopes = append(g.scopes, map[string]*ir.Slot{}) }
@@ -95,6 +102,7 @@ func (g *gen) genFunc(fn *ast.FuncDecl) (*ir.Func, error) {
 	g.slotTypes = map[int]ir.Type{}
 	g.blocks = nil
 	g.curBlock = nil
+	g.loopStack = nil
 
 	qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)
 	ret, err := g.irTypeFromChecked(g.funcSigs[qname].Ret)
@@ -258,6 +266,48 @@ func (g *gen) genStmt(st ast.Stmt, retTy ir.Type) error {
 
 		// end
 		g.setBlock(endBlk)
+		return nil
+	case *ast.WhileStmt:
+		condBlk := g.newBlock(fmt.Sprintf("while_cond_%d", len(g.blocks)))
+		bodyBlk := g.newBlock(fmt.Sprintf("while_body_%d", len(g.blocks)))
+		endBlk := g.newBlock(fmt.Sprintf("while_end_%d", len(g.blocks)))
+
+		// Jump to condition.
+		g.term(&ir.Br{Target: condBlk.Name})
+
+		// cond
+		g.setBlock(condBlk)
+		cond, err := g.genExpr(s.Cond)
+		if err != nil {
+			return err
+		}
+		g.term(&ir.CondBr{Cond: cond, Then: bodyBlk.Name, Else: endBlk.Name})
+
+		// body
+		g.setBlock(bodyBlk)
+		g.loopStack = append(g.loopStack, loopCtx{breakTarget: endBlk.Name, continueTarget: condBlk.Name})
+		if err := g.genBlockStmt(s.Body, retTy); err != nil {
+			return err
+		}
+		g.loopStack = g.loopStack[:len(g.loopStack)-1]
+		if g.curBlock.Term == nil {
+			g.term(&ir.Br{Target: condBlk.Name})
+		}
+
+		// end
+		g.setBlock(endBlk)
+		return nil
+	case *ast.BreakStmt:
+		if len(g.loopStack) == 0 {
+			return fmt.Errorf("break outside of loop")
+		}
+		g.term(&ir.Br{Target: g.loopStack[len(g.loopStack)-1].breakTarget})
+		return nil
+	case *ast.ContinueStmt:
+		if len(g.loopStack) == 0 {
+			return fmt.Errorf("continue outside of loop")
+		}
+		g.term(&ir.Br{Target: g.loopStack[len(g.loopStack)-1].continueTarget})
 		return nil
 	case *ast.ExprStmt:
 		_, err := g.genExpr(s.Expr)

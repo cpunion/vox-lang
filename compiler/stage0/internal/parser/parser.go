@@ -158,6 +158,12 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseReturn()
 	case lexer.TokenIf:
 		return p.parseIf()
+	case lexer.TokenWhile:
+		return p.parseWhile()
+	case lexer.TokenBreak:
+		return p.parseBreak()
+	case lexer.TokenContinue:
+		return p.parseContinue()
 	case lexer.TokenLBrace:
 		return p.parseBlock()
 	case lexer.TokenIdent:
@@ -235,6 +241,28 @@ func (p *Parser) parseIf() ast.Stmt {
 		endSpan = elseSt.Span()
 	}
 	return &ast.IfStmt{Cond: cond, Then: thenBlk, Else: elseSt, S: joinSpan(ifTok.Span, endSpan)}
+}
+
+func (p *Parser) parseWhile() ast.Stmt {
+	whileTok := p.expect(lexer.TokenWhile, "expected `while`")
+	cond := p.parseExpr(0)
+	body := p.parseBlock()
+	if body == nil {
+		return nil
+	}
+	return &ast.WhileStmt{Cond: cond, Body: body, S: joinSpan(whileTok.Span, body.S)}
+}
+
+func (p *Parser) parseBreak() ast.Stmt {
+	brTok := p.expect(lexer.TokenBreak, "expected `break`")
+	semi := p.expect(lexer.TokenSemicolon, "expected `;`")
+	return &ast.BreakStmt{S: joinSpan(brTok.Span, semi.Span)}
+}
+
+func (p *Parser) parseContinue() ast.Stmt {
+	coTok := p.expect(lexer.TokenContinue, "expected `continue`")
+	semi := p.expect(lexer.TokenSemicolon, "expected `;`")
+	return &ast.ContinueStmt{S: joinSpan(coTok.Span, semi.Span)}
 }
 
 func (p *Parser) parseType() ast.Type {

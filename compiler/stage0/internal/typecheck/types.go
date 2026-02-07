@@ -93,8 +93,9 @@ type checker struct {
 	exprTypes map[ast.Expr]Type
 	callTgts  map[*ast.CallExpr]string
 
-	curFn *ast.FuncDecl
-	scope []map[string]varInfo
+	curFn     *ast.FuncDecl
+	scope     []map[string]varInfo
+	loopDepth int
 
 	opts    Options
 	imports map[*source.File]map[string]importTarget // file -> qualifier -> target
@@ -254,6 +255,22 @@ func (c *checker) checkStmt(st ast.Stmt, expectedRet Type) {
 		c.checkBlock(s.Then, expectedRet)
 		if s.Else != nil {
 			c.checkStmt(s.Else, expectedRet)
+		}
+	case *ast.WhileStmt:
+		condTy := c.checkExpr(s.Cond, Type{K: TyBool})
+		if condTy.K != TyBool {
+			c.errorAt(s.Cond.Span(), "while condition must be bool")
+		}
+		c.loopDepth++
+		c.checkBlock(s.Body, expectedRet)
+		c.loopDepth--
+	case *ast.BreakStmt:
+		if c.loopDepth == 0 {
+			c.errorAt(s.S, "`break` outside of loop")
+		}
+	case *ast.ContinueStmt:
+		if c.loopDepth == 0 {
+			c.errorAt(s.S, "`continue` outside of loop")
 		}
 	case *ast.ExprStmt:
 		_ = c.checkExpr(s.Expr, Type{K: TyBad})

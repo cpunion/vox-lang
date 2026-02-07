@@ -29,6 +29,9 @@ const (
 	TokenPub
 	TokenMatch
 	TokenAs
+	TokenWhile
+	TokenBreak
+	TokenContinue
 
 	// Punct
 	TokenLParen

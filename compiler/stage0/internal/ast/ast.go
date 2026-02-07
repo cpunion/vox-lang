@@ -101,6 +101,29 @@ type IfStmt struct {
 func (*IfStmt) stmtNode()           {}
 func (s *IfStmt) Span() source.Span { return s.S }
 
+type WhileStmt struct {
+	Cond Expr
+	Body *BlockStmt
+	S    source.Span
+}
+
+func (*WhileStmt) stmtNode()           {}
+func (s *WhileStmt) Span() source.Span { return s.S }
+
+type BreakStmt struct {
+	S source.Span
+}
+
+func (*BreakStmt) stmtNode()           {}
+func (s *BreakStmt) Span() source.Span { return s.S }
+
+type ContinueStmt struct {
+	S source.Span
+}
+
+func (*ContinueStmt) stmtNode()           {}
+func (s *ContinueStmt) Span() source.Span { return s.S }
+
 type ExprStmt struct {
 	Expr Expr
 	S    source.Span

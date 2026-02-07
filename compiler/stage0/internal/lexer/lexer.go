@@ -108,6 +108,12 @@ func (lx *lexer) lexIdentOrKeyword() {
 		lx.emit(TokenMatch, lex, start, lx.pos)
 	case "as":
 		lx.emit(TokenAs, lex, start, lx.pos)
+	case "while":
+		lx.emit(TokenWhile, lex, start, lx.pos)
+	case "break":
+		lx.emit(TokenBreak, lex, start, lx.pos)
+	case "continue":
+		lx.emit(TokenContinue, lex, start, lx.pos)
 	default:
 		lx.emit(TokenIdent, lex, start, lx.pos)
 	}

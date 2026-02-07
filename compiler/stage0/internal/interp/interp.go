@@ -135,6 +135,14 @@ type returnSignal struct{ V Value }
 
 func (r returnSignal) Error() string { return "return" }
 
+type breakSignal struct{}
+
+func (b breakSignal) Error() string { return "break" }
+
+type continueSignal struct{}
+
+func (c continueSignal) Error() string { return "continue" }
+
 func (rt *Runtime) evalBlock(b *ast.BlockStmt) (Value, error) {
 	rt.pushFrame()
 	for _, st := range b.Stmts {
@@ -198,6 +206,34 @@ func (rt *Runtime) evalStmt(st ast.Stmt) (Value, error) {
 			return rt.evalStmt(s.Else)
 		}
 		return unit(), nil
+	case *ast.WhileStmt:
+		for {
+			cond, err := rt.evalExpr(s.Cond)
+			if err != nil {
+				return unit(), err
+			}
+			if cond.K != VBool {
+				return unit(), fmt.Errorf("while condition is not bool")
+			}
+			if !cond.B {
+				return unit(), nil
+			}
+			_, err = rt.evalBlock(s.Body)
+			if err != nil {
+				switch err.(type) {
+				case breakSignal:
+					return unit(), nil
+				case continueSignal:
+					continue
+				default:
+					return unit(), err
+				}
+			}
+		}
+	case *ast.BreakStmt:
+		return unit(), breakSignal{}
+	case *ast.ContinueStmt:
+		return unit(), continueSignal{}
 	case *ast.ExprStmt:
 		_, err := rt.evalExpr(s.Expr)
 		return unit(), err
