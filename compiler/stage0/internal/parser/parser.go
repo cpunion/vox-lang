@@ -528,6 +528,16 @@ func (p *Parser) parsePrefixWith(allowStructLit bool) ast.Expr {
 		p.advance()
 		ex := ast.Expr(&ast.IdentExpr{Name: tok.Lexeme, S: tok.Span})
 		return p.parsePostfix(ex, allowStructLit)
+	case lexer.TokenDot:
+		// Enum variant shorthand: `.Variant` (or `.Variant(...)` as a call).
+		dot := p.advance()
+		id := p.expect(lexer.TokenIdent, "expected identifier after `.`")
+		name := ""
+		if id.Kind == lexer.TokenIdent {
+			name = id.Lexeme
+		}
+		ex := ast.Expr(&ast.DotExpr{Name: name, S: joinSpan(dot.Span, id.Span)})
+		return p.parsePostfix(ex, allowStructLit)
 	case lexer.TokenInt:
 		p.advance()
 		return p.parsePostfix(&ast.IntLit{Text: tok.Lexeme, S: tok.Span}, allowStructLit)
@@ -632,6 +642,33 @@ func (p *Parser) parsePattern() ast.Pattern {
 	if p.at(lexer.TokenIdent) && p.peek().Lexeme == "_" {
 		tok := p.advance()
 		return &ast.WildPat{S: tok.Span}
+	}
+	if p.at(lexer.TokenDot) {
+		start := p.advance()
+		id := p.expect(lexer.TokenIdent, "expected identifier after `.`")
+		endSpan := id.Span
+		binds := []string{}
+		if p.match(lexer.TokenLParen) {
+			if !p.at(lexer.TokenRParen) {
+				for {
+					b := p.expect(lexer.TokenIdent, "expected binder name")
+					if b.Kind == lexer.TokenIdent {
+						binds = append(binds, b.Lexeme)
+					}
+					if p.match(lexer.TokenComma) {
+						continue
+					}
+					break
+				}
+			}
+			rp := p.expect(lexer.TokenRParen, "expected `)`")
+			endSpan = rp.Span
+		}
+		name := ""
+		if id.Kind == lexer.TokenIdent {
+			name = id.Lexeme
+		}
+		return &ast.VariantPat{TypeParts: nil, Variant: name, Binds: binds, S: joinSpan(start.Span, endSpan)}
 	}
 	start := p.peek()
 	id := p.expect(lexer.TokenIdent, "expected pattern")

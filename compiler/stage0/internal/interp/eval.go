@@ -557,11 +557,11 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			args = append(args, v)
 		}
 		return rt.call(target, args)
-	case *ast.MemberExpr:
-		// Unit enum variant value: `Enum.Variant`.
-		if cu, ok := rt.prog.EnumUnitVariants[e]; ok {
-			return Value{K: VEnum, E: cu.Enum.Name, T: cu.Tag}, nil
-		}
+		case *ast.MemberExpr:
+			// Unit enum variant value: `Enum.Variant`.
+			if cu, ok := rt.prog.EnumUnitVariants[e]; ok {
+				return Value{K: VEnum, E: cu.Enum.Name, T: cu.Tag}, nil
+			}
 
 		recv, err := rt.evalExpr(e.Recv)
 		if err != nil {
@@ -574,9 +574,15 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		if !ok {
 			return unit(), fmt.Errorf("unknown field: %s", e.Name)
 		}
-		return v, nil
-	case *ast.StructLitExpr:
-		m := map[string]Value{}
+			return v, nil
+		case *ast.DotExpr:
+			// Unit enum variant shorthand: `.Variant`.
+			if cu, ok := rt.prog.EnumUnitVariants[e]; ok {
+				return Value{K: VEnum, E: cu.Enum.Name, T: cu.Tag}, nil
+			}
+			return unit(), fmt.Errorf("unresolved unit enum variant shorthand")
+		case *ast.StructLitExpr:
+			m := map[string]Value{}
 		for _, init := range e.Inits {
 			v, err := rt.evalExpr(init.Expr)
 			if err != nil {

@@ -194,6 +194,16 @@ type IdentExpr struct {
 func (*IdentExpr) exprNode()           {}
 func (e *IdentExpr) Span() source.Span { return e.S }
 
+// DotExpr is an enum-variant shorthand when the enum type is known from context.
+// Examples: `.None`, `.Some(1)` (as CallExpr with callee DotExpr).
+type DotExpr struct {
+	Name string
+	S    source.Span
+}
+
+func (*DotExpr) exprNode()           {}
+func (e *DotExpr) Span() source.Span { return e.S }
+
 type MemberExpr struct {
 	Recv Expr
 	Name string

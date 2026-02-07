@@ -49,7 +49,7 @@ type CheckedProgram struct {
 	EnumCtors map[*ast.CallExpr]EnumCtorTarget
 	// EnumUnitVariants records which member expressions are unit enum variant values (Enum.Variant).
 	// This disambiguates enum literals from struct-field access that returns an enum-typed value.
-	EnumUnitVariants map[*ast.MemberExpr]EnumCtorTarget
+	EnumUnitVariants map[ast.Expr]EnumCtorTarget
 }
 
 type FuncSig struct {
@@ -180,7 +180,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		toStrCalls:    map[*ast.CallExpr]ToStrTarget{},
 		callTgts:      map[*ast.CallExpr]string{},
 		enumCtors:     map[*ast.CallExpr]EnumCtorTarget{},
-		enumUnits:     map[*ast.MemberExpr]EnumCtorTarget{},
+		enumUnits:     map[ast.Expr]EnumCtorTarget{},
 		opts:          opts,
 		imports:       map[*source.File]map[string]importTarget{},
 		namedFuncs:    map[*source.File]map[string]string{},
@@ -226,7 +226,7 @@ type checker struct {
 	toStrCalls map[*ast.CallExpr]ToStrTarget
 	callTgts   map[*ast.CallExpr]string
 	enumCtors  map[*ast.CallExpr]EnumCtorTarget
-	enumUnits  map[*ast.MemberExpr]EnumCtorTarget
+	enumUnits  map[ast.Expr]EnumCtorTarget
 
 	curFn     *ast.FuncDecl
 	curTyVars map[string]bool

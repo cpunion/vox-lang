@@ -158,6 +158,21 @@ fn main() -> i32 {
 	}
 }
 
+func TestParseEnumCtorAndMatchShorthand(t *testing.T) {
+	f := source.NewFile("test.vox", `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = .A(1);
+  return match x {
+    .A(v) => v,
+    .None => 0,
+  };
+}`)
+	_, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+}
+
 func TestParsePubDecls(t *testing.T) {
 	f := source.NewFile("test.vox", `pub struct S { pub x: i32, y: i32 }
 pub enum E { A(i32), None }

@@ -28,6 +28,9 @@ func cloneExpr(e ast.Expr) ast.Expr {
 	case *ast.IdentExpr:
 		cp := *x
 		return &cp
+	case *ast.DotExpr:
+		cp := *x
+		return &cp
 	case *ast.MemberExpr:
 		return &ast.MemberExpr{Recv: cloneExpr(x.Recv), Name: x.Name, S: x.S}
 	case *ast.IntLit:

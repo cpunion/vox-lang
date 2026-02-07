@@ -451,6 +451,18 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 		}
 		g.emit(call)
 		return g.zeroValue(ret)
+	case *ast.DotExpr:
+		// Unit enum variant shorthand: `.Variant`.
+		if cu, ok := g.p.EnumUnitVariants[e]; ok {
+			ety, err := g.irTypeFromChecked(cu.Enum)
+			if err != nil {
+				return nil, err
+			}
+			tmp := g.newTemp()
+			g.emit(&ir.EnumInit{Dst: tmp, Ty: ety, Variant: cu.Variant})
+			return tmp, nil
+		}
+		return nil, fmt.Errorf("unresolved unit enum variant shorthand")
 	case *ast.MemberExpr:
 		// Unit enum variant value: `Enum.Variant`.
 		if cu, ok := g.p.EnumUnitVariants[e]; ok {

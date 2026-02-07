@@ -16,6 +16,12 @@ func (g *gen) enumUnitTag(ex ast.Expr) (int, bool) {
 			return 0, false
 		}
 		return t.Tag, true
+	case *ast.DotExpr:
+		t, ok := g.p.EnumUnitVariants[e]
+		if !ok {
+			return 0, false
+		}
+		return t.Tag, true
 	case *ast.CallExpr:
 		t, ok := g.p.EnumCtors[e]
 		if !ok || len(t.Fields) != 0 {

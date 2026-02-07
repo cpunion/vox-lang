@@ -294,6 +294,25 @@ fn main() -> i32 {
 	}
 }
 
+func TestEnumCtorAndMatchShorthand(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = .A(41);
+  return match x {
+    .A(v) => v + 1,
+    .None => 0,
+  };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestEnumEqualityAgainstUnitVariant(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -305,7 +324,7 @@ func TestEnumEqualityAgainstUnitVariant(t *testing.T) {
 			src: `enum E { A(i32), None }
 fn main() -> i32 {
   let x: E = E.A(1);
-  let b: bool = x == E.None;
+  let b: bool = x == .None;
   if b { return 1; } else { return 0; }
 }`,
 		},

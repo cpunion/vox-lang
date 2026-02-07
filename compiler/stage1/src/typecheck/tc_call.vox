@@ -15,6 +15,37 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias],
     }
   }
 
+  // Enum variant shorthand: `.Variant(...)` (enum type must be known from context).
+  if match cn { ast.ExprNode.DotIdent(_x) => true, _ => false } {
+    if type_args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if expected == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    let et: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
+    if et.kind != ir.TyKind.Enum { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    let fe: FindEnumResult = find_enum(ctx, ty_mod(et), ty_name(et));
+    if !fe.found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    let es: EnumSig = fe.sig;
+    let var_name: String = match cn { ast.ExprNode.DotIdent(s) => s, _ => "" };
+
+    let mut vi: i32 = 0;
+    while vi < es.vars.len() {
+      let v: EnumVariantSig = es.vars.get(vi);
+      if v.name == var_name {
+        if v.fields.len() != args.len() { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+        let mut ai: i32 = 0;
+        while ai < args.len() {
+          let want: i32 = v.fields.get(ai);
+          let ar: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(ai), want);
+          if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+          if ar.ty != want { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+          ai = ai + 1;
+        }
+        return ExprTyResult { ok: true, ty: expected };
+      }
+      vi = vi + 1;
+    }
+    return ExprTyResult { ok: false, ty: ctx.ty_bad };
+  }
+
   // Path-based calls: `name(...)`, `alias.name(...)`, `Enum.Variant(...)`.
   let pr: ExprPartsResult = expr_parts(exprs, callee);
   if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }

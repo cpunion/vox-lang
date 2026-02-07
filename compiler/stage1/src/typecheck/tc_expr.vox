@@ -15,6 +15,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], 
     ast.ExprNode.Str(_) => tc_expr_str(ctx, expected),
     ast.ExprNode.Bool(_) => tc_expr_bool(ctx, expected),
     ast.ExprNode.Ident(name) => tc_expr_ident(ctx, l0, name, expected),
+    ast.ExprNode.DotIdent(name) => tc_expr_dot_ident(ctx, mod_path, name, expected),
 
     ast.ExprNode.If(c, t, e) => tc_expr_if(ctx, w, mod_path, aliases, exprs, l0, c, t, e, expected),
     ast.ExprNode.Unary(op, a) => tc_expr_unary(ctx, w, mod_path, aliases, exprs, l0, op, a, expected),
@@ -25,6 +26,27 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], 
     ast.ExprNode.StructLit(ty_expr, fields) => tc_expr_struct_lit(ctx, w, mod_path, aliases, exprs, l0, ty_expr, fields, expected),
     ast.ExprNode.Match(scrut, arms) => tc_expr_match(ctx, w, mod_path, aliases, exprs, l0, scrut, arms, expected),
   };
+}
+
+fn tc_expr_dot_ident(ctx: Ctx, mod_path: String, name: String, expected: i32) -> ExprTyResult {
+  // `.Variant` needs an expected enum type.
+  if expected == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  let et: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
+  if et.kind != ir.TyKind.Enum { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  let fe: FindEnumResult = find_enum(ctx, ty_mod(et), ty_name(et));
+  if !fe.found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  let es: EnumSig = fe.sig;
+  // Unit variant only.
+  let mut vi: i32 = 0;
+  while vi < es.vars.len() {
+    let v: EnumVariantSig = es.vars.get(vi);
+    if v.name == name {
+      if v.fields.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+      return ExprTyResult { ok: true, ty: expected };
+    }
+    vi = vi + 1;
+  }
+  return ExprTyResult { ok: false, ty: ctx.ty_bad };
 }
 
 fn tc_expr_int(ctx: Ctx, expected: i32) -> ExprTyResult {
