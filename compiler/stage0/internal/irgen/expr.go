@@ -69,6 +69,11 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 		}
 		return nil, fmt.Errorf("unsupported unary op: %s", e.Op)
 	case *ast.BinaryExpr:
+		// Special-case: enum equality against unit variants lowers to tag comparison.
+		if (e.Op == "==" || e.Op == "!=") && g.isEnumUnitEq(e) {
+			return g.genEnumUnitEq(e)
+		}
+
 		l, err := g.genExpr(e.Left)
 		if err != nil {
 			return nil, err

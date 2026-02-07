@@ -40,6 +40,15 @@
 
 沿用 Rust-like 的常见规则（后续可给出完整表）。
 
+## 相等（`==`/`!=`，Stage0 约束）
+
+Stage0 为了保持实现范围可控，对相等运算符有额外约束：
+
+- `bool/i32/i64/String`：支持完整 `==`/`!=`。
+- `enum`：仅支持与 **unit variant**（无 payload 的构造子值）比较，例如 `x == E.None`。
+  - 该比较降低为 `enum_tag(x) == tag(E.None)`。
+  - 不支持 `E.A(1) == E.A(2)` 这类 payload 比较（Stage1 再引入更完整的机制）。
+
 ## `if` 表达式（Stage0 增补，已定）
 
 除语句形式的 `if { ... } else { ... }` 外，Vox 允许在**表达式位置**使用 `if`：

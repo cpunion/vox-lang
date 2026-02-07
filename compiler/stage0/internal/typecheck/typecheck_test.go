@@ -294,6 +294,62 @@ fn main() -> i32 {
 	}
 }
 
+func TestEnumEqualityAgainstUnitVariant(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		src     string
+		wantErr string
+	}{
+		{
+			name: "ok",
+			src: `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = E.A(1);
+  let b: bool = x == E.None;
+  if b { return 1; } else { return 0; }
+}`,
+		},
+		{
+			name:    "reject_payload_ctor_compare",
+			wantErr: "enum equality is only supported against unit variants in stage0",
+			src: `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = E.A(1);
+  let b: bool = x == E.A(2);
+  if b { return 1; } else { return 0; }
+}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := source.NewFile("src/main.vox", tt.src)
+			prog, pdiags := parser.Parse(f)
+			if pdiags != nil && len(pdiags.Items) > 0 {
+				t.Fatalf("parse diags: %+v", pdiags.Items)
+			}
+			_, tdiags := Check(prog, Options{})
+			if tt.wantErr == "" {
+				if tdiags != nil && len(tdiags.Items) > 0 {
+					t.Fatalf("type diags: %+v", tdiags.Items)
+				}
+				return
+			}
+			if tdiags == nil || len(tdiags.Items) == 0 {
+				t.Fatalf("expected diagnostics")
+			}
+			found := false
+			for _, it := range tdiags.Items {
+				if it.Msg == tt.wantErr {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected %q, got: %+v", tt.wantErr, tdiags.Items)
+			}
+		})
+	}
+}
+
 func TestEnumMultiPayload(t *testing.T) {
 	f := source.NewFile("src/main.vox", `enum E { Pair(i32, i32), None }
 fn main() -> i32 {

@@ -240,11 +240,17 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			if !sameType(l, r) {
 				c.errorAt(e.S, "equality requires same type")
 			}
+
 			// Stage0 backend only supports equality on a small set of primitives.
-			// (Struct/enum/vec equality would need dedicated lowering.)
+			// Enum equality is only supported when comparing against a unit variant value
+			// (e.g. `x == E.None`), which lowers to a tag comparison.
 			switch l.K {
 			case TyBad, TyBool, TyI32, TyI64, TyString:
 				// ok
+			case TyEnum:
+				if !c.isEnumUnitValue(e.Left) && !c.isEnumUnitValue(e.Right) {
+					c.errorAt(e.S, "enum equality is only supported against unit variants in stage0")
+				}
 			default:
 				c.errorAt(e.S, "equality is only supported for bool/i32/i64/String in stage0")
 			}
@@ -724,6 +730,19 @@ func rootIdentName(ex ast.Expr) (string, bool) {
 		return rootIdentName(e.Recv)
 	default:
 		return "", false
+	}
+}
+
+func (c *checker) isEnumUnitValue(ex ast.Expr) bool {
+	switch e := ex.(type) {
+	case *ast.MemberExpr:
+		_, ok := c.enumUnits[e]
+		return ok
+	case *ast.CallExpr:
+		ctor, ok := c.enumCtors[e]
+		return ok && len(ctor.Fields) == 0
+	default:
+		return false
 	}
 }
 
