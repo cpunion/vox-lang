@@ -350,6 +350,46 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 					return unit(), fmt.Errorf("Vec.get index out of bounds")
 				}
 				return cloneValue(recv.A[idx]), nil
+			case typecheck.VecCallJoin:
+				if len(e.Args) != 1 {
+					return unit(), fmt.Errorf("Vec.join expects 1 arg")
+				}
+				sepV, err := rt.evalExpr(e.Args[0])
+				if err != nil {
+					return unit(), err
+				}
+				if sepV.K != VString {
+					return unit(), fmt.Errorf("Vec.join separator must be string")
+				}
+				var recv Value
+				if vc.Recv != nil {
+					rv, err := rt.evalExpr(vc.Recv)
+					if err != nil {
+						return unit(), err
+					}
+					recv = rv
+				} else {
+					fr, ok := rt.lookup(vc.RecvName)
+					if !ok {
+						return unit(), fmt.Errorf("unknown variable: %s", vc.RecvName)
+					}
+					recv = fr[vc.RecvName]
+				}
+				if recv.K != VVec {
+					return unit(), fmt.Errorf("Vec.join requires vec receiver")
+				}
+				// Stage0: Vec.join is only supported for Vec[String].
+				var b strings.Builder
+				for i, it := range recv.A {
+					if it.K != VString {
+						return unit(), fmt.Errorf("Vec.join expects Vec[String]")
+					}
+					if i > 0 {
+						b.WriteString(sepV.S)
+					}
+					b.WriteString(it.S)
+				}
+				return Value{K: VString, S: b.String()}, nil
 			default:
 				return unit(), fmt.Errorf("unsupported vec call")
 			}
@@ -413,8 +453,59 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 					return unit(), fmt.Errorf("String.slice index out of bounds")
 				}
 				return Value{K: VString, S: recv.S[start:end]}, nil
+			case typecheck.StrCallConcat:
+				if len(e.Args) != 1 {
+					return unit(), fmt.Errorf("String.concat expects 1 arg")
+				}
+				ov, err := rt.evalExpr(e.Args[0])
+				if err != nil {
+					return unit(), err
+				}
+				if ov.K != VString {
+					return unit(), fmt.Errorf("String.concat arg must be string")
+				}
+				return Value{K: VString, S: recv.S + ov.S}, nil
+			case typecheck.StrCallEscapeC:
+				if len(e.Args) != 0 {
+					return unit(), fmt.Errorf("String.escape_c expects 0 args")
+				}
+				return Value{K: VString, S: escapeC(recv.S)}, nil
 			default:
 				return unit(), fmt.Errorf("unsupported string call")
+			}
+		}
+
+		if ts, ok := rt.prog.ToStrCalls[e]; ok {
+			var recv Value
+			if ts.Recv != nil {
+				rv, err := rt.evalExpr(ts.Recv)
+				if err != nil {
+					return unit(), err
+				}
+				recv = rv
+			} else {
+				fr, ok := rt.lookup(ts.RecvName)
+				if !ok {
+					return unit(), fmt.Errorf("unknown variable: %s", ts.RecvName)
+				}
+				recv = fr[ts.RecvName]
+			}
+			switch ts.Kind {
+			case typecheck.ToStrI32, typecheck.ToStrI64:
+				if recv.K != VInt {
+					return unit(), fmt.Errorf("to_string expects int receiver")
+				}
+				return Value{K: VString, S: strconv.FormatInt(recv.I, 10)}, nil
+			case typecheck.ToStrBool:
+				if recv.K != VBool {
+					return unit(), fmt.Errorf("to_string expects bool receiver")
+				}
+				if recv.B {
+					return Value{K: VString, S: "true"}, nil
+				}
+				return Value{K: VString, S: "false"}, nil
+			default:
+				return unit(), fmt.Errorf("unsupported to_string call")
 			}
 		}
 
