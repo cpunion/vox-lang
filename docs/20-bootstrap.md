@@ -43,6 +43,7 @@ Stage0 的目标是“能写编译器”，但保持范围可控，不引入会�
 - 命名导入：`import { name } from "path"`（最小子集；减少 `a.name(...)` 噪声）
 - 控制流：`while` + `break/continue`
 - 数据类型：`struct`（声明、字面量、字段读取/写入）
+- 容器：`Vec[T]`（`Vec()` 构造 + `push/len/get` 的最小子集；先作为内建类型）
 - IR/后端：`String` 字面量最小支持（IR `str` + C 后端）；`struct` 降低到 C `typedef struct`
 - 数据类型：`enum` + `match`（Stage0 限制：variant payload 仅支持 0/1 个字段；后端降低为 `tag + union`）
 
