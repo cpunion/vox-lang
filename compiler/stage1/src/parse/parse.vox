@@ -28,6 +28,8 @@ struct ParseStmtResult { p: Parser, st: ast.Stmt }
 struct ParseBlockResult { p: Parser, b: ast.Block }
 struct ParseFnResult { p: Parser, f: ast.FuncDecl }
 struct ParseProgramResult { p: Parser, prog: ast.Program }
+struct ParseImportResult { p: Parser, imp: ast.ImportDecl }
+struct ParseStringResult { p: Parser, s: String }
 
 fn dummy_token() -> lex.Token {
   return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0 };
@@ -91,6 +93,31 @@ fn parse_ident(p: Parser) -> ParseIdentResult {
 fn parse_type_name(p: Parser) -> ParseTypeResult {
   let r: ParseIdentResult = parse_ident(p);
   return ParseTypeResult { p: r.p, ty: ast.TypeName { name: r.name } };
+}
+
+fn parse_string_inner(p: Parser) -> ParseStringResult {
+  let ar: AdvanceResult = expect(p, lex.TokenKind.Str);
+  let mut s: String = lexeme(ar.p, ar.tok); // includes quotes
+  let n: i32 = s.len();
+  if n >= 2 {
+    s = s.slice(1, n - 1);
+  }
+  return ParseStringResult { p: ar.p, s: s };
+}
+
+fn parse_import_decl(p: Parser) -> ParseImportResult {
+  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwImport);
+  let r2: ParseStringResult = parse_string_inner(ar1.p);
+  let mut q: Parser = r2.p;
+  let path: String = r2.s;
+  let mut alias: String = "";
+  if kind_is(peek_kind(q), lex.TokenKind.KwAs) {
+    let ar3: AdvanceResult = advance(q);
+    let r4: ParseIdentResult = parse_ident(ar3.p);
+    q = r4.p;
+    alias = r4.name;
+  }
+  return ParseImportResult { p: q, imp: ast.ImportDecl { path: path, alias: alias } };
 }
 
 fn parse_expr(p: Parser) -> ParseExprResult {
@@ -198,19 +225,26 @@ fn parse_fn_decl(p: Parser) -> ParseFnResult {
 
 fn parse_program(p: Parser) -> ParseProgramResult {
   let mut q: Parser = p;
+  let mut imports: Vec[ast.ImportDecl] = Vec();
   let mut funcs: Vec[ast.FuncDecl] = Vec();
   while !q.has_err && !kind_is(peek_kind(q), lex.TokenKind.Eof) {
-    let r: ParseFnResult = parse_fn_decl(q);
-    q = r.p;
-    funcs.push(r.f);
+    if kind_is(peek_kind(q), lex.TokenKind.KwImport) {
+      let r: ParseImportResult = parse_import_decl(q);
+      q = r.p;
+      imports.push(r.imp);
+    } else {
+      let r: ParseFnResult = parse_fn_decl(q);
+      q = r.p;
+      funcs.push(r.f);
+    }
   }
-  return ParseProgramResult { p: q, prog: ast.Program { funcs: funcs } };
+  return ParseProgramResult { p: q, prog: ast.Program { imports: imports, funcs: funcs } };
 }
 
 pub fn parse_text(text: String) -> ParseResult {
   let lr: lex.LexResult = lex.lex_text(text);
   if !lex_err_none(lr.err) {
-    return ParseResult { prog: ast.Program { funcs: Vec() }, err: ParseError.Lex(lr.err) };
+    return ParseResult { prog: ast.Program { imports: Vec(), funcs: Vec() }, err: ParseError.Lex(lr.err) };
   }
   let p: Parser = Parser { text: text, toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None };
   let r: ParseProgramResult = parse_program(p);
