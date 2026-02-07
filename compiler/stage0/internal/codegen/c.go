@@ -187,7 +187,7 @@ func emitFunc(out *bytes.Buffer, f *ir.Func) error {
 
 	// Emit blocks
 	for _, b := range f.Blocks {
-		out.WriteString(b.Name)
+		out.WriteString(cLabelName(b.Name))
 		out.WriteString(":\n")
 		for _, ins := range b.Instr {
 			if err := emitInstr(out, ins); err != nil {
@@ -343,16 +343,16 @@ func emitTerm(out *bytes.Buffer, t ir.Term) error {
 		return nil
 	case *ir.Br:
 		out.WriteString("  goto ")
-		out.WriteString(tt.Target)
+		out.WriteString(cLabelName(tt.Target))
 		out.WriteString(";\n")
 		return nil
 	case *ir.CondBr:
 		out.WriteString("  if (")
 		out.WriteString(cValue(tt.Cond))
 		out.WriteString(") goto ")
-		out.WriteString(tt.Then)
+		out.WriteString(cLabelName(tt.Then))
 		out.WriteString("; else goto ")
-		out.WriteString(tt.Else)
+		out.WriteString(cLabelName(tt.Else))
 		out.WriteString(";\n")
 		return nil
 	default:
@@ -378,6 +378,8 @@ func cType(t ir.Type) string {
 }
 
 func cFnName(name string) string { return "vox_fn_" + cIdent(name) }
+
+func cLabelName(name string) string { return "vox_blk_" + cIdent(name) }
 
 func cIdent(s string) string {
 	// Best-effort sanitization: keep [A-Za-z0-9_], map others to '_'.
