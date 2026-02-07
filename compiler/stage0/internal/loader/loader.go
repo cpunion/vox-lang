@@ -110,12 +110,17 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 	if err != nil {
 		return nil, nil, err
 	}
-	// Stage0 stdlib is always available and is compiled as part of the root package.
-	stdFiles, err := stdlib.Files()
-	if err != nil {
-		return nil, nil, err
+	// Stage0 stdlib is always available, except when building stage1 itself:
+	// stage1 owns the stdlib sources under compiler/stage1/src/std/**.
+	if stage1Root, err := stdlib.Stage1RootDir(); err == nil && filepath.Clean(root) == filepath.Clean(stage1Root) {
+		// no injection
+	} else {
+		stdFiles, err := stdlib.Files()
+		if err != nil {
+			return nil, nil, err
+		}
+		files = append(files, stdFiles...)
 	}
-	files = append(files, stdFiles...)
 
 	// Load path dependencies (including transitive).
 	depNames := make([]string, 0, len(deps))

@@ -23,6 +23,14 @@ func Files() ([]*source.File, error) {
 	return out, nil
 }
 
+func Stage1RootDir() (string, error) {
+	root, err := stage0RootDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(filepath.Join(root, "..", "stage1")), nil
+}
+
 var (
 	loadOnce sync.Once
 	loadErr  error
