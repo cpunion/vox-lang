@@ -118,6 +118,12 @@ type importTarget struct {
 func (c *checker) collectFuncSigs() {
 	// Builtins (stage0): keep minimal and stable.
 	c.funcSigs["assert"] = FuncSig{Params: []Type{{K: TyBool}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::assert"] = FuncSig{Params: []Type{{K: TyBool}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::assert_eq_i32"] = FuncSig{Params: []Type{{K: TyI32}, {K: TyI32}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::assert_eq_i64"] = FuncSig{Params: []Type{{K: TyI64}, {K: TyI64}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::assert_eq_bool"] = FuncSig{Params: []Type{{K: TyBool}, {K: TyBool}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::assert_eq_str"] = FuncSig{Params: []Type{{K: TyString}, {K: TyString}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["std.testing::fail"] = FuncSig{Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
 
 	for _, fn := range c.prog.Funcs {
 		qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)
@@ -421,7 +427,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			m := c.imports[c.curFn.Span.File]
 			tgt, ok := m[alias]
 			if !ok {
-				c.errorAt(e.S, "unknown package qualifier: "+alias+" (did you forget `import \""+alias+"\"`?)")
+				c.errorAt(e.S, "unknown module qualifier: "+alias+" (did you forget `import \""+alias+"\"`?)")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
 			mod := append(append([]string{}, tgt.Mod...), extraMods...)

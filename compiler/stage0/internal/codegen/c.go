@@ -32,6 +32,11 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	out.WriteString("static void vox_builtin_assert(bool cond) {\n")
 	out.WriteString("  if (!cond) { fprintf(stderr, \"assertion failed\\n\"); exit(1); }\n")
 	out.WriteString("}\n\n")
+	out.WriteString("static void vox_builtin_fail(const char* msg) {\n")
+	out.WriteString("  if (!msg) msg = \"\";\n")
+	out.WriteString("  fprintf(stderr, \"%s\\n\", msg);\n")
+	out.WriteString("  exit(1);\n")
+	out.WriteString("}\n\n")
 
 	// Forward decls
 	names := make([]string, 0, len(p.Funcs))
@@ -302,13 +307,44 @@ func emitInstr(out *bytes.Buffer, ins ir.Instr) error {
 		return nil
 	case *ir.Call:
 		// builtin assert
-		if i.Name == "assert" {
+		if i.Name == "assert" || i.Name == "std.testing::assert" {
 			if len(i.Args) != 1 {
 				return fmt.Errorf("assert expects 1 arg")
 			}
 			out.WriteString("  vox_builtin_assert(")
 			out.WriteString(cValue(i.Args[0]))
 			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "std.testing::fail" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("std.testing::fail expects 1 arg")
+			}
+			out.WriteString("  vox_builtin_fail(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "std.testing::assert_eq_i32" || i.Name == "std.testing::assert_eq_i64" || i.Name == "std.testing::assert_eq_bool" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("%s expects 2 args", i.Name)
+			}
+			out.WriteString("  vox_builtin_assert((")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(") == (")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString("));\n")
+			return nil
+		}
+		if i.Name == "std.testing::assert_eq_str" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("%s expects 2 args", i.Name)
+			}
+			out.WriteString("  vox_builtin_assert(strcmp(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(") == 0);\n")
 			return nil
 		}
 		out.WriteString("  ")

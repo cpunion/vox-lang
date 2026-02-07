@@ -145,6 +145,46 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 			want: "7",
 		},
 		{
+			name: "std_testing_asserts",
+			prog: &ir.Program{Funcs: map[string]*ir.Func{
+				"main": {
+					Name: "main",
+					Ret:  ir.Type{K: ir.TI32},
+					Blocks: []*ir.Block{
+						{
+							Name: "entry",
+							Instr: []ir.Instr{
+								&ir.Const{Dst: &ir.Temp{ID: 0}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 1}},
+								&ir.Const{Dst: &ir.Temp{ID: 1}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 1}},
+								&ir.Call{Ret: ir.Type{K: ir.TUnit}, Name: "std.testing::assert_eq_i32", Args: []ir.Value{&ir.Temp{ID: 0}, &ir.Temp{ID: 1}}},
+								&ir.Const{Dst: &ir.Temp{ID: 2}, Ty: ir.Type{K: ir.TString}, Val: &ir.ConstStr{S: "a"}},
+								&ir.Const{Dst: &ir.Temp{ID: 3}, Ty: ir.Type{K: ir.TString}, Val: &ir.ConstStr{S: "a"}},
+								&ir.Call{Ret: ir.Type{K: ir.TUnit}, Name: "std.testing::assert_eq_str", Args: []ir.Value{&ir.Temp{ID: 2}, &ir.Temp{ID: 3}}},
+								&ir.Const{Dst: &ir.Temp{ID: 4}, Ty: ir.Type{K: ir.TBool}, Val: &ir.ConstBool{V: true}},
+								&ir.Call{Ret: ir.Type{K: ir.TUnit}, Name: "std.testing::assert", Args: []ir.Value{&ir.Temp{ID: 4}}},
+								&ir.Call{Dst: &ir.Temp{ID: 5}, Ret: ir.Type{K: ir.TI32}, Name: "callee", Args: nil},
+							},
+							Term: &ir.Ret{Val: &ir.Temp{ID: 5}},
+						},
+					},
+				},
+				"callee": {
+					Name: "callee",
+					Ret:  ir.Type{K: ir.TI32},
+					Blocks: []*ir.Block{
+						{
+							Name: "entry",
+							Instr: []ir.Instr{
+								&ir.Const{Dst: &ir.Temp{ID: 0}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 9}},
+							},
+							Term: &ir.Ret{Val: &ir.Temp{ID: 0}},
+						},
+					},
+				},
+			}},
+			want: "9",
+		},
+		{
 			name: "string_return",
 			prog: progMainStr(func(fn *ir.Func) {
 				b := &ir.Block{Name: "entry"}

@@ -32,7 +32,7 @@ func TestQualifiedCallRequiresImport(t *testing.T) {
 	}
 	found := false
 	for _, it := range tdiags.Items {
-		if it.Msg == "unknown package qualifier: dep (did you forget `import \"dep\"`?)" {
+		if it.Msg == "unknown module qualifier: dep (did you forget `import \"dep\"`?)" {
 			found = true
 			break
 		}

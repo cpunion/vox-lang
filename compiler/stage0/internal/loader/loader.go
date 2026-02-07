@@ -138,12 +138,15 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 	if err != nil {
 		return nil, nil, err
 	}
+	// Built-in std modules (stage0 subset).
+	rootMods["std/testing"] = true
 	modByPkg[""] = rootMods
 	for depName, depRoot := range deps {
 		mods, err := collectLocalModules(depRoot)
 		if err != nil {
 			return nil, nil, err
 		}
+		mods["std/testing"] = true
 		modByPkg[depName] = mods
 	}
 
@@ -385,6 +388,10 @@ func collectPackageFiles(root string, opts collectOptions) ([]*source.File, erro
 			}
 			rel := strings.TrimPrefix(path, root+string(filepath.Separator))
 			if opts.SkipMain && rel == filepath.Join("src", "main.vox") {
+				return nil
+			}
+			// Go-style test files: only included when IncludeTests is enabled.
+			if !opts.IncludeTests && strings.HasSuffix(rel, "_test.vox") {
 				return nil
 			}
 			out = append(out, source.NewFile(opts.FilePrefix+rel, string(b)))

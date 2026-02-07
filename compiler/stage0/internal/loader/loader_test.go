@@ -60,6 +60,53 @@ fn main() -> i32 { return utils.one(); }`)
 	}
 }
 
+func TestBuildPackage_IgnoresSrcTestFiles(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "vox.toml"), `[package]
+name = "a"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+`)
+	mustWrite(t, filepath.Join(dir, "src", "main.vox"), `fn main() -> i32 { return 0; }`)
+	// If this file were included in normal builds, it would trigger a diagnostic.
+	mustWrite(t, filepath.Join(dir, "src", "a_test.vox"), `import "nope"
+fn test_should_not_be_loaded() -> () {}`)
+
+	_, diags, err := BuildPackage(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags.Items)
+	}
+}
+
+func TestTestPackage_IncludesSrcTestFiles(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "vox.toml"), `[package]
+name = "a"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+`)
+	mustWrite(t, filepath.Join(dir, "src", "main.vox"), `fn main() -> i32 { return 0; }`)
+	mustWrite(t, filepath.Join(dir, "src", "a_test.vox"), `fn test_basic() -> () { assert(true); }`)
+
+	res, diags, err := TestPackage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags.Items)
+	}
+	if res == nil || !strings.Contains(res.TestLog, "test_basic") || !strings.Contains(res.TestLog, "[OK]") {
+		t.Fatalf("expected ok test log, got %q", res.TestLog)
+	}
+}
+
 func TestBuildPackage_ImportsAreFileLocal(t *testing.T) {
 	dir := t.TempDir()
 	// dep package
