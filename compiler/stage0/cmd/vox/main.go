@@ -10,6 +10,7 @@ import (
 
 	"voxlang/internal/codegen"
 	"voxlang/internal/diag"
+	"voxlang/internal/interp"
 	"voxlang/internal/irgen"
 	"voxlang/internal/loader"
 	"voxlang/internal/names"
@@ -20,10 +21,67 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "vox - stage0 prototype")
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  vox init [dir]")
-	fmt.Fprintln(os.Stderr, "  vox ir [dir]")
-	fmt.Fprintln(os.Stderr, "  vox build [dir]")
-	fmt.Fprintln(os.Stderr, "  vox run [dir]")
-	fmt.Fprintln(os.Stderr, "  vox test [dir]")
+	fmt.Fprintln(os.Stderr, "  vox ir [--engine=c|interp] [dir]")
+	fmt.Fprintln(os.Stderr, "  vox build [--engine=c|interp] [dir]")
+	fmt.Fprintln(os.Stderr, "  vox run [--engine=c|interp] [dir]")
+	fmt.Fprintln(os.Stderr, "  vox test [--engine=c|interp] [dir]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "flags:")
+	fmt.Fprintln(os.Stderr, "  --engine=c|interp   execution engine (default: c)")
+	fmt.Fprintln(os.Stderr, "  --compile           alias for --engine=c")
+	fmt.Fprintln(os.Stderr, "  --interp            alias for --engine=interp")
+}
+
+type engine int
+
+const (
+	engineC engine = iota
+	engineInterp
+)
+
+func parseEngineAndDir(args []string) (eng engine, dir string, err error) {
+	eng = engineC
+	dir = "."
+	setDir := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--compile" {
+			eng = engineC
+			continue
+		}
+		if a == "--interp" {
+			eng = engineInterp
+			continue
+		}
+		if a == "--engine" {
+			if i+1 >= len(args) {
+				return engineC, ".", fmt.Errorf("missing value for --engine")
+			}
+			i++
+			a = "--engine=" + args[i]
+		}
+		if strings.HasPrefix(a, "--engine=") {
+			v := strings.TrimPrefix(a, "--engine=")
+			switch v {
+			case "c":
+				eng = engineC
+			case "interp":
+				eng = engineInterp
+			default:
+				return engineC, ".", fmt.Errorf("unknown engine: %q", v)
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			return engineC, ".", fmt.Errorf("unknown flag: %s", a)
+		}
+		if setDir {
+			return engineC, ".", fmt.Errorf("unexpected extra arg: %s", a)
+		}
+		dir = a
+		setDir = true
+	}
+	return eng, dir, nil
 }
 
 func main() {
@@ -42,38 +100,42 @@ func main() {
 			os.Exit(1)
 		}
 	case "ir":
-		dir := "."
-		if len(os.Args) >= 3 {
-			dir = os.Args[2]
+		_, dir, err := parseEngineAndDir(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
 		}
 		if err := dumpIR(dir); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
 	case "build":
-		dir := "."
-		if len(os.Args) >= 3 {
-			dir = os.Args[2]
+		eng, dir, err := parseEngineAndDir(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
 		}
-		if err := build(dir); err != nil {
+		if err := build(dir, eng); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
 	case "run":
-		dir := "."
-		if len(os.Args) >= 3 {
-			dir = os.Args[2]
+		eng, dir, err := parseEngineAndDir(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
 		}
-		if err := run(dir); err != nil {
+		if err := run(dir, eng); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
 	case "test":
-		dir := "."
-		if len(os.Args) >= 3 {
-			dir = os.Args[2]
+		eng, dir, err := parseEngineAndDir(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
 		}
-		if err := test(dir); err != nil {
+		if err := test(dir, eng); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
@@ -107,12 +169,49 @@ func dumpIR(dir string) error {
 	return nil
 }
 
-func build(dir string) error {
+func build(dir string, eng engine) error {
+	if eng == engineInterp {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return err
+		}
+		_, diags, err := loader.BuildPackage(abs, false)
+		if err != nil {
+			return err
+		}
+		if diags != nil && len(diags.Items) > 0 {
+			diag.Print(os.Stderr, diags)
+			return fmt.Errorf("build failed")
+		}
+		return nil
+	}
 	_, err := compile(dir)
 	return err
 }
 
-func run(dir string) error {
+func run(dir string, eng engine) error {
+	if eng == engineInterp {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return err
+		}
+		res, diags, err := loader.BuildPackage(abs, false)
+		if err != nil {
+			return err
+		}
+		if diags != nil && len(diags.Items) > 0 {
+			diag.Print(os.Stderr, diags)
+			return fmt.Errorf("build failed")
+		}
+		out, err := interp.RunMain(res.Program)
+		if err != nil {
+			return err
+		}
+		if out != "" {
+			fmt.Fprintln(os.Stdout, out)
+		}
+		return nil
+	}
 	bin, err := compile(dir)
 	if err != nil {
 		return err
@@ -127,7 +226,7 @@ func run(dir string) error {
 	return nil
 }
 
-func test(dir string) error {
+func test(dir string, eng engine) error {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return err
@@ -142,6 +241,14 @@ func test(dir string) error {
 	}
 	if res == nil || res.Program == nil {
 		return fmt.Errorf("internal error: missing checked program")
+	}
+
+	if eng == engineInterp {
+		log, err := interp.RunTests(res.Program)
+		if log != "" {
+			fmt.Fprint(os.Stdout, log)
+		}
+		return err
 	}
 
 	// Discover tests (Go-like): tests/**.vox and src/**/*_test.vox, functions named `test_*`.
