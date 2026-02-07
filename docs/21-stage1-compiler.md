@@ -24,4 +24,4 @@
 当前进度（实现状态以代码为准）：
 
 - lexer：已覆盖常用关键字/标点、字符串/整数、注释与错误定位（byte offset）。
-- parser：已支持 `import "pkg" as alias`、`pub struct`/`enum`/`fn`，以及语句 `let`/赋值/`if`/`while`/`break`/`continue`/`return`/表达式语句；表达式包含 member/call 与常见二元/一元运算（precedence climbing）。
+- parser：已支持 `import "pkg" as alias`、`pub struct`/`enum`/`fn`，以及语句 `let`/赋值/`if`/`while`/`break`/`continue`/`return`/表达式语句；表达式包含 member/call、struct literal、`match { pat => expr }` 与常见二元/一元运算（precedence climbing）。

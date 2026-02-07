@@ -165,6 +165,49 @@ fn test_parse_member_call_and_add() -> () {
   t.assert(ok_call);
 }
 
+fn test_parse_struct_literal_expr() -> () {
+  let src: String = "struct S { x: i32, y: i32 }\nfn main() -> i32 { let s: S = S { x: 1, y: 2 }; return 0; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  let exprs: ast.ExprPool = r.prog.exprs;
+  let st0: ast.Stmt = f.body.stmts.get(0);
+  let init: i32 = match st0 { ast.Stmt.Let(_, _, _, _, id) => id, _ => -1 };
+  let ok_lit: bool = match ast.expr_pool_get(exprs, init) {
+    ast.ExprNode.StructLit(ty, fields) =>
+      match ast.expr_pool_get(exprs, ty) { ast.ExprNode.Ident(s) => s == "S", _ => false } &&
+      fields.len() == 2 &&
+      fields.get(0).name == "x" &&
+      match ast.expr_pool_get(exprs, fields.get(0).expr) { ast.ExprNode.Int(v) => v == 1, _ => false } &&
+      fields.get(1).name == "y" &&
+      match ast.expr_pool_get(exprs, fields.get(1).expr) { ast.ExprNode.Int(v) => v == 2, _ => false },
+    _ => false,
+  };
+  t.assert(ok_lit);
+}
+
+fn test_parse_match_expr_enum_variant_pattern() -> () {
+  let src: String = "enum E { A(i32), None }\nfn main() -> i32 { let x: E = E.None; return match x { E.A(v) => v, E.None => 0, _ => 1 }; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  let exprs: ast.ExprPool = r.prog.exprs;
+  let st1: ast.Stmt = f.body.stmts.get(1);
+  let rid: i32 = match st1 { ast.Stmt.Return(_, id) => id, _ => -1 };
+  let ok_match: bool = match ast.expr_pool_get(exprs, rid) {
+    ast.ExprNode.Match(scr, arms) =>
+      match ast.expr_pool_get(exprs, scr) { ast.ExprNode.Ident(s) => s == "x", _ => false } &&
+      arms.len() == 3 &&
+      match arms.get(0).pat { ast.Pat.EnumVariant(enum_parts, vname, binders) => enum_parts.len() == 1 && enum_parts.get(0) == "E" && vname == "A" && binders.len() == 1 && binders.get(0) == "v", _ => false } &&
+      match arms.get(1).pat { ast.Pat.EnumVariant(enum_parts, vname, binders) => enum_parts.len() == 1 && enum_parts.get(0) == "E" && vname == "None" && binders.len() == 0, _ => false } &&
+      match arms.get(2).pat { ast.Pat.Wild => true, _ => false },
+    _ => false,
+  };
+  t.assert(ok_match);
+}
+
 fn test_parse_if_while_assign_and_expr_stmt() -> () {
   // Stage0 does not support String concatenation with `+`, so keep it as a single literal.
   let src: String = "fn main(x: i32) -> i32 {\n  let mut y: i32 = 0;\n  if x < 3 { y = 1; } else { y = 2; }\n  while y < 10 { y = y + 1; }\n  print(\"ok\");\n  return y;\n}";
