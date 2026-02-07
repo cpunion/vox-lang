@@ -220,6 +220,67 @@ fn main() -> i32 {
 	}
 }
 
+func TestPipelineNamedImportsForTypesAndEnumsCompilesAndRuns(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("cc not found")
+	}
+
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import { S, E, one } from "dep"
+fn main() -> i32 {
+  let s: S = S { x: 1 };
+  let e: E = E.A(41);
+  let v: i32 = match e {
+    E.A(n) => n + 1,
+    E.None => 0,
+  };
+  return one() + s.x + v;
+}`),
+		source.NewFile("dep/src/lib.vox", `pub fn one() -> i32 { return 10; }
+pub struct S { pub x: i32 }
+pub enum E { A(i32), None }
+`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	irp, err := irgen.Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrc, err := EmitC(irp, EmitOptions{EmitDriverMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	cPath := filepath.Join(dir, "a.c")
+	binPath := filepath.Join(dir, "a.out")
+	if err := writeFile(cPath, csrc); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(cc, "-std=c11", "-O0", "-g", cPath, "-o", binPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, string(out))
+	}
+	run := exec.Command(binPath)
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, string(out))
+	}
+	// one()=10, s.x=1, match(E.A(41))=42 => 53
+	if got := strings.TrimSpace(string(out)); got != "53" {
+		t.Fatalf("expected output 53, got %q", got)
+	}
+}
+
 func TestPipelineNoSymbolCollisionBetweenQualifiedAndPlainNames(t *testing.T) {
 	cc, err := exec.LookPath("cc")
 	if err != nil {
