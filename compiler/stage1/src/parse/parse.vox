@@ -18,18 +18,20 @@ struct Parser {
   pos: i32,
   has_err: bool,
   err: ParseError,
+  exprs: ast.ExprPool,
 }
 
 struct AdvanceResult { p: Parser, tok: lex.Token }
 struct ParseIdentResult { p: Parser, name: String }
 struct ParseTypeResult { p: Parser, ty: ast.TypeName }
-struct ParseExprResult { p: Parser, ex: ast.Expr }
+struct ParseExprResult { p: Parser, id: i32 }
 struct ParseStmtResult { p: Parser, st: ast.Stmt }
 struct ParseBlockResult { p: Parser, b: ast.Block }
 struct ParseFnResult { p: Parser, f: ast.FuncDecl }
 struct ParseProgramResult { p: Parser, prog: ast.Program }
 struct ParseImportResult { p: Parser, imp: ast.ImportDecl }
 struct ParseStringResult { p: Parser, s: String }
+struct ParseParamsResult { p: Parser, params: Vec[ast.Param] }
 
 fn dummy_token() -> lex.Token {
   return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0 };
@@ -95,6 +97,13 @@ fn parse_type_name(p: Parser) -> ParseTypeResult {
   return ParseTypeResult { p: r.p, ty: ast.TypeName { name: r.name } };
 }
 
+fn add_expr(p: Parser, node: ast.ExprNode) -> ParseExprResult {
+  let r: ast.AddExprResult = ast.expr_pool_add(p.exprs, node);
+  let mut q: Parser = p;
+  q.exprs = r.pool;
+  return ParseExprResult { p: q, id: r.id };
+}
+
 fn parse_string_inner(p: Parser) -> ParseStringResult {
   let ar: AdvanceResult = expect(p, lex.TokenKind.Str);
   let mut s: String = lexeme(ar.p, ar.tok); // includes quotes
@@ -120,12 +129,12 @@ fn parse_import_decl(p: Parser) -> ParseImportResult {
   return ParseImportResult { p: q, imp: ast.ImportDecl { path: path, alias: alias } };
 }
 
-fn parse_expr(p: Parser) -> ParseExprResult {
+fn parse_primary(p: Parser) -> ParseExprResult {
   if p.has_err {
-    return ParseExprResult { p: p, ex: ast.Expr.Int(0) };
+    return ParseExprResult { p: p, id: -1 };
   }
-
   let k: lex.TokenKind = peek_kind(p);
+
   if kind_is(k, lex.TokenKind.Int) {
     let ar: AdvanceResult = advance(p);
     let tok: lex.Token = ar.tok;
@@ -137,18 +146,149 @@ fn parse_expr(p: Parser) -> ParseExprResult {
       n = n * 10 + d;
       i = i + 1;
     }
-    return ParseExprResult { p: ar.p, ex: ast.Expr.Int(n) };
+    return add_expr(ar.p, ast.ExprNode.Int(n));
   }
+
   if kind_is(k, lex.TokenKind.Ident) {
     let r: ParseIdentResult = parse_ident(p);
-    return ParseExprResult { p: r.p, ex: ast.Expr.Ident(r.name) };
+    return add_expr(r.p, ast.ExprNode.Ident(r.name));
+  }
+
+  if kind_is(k, lex.TokenKind.Str) {
+    let r: ParseStringResult = parse_string_inner(p);
+    return add_expr(r.p, ast.ExprNode.Str(r.s));
   }
 
   let mut q: Parser = p;
   let at: i32 = peek(p).start;
   q.has_err = true;
   q.err = ParseError.UnexpectedToken(lex.TokenKind.Ident, k, at);
-  return ParseExprResult { p: q, ex: ast.Expr.Int(0) };
+  return ParseExprResult { p: q, id: -1 };
+}
+
+fn parse_postfix(p: Parser, base: i32) -> ParseExprResult {
+  let mut q: Parser = p;
+  let mut cur: i32 = base;
+  while !q.has_err {
+    if kind_is(peek_kind(q), lex.TokenKind.Dot) {
+      let ar1: AdvanceResult = advance(q);
+      let r2: ParseIdentResult = parse_ident(ar1.p);
+      let r3: ParseExprResult = add_expr(r2.p, ast.ExprNode.Member(cur, r2.name));
+      q = r3.p;
+      cur = r3.id;
+      continue;
+    }
+    if kind_is(peek_kind(q), lex.TokenKind.LParen) {
+      let ar1: AdvanceResult = advance(q);
+      let mut r: Parser = ar1.p;
+      let mut args: Vec[i32] = Vec();
+      if !kind_is(peek_kind(r), lex.TokenKind.RParen) {
+        while !r.has_err {
+          let er: ParseExprResult = parse_expr(r, 0);
+          r = er.p;
+          args.push(er.id);
+          if kind_is(peek_kind(r), lex.TokenKind.Comma) {
+            let ar2: AdvanceResult = advance(r);
+            r = ar2.p;
+            if kind_is(peek_kind(r), lex.TokenKind.RParen) {
+              break;
+            }
+            continue;
+          }
+          break;
+        }
+      }
+      let ar3: AdvanceResult = expect(r, lex.TokenKind.RParen);
+      let r4: ParseExprResult = add_expr(ar3.p, ast.ExprNode.Call(cur, args));
+      q = r4.p;
+      cur = r4.id;
+      continue;
+    }
+    break;
+  }
+  return ParseExprResult { p: q, id: cur };
+}
+
+fn parse_prefix(p: Parser) -> ParseExprResult {
+  let k: lex.TokenKind = peek_kind(p);
+  if kind_is(k, lex.TokenKind.Minus) {
+    let ar: AdvanceResult = advance(p);
+    let r: ParseExprResult = parse_expr(ar.p, 7);
+    if r.p.has_err { return r; }
+    return add_expr(r.p, ast.ExprNode.Unary(ast.UnaryOp.Neg, r.id));
+  }
+  if kind_is(k, lex.TokenKind.Not) {
+    let ar: AdvanceResult = advance(p);
+    let r: ParseExprResult = parse_expr(ar.p, 7);
+    if r.p.has_err { return r; }
+    return add_expr(r.p, ast.ExprNode.Unary(ast.UnaryOp.Not, r.id));
+  }
+  if kind_is(k, lex.TokenKind.LParen) {
+    let ar1: AdvanceResult = advance(p);
+    let r2: ParseExprResult = parse_expr(ar1.p, 0);
+    let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.RParen);
+    return ParseExprResult { p: ar3.p, id: r2.id };
+  }
+  let r0: ParseExprResult = parse_primary(p);
+  return parse_postfix(r0.p, r0.id);
+}
+
+fn infix_prec(k: lex.TokenKind) -> i32 {
+  return match k {
+    lex.TokenKind.OrOr => 1,
+    lex.TokenKind.AndAnd => 2,
+    lex.TokenKind.EqEq => 3,
+    lex.TokenKind.Ne => 3,
+    lex.TokenKind.Lt => 4,
+    lex.TokenKind.Le => 4,
+    lex.TokenKind.Gt => 4,
+    lex.TokenKind.Ge => 4,
+    lex.TokenKind.Plus => 5,
+    lex.TokenKind.Minus => 5,
+    lex.TokenKind.Star => 6,
+    lex.TokenKind.Slash => 6,
+    lex.TokenKind.Percent => 6,
+    _ => 0,
+  };
+}
+
+fn infix_op(k: lex.TokenKind) -> ast.BinaryOp {
+  return match k {
+    lex.TokenKind.Plus => ast.BinaryOp.Add,
+    lex.TokenKind.Minus => ast.BinaryOp.Sub,
+    lex.TokenKind.Star => ast.BinaryOp.Mul,
+    lex.TokenKind.Slash => ast.BinaryOp.Div,
+    lex.TokenKind.Percent => ast.BinaryOp.Mod,
+    lex.TokenKind.EqEq => ast.BinaryOp.Eq,
+    lex.TokenKind.Ne => ast.BinaryOp.Ne,
+    lex.TokenKind.Lt => ast.BinaryOp.Lt,
+    lex.TokenKind.Le => ast.BinaryOp.Le,
+    lex.TokenKind.Gt => ast.BinaryOp.Gt,
+    lex.TokenKind.Ge => ast.BinaryOp.Ge,
+    lex.TokenKind.AndAnd => ast.BinaryOp.AndAnd,
+    lex.TokenKind.OrOr => ast.BinaryOp.OrOr,
+    _ => ast.BinaryOp.Add,
+  };
+}
+
+fn parse_expr(p: Parser, min_prec: i32) -> ParseExprResult {
+  let r0: ParseExprResult = parse_prefix(p);
+  let mut q: Parser = r0.p;
+  let mut left: i32 = r0.id;
+  while !q.has_err {
+    let k: lex.TokenKind = peek_kind(q);
+    let prec: i32 = infix_prec(k);
+    if prec < min_prec || prec == 0 {
+      break;
+    }
+    let ar1: AdvanceResult = advance(q);
+    let op: ast.BinaryOp = infix_op(k);
+    let r2: ParseExprResult = parse_expr(ar1.p, prec + 1);
+    let r3: ParseExprResult = add_expr(r2.p, ast.ExprNode.Binary(op, left, r2.id));
+    q = r3.p;
+    left = r3.id;
+  }
+  return ParseExprResult { p: q, id: left };
 }
 
 fn parse_stmt(p: Parser) -> ParseStmtResult {
@@ -181,22 +321,22 @@ fn parse_stmt(p: Parser) -> ParseStmtResult {
     }
 
     let ar6: AdvanceResult = expect(q, lex.TokenKind.Eq);
-    let r7: ParseExprResult = parse_expr(ar6.p);
+    let r7: ParseExprResult = parse_expr(ar6.p, 0);
     let ar8: AdvanceResult = expect(r7.p, lex.TokenKind.Semicolon);
-    return ParseStmtResult { p: ar8.p, st: ast.Stmt.Let(is_mut, name, has_ann, ann, r7.ex) };
+    return ParseStmtResult { p: ar8.p, st: ast.Stmt.Let(is_mut, name, has_ann, ann, r7.id) };
   }
   if kind_is(k, lex.TokenKind.KwReturn) {
     let ar1: AdvanceResult = advance(p);
-    let r2: ParseExprResult = parse_expr(ar1.p);
+    let r2: ParseExprResult = parse_expr(ar1.p, 0);
     let _ar3: AdvanceResult = expect(r2.p, lex.TokenKind.Semicolon);
-    return ParseStmtResult { p: _ar3.p, st: ast.Stmt.Return(r2.ex) };
+    return ParseStmtResult { p: _ar3.p, st: ast.Stmt.Return(r2.id) };
   }
 
   let mut q: Parser = p;
   let at: i32 = peek(p).start;
   q.has_err = true;
   q.err = ParseError.UnexpectedToken(lex.TokenKind.KwReturn, k, at);
-  return ParseStmtResult { p: q, st: ast.Stmt.Return(ast.Expr.Int(0)) };
+  return ParseStmtResult { p: q, st: ast.Stmt.Return(-1) };
 }
 
 fn parse_block(p: Parser) -> ParseBlockResult {
@@ -216,11 +356,38 @@ fn parse_fn_decl(p: Parser) -> ParseFnResult {
   let ar1: AdvanceResult = expect(p, lex.TokenKind.KwFn);
   let r2: ParseIdentResult = parse_ident(ar1.p);
   let _ar3: AdvanceResult = expect(r2.p, lex.TokenKind.LParen);
-  let _ar4: AdvanceResult = expect(_ar3.p, lex.TokenKind.RParen);
-  let _ar5: AdvanceResult = expect(_ar4.p, lex.TokenKind.Arrow);
-  let r6: ParseTypeResult = parse_type_name(_ar5.p);
-  let r7: ParseBlockResult = parse_block(r6.p);
-  return ParseFnResult { p: r7.p, f: ast.FuncDecl { name: r2.name, ret: r6.ty, body: r7.b } };
+  let r4: ParseParamsResult = parse_params(_ar3.p);
+  let _ar5: AdvanceResult = expect(r4.p, lex.TokenKind.RParen);
+  let _ar6: AdvanceResult = expect(_ar5.p, lex.TokenKind.Arrow);
+  let r7: ParseTypeResult = parse_type_name(_ar6.p);
+  let params: Vec[ast.Param] = r4.params;
+  let r8: ParseBlockResult = parse_block(r7.p);
+  return ParseFnResult { p: r8.p, f: ast.FuncDecl { name: r2.name, params: params, ret: r7.ty, body: r8.b } };
+}
+
+fn parse_params(p: Parser) -> ParseParamsResult {
+  let mut q: Parser = p;
+  let mut params: Vec[ast.Param] = Vec();
+  if kind_is(peek_kind(q), lex.TokenKind.RParen) {
+    return ParseParamsResult { p: q, params: params };
+  }
+  while !q.has_err {
+    let r1: ParseIdentResult = parse_ident(q);
+    let ar2: AdvanceResult = expect(r1.p, lex.TokenKind.Colon);
+    let r3: ParseTypeResult = parse_type_name(ar2.p);
+    params.push(ast.Param { name: r1.name, ty: r3.ty });
+    q = r3.p;
+    if kind_is(peek_kind(q), lex.TokenKind.Comma) {
+      let ar4: AdvanceResult = advance(q);
+      q = ar4.p;
+      if kind_is(peek_kind(q), lex.TokenKind.RParen) {
+        break;
+      }
+      continue;
+    }
+    break;
+  }
+  return ParseParamsResult { p: q, params: params };
 }
 
 fn parse_program(p: Parser) -> ParseProgramResult {
@@ -238,15 +405,15 @@ fn parse_program(p: Parser) -> ParseProgramResult {
       funcs.push(r.f);
     }
   }
-  return ParseProgramResult { p: q, prog: ast.Program { imports: imports, funcs: funcs } };
+  return ParseProgramResult { p: q, prog: ast.Program { imports: imports, funcs: funcs, exprs: q.exprs } };
 }
 
 pub fn parse_text(text: String) -> ParseResult {
   let lr: lex.LexResult = lex.lex_text(text);
   if !lex_err_none(lr.err) {
-    return ParseResult { prog: ast.Program { imports: Vec(), funcs: Vec() }, err: ParseError.Lex(lr.err) };
+    return ParseResult { prog: ast.Program { imports: Vec(), funcs: Vec(), exprs: ast.expr_pool() }, err: ParseError.Lex(lr.err) };
   }
-  let p: Parser = Parser { text: text, toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None };
+  let p: Parser = Parser { text: text, toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None, exprs: ast.expr_pool() };
   let r: ParseProgramResult = parse_program(p);
   return ParseResult { prog: r.prog, err: r.p.err };
 }

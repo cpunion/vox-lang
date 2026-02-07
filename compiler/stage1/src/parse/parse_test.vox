@@ -18,17 +18,20 @@ fn test_parse_single_fn_return_int() -> () {
   t.assert_eq(imports.len(), 0);
   let funcs: Vec[ast.FuncDecl] = prog.funcs;
   t.assert_eq(funcs.len(), 1);
+  let exprs: ast.ExprPool = prog.exprs;
 
   let f: ast.FuncDecl = funcs.get(0);
   t.assert_eq(f.name, "main");
+  let params: Vec[ast.Param] = f.params;
+  t.assert_eq(params.len(), 0);
   t.assert_eq(f.ret.name, "i32");
   let stmts: Vec[ast.Stmt] = f.body.stmts;
   t.assert_eq(stmts.len(), 1);
 
   let st: ast.Stmt = stmts.get(0);
   let is_ret0: bool = match st {
-    ast.Stmt.Return(ex) => match ex {
-      ast.Expr.Int(v) => v == 0,
+    ast.Stmt.Return(id) => match ast.expr_pool_get(exprs, id) {
+      ast.ExprNode.Int(v) => v == 0,
       _ => false,
     },
     _ => false,
@@ -56,7 +59,9 @@ fn test_parse_let_mut_with_type_ann_and_int_init() -> () {
   let r: p.ParseResult = p.parse_text("fn main() -> i32 { let mut x: i32 = 1; return x; }");
   t.assert(ok(r.err));
 
-  let funcs: Vec[ast.FuncDecl] = r.prog.funcs;
+  let prog: ast.Program = r.prog;
+  let funcs: Vec[ast.FuncDecl] = prog.funcs;
+  let exprs: ast.ExprPool = prog.exprs;
   let f: ast.FuncDecl = funcs.get(0);
   let stmts: Vec[ast.Stmt] = f.body.stmts;
   t.assert_eq(stmts.len(), 2);
@@ -65,17 +70,51 @@ fn test_parse_let_mut_with_type_ann_and_int_init() -> () {
   let ok0: bool = match st0 {
     ast.Stmt.Let(mutable, name, has_ann, ann, init) =>
       mutable && name == "x" && has_ann && ann.name == "i32" &&
-      match init { ast.Expr.Int(v) => v == 1, _ => false },
+      match ast.expr_pool_get(exprs, init) { ast.ExprNode.Int(v) => v == 1, _ => false },
     _ => false,
   };
   t.assert(ok0);
 
   let st1: ast.Stmt = stmts.get(1);
   let ok1: bool = match st1 {
-    ast.Stmt.Return(ex) => match ex { ast.Expr.Ident(s) => s == "x", _ => false },
+    ast.Stmt.Return(id) => match ast.expr_pool_get(exprs, id) { ast.ExprNode.Ident(s) => s == "x", _ => false },
     _ => false,
   };
   t.assert(ok1);
+}
+
+fn test_parse_member_call_and_add() -> () {
+  let r: p.ParseResult = p.parse_text("fn main() -> i32 { return a.b(1 + 2); }");
+  t.assert(ok(r.err));
+
+  let prog: ast.Program = r.prog;
+  let exprs: ast.ExprPool = prog.exprs;
+  let funcs: Vec[ast.FuncDecl] = prog.funcs;
+  let f: ast.FuncDecl = funcs.get(0);
+  let stmts: Vec[ast.Stmt] = f.body.stmts;
+  let st: ast.Stmt = stmts.get(0);
+  let rid: i32 = match st { ast.Stmt.Return(id) => id, _ => -1 };
+
+  // return <call>
+  let ok_call: bool = match ast.expr_pool_get(exprs, rid) {
+    ast.ExprNode.Call(callee, args) =>
+      args.len() == 1 &&
+      match ast.expr_pool_get(exprs, callee) {
+        ast.ExprNode.Member(recv, name) =>
+          name == "b" &&
+          match ast.expr_pool_get(exprs, recv) { ast.ExprNode.Ident(s) => s == "a", _ => false },
+        _ => false,
+      } &&
+      match ast.expr_pool_get(exprs, args.get(0)) {
+        ast.ExprNode.Binary(op, l, r) =>
+          match op { ast.BinaryOp.Add => true, _ => false } &&
+          match ast.expr_pool_get(exprs, l) { ast.ExprNode.Int(v) => v == 1, _ => false } &&
+          match ast.expr_pool_get(exprs, r) { ast.ExprNode.Int(v) => v == 2, _ => false },
+        _ => false,
+      },
+    _ => false,
+  };
+  t.assert(ok_call);
 }
 
 fn test_parse_reports_lex_error() -> () {
