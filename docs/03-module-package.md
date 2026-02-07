@@ -39,6 +39,10 @@ import "utils" as u
 u.helper()
 ```
 
+规则（当前决策）：
+
+- 使用 `pkg.name(...)` 形式访问依赖包符号时，必须在同一文件中先写 `import "pkg"`（或 `import "pkg" as alias` 后用 `alias.name(...)`）。
+
 ## 导出
 
 ```vox

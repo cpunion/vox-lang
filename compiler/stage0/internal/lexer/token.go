@@ -28,6 +28,7 @@ const (
 	TokenImport
 	TokenPub
 	TokenMatch
+	TokenAs
 
 	// Punct
 	TokenLParen

@@ -28,6 +28,7 @@ func ParseFiles(files []*source.File) (*ast.Program, *diag.Bag) {
 	for _, f := range files {
 		prog, d := Parse(f)
 		if prog != nil {
+			merged.Imports = append(merged.Imports, prog.Imports...)
 			merged.Funcs = append(merged.Funcs, prog.Funcs...)
 		}
 		if d != nil && len(d.Items) > 0 {
@@ -43,6 +44,13 @@ func ParseFiles(files []*source.File) (*ast.Program, *diag.Bag) {
 func (p *Parser) parseProgram() *ast.Program {
 	prog := &ast.Program{}
 	for !p.at(lexer.TokenEOF) {
+		if p.match(lexer.TokenImport) {
+			imp := p.parseImportDecl()
+			if imp != nil {
+				prog.Imports = append(prog.Imports, imp)
+			}
+			continue
+		}
 		if p.match(lexer.TokenFn) {
 			fn := p.parseFuncDecl()
 			if fn != nil {
@@ -50,10 +58,39 @@ func (p *Parser) parseProgram() *ast.Program {
 			}
 			continue
 		}
-		p.errorHere("expected `fn`")
+		p.errorHere("expected `import` or `fn`")
 		p.advance()
 	}
 	return prog
+}
+
+func (p *Parser) parseImportDecl() *ast.ImportDecl {
+	start := p.prev()
+	pathTok := p.expect(lexer.TokenString, "expected string literal import path")
+	if pathTok.Kind != lexer.TokenString {
+		return nil
+	}
+	path := unquote(pathTok.Lexeme)
+	alias := ""
+	if p.match(lexer.TokenAs) {
+		id := p.expect(lexer.TokenIdent, "expected alias after `as`")
+		if id.Kind == lexer.TokenIdent {
+			alias = id.Lexeme
+		}
+	}
+	// Optional semicolon: if absent, next token must start a new top-level item.
+	endTok := p.peek()
+	if p.match(lexer.TokenSemicolon) {
+		endTok = p.prev()
+	} else {
+		switch p.peek().Kind {
+		case lexer.TokenFn, lexer.TokenImport, lexer.TokenEOF:
+			// ok
+		default:
+			p.errorHere("expected `;` or next top-level item after import")
+		}
+	}
+	return &ast.ImportDecl{Path: path, Alias: alias, Span: joinSpan(start.Span, endTok.Span)}
 }
 
 func (p *Parser) parseFuncDecl() *ast.FuncDecl {
@@ -456,6 +493,13 @@ func joinSpan(a source.Span, b source.Span) source.Span {
 		end = b.End
 	}
 	return source.Span{File: a.File, Start: start, End: end}
+}
+
+func unquote(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
 }
 
 // quick sanity: parseInt for potential future use

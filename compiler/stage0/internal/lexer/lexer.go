@@ -106,6 +106,8 @@ func (lx *lexer) lexIdentOrKeyword() {
 		lx.emit(TokenPub, lex, start, lx.pos)
 	case "match":
 		lx.emit(TokenMatch, lex, start, lx.pos)
+	case "as":
+		lx.emit(TokenAs, lex, start, lx.pos)
 	default:
 		lx.emit(TokenIdent, lex, start, lx.pos)
 	}

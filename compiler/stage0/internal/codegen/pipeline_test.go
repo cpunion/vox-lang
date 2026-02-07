@@ -24,7 +24,7 @@ func TestPipelineCompilesAndRuns(t *testing.T) {
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		t.Fatalf("parse diags: %+v", pdiags.Items)
 	}
-	checked, tdiags := typecheck.Check(prog)
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
 	if tdiags != nil && len(tdiags.Items) > 0 {
 		t.Fatalf("type diags: %+v", tdiags.Items)
 	}
@@ -65,14 +65,15 @@ func TestPipelineCompilesAndRunsWithDepQualifiedNames(t *testing.T) {
 	}
 
 	files := []*source.File{
-		source.NewFile("src/main.vox", `fn main() -> i32 { return dep.one(); }`),
+		source.NewFile("src/main.vox", `import "dep"
+fn main() -> i32 { return dep.one(); }`),
 		source.NewFile("dep/src/lib.vox", `fn one() -> i32 { return 1; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		t.Fatalf("parse diags: %+v", pdiags.Items)
 	}
-	checked, tdiags := typecheck.Check(prog)
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
 	if tdiags != nil && len(tdiags.Items) > 0 {
 		t.Fatalf("type diags: %+v", tdiags.Items)
 	}

@@ -22,13 +22,17 @@ func TestParseMain(t *testing.T) {
 }
 
 func TestParsePathCall(t *testing.T) {
-	f := source.NewFile("test.vox", `fn main() -> i32 { return dep.one(); }`)
+	f := source.NewFile("test.vox", `import "dep"
+fn main() -> i32 { return dep.one(); }`)
 	prog, diags := Parse(f)
 	if diags != nil && len(diags.Items) > 0 {
 		t.Fatalf("unexpected diags: %+v", diags.Items)
 	}
 	if len(prog.Funcs) != 1 {
 		t.Fatalf("expected 1 func, got %d", len(prog.Funcs))
+	}
+	if len(prog.Imports) != 1 || prog.Imports[0].Path != "dep" {
+		t.Fatalf("expected 1 import dep, got %#v", prog.Imports)
 	}
 	body := prog.Funcs[0].Body
 	if len(body.Stmts) != 1 {

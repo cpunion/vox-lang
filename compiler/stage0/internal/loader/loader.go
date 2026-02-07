@@ -135,7 +135,11 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		return &BuildResult{Manifest: mani}, pdiags, nil
 	}
-	checked, tdiags := typecheck.Check(prog)
+	allowed := map[string]bool{}
+	for name := range mani.Dependencies {
+		allowed[name] = true
+	}
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{AllowedPkgs: allowed})
 	if tdiags != nil && len(tdiags.Items) > 0 {
 		return &BuildResult{Manifest: mani}, tdiags, nil
 	}

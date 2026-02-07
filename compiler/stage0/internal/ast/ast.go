@@ -3,7 +3,14 @@ package ast
 import "voxlang/internal/source"
 
 type Program struct {
-	Funcs []*FuncDecl
+	Imports []*ImportDecl
+	Funcs   []*FuncDecl
+}
+
+type ImportDecl struct {
+	Path  string // string literal content, unquoted
+	Alias string // optional; when empty, defaults to last path segment
+	Span  source.Span
 }
 
 type FuncDecl struct {

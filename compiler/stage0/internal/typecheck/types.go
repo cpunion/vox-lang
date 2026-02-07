@@ -61,15 +61,24 @@ type FuncSig struct {
 	Ret    Type
 }
 
-func Check(prog *ast.Program) (*CheckedProgram, *diag.Bag) {
+type Options struct {
+	// AllowedPkgs is the set of importable package names in the current build.
+	// When nil, imports are accepted without validation.
+	AllowedPkgs map[string]bool
+}
+
+func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 	c := &checker{
 		prog:      prog,
 		diags:     &diag.Bag{},
 		funcSigs:  map[string]FuncSig{},
 		exprTypes: map[ast.Expr]Type{},
 		callTgts:  map[*ast.CallExpr]string{},
+		opts:      opts,
+		imports:   map[*source.File]map[string]string{},
 	}
 	c.collectFuncSigs()
+	c.collectImports()
 	c.checkAll()
 	return &CheckedProgram{Prog: prog, FuncSigs: c.funcSigs, ExprTypes: c.exprTypes, CallTargets: c.callTgts}, c.diags
 }
@@ -83,6 +92,9 @@ type checker struct {
 
 	curFn *ast.FuncDecl
 	scope []map[string]varInfo
+
+	opts    Options
+	imports map[*source.File]map[string]string // file -> qualifier -> package name
 }
 
 type varInfo struct {
@@ -110,6 +122,33 @@ func (c *checker) collectFuncSigs() {
 	// main presence check (stage0)
 	if _, ok := c.funcSigs["main"]; !ok {
 		// not a hard error for library compilation, but stage0 expects main
+	}
+}
+
+func (c *checker) collectImports() {
+	for _, imp := range c.prog.Imports {
+		if imp == nil || imp.Span.File == nil {
+			continue
+		}
+		pkg := imp.Path
+		if c.opts.AllowedPkgs != nil && !c.opts.AllowedPkgs[pkg] {
+			c.errorAt(imp.Span, "unknown dependency package: "+pkg)
+			continue
+		}
+		alias := imp.Alias
+		if alias == "" {
+			alias = defaultImportAlias(pkg)
+		}
+		m := c.imports[imp.Span.File]
+		if m == nil {
+			m = map[string]string{}
+			c.imports[imp.Span.File] = m
+		}
+		if _, exists := m[alias]; exists {
+			c.errorAt(imp.Span, "duplicate import alias: "+alias)
+			continue
+		}
+		m[alias] = pkg
 	}
 }
 
@@ -314,7 +353,25 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				c.errorAt(e.S, "stage0 only supports `pkg.fn(...)` calls for qualified names")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
-			target = strings.Join(cal.Parts, "::")
+			qual := cal.Parts[0]
+			member := cal.Parts[1]
+			curPkg := names.PackageFromFileName(c.curFn.Span.File.Name)
+			if curPkg != "" && qual == curPkg {
+				// Allow self-qualified calls within a dependency package without import.
+				target = curPkg + "::" + member
+				break
+			}
+			if c.curFn.Span.File == nil {
+				c.errorAt(e.S, "internal error: missing file for import resolution")
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+			m := c.imports[c.curFn.Span.File]
+			pkg, ok := m[qual]
+			if !ok {
+				c.errorAt(e.S, "unknown package qualifier: "+qual+" (did you forget `import \""+qual+"\"`?)")
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+			target = pkg + "::" + member
 		default:
 			c.errorAt(e.S, "callee must be an identifier (stage0)")
 			return c.setExprType(ex, Type{K: TyBad})
@@ -421,4 +478,13 @@ func chooseType(ann, init Type) Type {
 		return ann
 	}
 	return init
+}
+
+func defaultImportAlias(path string) string {
+	// For stage0, dependency package import paths are simple names like "mathlib".
+	// If we later support nested module paths, use the last segment.
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
