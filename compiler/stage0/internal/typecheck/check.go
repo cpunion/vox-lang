@@ -191,7 +191,11 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 	case *ast.UnaryExpr:
 		switch e.Op {
 		case "-":
-			ty := c.checkExpr(e.Expr, Type{K: TyI64})
+			want := expected
+			if want.K != TyI32 && want.K != TyI64 {
+				want = Type{K: TyI64}
+			}
+			ty := c.checkExpr(e.Expr, want)
 			ty = c.forceIntType(e.Expr, ty, expected)
 			return c.setExprType(ex, ty)
 		case "!":
@@ -475,6 +479,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 						vname := parts[len(parts)-1]
 						vidx, vok := es.VariantIndex[vname]
 						if vok && len(es.Variants[vidx].Fields) == 0 {
+							c.enumUnits[e] = EnumCtorTarget{Enum: ety, Variant: vname, Tag: vidx, Payload: Type{K: TyUnit}}
 							return c.setExprType(ex, ety)
 						}
 					}

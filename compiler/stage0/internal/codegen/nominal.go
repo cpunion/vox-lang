@@ -49,11 +49,13 @@ func emitNominalTypes(out *bytes.Buffer, p *ir.Program) error {
 		if _, ok := all[to]; !ok {
 			return fmt.Errorf("unknown nominal type reference: %s -> %s", from, to)
 		}
-		if _, ok := deps[from][to]; ok {
+		// Emit dependencies first: if `from` references `to` by-value, then `to` must be emitted before `from`.
+		// Model the topo edge as: to -> from.
+		if _, ok := deps[to][from]; ok {
 			return nil
 		}
-		deps[from][to] = struct{}{}
-		indeg[to]++
+		deps[to][from] = struct{}{}
+		indeg[from]++
 		return nil
 	}
 

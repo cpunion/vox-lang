@@ -133,6 +133,10 @@ func test(dir string) error {
 		return err
 	}
 	if diags != nil && len(diags.Items) > 0 {
+		// If tests ran, print the test log even when failing, to aid debugging.
+		if res != nil && res.TestLog != "" {
+			fmt.Fprint(os.Stdout, res.TestLog)
+		}
 		diag.Print(os.Stderr, diags)
 		return fmt.Errorf("test failed")
 	}

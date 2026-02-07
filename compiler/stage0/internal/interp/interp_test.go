@@ -119,6 +119,19 @@ fn main() -> i32 {
 	}
 }
 
+func TestInterpStructFieldOfEnumType(t *testing.T) {
+	out := runMain(t, `enum K { A, B }
+struct S { k: K }
+fn main() -> i32 {
+  let s: S = S { k: K.A };
+  let k: K = s.k;
+  return match k { K.A => 1, K.B => 2 };
+}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
 func TestInterpVecPushLenGet(t *testing.T) {
 	out := runMain(t, `fn main() -> i32 {
   let mut v: Vec[i32] = Vec();

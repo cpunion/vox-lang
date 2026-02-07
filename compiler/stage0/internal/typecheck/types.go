@@ -45,6 +45,9 @@ type CheckedProgram struct {
 	CallTargets map[*ast.CallExpr]string
 	// EnumCtors records which call expressions are enum constructors instead of function calls.
 	EnumCtors map[*ast.CallExpr]EnumCtorTarget
+	// EnumUnitVariants records which member expressions are unit enum variant values (Enum.Variant).
+	// This disambiguates enum literals from struct-field access that returns an enum-typed value.
+	EnumUnitVariants map[*ast.MemberExpr]EnumCtorTarget
 }
 
 type FuncSig struct {
@@ -134,6 +137,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		vecCalls:      map[*ast.CallExpr]VecCallTarget{},
 		callTgts:      map[*ast.CallExpr]string{},
 		enumCtors:     map[*ast.CallExpr]EnumCtorTarget{},
+		enumUnits:     map[*ast.MemberExpr]EnumCtorTarget{},
 		opts:          opts,
 		imports:       map[*source.File]map[string]importTarget{},
 		namedFuncs:    map[*source.File]map[string]string{},
@@ -143,8 +147,9 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		instantiating: map[string]bool{},
 	}
 	c.collectImports()
-	c.collectStructSigs()
-	c.collectEnumSigs()
+	c.collectNominalSigs()
+	c.fillStructSigs()
+	c.fillEnumSigs()
 	c.collectFuncSigs()
 	c.resolveNamedImports()
 	c.checkPubInterfaces()
@@ -159,6 +164,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		VecCalls:    c.vecCalls,
 		CallTargets: c.callTgts,
 		EnumCtors:   c.enumCtors,
+		EnumUnitVariants: c.enumUnits,
 	}, c.diags
 }
 
@@ -173,6 +179,7 @@ type checker struct {
 	vecCalls   map[*ast.CallExpr]VecCallTarget
 	callTgts   map[*ast.CallExpr]string
 	enumCtors  map[*ast.CallExpr]EnumCtorTarget
+	enumUnits  map[*ast.MemberExpr]EnumCtorTarget
 
 	curFn     *ast.FuncDecl
 	curTyVars map[string]bool

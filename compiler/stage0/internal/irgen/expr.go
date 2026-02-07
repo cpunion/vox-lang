@@ -236,21 +236,13 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 		return g.zeroValue(ret)
 	case *ast.MemberExpr:
 		// Unit enum variant value: `Enum.Variant`.
-		if ty := g.p.ExprTypes[ex]; ty.K == typecheck.TyEnum {
-			es, ok := g.p.EnumSigs[ty.Name]
-			if !ok {
-				return nil, fmt.Errorf("unknown enum: %s", ty.Name)
-			}
-			_, ok = es.VariantIndex[e.Name]
-			if !ok {
-				return nil, fmt.Errorf("unknown variant: %s", e.Name)
-			}
-			ety, err := g.irTypeFromChecked(ty)
+		if cu, ok := g.p.EnumUnitVariants[e]; ok {
+			ety, err := g.irTypeFromChecked(cu.Enum)
 			if err != nil {
 				return nil, err
 			}
 			tmp := g.newTemp()
-			g.emit(&ir.EnumInit{Dst: tmp, Ty: ety, Variant: e.Name})
+			g.emit(&ir.EnumInit{Dst: tmp, Ty: ety, Variant: cu.Variant})
 			return tmp, nil
 		}
 

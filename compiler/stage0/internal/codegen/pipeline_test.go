@@ -299,6 +299,51 @@ fn main() -> i32 {
 	}
 }
 
+func TestPipelineStructFieldOfEnumTypeCompilesAndRuns(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("cc not found")
+	}
+
+	checked := parseAndCheckWithStdlib(t, []*source.File{
+		source.NewFile("src/main.vox", `enum K { A, B }
+struct S { k: K }
+fn main() -> i32 {
+  let s: S = S { k: K.A };
+  let k: K = s.k;
+  return match k { K.A => 1, K.B => 2 };
+}`),
+	})
+	irp, err := irgen.Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrc, err := EmitC(irp, EmitOptions{EmitDriverMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	cPath := filepath.Join(dir, "a.c")
+	binPath := filepath.Join(dir, "a.out")
+	if err := writeFile(cPath, csrc); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(cc, "-std=c11", "-O0", "-g", cPath, "-o", binPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, string(out))
+	}
+	run := exec.Command(binPath)
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "1" {
+		t.Fatalf("expected output 1, got %q", got)
+	}
+}
+
 func TestPipelineNamedImportsForTypesAndEnumsCompilesAndRuns(t *testing.T) {
 	cc, err := exec.LookPath("cc")
 	if err != nil {

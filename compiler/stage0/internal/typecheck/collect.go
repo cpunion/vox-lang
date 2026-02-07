@@ -4,8 +4,8 @@ import (
 	"voxlang/internal/names"
 )
 
-func (c *checker) collectStructSigs() {
-	// First pass: register all struct names so field types can reference other structs.
+func (c *checker) collectNominalSigs() {
+	// First pass: register all nominal type names (struct + enum) so bodies can reference each other.
 	for _, st := range c.prog.Structs {
 		if st == nil || st.Span.File == nil {
 			continue
@@ -28,31 +28,6 @@ func (c *checker) collectStructSigs() {
 			FieldIndex: map[string]int{},
 		}
 	}
-
-	// Second pass: fill fields.
-	for _, st := range c.prog.Structs {
-		if st == nil || st.Span.File == nil {
-			continue
-		}
-		qname := names.QualifyFunc(st.Span.File.Name, st.Name)
-		sig := c.structSigs[qname]
-		sig.Fields = nil
-		sig.FieldIndex = map[string]int{}
-		for _, f := range st.Fields {
-			if _, exists := sig.FieldIndex[f.Name]; exists {
-				c.errorAt(f.Span, "duplicate field: "+f.Name)
-				continue
-			}
-			fty := c.typeFromAstInFile(f.Type, st.Span.File)
-			sig.FieldIndex[f.Name] = len(sig.Fields)
-			sig.Fields = append(sig.Fields, StructFieldSig{Pub: f.Pub, Name: f.Name, Ty: fty})
-		}
-		c.structSigs[qname] = sig
-	}
-}
-
-func (c *checker) collectEnumSigs() {
-	// First pass: register all enum names so payload types can reference other nominal types.
 	for _, en := range c.prog.Enums {
 		if en == nil || en.Span.File == nil {
 			continue
@@ -75,8 +50,31 @@ func (c *checker) collectEnumSigs() {
 			VariantIndex: map[string]int{},
 		}
 	}
+}
 
-	// Second pass: fill variants.
+func (c *checker) fillStructSigs() {
+	for _, st := range c.prog.Structs {
+		if st == nil || st.Span.File == nil {
+			continue
+		}
+		qname := names.QualifyFunc(st.Span.File.Name, st.Name)
+		sig := c.structSigs[qname]
+		sig.Fields = nil
+		sig.FieldIndex = map[string]int{}
+		for _, f := range st.Fields {
+			if _, exists := sig.FieldIndex[f.Name]; exists {
+				c.errorAt(f.Span, "duplicate field: "+f.Name)
+				continue
+			}
+			fty := c.typeFromAstInFile(f.Type, st.Span.File)
+			sig.FieldIndex[f.Name] = len(sig.Fields)
+			sig.Fields = append(sig.Fields, StructFieldSig{Pub: f.Pub, Name: f.Name, Ty: fty})
+		}
+		c.structSigs[qname] = sig
+	}
+}
+
+func (c *checker) fillEnumSigs() {
 	for _, en := range c.prog.Enums {
 		if en == nil || en.Span.File == nil {
 			continue

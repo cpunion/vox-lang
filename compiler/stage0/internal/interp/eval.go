@@ -339,19 +339,9 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		}
 		return rt.call(target, args)
 	case *ast.MemberExpr:
-		if ty, ok := rt.prog.ExprTypes[ex]; ok && ty.K == typecheck.TyEnum {
-			es, ok := rt.prog.EnumSigs[ty.Name]
-			if !ok {
-				return unit(), fmt.Errorf("unknown enum: %s", ty.Name)
-			}
-			tag, ok := es.VariantIndex[e.Name]
-			if !ok {
-				return unit(), fmt.Errorf("unknown variant: %s", e.Name)
-			}
-			if len(es.Variants[tag].Fields) != 0 {
-				return unit(), fmt.Errorf("non-unit variant requires constructor call")
-			}
-			return Value{K: VEnum, E: ty.Name, T: tag}, nil
+		// Unit enum variant value: `Enum.Variant`.
+		if cu, ok := rt.prog.EnumUnitVariants[e]; ok {
+			return Value{K: VEnum, E: cu.Enum.Name, T: cu.Tag}, nil
 		}
 
 		recv, err := rt.evalExpr(e.Recv)
