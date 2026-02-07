@@ -21,7 +21,7 @@ func TestStage1ToolchainBuildsMultiModuleProgram(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "src", "a"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	mainSrc := "import \"a\" as a\nfn main() -> i32 { return a.one(); }\n"
+	mainSrc := "import \"std/prelude\" as prelude\nimport \"a\" as a\nfn main() -> i32 { prelude.assert(true); return a.one(); }\n"
 	aSrc := "pub fn one() -> i32 { return 1; }\n"
 	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte(mainSrc), 0o644); err != nil {
 		t.Fatalf("write main: %v", err)

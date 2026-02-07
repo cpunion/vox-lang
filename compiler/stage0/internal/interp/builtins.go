@@ -32,6 +32,15 @@ func (rt *Runtime) callBuiltin(name string, args []Value) (Value, bool, error) {
 			out = append(out, Value{K: VString, S: a})
 		}
 		return Value{K: VVec, A: out}, true, nil
+	case "__exe_path":
+		if len(args) != 0 {
+			return unit(), true, fmt.Errorf("__exe_path expects ()")
+		}
+		p, err := os.Executable()
+		if err != nil {
+			return unit(), true, err
+		}
+		return Value{K: VString, S: p}, true, nil
 	case "__read_file":
 		if len(args) != 1 || args[0].K != VString {
 			return unit(), true, fmt.Errorf("__read_file expects (String)")

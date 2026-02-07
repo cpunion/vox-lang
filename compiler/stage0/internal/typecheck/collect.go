@@ -113,6 +113,7 @@ func (c *checker) collectFuncSigs() {
 	c.funcSigs["__exec"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyI32}}
 	c.funcSigs["__args"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
 	c.funcSigs["__walk_vox_files"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
+	c.funcSigs["__exe_path"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyString}}
 
 	for _, fn := range c.prog.Funcs {
 		qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)
