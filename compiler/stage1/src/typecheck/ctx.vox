@@ -61,6 +61,15 @@ pub fn new_ctx() -> Ctx {
   let r3: InternResult = intern_ty(c, ir.ty_i32()); c = r3.ctx; c.ty_i32 = r3.idx;
   let r4: InternResult = intern_ty(c, ir.ty_i64()); c = r4.ctx; c.ty_i64 = r4.idx;
   let r5: InternResult = intern_ty(c, ir.ty_string()); c = r5.ctx; c.ty_string = r5.idx;
+
+  // Ensure common `Vec[T]` instantiations exist even when not explicitly mentioned
+  // in type annotations, so generic inference can return `Vec[i32]` etc.
+  let rv0: InternResult = intern_ty(c, ir.ty_vec(c.ty_unit)); c = rv0.ctx;
+  let rv1: InternResult = intern_ty(c, ir.ty_vec(c.ty_bool)); c = rv1.ctx;
+  let rv2: InternResult = intern_ty(c, ir.ty_vec(c.ty_i32)); c = rv2.ctx;
+  let rv3: InternResult = intern_ty(c, ir.ty_vec(c.ty_i64)); c = rv3.ctx;
+  let rv4: InternResult = intern_ty(c, ir.ty_vec(c.ty_string)); c = rv4.ctx;
+
   return c;
 }
 
@@ -69,6 +78,13 @@ fn typename_is0(tn: ast.TypeName, s: String) -> bool {
 }
 
 pub struct ResolveTyResult { pub ctx: Ctx, pub ok: bool, pub idx: i32 }
+
+pub fn intern_vec(ctx: Ctx, elem: i32) -> ResolveTyResult {
+  let mut c: Ctx = ctx;
+  let r: InternResult = intern_ty(c, ir.ty_vec(elem));
+  c = r.ctx;
+  return ResolveTyResult { ctx: c, ok: true, idx: r.idx };
+}
 
 pub fn resolve_type(ctx: Ctx, w: World, cur_mod: String, aliases: Vec[ImportAlias], type_params: Vec[String], tn: ast.TypeName) -> ResolveTyResult {
   let mut c: Ctx = ctx;
@@ -99,6 +115,9 @@ pub fn resolve_type(ctx: Ctx, w: World, cur_mod: String, aliases: Vec[ImportAlia
     if !r0.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     let ir0: InternResult = intern_ty(c, ir.ty_vec(r0.idx));
     c = ir0.ctx;
+    // Also pre-intern one more level: `Vec[Vec[T]]`.
+    let _ir1: InternResult = intern_ty(c, ir.ty_vec(ir0.idx));
+    c = _ir1.ctx;
     return ResolveTyResult { ctx: c, ok: true, idx: ir0.idx };
   }
 
@@ -130,28 +149,34 @@ pub fn resolve_type(ctx: Ctx, w: World, cur_mod: String, aliases: Vec[ImportAlia
   let m: WorldModule = w.mods.get(fm.idx);
   // struct
   let mut i: i32 = 0;
-  while i < m.prog.structs.len() {
-    let sd: ast.StructDecl = m.prog.structs.get(i);
-    if sd.name == name {
-      if mod_path != cur_mod && !sd.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
-      let ir1: InternResult = intern_ty(c, ir.ty_struct(mod_path, name));
-      c = ir1.ctx;
-      return ResolveTyResult { ctx: c, ok: true, idx: ir1.idx };
+    while i < m.prog.structs.len() {
+      let sd: ast.StructDecl = m.prog.structs.get(i);
+      if sd.name == name {
+        if mod_path != cur_mod && !sd.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+        let ir1: InternResult = intern_ty(c, ir.ty_struct(mod_path, name));
+        c = ir1.ctx;
+        // Pre-intern `Vec[Struct]` and `Vec[Vec[Struct]]` so generics can build collections.
+        let iv0: InternResult = intern_ty(c, ir.ty_vec(ir1.idx)); c = iv0.ctx;
+        let iv1: InternResult = intern_ty(c, ir.ty_vec(iv0.idx)); c = iv1.ctx;
+        return ResolveTyResult { ctx: c, ok: true, idx: ir1.idx };
+      }
+      i = i + 1;
     }
-    i = i + 1;
-  }
   // enum
   i = 0;
-  while i < m.prog.enums.len() {
-    let ed: ast.EnumDecl = m.prog.enums.get(i);
-    if ed.name == name {
-      if mod_path != cur_mod && !ed.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
-      let ir2: InternResult = intern_ty(c, ir.ty_enum(mod_path, name));
-      c = ir2.ctx;
-      return ResolveTyResult { ctx: c, ok: true, idx: ir2.idx };
+    while i < m.prog.enums.len() {
+      let ed: ast.EnumDecl = m.prog.enums.get(i);
+      if ed.name == name {
+        if mod_path != cur_mod && !ed.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+        let ir2: InternResult = intern_ty(c, ir.ty_enum(mod_path, name));
+        c = ir2.ctx;
+        // Pre-intern `Vec[Enum]` and `Vec[Vec[Enum]]`.
+        let iv0: InternResult = intern_ty(c, ir.ty_vec(ir2.idx)); c = iv0.ctx;
+        let iv1: InternResult = intern_ty(c, ir.ty_vec(iv0.idx)); c = iv1.ctx;
+        return ResolveTyResult { ctx: c, ok: true, idx: ir2.idx };
+      }
+      i = i + 1;
     }
-    i = i + 1;
-  }
   return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
 }
 
