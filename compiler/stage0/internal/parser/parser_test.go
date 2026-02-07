@@ -22,7 +22,7 @@ func TestParseMain(t *testing.T) {
 }
 
 func TestParsePathCall(t *testing.T) {
-	f := source.NewFile("test.vox", `fn main() -> i32 { return dep::one(); }`)
+	f := source.NewFile("test.vox", `fn main() -> i32 { return dep.one(); }`)
 	prog, diags := Parse(f)
 	if diags != nil && len(diags.Items) > 0 {
 		t.Fatalf("unexpected diags: %+v", diags.Items)

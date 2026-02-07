@@ -50,7 +50,8 @@ type CheckedProgram struct {
 	Prog      *ast.Program
 	FuncSigs  map[string]FuncSig
 	ExprTypes map[ast.Expr]Type
-	// CallTargets stores the resolved function name (possibly qualified, e.g. "dep::foo")
+	// CallTargets stores the resolved function name (possibly qualified, e.g. "dep::foo").
+	// Note: Vox surface syntax may use `dep.foo(...)`; it still resolves to `dep::foo` internally.
 	// for each call expression.
 	CallTargets map[*ast.CallExpr]string
 }
@@ -310,7 +311,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 		case *ast.PathExpr:
 			if len(cal.Parts) != 2 {
-				c.errorAt(e.S, "stage0 only supports `pkg::fn(...)` calls for qualified names")
+				c.errorAt(e.S, "stage0 only supports `pkg.fn(...)` calls for qualified names")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
 			target = strings.Join(cal.Parts, "::")

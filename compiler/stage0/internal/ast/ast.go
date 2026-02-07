@@ -116,7 +116,7 @@ type IdentExpr struct {
 func (*IdentExpr) exprNode()           {}
 func (e *IdentExpr) Span() source.Span { return e.S }
 
-// PathExpr represents a qualified path like `dep::foo`.
+// PathExpr represents a qualified path like `dep.foo` (or temporarily `dep::foo`).
 // Stage0 uses it only for function calls into dependency packages.
 type PathExpr struct {
 	Parts []string

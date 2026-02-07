@@ -254,13 +254,29 @@ func (p *Parser) parsePrefix() ast.Expr {
 		p.advance()
 		parts := []string{tok.Lexeme}
 		span := tok.Span
-		for p.match(lexer.TokenColonColon) {
-			id := p.expect(lexer.TokenIdent, "expected identifier after `::`")
-			if id.Kind != lexer.TokenIdent {
-				break
+		for {
+			if p.match(lexer.TokenDot) {
+				id := p.expect(lexer.TokenIdent, "expected identifier after `.`")
+				if id.Kind != lexer.TokenIdent {
+					break
+				}
+				parts = append(parts, id.Lexeme)
+				span = joinSpan(span, id.Span)
+				continue
 			}
-			parts = append(parts, id.Lexeme)
-			span = joinSpan(span, id.Span)
+			// Temporary compatibility: allow `pkg::fn` as well, but only when followed by an identifier.
+			// This avoids eating `Vec::[T]` (turbofish) which will be parsed separately later.
+			if p.at(lexer.TokenColonColon) && p.peekN(1).Kind == lexer.TokenIdent {
+				p.advance()
+				id := p.expect(lexer.TokenIdent, "expected identifier after `::`")
+				if id.Kind != lexer.TokenIdent {
+					break
+				}
+				parts = append(parts, id.Lexeme)
+				span = joinSpan(span, id.Span)
+				continue
+			}
+			break
 		}
 		var ex ast.Expr
 		if len(parts) == 1 {

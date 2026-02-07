@@ -29,6 +29,16 @@ import { read_file } from "utils/io"
 import "utils" as u
 ```
 
+导入后，模块名（或别名）作为命名空间，通过 `.` 访问其中的符号：
+
+```vox
+import "utils"
+utils.helper()
+
+import "utils" as u
+u.helper()
+```
+
 ## 导出
 
 ```vox
@@ -46,4 +56,3 @@ pub struct Api {
 
 - 包清单文件：`vox.toml`（字段与语义待定）
 - `src/main.vox` 作为可执行入口，`src/lib.vox` 作为库入口（可同时存在）
-
