@@ -46,6 +46,16 @@ import "utils" as u
 fn f(p: u.Point) -> i32 { return p.x; }
 ```
 
+命名导入也可以导入函数/类型（Stage0 最小子集）：
+
+```vox
+import { read_file, Point } from "utils/io"
+fn main() -> i32 {
+  let p: Point = Point { x: 1, y: 2 };
+  return p.x;
+}
+```
+
 规则（当前决策）：
 
 - 使用 `pkg.name(...)` 形式访问依赖包符号时，必须在同一文件中先写 `import "pkg"`（或 `import "pkg" as alias` 后用 `alias.name(...)`）。

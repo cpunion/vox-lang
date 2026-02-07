@@ -142,6 +142,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		opts:       opts,
 		imports:    map[*source.File]map[string]importTarget{},
 		namedFuncs: map[*source.File]map[string]string{},
+		namedTypes: map[*source.File]map[string]Type{},
 	}
 	c.collectImports()
 	c.collectStructSigs()
@@ -182,6 +183,8 @@ type checker struct {
 
 	// Named function imports: file -> localName -> qualifiedTarget.
 	namedFuncs map[*source.File]map[string]string
+	// Named type imports: file -> localName -> qualified type.
+	namedTypes map[*source.File]map[string]Type
 	pending    []pendingNamedImport
 }
 
@@ -504,10 +507,17 @@ func (c *checker) resolveNamedImports() {
 		if pi.File == nil {
 			continue
 		}
+		ownerPkg, ownerMod, _ := names.SplitOwnerAndModule(pi.File.Name)
+
 		m := c.namedFuncs[pi.File]
 		if m == nil {
 			m = map[string]string{}
 			c.namedFuncs[pi.File] = m
+		}
+		tm := c.namedTypes[pi.File]
+		if tm == nil {
+			tm = map[string]Type{}
+			c.namedTypes[pi.File] = tm
 		}
 		for _, nm := range pi.Names {
 			local := nm.Alias
@@ -517,22 +527,70 @@ func (c *checker) resolveNamedImports() {
 			if local == "" {
 				continue
 			}
-			if _, exists := m[local]; exists {
+
+			// Reject collisions with local module definitions.
+			qLocal := names.QualifyParts(ownerPkg, ownerMod, local)
+			if _, ok := c.funcSigs[qLocal]; ok {
+				c.errorAt(pi.Span, "import name conflicts with local definition: "+local)
+				continue
+			}
+			if _, ok := c.structSigs[qLocal]; ok {
+				c.errorAt(pi.Span, "import name conflicts with local definition: "+local)
+				continue
+			}
+			if _, ok := c.enumSigs[qLocal]; ok {
+				c.errorAt(pi.Span, "import name conflicts with local definition: "+local)
+				continue
+			}
+
+			if _, exists := m[local]; exists || tm[local].K != TyBad {
 				c.errorAt(pi.Span, "duplicate imported name: "+local)
 				continue
 			}
 
 			target := names.QualifyParts(pi.Tgt.Pkg, pi.Tgt.Mod, nm.Name)
-			sig, ok := c.funcSigs[target]
-			if !ok {
-				c.errorAt(pi.Span, "unknown imported function: "+target)
+
+			var found int
+			// function
+			if sig, ok := c.funcSigs[target]; ok {
+				found++
+				if !c.canAccess(pi.File, sig.OwnerPkg, sig.OwnerMod, sig.Pub) {
+					c.errorAt(pi.Span, "function is private: "+target)
+					continue
+				}
+				m[local] = target
+			}
+			// struct
+			if ss, ok := c.structSigs[target]; ok {
+				found++
+				if !c.canAccess(pi.File, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+					c.errorAt(pi.Span, "type is private: "+target)
+					continue
+				}
+				tm[local] = Type{K: TyStruct, Name: target}
+			}
+			// enum
+			if es, ok := c.enumSigs[target]; ok {
+				found++
+				if !c.canAccess(pi.File, es.OwnerPkg, es.OwnerMod, es.Pub) {
+					c.errorAt(pi.Span, "type is private: "+target)
+					continue
+				}
+				tm[local] = Type{K: TyEnum, Name: target}
+			}
+
+			if found == 0 {
+				c.errorAt(pi.Span, "unknown imported name: "+target)
 				continue
 			}
-			if !c.canAccess(pi.File, sig.OwnerPkg, sig.OwnerMod, sig.Pub) {
-				c.errorAt(pi.Span, "function is private: "+target)
+			if found > 1 {
+				// Keep it simple: avoid mixing namespaces in stage0.
+				c.errorAt(pi.Span, "ambiguous imported name: "+target)
+				// best-effort: drop any partial bindings
+				delete(m, local)
+				delete(tm, local)
 				continue
 			}
-			m[local] = target
 		}
 	}
 }
@@ -1134,6 +1192,11 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 						private = q1
 					}
 				}
+				if tm := c.namedTypes[file]; tm != nil {
+					if ty := tm[name]; ty.K == TyStruct || ty.K == TyEnum {
+						return ty
+					}
+				}
 				q2 := names.QualifyParts(pkg, nil, name)
 				if ss, ok := c.structSigs[q2]; ok {
 					if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
@@ -1277,6 +1340,15 @@ func (c *checker) resolveStructByParts(file *source.File, parts []string, s sour
 				private = q2
 			}
 		}
+		if file != nil {
+			if tm := c.namedTypes[file]; tm != nil {
+				if ty := tm[parts[0]]; ty.K == TyStruct {
+					if ss, ok := c.structSigs[ty.Name]; ok {
+						return ty, ss, true
+					}
+				}
+			}
+		}
 		if private != "" {
 			c.errorAt(s, "type is private: "+private)
 			return Type{K: TyBad}, StructSig{}, false
@@ -1314,6 +1386,15 @@ func (c *checker) findEnumByParts(file *source.File, parts []string) (Type, Enum
 		return Type{K: TyBad}, EnumSig{}, false
 	}
 	if len(parts) == 1 {
+		if file != nil {
+			if tm := c.namedTypes[file]; tm != nil {
+				if ty := tm[parts[0]]; ty.K == TyEnum {
+					if es, ok := c.enumSigs[ty.Name]; ok {
+						return ty, es, true
+					}
+				}
+			}
+		}
 		pkg, mod, _ := names.SplitOwnerAndModule(file.Name)
 		q1 := names.QualifyParts(pkg, mod, parts[0])
 		if es, ok := c.enumSigs[q1]; ok {

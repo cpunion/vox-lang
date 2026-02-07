@@ -400,3 +400,44 @@ fn main() -> i32 { return one(); }`),
 		t.Fatalf("expected private function diagnostic, got: %+v", tdiags.Items)
 	}
 }
+
+func TestNamedImportResolvesStructTypeInTypeAndLiteral(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import { S } from "dep"
+fn main() -> i32 {
+  let s: S = S { x: 1 };
+  return s.x;
+}`),
+		source.NewFile("dep/src/lib.vox", `pub struct S { pub x: i32 }`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestNamedImportResolvesEnumCtorAndMatch(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import { E } from "dep"
+fn main() -> i32 {
+  let x: E = E.A(41);
+  return match x {
+    E.A(v) => v + 1,
+    E.None => 0,
+  };
+}`),
+		source.NewFile("dep/src/lib.vox", `pub enum E { A(i32), None }`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
