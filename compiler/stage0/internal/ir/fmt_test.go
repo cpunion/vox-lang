@@ -53,6 +53,10 @@ func TestFmtStringInstrAndTerm(t *testing.T) {
 		{name: "enum_init_unit", ins: &EnumInit{Dst: &Temp{ID: 9}, Ty: Type{K: TEnum, Name: "E"}, Variant: "None"}, want: "%t9 = enum_init enum(E) None"},
 		{name: "enum_tag", ins: &EnumTag{Dst: &Temp{ID: 10}, Recv: t0}, want: "%t10 = enum_tag %t0"},
 		{name: "enum_payload", ins: &EnumPayload{Dst: &Temp{ID: 11}, Ty: Type{K: TI32}, Recv: t0, Variant: "A"}, want: "%t11 = enum_payload i32 %t0 A"},
+		{name: "vec_new", ins: &VecNew{Dst: &Temp{ID: 12}, Ty: Type{K: TVec, Elem: &Type{K: TI32}}, Elem: Type{K: TI32}}, want: "%t12 = vec_new vec(i32)"},
+		{name: "vec_push", ins: &VecPush{Recv: s0, Elem: Type{K: TI32}, Val: t0}, want: "vec_push $v0 %t0"},
+		{name: "vec_len", ins: &VecLen{Dst: &Temp{ID: 13}, Recv: s0}, want: "%t13 = vec_len $v0"},
+		{name: "vec_get", ins: &VecGet{Dst: &Temp{ID: 14}, Ty: Type{K: TI32}, Recv: s0, Idx: &ConstInt{Ty: Type{K: TI32}, V: 0}}, want: "%t14 = vec_get i32 $v0 0"},
 	}
 	for _, tc := range insCases {
 		t.Run("ins_"+tc.name, func(t *testing.T) {

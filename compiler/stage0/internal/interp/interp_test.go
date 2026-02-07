@@ -114,6 +114,19 @@ fn main() -> i32 {
 	}
 }
 
+func TestInterpVecPushLenGet(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+  let mut v: Vec[i32] = Vec();
+  v.push(41);
+  v.push(1);
+  return v.get(0) + v.get(1) + v.len();
+}`)
+	// 41 + 1 + 2
+	if out != "44" {
+		t.Fatalf("expected 44, got %q", out)
+	}
+}
+
 func runMain(t *testing.T, src string) string {
 	t.Helper()
 	f := source.NewFile("src/main.vox", src)

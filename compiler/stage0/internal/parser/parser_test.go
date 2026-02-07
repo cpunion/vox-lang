@@ -180,3 +180,15 @@ fn main() -> i32 {
 		t.Fatalf("unexpected diags: %+v", diags.Items)
 	}
 }
+
+func TestParseVecMethods(t *testing.T) {
+	f := source.NewFile("test.vox", `fn main() -> i32 {
+  let mut v: Vec[i32] = Vec();
+  v.push(1);
+  return v.get(0) + v.len();
+}`)
+	_, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+}

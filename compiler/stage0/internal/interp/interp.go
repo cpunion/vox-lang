@@ -20,6 +20,7 @@ const (
 	VString
 	VStruct
 	VEnum
+	VVec
 )
 
 type Value struct {
@@ -31,6 +32,7 @@ type Value struct {
 	E string           // VEnum qualified enum name
 	T int              // VEnum tag
 	P *Value           // VEnum payload (nil when no payload)
+	A []Value          // VVec elements
 }
 
 func unit() Value { return Value{K: VUnit} }
@@ -38,7 +40,14 @@ func unit() Value { return Value{K: VUnit} }
 func cloneValue(v Value) Value {
 	if v.K != VStruct {
 		if v.K != VEnum {
-			return v
+			if v.K != VVec {
+				return v
+			}
+			out := Value{K: VVec, A: make([]Value, 0, len(v.A))}
+			for _, e := range v.A {
+				out.A = append(out.A, cloneValue(e))
+			}
+			return out
 		}
 		out := Value{K: VEnum, E: v.E, T: v.T}
 		if v.P != nil {
@@ -413,6 +422,68 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		}
 		return unit(), fmt.Errorf("unreachable")
 	case *ast.CallExpr:
+		if vc, ok := rt.prog.VecCalls[e]; ok {
+			switch vc.Kind {
+			case typecheck.VecCallNew:
+				return Value{K: VVec, A: nil}, nil
+			case typecheck.VecCallPush:
+				if len(e.Args) != 1 {
+					return unit(), fmt.Errorf("Vec.push expects 1 arg")
+				}
+				v, err := rt.evalExpr(e.Args[0])
+				if err != nil {
+					return unit(), err
+				}
+				fr, ok := rt.lookup(vc.RecvName)
+				if !ok {
+					return unit(), fmt.Errorf("unknown variable: %s", vc.RecvName)
+				}
+				recv := fr[vc.RecvName]
+				if recv.K != VVec {
+					return unit(), fmt.Errorf("Vec.push requires vec receiver")
+				}
+				recv.A = append(recv.A, cloneValue(v))
+				fr[vc.RecvName] = recv
+				return unit(), nil
+			case typecheck.VecCallLen:
+				fr, ok := rt.lookup(vc.RecvName)
+				if !ok {
+					return unit(), fmt.Errorf("unknown variable: %s", vc.RecvName)
+				}
+				recv := fr[vc.RecvName]
+				if recv.K != VVec {
+					return unit(), fmt.Errorf("Vec.len requires vec receiver")
+				}
+				return Value{K: VInt, I: int64(len(recv.A))}, nil
+			case typecheck.VecCallGet:
+				if len(e.Args) != 1 {
+					return unit(), fmt.Errorf("Vec.get expects 1 arg")
+				}
+				idxV, err := rt.evalExpr(e.Args[0])
+				if err != nil {
+					return unit(), err
+				}
+				if idxV.K != VInt {
+					return unit(), fmt.Errorf("Vec.get index must be int")
+				}
+				idx := int(idxV.I)
+				fr, ok := rt.lookup(vc.RecvName)
+				if !ok {
+					return unit(), fmt.Errorf("unknown variable: %s", vc.RecvName)
+				}
+				recv := fr[vc.RecvName]
+				if recv.K != VVec {
+					return unit(), fmt.Errorf("Vec.get requires vec receiver")
+				}
+				if idx < 0 || idx >= len(recv.A) {
+					return unit(), fmt.Errorf("Vec.get index out of bounds")
+				}
+				return cloneValue(recv.A[idx]), nil
+			default:
+				return unit(), fmt.Errorf("unsupported vec call")
+			}
+		}
+
 		if ctor, ok := rt.prog.EnumCtors[e]; ok {
 			if ctor.Payload.K == typecheck.TyUnit {
 				return Value{K: VEnum, E: ctor.Enum.Name, T: ctor.Tag}, nil
@@ -583,6 +654,9 @@ func valueEq(a, b Value) bool {
 			return false
 		}
 		return valueEq(*a.P, *b.P)
+	case VVec:
+		// Not needed for stage0 yet; keep it conservative.
+		return false
 	default:
 		return false
 	}

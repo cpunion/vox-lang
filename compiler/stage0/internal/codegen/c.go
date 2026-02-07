@@ -28,6 +28,30 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	out.WriteString("#include <stdlib.h>\n\n")
 	out.WriteString("#include <string.h>\n\n")
 
+	// Minimal Vec runtime (stage0): by-value elements, no drop glue.
+	out.WriteString("typedef struct { uint8_t* data; int32_t len; int32_t cap; int32_t elem_size; } vox_vec;\n")
+	out.WriteString("static vox_vec vox_vec_new(int32_t elem_size) {\n")
+	out.WriteString("  vox_vec v; v.data = NULL; v.len = 0; v.cap = 0; v.elem_size = elem_size; return v;\n")
+	out.WriteString("}\n")
+	out.WriteString("static void vox_vec_grow(vox_vec* v, int32_t new_cap) {\n")
+	out.WriteString("  if (new_cap <= v->cap) return;\n")
+	out.WriteString("  if (new_cap < 4) new_cap = 4;\n")
+	out.WriteString("  size_t bytes = (size_t)new_cap * (size_t)v->elem_size;\n")
+	out.WriteString("  uint8_t* p = (uint8_t*)realloc(v->data, bytes);\n")
+	out.WriteString("  if (!p) { fprintf(stderr, \"out of memory\\n\"); exit(1); }\n")
+	out.WriteString("  v->data = p; v->cap = new_cap;\n")
+	out.WriteString("}\n")
+	out.WriteString("static void vox_vec_push(vox_vec* v, const void* elem) {\n")
+	out.WriteString("  if (v->len == v->cap) { int32_t nc = v->cap == 0 ? 4 : v->cap * 2; vox_vec_grow(v, nc); }\n")
+	out.WriteString("  memcpy(v->data + (size_t)v->len * (size_t)v->elem_size, elem, (size_t)v->elem_size);\n")
+	out.WriteString("  v->len++;\n")
+	out.WriteString("}\n")
+	out.WriteString("static int32_t vox_vec_len(const vox_vec* v) { return v->len; }\n")
+	out.WriteString("static void vox_vec_get(const vox_vec* v, int32_t idx, void* out) {\n")
+	out.WriteString("  if (idx < 0 || idx >= v->len) { fprintf(stderr, \"vec index out of bounds\\n\"); exit(1); }\n")
+	out.WriteString("  memcpy(out, v->data + (size_t)idx * (size_t)v->elem_size, (size_t)v->elem_size);\n")
+	out.WriteString("}\n\n")
+
 	// Runtime builtins
 	out.WriteString("static void vox_builtin_assert(bool cond) {\n")
 	out.WriteString("  if (!cond) { fprintf(stderr, \"assertion failed\\n\"); exit(1); }\n")
@@ -150,6 +174,12 @@ func emitFunc(out *bytes.Buffer, p *ir.Program, f *ir.Func) error {
 			case *ir.EnumTag:
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TI32}
 			case *ir.EnumPayload:
+				tempTypes[i.Dst.ID] = i.Ty
+			case *ir.VecNew:
+				tempTypes[i.Dst.ID] = i.Ty
+			case *ir.VecLen:
+				tempTypes[i.Dst.ID] = ir.Type{K: ir.TI32}
+			case *ir.VecGet:
 				tempTypes[i.Dst.ID] = i.Ty
 			case *ir.Call:
 				if i.Ret.K != ir.TUnit && i.Dst != nil {
@@ -408,6 +438,39 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		out.WriteString(".payload.")
 		out.WriteString(cIdent(i.Variant))
 		out.WriteString("._0;\n")
+		return nil
+	case *ir.VecNew:
+		if i.Ty.K != ir.TVec || i.Ty.Elem == nil {
+			return fmt.Errorf("vec_new expects vec type")
+		}
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = vox_vec_new((int32_t)sizeof(")
+		out.WriteString(cType(*i.Ty.Elem))
+		out.WriteString("));\n")
+		return nil
+	case *ir.VecPush:
+		out.WriteString("  vox_vec_push(&")
+		out.WriteString(cSlotName(i.Recv.ID))
+		out.WriteString(", &")
+		out.WriteString(cValue(i.Val))
+		out.WriteString(");\n")
+		return nil
+	case *ir.VecLen:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = vox_vec_len(&")
+		out.WriteString(cSlotName(i.Recv.ID))
+		out.WriteString(");\n")
+		return nil
+	case *ir.VecGet:
+		out.WriteString("  vox_vec_get(&")
+		out.WriteString(cSlotName(i.Recv.ID))
+		out.WriteString(", ")
+		out.WriteString(cValue(i.Idx))
+		out.WriteString(", &")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(");\n")
 		return nil
 	case *ir.Call:
 		// builtin assert
@@ -710,6 +773,8 @@ func cType(t ir.Type) string {
 		return cStructTypeName(t.Name)
 	case ir.TEnum:
 		return cEnumTypeName(t.Name)
+	case ir.TVec:
+		return "vox_vec"
 	default:
 		return "void"
 	}

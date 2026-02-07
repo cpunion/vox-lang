@@ -18,12 +18,15 @@ const (
 	TString
 	TStruct
 	TEnum
+	TVec
 )
 
 type Type struct {
 	K TypeKind
 	// Name is set when K == TStruct or K == TEnum (qualified name).
 	Name string
+	// Elem is set when K == TVec.
+	Elem *Type
 }
 
 func (t Type) String() string {
@@ -42,6 +45,11 @@ func (t Type) String() string {
 		return "struct(" + t.Name + ")"
 	case TEnum:
 		return "enum(" + t.Name + ")"
+	case TVec:
+		if t.Elem == nil {
+			return "vec(<bad>)"
+		}
+		return "vec(" + t.Elem.String() + ")"
 	default:
 		return "<bad>"
 	}
@@ -388,6 +396,50 @@ type EnumPayload struct {
 func (*EnumPayload) instrNode() {}
 func (i *EnumPayload) fmtString() string {
 	return fmt.Sprintf("%s = enum_payload %s %s %s", i.Dst.fmtString(), i.Ty.String(), i.Recv.fmtString(), i.Variant)
+}
+
+type VecNew struct {
+	Dst  *Temp
+	Ty   Type // vec type
+	Elem Type // element type
+}
+
+func (*VecNew) instrNode() {}
+func (i *VecNew) fmtString() string {
+	return fmt.Sprintf("%s = vec_new %s", i.Dst.fmtString(), i.Ty.String())
+}
+
+type VecPush struct {
+	Recv *Slot // mutated in-place
+	Elem Type
+	Val  Value
+}
+
+func (*VecPush) instrNode() {}
+func (i *VecPush) fmtString() string {
+	return fmt.Sprintf("vec_push %s %s", i.Recv.fmtString(), i.Val.fmtString())
+}
+
+type VecLen struct {
+	Dst  *Temp
+	Recv *Slot
+}
+
+func (*VecLen) instrNode() {}
+func (i *VecLen) fmtString() string {
+	return fmt.Sprintf("%s = vec_len %s", i.Dst.fmtString(), i.Recv.fmtString())
+}
+
+type VecGet struct {
+	Dst  *Temp
+	Ty   Type
+	Recv *Slot
+	Idx  Value
+}
+
+func (*VecGet) instrNode() {}
+func (i *VecGet) fmtString() string {
+	return fmt.Sprintf("%s = vec_get %s %s %s", i.Dst.fmtString(), i.Ty.String(), i.Recv.fmtString(), i.Idx.fmtString())
 }
 
 type Call struct {

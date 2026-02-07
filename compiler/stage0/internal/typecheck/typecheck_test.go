@@ -441,3 +441,19 @@ fn main() -> i32 {
 		t.Fatalf("type diags: %+v", tdiags.Items)
 	}
 }
+
+func TestVecBasicTypecheck(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main() -> i32 {
+  let mut v: Vec[i32] = Vec();
+  v.push(41);
+  return v.get(0) + v.len();
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}

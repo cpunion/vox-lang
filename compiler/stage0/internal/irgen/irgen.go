@@ -220,6 +220,15 @@ func (g *gen) irTypeFromChecked(t typecheck.Type) (ir.Type, error) {
 		return ir.Type{K: ir.TStruct, Name: t.Name}, nil
 	case typecheck.TyEnum:
 		return ir.Type{K: ir.TEnum, Name: t.Name}, nil
+	case typecheck.TyVec:
+		if t.Elem == nil {
+			return ir.Type{}, fmt.Errorf("vec missing element type")
+		}
+		elem, err := g.irTypeFromChecked(*t.Elem)
+		if err != nil {
+			return ir.Type{}, err
+		}
+		return ir.Type{K: ir.TVec, Elem: &elem}, nil
 	default:
 		return ir.Type{}, fmt.Errorf("unsupported type")
 	}
@@ -525,6 +534,66 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			return nil, fmt.Errorf("unsupported binary op: %s", e.Op)
 		}
 	case *ast.CallExpr:
+		// Vec ops are special-cased in stage0 and lowered to dedicated IR.
+		if vc, ok := g.p.VecCalls[e]; ok {
+			switch vc.Kind {
+			case typecheck.VecCallNew:
+				ty := g.p.ExprTypes[ex]
+				irty, err := g.irTypeFromChecked(ty)
+				if err != nil {
+					return nil, err
+				}
+				elem, err := g.irTypeFromChecked(vc.Elem)
+				if err != nil {
+					return nil, err
+				}
+				tmp := g.newTemp()
+				g.emit(&ir.VecNew{Dst: tmp, Ty: irty, Elem: elem})
+				return tmp, nil
+			case typecheck.VecCallPush:
+				slot, ok := g.lookup(vc.RecvName)
+				if !ok {
+					return nil, fmt.Errorf("unknown vec receiver: %s", vc.RecvName)
+				}
+				val, err := g.genExpr(e.Args[0])
+				if err != nil {
+					return nil, err
+				}
+				elem, err := g.irTypeFromChecked(vc.Elem)
+				if err != nil {
+					return nil, err
+				}
+				g.emit(&ir.VecPush{Recv: slot, Elem: elem, Val: val})
+				return nil, nil
+			case typecheck.VecCallLen:
+				slot, ok := g.lookup(vc.RecvName)
+				if !ok {
+					return nil, fmt.Errorf("unknown vec receiver: %s", vc.RecvName)
+				}
+				tmp := g.newTemp()
+				g.emit(&ir.VecLen{Dst: tmp, Recv: slot})
+				return tmp, nil
+			case typecheck.VecCallGet:
+				slot, ok := g.lookup(vc.RecvName)
+				if !ok {
+					return nil, fmt.Errorf("unknown vec receiver: %s", vc.RecvName)
+				}
+				idx, err := g.genExpr(e.Args[0])
+				if err != nil {
+					return nil, err
+				}
+				elem, err := g.irTypeFromChecked(vc.Elem)
+				if err != nil {
+					return nil, err
+				}
+				tmp := g.newTemp()
+				g.emit(&ir.VecGet{Dst: tmp, Ty: elem, Recv: slot, Idx: idx})
+				return tmp, nil
+			default:
+				return nil, fmt.Errorf("unsupported vec call kind")
+			}
+		}
+
 		// Enum constructors are lowered as enum_init.
 		if ctor, ok := g.p.EnumCtors[e]; ok {
 			ety, err := g.irTypeFromChecked(ctor.Enum)
@@ -818,6 +887,13 @@ func (g *gen) zeroValue(t ir.Type) (ir.Value, error) {
 		}
 		tmp := g.newTemp()
 		g.emit(&ir.EnumInit{Dst: tmp, Ty: t, Variant: v0.Name, Payload: payload})
+		return tmp, nil
+	case ir.TVec:
+		if t.Elem == nil {
+			return nil, fmt.Errorf("vec missing element type")
+		}
+		tmp := g.newTemp()
+		g.emit(&ir.VecNew{Dst: tmp, Ty: t, Elem: *t.Elem})
 		return tmp, nil
 	default:
 		return &ir.ConstInt{Ty: t, V: 0}, nil
