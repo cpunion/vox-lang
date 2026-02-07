@@ -22,4 +22,4 @@ Notes:
 
 - The language spec lives in `../../docs/`.
 - Generics, comptime, macros, imports, and stdlib are not implemented in stage0 yet.
-
+- Stage1 is the self-hosting Vox compiler; Stage2 is the toolchain phase (fmt/lint/doc/LSP/IR/backends).
