@@ -16,5 +16,7 @@
 4. IR v0：对齐 `docs/19-ir-spec.md`，先跑通从 AST 到 IR。
 5. 后端：先复用 stage0 的 C 后端策略（tagged union、by-value struct），能产出可执行文件。
 
-说明：在 Stage0 子集内暂时没有 substring/切片，因此 lexer token 先用 `start/end`（byte offset）引用源文本，不直接携带 `lexeme` 字符串。
+说明：
 
+- Stage1 lexer 的 `Token` 不直接携带 `lexeme`，而是携带 `[start,end)` 的 byte offset。解析器需要通过 `source.slice(start, end)` 拉取 token 文本。
+- Stage0 已提供 `String.slice(start, end) -> String` 作为过渡能力；其内存行为在 Stage0/C 后端下会产生分配（临时泄漏可接受，后续再用切片/真实字符串模型替换）。

@@ -1,0 +1,186 @@
+import "ast" as ast
+import "lex" as lex
+
+pub enum ParseError {
+  None,
+  Lex(lex.LexError),
+  UnexpectedToken(lex.TokenKind, lex.TokenKind, i32), // expected, got, byte offset
+}
+
+pub struct ParseResult {
+  pub prog: ast.Program,
+  pub err: ParseError,
+}
+
+struct Parser {
+  text: String,
+  toks: Vec[lex.Token],
+  pos: i32,
+  has_err: bool,
+  err: ParseError,
+}
+
+struct AdvanceResult { p: Parser, tok: lex.Token }
+struct ParseIdentResult { p: Parser, name: String }
+struct ParseTypeResult { p: Parser, ty: ast.TypeName }
+struct ParseExprResult { p: Parser, ex: ast.Expr }
+struct ParseStmtResult { p: Parser, st: ast.Stmt }
+struct ParseBlockResult { p: Parser, b: ast.Block }
+struct ParseFnResult { p: Parser, f: ast.FuncDecl }
+struct ParseProgramResult { p: Parser, prog: ast.Program }
+
+fn dummy_token() -> lex.Token {
+  return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0 };
+}
+
+fn lex_err_none(e: lex.LexError) -> bool {
+  return match e {
+    lex.LexError.None => true,
+    _ => false,
+  };
+}
+
+fn peek(p: Parser) -> lex.Token {
+  let toks: Vec[lex.Token] = p.toks;
+  if p.pos < toks.len() { return toks.get(p.pos); }
+  return dummy_token();
+}
+
+fn peek_kind(p: Parser) -> lex.TokenKind {
+  return peek(p).kind;
+}
+
+fn kind_is(k: lex.TokenKind, want: lex.TokenKind) -> bool {
+  return lex.token_kind_eq(k, want);
+}
+
+fn advance(p: Parser) -> AdvanceResult {
+  let tok: lex.Token = peek(p);
+  let mut q: Parser = p;
+  let toks: Vec[lex.Token] = q.toks;
+  if q.pos < toks.len() { q.pos = q.pos + 1; }
+  return AdvanceResult { p: q, tok: tok };
+}
+
+fn expect(p: Parser, want: lex.TokenKind) -> AdvanceResult {
+  if p.has_err {
+    return AdvanceResult { p: p, tok: dummy_token() };
+  }
+  let got: lex.TokenKind = peek_kind(p);
+  if kind_is(got, want) {
+    return advance(p);
+  }
+  let mut q: Parser = p;
+  let at: i32 = peek(p).start;
+  q.has_err = true;
+  q.err = ParseError.UnexpectedToken(want, got, at);
+  return AdvanceResult { p: q, tok: dummy_token() };
+}
+
+fn lexeme(p: Parser, t: lex.Token) -> String {
+  let text: String = p.text;
+  return text.slice(t.start, t.end);
+}
+
+fn parse_ident(p: Parser) -> ParseIdentResult {
+  let ar: AdvanceResult = expect(p, lex.TokenKind.Ident);
+  let name: String = lexeme(ar.p, ar.tok);
+  return ParseIdentResult { p: ar.p, name: name };
+}
+
+fn parse_type_name(p: Parser) -> ParseTypeResult {
+  let r: ParseIdentResult = parse_ident(p);
+  return ParseTypeResult { p: r.p, ty: ast.TypeName { name: r.name } };
+}
+
+fn parse_expr(p: Parser) -> ParseExprResult {
+  if p.has_err {
+    return ParseExprResult { p: p, ex: ast.Expr.Int(0) };
+  }
+
+  let k: lex.TokenKind = peek_kind(p);
+  if kind_is(k, lex.TokenKind.Int) {
+    let ar: AdvanceResult = advance(p);
+    let tok: lex.Token = ar.tok;
+    let mut n: i32 = 0;
+    let mut i: i32 = tok.start;
+    let text: String = p.text;
+    while i < tok.end {
+      let d: i32 = text.byte_at(i) - 48;
+      n = n * 10 + d;
+      i = i + 1;
+    }
+    return ParseExprResult { p: ar.p, ex: ast.Expr.Int(n) };
+  }
+  if kind_is(k, lex.TokenKind.Ident) {
+    let r: ParseIdentResult = parse_ident(p);
+    return ParseExprResult { p: r.p, ex: ast.Expr.Ident(r.name) };
+  }
+
+  let mut q: Parser = p;
+  let at: i32 = peek(p).start;
+  q.has_err = true;
+  q.err = ParseError.UnexpectedToken(lex.TokenKind.Ident, k, at);
+  return ParseExprResult { p: q, ex: ast.Expr.Int(0) };
+}
+
+fn parse_stmt(p: Parser) -> ParseStmtResult {
+  let k: lex.TokenKind = peek_kind(p);
+  if kind_is(k, lex.TokenKind.KwReturn) {
+    let ar1: AdvanceResult = advance(p);
+    let r2: ParseExprResult = parse_expr(ar1.p);
+    let _ar3: AdvanceResult = expect(r2.p, lex.TokenKind.Semicolon);
+    return ParseStmtResult { p: _ar3.p, st: ast.Stmt.Return(r2.ex) };
+  }
+
+  let mut q: Parser = p;
+  let at: i32 = peek(p).start;
+  q.has_err = true;
+  q.err = ParseError.UnexpectedToken(lex.TokenKind.KwReturn, k, at);
+  return ParseStmtResult { p: q, st: ast.Stmt.Return(ast.Expr.Int(0)) };
+}
+
+fn parse_block(p: Parser) -> ParseBlockResult {
+  let ar1: AdvanceResult = expect(p, lex.TokenKind.LBrace);
+  let mut q: Parser = ar1.p;
+  let mut stmts: Vec[ast.Stmt] = Vec();
+  while !q.has_err && !kind_is(peek_kind(q), lex.TokenKind.RBrace) && !kind_is(peek_kind(q), lex.TokenKind.Eof) {
+    let r: ParseStmtResult = parse_stmt(q);
+    q = r.p;
+    stmts.push(r.st);
+  }
+  let ar2: AdvanceResult = expect(q, lex.TokenKind.RBrace);
+  return ParseBlockResult { p: ar2.p, b: ast.Block { stmts: stmts } };
+}
+
+fn parse_fn_decl(p: Parser) -> ParseFnResult {
+  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwFn);
+  let r2: ParseIdentResult = parse_ident(ar1.p);
+  let _ar3: AdvanceResult = expect(r2.p, lex.TokenKind.LParen);
+  let _ar4: AdvanceResult = expect(_ar3.p, lex.TokenKind.RParen);
+  let _ar5: AdvanceResult = expect(_ar4.p, lex.TokenKind.Arrow);
+  let r6: ParseTypeResult = parse_type_name(_ar5.p);
+  let r7: ParseBlockResult = parse_block(r6.p);
+  return ParseFnResult { p: r7.p, f: ast.FuncDecl { name: r2.name, ret: r6.ty, body: r7.b } };
+}
+
+fn parse_program(p: Parser) -> ParseProgramResult {
+  let mut q: Parser = p;
+  let mut funcs: Vec[ast.FuncDecl] = Vec();
+  while !q.has_err && !kind_is(peek_kind(q), lex.TokenKind.Eof) {
+    let r: ParseFnResult = parse_fn_decl(q);
+    q = r.p;
+    funcs.push(r.f);
+  }
+  return ParseProgramResult { p: q, prog: ast.Program { funcs: funcs } };
+}
+
+pub fn parse_text(text: String) -> ParseResult {
+  let lr: lex.LexResult = lex.lex_text(text);
+  if !lex_err_none(lr.err) {
+    return ParseResult { prog: ast.Program { funcs: Vec() }, err: ParseError.Lex(lr.err) };
+  }
+  let p: Parser = Parser { text: text, toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None };
+  let r: ParseProgramResult = parse_program(p);
+  return ParseResult { prog: r.prog, err: r.p.err };
+}
