@@ -72,3 +72,58 @@ fn main() -> i32 { return m.one(); }`),
 		t.Fatalf("expected call target mathlib::one, got %q", got)
 	}
 }
+
+func TestBreakContinueOutsideLoop(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{name: "break", src: `fn main() -> i32 { break; return 0; }`, want: "`break` outside of loop"},
+		{name: "continue", src: `fn main() -> i32 { continue; return 0; }`, want: "`continue` outside of loop"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := source.NewFile("src/main.vox", tt.src)
+			prog, pdiags := parser.Parse(f)
+			if pdiags != nil && len(pdiags.Items) > 0 {
+				t.Fatalf("parse diags: %+v", pdiags.Items)
+			}
+			_, tdiags := Check(prog, Options{})
+			if tdiags == nil || len(tdiags.Items) == 0 {
+				t.Fatalf("expected diagnostics")
+			}
+			found := false
+			for _, it := range tdiags.Items {
+				if it.Msg == tt.want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected %q, got: %+v", tt.want, tdiags.Items)
+			}
+		})
+	}
+}
+
+func TestWhileConditionMustBeBool(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main() -> i32 { while 1 { } return 0; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "while condition must be bool" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected while condition diag, got: %+v", tdiags.Items)
+	}
+}
