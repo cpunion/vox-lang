@@ -33,11 +33,12 @@ struct ParseTypeResult { p: Parser, ty: ast.TypeName }
 	struct ParseProgramResult { p: Parser, prog: ast.Program }
 	struct ParseImportResult { p: Parser, imp: ast.ImportDecl }
 	struct ParseStringResult { p: Parser, s: String }
-	struct ParseParamsResult { p: Parser, params: Vec[ast.Param] }
-	struct ParseFieldResult { p: Parser, f: ast.FieldDecl }
-	struct ParseVariantResult { p: Parser, v: ast.EnumVariantDecl }
-	struct ParsePatResult { p: Parser, pat: ast.Pat }
-	struct ParseArmResult { p: Parser, arm: ast.MatchArm }
+struct ParseParamsResult { p: Parser, params: Vec[ast.Param] }
+struct ParseFieldResult { p: Parser, f: ast.FieldDecl }
+struct ParseVariantResult { p: Parser, v: ast.EnumVariantDecl }
+struct ParsePatResult { p: Parser, pat: ast.Pat }
+struct ParseArmResult { p: Parser, arm: ast.MatchArm }
+struct ParseTypeParamsResult { p: Parser, tps: Vec[String] }
 
 fn dummy_token() -> lex.Token {
   return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0 };
@@ -113,6 +114,15 @@ fn parse_ident(p: Parser) -> ParseIdentResult {
 }
 
 fn parse_type_name(p: Parser) -> ParseTypeResult {
+  // Unit type: `()`
+  if kind_is(peek_kind(p), lex.TokenKind.LParen) && kind_is(peek2_kind(p), lex.TokenKind.RParen) {
+    let ar1: AdvanceResult = advance(p);
+    let ar2: AdvanceResult = expect(ar1.p, lex.TokenKind.RParen);
+    let mut parts: Vec[String] = Vec();
+    parts.push("()");
+    return ParseTypeResult { p: ar2.p, ty: ast.TypeName { parts: parts, args: Vec() } };
+  }
+
   let r0: ParseIdentResult = parse_ident(p);
   let mut q: Parser = r0.p;
   let mut parts: Vec[String] = Vec();
@@ -200,6 +210,15 @@ fn parse_import_decl(p: Parser) -> ParseImportResult {
       i = i + 1;
     }
     return add_expr(ar.p, ast.ExprNode.Int(n));
+  }
+
+  if kind_is(k, lex.TokenKind.KwTrue) {
+    let ar: AdvanceResult = advance(p);
+    return add_expr(ar.p, ast.ExprNode.Bool(true));
+  }
+  if kind_is(k, lex.TokenKind.KwFalse) {
+    let ar: AdvanceResult = advance(p);
+    return add_expr(ar.p, ast.ExprNode.Bool(false));
   }
 
   if kind_is(k, lex.TokenKind.Ident) {
@@ -612,16 +631,49 @@ fn parse_block(p: Parser) -> ParseBlockResult {
 }
 
 fn parse_fn_decl(p: Parser, is_pub: bool) -> ParseFnResult {
-	  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwFn);
-	  let r2: ParseIdentResult = parse_ident(ar1.p);
-	  let _ar3: AdvanceResult = expect(r2.p, lex.TokenKind.LParen);
-	  let r4: ParseParamsResult = parse_params(_ar3.p);
-	  let _ar5: AdvanceResult = expect(r4.p, lex.TokenKind.RParen);
-	  let _ar6: AdvanceResult = expect(_ar5.p, lex.TokenKind.Arrow);
-	  let r7: ParseTypeResult = parse_type_name(_ar6.p);
-	  let params: Vec[ast.Param] = r4.params;
-	  let r8: ParseBlockResult = parse_block(r7.p);
-	  return ParseFnResult { p: r8.p, f: ast.FuncDecl { is_pub: is_pub, name: r2.name, params: params, ret: r7.ty, body: r8.b } };
+  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwFn);
+  let r2: ParseIdentResult = parse_ident(ar1.p);
+  let mut q: Parser = r2.p;
+  let mut tps: Vec[String] = Vec();
+  if kind_is(peek_kind(q), lex.TokenKind.LBracket) {
+    let r3: ParseTypeParamsResult = parse_type_params(q);
+    q = r3.p;
+    tps = r3.tps;
+  }
+  let _ar4: AdvanceResult = expect(q, lex.TokenKind.LParen);
+  let r5: ParseParamsResult = parse_params(_ar4.p);
+  let _ar6: AdvanceResult = expect(r5.p, lex.TokenKind.RParen);
+  let _ar7: AdvanceResult = expect(_ar6.p, lex.TokenKind.Arrow);
+  let r8: ParseTypeResult = parse_type_name(_ar7.p);
+  let params: Vec[ast.Param] = r5.params;
+  let r9: ParseBlockResult = parse_block(r8.p);
+  return ParseFnResult { p: r9.p, f: ast.FuncDecl { is_pub: is_pub, name: r2.name, type_params: tps, params: params, ret: r8.ty, body: r9.b } };
+}
+
+fn parse_type_params(p: Parser) -> ParseTypeParamsResult {
+  let ar1: AdvanceResult = expect(p, lex.TokenKind.LBracket);
+  let mut q: Parser = ar1.p;
+  let mut tps: Vec[String] = Vec();
+  if kind_is(peek_kind(q), lex.TokenKind.RBracket) {
+    let ar2: AdvanceResult = expect(q, lex.TokenKind.RBracket);
+    return ParseTypeParamsResult { p: ar2.p, tps: tps };
+  }
+  while !q.has_err {
+    let r1: ParseIdentResult = parse_ident(q);
+    q = r1.p;
+    tps.push(r1.name);
+    if kind_is(peek_kind(q), lex.TokenKind.Comma) {
+      let ar3: AdvanceResult = advance(q);
+      q = ar3.p;
+      if kind_is(peek_kind(q), lex.TokenKind.RBracket) {
+        break;
+      }
+      continue;
+    }
+    break;
+  }
+  let ar4: AdvanceResult = expect(q, lex.TokenKind.RBracket);
+  return ParseTypeParamsResult { p: ar4.p, tps: tps };
 }
 
 fn parse_field_decl(p: Parser) -> ParseFieldResult {

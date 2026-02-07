@@ -64,6 +64,8 @@ func cloneExpr(e ast.Expr) ast.Expr {
 			cp.Arms = append(cp.Arms, ast.MatchArm{Pat: clonePat(arm.Pat), Expr: cloneExpr(arm.Expr), S: arm.S})
 		}
 		return cp
+	case *ast.IfExpr:
+		return &ast.IfExpr{Cond: cloneExpr(x.Cond), Then: cloneExpr(x.Then), Else: cloneExpr(x.Else), S: x.S}
 	default:
 		return x
 	}

@@ -295,11 +295,11 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		// Enum constructor: `Enum.Variant(...)` (including qualified types like `dep.Option.Some(...)`).
 		if len(parts) >= 2 {
 			alias := parts[0]
-				if vi, ok := c.lookupVar(alias); ok {
-					// Vec methods on local vars: v.push(...), v.len(), v.get(i)
-					if len(parts) == 2 && vi.ty.K == TyVec && vi.ty.Elem != nil {
-						method := parts[1]
-						switch method {
+			if vi, ok := c.lookupVar(alias); ok {
+				// Vec methods on local vars: v.push(...), v.len(), v.get(i)
+				if len(parts) == 2 && vi.ty.K == TyVec && vi.ty.Elem != nil {
+					method := parts[1]
+					switch method {
 					case "push":
 						if len(e.Args) != 1 {
 							c.errorAt(e.S, "Vec.push expects 1 arg")
@@ -598,6 +598,47 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 		}
 		return c.setExprType(ex, sty)
+	case *ast.IfExpr:
+		condTy := c.checkExpr(e.Cond, Type{K: TyBool})
+		if condTy.K != TyBool {
+			c.errorAt(e.Cond.Span(), "if condition must be bool")
+		}
+
+		// Typecheck branches. If expected is known, both branches must match it.
+		thenTy := c.checkExpr(e.Then, expected)
+		wantElse := expected
+		if wantElse.K == TyBad {
+			wantElse = thenTy
+		}
+		elseTy := c.checkExpr(e.Else, wantElse)
+
+		// If expected was specified, enforce.
+		if expected.K != TyBad {
+			if !sameType(expected, thenTy) {
+				c.errorAt(e.Then.Span(), fmt.Sprintf("if branch type mismatch: expected %s, got %s", expected.String(), thenTy.String()))
+			}
+			if !sameType(expected, elseTy) {
+				c.errorAt(e.Else.Span(), fmt.Sprintf("if branch type mismatch: expected %s, got %s", expected.String(), elseTy.String()))
+			}
+			return c.setExprType(ex, expected)
+		}
+
+		// Minimal untyped-int unification.
+		if thenTy.K == TyUntypedInt && (elseTy.K == TyI32 || elseTy.K == TyI64) {
+			thenTy = elseTy
+		}
+		if elseTy.K == TyUntypedInt && (thenTy.K == TyI32 || thenTy.K == TyI64) {
+			elseTy = thenTy
+		}
+		if thenTy.K == TyUntypedInt && elseTy.K == TyUntypedInt {
+			thenTy = Type{K: TyI64}
+			elseTy = thenTy
+		}
+		if !sameType(thenTy, elseTy) {
+			c.errorAt(e.S, fmt.Sprintf("if branches must have same type, got %s and %s", thenTy.String(), elseTy.String()))
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		return c.setExprType(ex, thenTy)
 	case *ast.MatchExpr:
 		scrutTy := c.checkExpr(e.Scrutinee, Type{K: TyBad})
 		if scrutTy.K != TyEnum {
@@ -714,25 +755,52 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 				c.errorAt(call.S, "Vec.push expects 1 arg")
 				return c.setExprType(ex, Type{K: TyBad}), true
 			}
-			if recvName == "" {
-				c.errorAt(call.S, "Vec.push receiver must be a local variable in stage0")
-				return c.setExprType(ex, Type{K: TyBad}), true
+
+			// Stage0: push requires an addressable place receiver.
+			// Supported places:
+			// - local variable: v.push(x)
+			// - direct field of a mutable local struct: s.items.push(x)
+			if recvName != "" {
+				vi, ok := c.lookupVar(recvName)
+				if !ok {
+					c.errorAt(call.S, "unknown variable: "+recvName)
+					return c.setExprType(ex, Type{K: TyBad}), true
+				}
+				if !vi.mutable {
+					c.errorAt(call.S, "cannot call push on immutable variable: "+recvName)
+					return c.setExprType(ex, Type{K: TyBad}), true
+				}
+				at := c.checkExpr(call.Args[0], *recvTy.Elem)
+				if !sameType(*recvTy.Elem, at) {
+					c.errorAt(call.Args[0].Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", recvTy.Elem.String(), at.String()))
+				}
+				c.vecCalls[call] = VecCallTarget{Kind: VecCallPush, RecvName: recvName, Recv: me.Recv, Elem: *recvTy.Elem}
+				return c.setExprType(ex, Type{K: TyUnit}), true
 			}
-			vi, ok := c.lookupVar(recvName)
-			if !ok {
-				c.errorAt(call.S, "unknown variable: "+recvName)
-				return c.setExprType(ex, Type{K: TyBad}), true
+
+			// Field place: ident.field
+			if mem, ok := me.Recv.(*ast.MemberExpr); ok {
+				if base, ok := mem.Recv.(*ast.IdentExpr); ok {
+					vi, ok := c.lookupVar(base.Name)
+					if !ok {
+						c.errorAt(call.S, "unknown variable: "+base.Name)
+						return c.setExprType(ex, Type{K: TyBad}), true
+					}
+					if !vi.mutable {
+						c.errorAt(call.S, "cannot call push on immutable variable: "+base.Name)
+						return c.setExprType(ex, Type{K: TyBad}), true
+					}
+					at := c.checkExpr(call.Args[0], *recvTy.Elem)
+					if !sameType(*recvTy.Elem, at) {
+						c.errorAt(call.Args[0].Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", recvTy.Elem.String(), at.String()))
+					}
+					c.vecCalls[call] = VecCallTarget{Kind: VecCallPush, Recv: me.Recv, Elem: *recvTy.Elem}
+					return c.setExprType(ex, Type{K: TyUnit}), true
+				}
 			}
-			if !vi.mutable {
-				c.errorAt(call.S, "cannot call push on immutable variable: "+recvName)
-				return c.setExprType(ex, Type{K: TyBad}), true
-			}
-			at := c.checkExpr(call.Args[0], *recvTy.Elem)
-			if !sameType(*recvTy.Elem, at) {
-				c.errorAt(call.Args[0].Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", recvTy.Elem.String(), at.String()))
-			}
-			c.vecCalls[call] = VecCallTarget{Kind: VecCallPush, RecvName: recvName, Recv: me.Recv, Elem: *recvTy.Elem}
-			return c.setExprType(ex, Type{K: TyUnit}), true
+
+			c.errorAt(call.S, "Vec.push receiver must be a local variable or direct struct field in stage0")
+			return c.setExprType(ex, Type{K: TyBad}), true
 		case "len":
 			if len(call.Args) != 0 {
 				c.errorAt(call.S, "Vec.len expects 0 args")

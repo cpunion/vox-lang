@@ -42,6 +42,7 @@ Stage0 的目标是“能写编译器”，但保持范围可控，不引入会�
 - 类型路径：类型位置支持 `a.Type`（用于跨模块/包引用名义类型）
 - 命名导入：`import { name } from "path"`（最小子集；减少 `a.name(...)` 噪声）
 - 控制流：`while` + `break/continue`
+- 控制流：`if` 支持表达式形式 `if cond { a } else { b }`（分支为单表达式）
 - 数据类型：`struct`（声明、字面量、字段读取/写入）
 - 容器：`Vec[T]`（`Vec()` 构造 + `push/len/get` 的最小子集；先作为内建类型）
 - IR/后端：`String` 字面量最小支持（IR `str` + C 后端）；`struct` 降低到 C `typedef struct`

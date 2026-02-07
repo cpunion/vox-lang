@@ -130,6 +130,58 @@ func TestWhileConditionMustBeBool(t *testing.T) {
 	}
 }
 
+func TestIfExprTypechecks(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		src     string
+		wantErr string
+	}{
+		{
+			name: "ok",
+			src: `fn main() -> i32 {
+  let x: i32 = if true { 1 } else { 2 };
+  return x;
+}`,
+		},
+		{
+			name:    "mismatch",
+			wantErr: "if branch type mismatch",
+			src: `fn main() -> i32 {
+  let x: i32 = if true { 1 } else { false };
+  return x;
+}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := source.NewFile("src/main.vox", tt.src)
+			prog, pdiags := parser.Parse(f)
+			if pdiags != nil && len(pdiags.Items) > 0 {
+				t.Fatalf("parse diags: %+v", pdiags.Items)
+			}
+			_, tdiags := Check(prog, Options{})
+			if tt.wantErr == "" {
+				if tdiags != nil && len(tdiags.Items) > 0 {
+					t.Fatalf("type diags: %+v", tdiags.Items)
+				}
+				return
+			}
+			if tdiags == nil || len(tdiags.Items) == 0 {
+				t.Fatalf("expected diagnostics")
+			}
+			found := false
+			for _, it := range tdiags.Items {
+				if strings.Contains(it.Msg, tt.wantErr) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected diag containing %q, got: %+v", tt.wantErr, tdiags.Items)
+			}
+		})
+	}
+}
+
 func TestModuleQualifierDoesNotOverrideLocalValue(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "dep"

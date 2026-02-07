@@ -208,6 +208,32 @@ func TestParseVecMethods(t *testing.T) {
 	}
 }
 
+func TestParseIfExpr(t *testing.T) {
+	f := source.NewFile("test.vox", `fn main() -> i32 {
+  let x: i32 = if true { 1 } else { 2 };
+  return if x < 0 { 0 } else { x };
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	body := prog.Funcs[0].Body
+	if len(body.Stmts) != 2 {
+		t.Fatalf("expected 2 stmts, got %d", len(body.Stmts))
+	}
+	ls, ok := body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let stmt, got %T", body.Stmts[0])
+	}
+	if _, ok := ls.Init.(*ast.IfExpr); !ok {
+		t.Fatalf("expected if expr init, got %T", ls.Init)
+	}
+	ret := body.Stmts[1].(*ast.ReturnStmt)
+	if _, ok := ret.Expr.(*ast.IfExpr); !ok {
+		t.Fatalf("expected if expr return, got %T", ret.Expr)
+	}
+}
+
 func TestParseGenericFuncAndExplicitTypeArgsCall(t *testing.T) {
 	f := source.NewFile("test.vox", `fn id[T](x: T) -> T { return x; }
 fn main() -> i32 { return id[i32](1); }`)

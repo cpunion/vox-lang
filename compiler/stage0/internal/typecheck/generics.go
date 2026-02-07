@@ -273,6 +273,10 @@ func substAstTypesInExpr(ex ast.Expr, subs map[string]Type) {
 		for _, arm := range e.Arms {
 			substAstTypesInExpr(arm.Expr, subs)
 		}
+	case *ast.IfExpr:
+		substAstTypesInExpr(e.Cond, subs)
+		substAstTypesInExpr(e.Then, subs)
+		substAstTypesInExpr(e.Else, subs)
 	}
 }
 

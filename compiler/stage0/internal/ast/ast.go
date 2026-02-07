@@ -271,6 +271,21 @@ type MatchArm struct {
 func (*MatchExpr) exprNode()           {}
 func (e *MatchExpr) Span() source.Span { return e.S }
 
+// IfExpr is an expression-form if:
+//
+//	if cond { thenExpr } else { elseExpr }
+//
+// Stage0 minimal: branch bodies are single expressions (not statement blocks).
+type IfExpr struct {
+	Cond Expr
+	Then Expr
+	Else Expr
+	S    source.Span
+}
+
+func (*IfExpr) exprNode()           {}
+func (e *IfExpr) Span() source.Span { return e.S }
+
 type StructLitExpr struct {
 	TypeParts []string
 	Inits     []FieldInit

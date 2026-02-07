@@ -108,14 +108,15 @@ const (
 )
 
 type VecCallTarget struct {
-	Kind     VecCallKind
+	Kind VecCallKind
 	// RecvName is used when the receiver is a local variable (addressable slot).
-	// This is required for operations that mutate the receiver (e.g. Vec.push).
+	// This is the most direct lowering path for operations that mutate the receiver (e.g. Vec.push).
 	RecvName string
-	// Recv is used for non-mutating operations where the receiver can be any value
-	// expression (e.g. s.items.len()).
+	// Recv is used when the receiver is not a simple local variable.
+	// - For non-mutating operations, it can be any value expression (e.g. s.items.len()).
+	// - For Vec.push, it must be a supported "place" expression (stage0: ident.field).
 	Recv ast.Expr
-	Elem     Type
+	Elem Type
 }
 
 type StrCallKind int
@@ -177,16 +178,16 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 	c.checkPubInterfaces()
 	c.checkAll()
 	return &CheckedProgram{
-		Prog:        prog,
-		FuncSigs:    c.funcSigs,
-		StructSigs:  c.structSigs,
-		EnumSigs:    c.enumSigs,
-		ExprTypes:   c.exprTypes,
-		LetTypes:    c.letTypes,
-		VecCalls:    c.vecCalls,
-		StrCalls:    c.strCalls,
-		CallTargets: c.callTgts,
-		EnumCtors:   c.enumCtors,
+		Prog:             prog,
+		FuncSigs:         c.funcSigs,
+		StructSigs:       c.structSigs,
+		EnumSigs:         c.enumSigs,
+		ExprTypes:        c.exprTypes,
+		LetTypes:         c.letTypes,
+		VecCalls:         c.vecCalls,
+		StrCalls:         c.strCalls,
+		CallTargets:      c.callTgts,
+		EnumCtors:        c.enumCtors,
 		EnumUnitVariants: c.enumUnits,
 	}, c.diags
 }

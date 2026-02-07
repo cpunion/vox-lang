@@ -40,6 +40,26 @@
 
 沿用 Rust-like 的常见规则（后续可给出完整表）。
 
+## `if` 表达式（Stage0 增补，已定）
+
+除语句形式的 `if { ... } else { ... }` 外，Vox 允许在**表达式位置**使用 `if`：
+
+```vox
+let x: i32 = if cond { 1 } else { 2 };
+return if ok { a } else { b };
+```
+
+语法（Stage0 最小子集）：
+
+- 分支使用 `{ ... }`，其中只允许**单个表达式**（不是语句块）。
+- `else` 对表达式形式是**必需的**。
+- 允许 `else if ...` 链式形式（其 `else` 分支本身是 `if` 表达式）。
+
+类型规则（Stage0）：
+
+- `cond` 必须是 `bool`。
+- `then` 与 `else` 分支的类型必须一致（或在 untyped int 约束下可被推导为一致）。
+
 ## Union 类型语法（已定，草案）
 
 类型位置允许 `|` 组合 union 类型：
@@ -104,11 +124,33 @@ Vox 统一使用 `.` 表示“成员访问”，并在不同上下文中解析�
 解析规则（Stage0 先实现最小子集）：
 
 - `a.b(...)`（调用上下文）
-  - 若 `a` 是当前作用域中的局部变量/参数：尝试解析为方法调用（Stage0 暂不支持方法，报错）。
+  - 若 `a`（或 `a.b.c` 的根）是当前作用域中的局部变量/参数：尝试解析为**值方法调用**。
+    - Stage0 仅支持一小部分**内建类型的 intrinsic 方法**（见下）。
+    - 其它类型的方法调用在 Stage0 报错（Stage1 再引入 trait/impl）。
   - 否则：`a` 必须是本文件 `import "..." [as alias]` 引入的命名空间别名；解析为该命名空间下的函数调用。
 - `a.b`（表达式上下文）
   - 若 `a` 的类型是 `struct`：解析为字段读取。
   - 其它类型：报错（Stage0 先不支持动态/反射式成员访问）。
+
+### 内建 intrinsic 方法（Stage0 最小子集）
+
+Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
+
+- `Vec[T]`：
+  - `v.push(x) -> ()`（可变）
+  - `v.len() -> i32`
+  - `v.get(i: i32) -> T`
+- `String`：
+  - `s.len() -> i32`
+  - `s.byte_at(i: i32) -> i32`
+  - `s.slice(start: i32, end: i32) -> String`
+
+对 receiver 的约束（Stage0）：
+
+- 非变更方法（`len/get/byte_at/slice`）：receiver 可以是任意表达式（例如 `ctx.items.len()`）。
+- 变更方法（`Vec.push`）：receiver 必须是 **place**（可写位置）。
+  - Stage0 当前支持：局部变量 `v.push(x)`，以及可变局部 struct 的直接字段 `s.items.push(x)`。
+  - 其它更复杂的 place（例如多级字段）后续再扩展。
 
 ## 导入语法（Stage0 最小子集）
 

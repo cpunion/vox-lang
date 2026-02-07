@@ -554,6 +554,9 @@ func (p *Parser) parsePrefixWith(allowStructLit bool) ast.Expr {
 	case lexer.TokenMatch:
 		p.advance()
 		return p.parsePostfix(p.parseMatchExpr(tok), allowStructLit)
+	case lexer.TokenIf:
+		p.advance()
+		return p.parsePostfix(p.parseIfExpr(tok), allowStructLit)
 	default:
 		p.errorHere("expected expression")
 		p.advance()
@@ -581,6 +584,48 @@ func (p *Parser) parseMatchExpr(matchTok lexer.Token) ast.Expr {
 	rb := p.expect(lexer.TokenRBrace, "expected `}` to end match")
 	_ = lb
 	return &ast.MatchExpr{Scrutinee: scrut, Arms: arms, S: joinSpan(matchTok.Span, rb.Span)}
+}
+
+func (p *Parser) parseIfExpr(ifTok lexer.Token) ast.Expr {
+	// if <cond> { <expr> } else { <expr> }
+	cond := p.parseExprNoStructLit(0)
+
+	thenExpr, thenSpan := p.parseBracedExpr("expected `{` to start if-expression branch")
+	if thenExpr == nil {
+		thenExpr = &ast.IntLit{Text: "0", S: thenSpan}
+	}
+
+	p.expect(lexer.TokenElse, "expected `else` in if-expression")
+
+	var elseExpr ast.Expr
+	var endSpan source.Span
+	if p.at(lexer.TokenIf) {
+		t := p.advance()
+		elseExpr = p.parseIfExpr(t)
+		endSpan = elseExpr.Span()
+	} else {
+		elseExpr, endSpan = p.parseBracedExpr("expected `{` after else in if-expression")
+		if elseExpr == nil {
+			elseExpr = &ast.IntLit{Text: "0", S: endSpan}
+		}
+	}
+
+	return &ast.IfExpr{Cond: cond, Then: thenExpr, Else: elseExpr, S: joinSpan(ifTok.Span, endSpan)}
+}
+
+func (p *Parser) parseBracedExpr(errMsg string) (ast.Expr, source.Span) {
+	lb := p.expect(lexer.TokenLBrace, errMsg)
+	if lb.Kind != lexer.TokenLBrace {
+		return nil, lb.Span
+	}
+	if p.at(lexer.TokenRBrace) {
+		p.errorHere("expected expression")
+		rb := p.advance()
+		return &ast.IntLit{Text: "0", S: joinSpan(lb.Span, rb.Span)}, joinSpan(lb.Span, rb.Span)
+	}
+	ex := p.parseExprWith(0, true)
+	rb := p.expect(lexer.TokenRBrace, "expected `}`")
+	return ex, joinSpan(lb.Span, rb.Span)
 }
 
 func (p *Parser) parsePattern() ast.Pattern {
