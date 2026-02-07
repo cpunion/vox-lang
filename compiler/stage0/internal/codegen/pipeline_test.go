@@ -16,7 +16,11 @@ import (
 
 func parseAndCheckWithStdlib(t *testing.T, files []*source.File) *typecheck.CheckedProgram {
 	t.Helper()
-	all := append([]*source.File{}, stdlib.Files()...)
+	stdFiles, err := stdlib.Files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := append([]*source.File{}, stdFiles...)
 	all = append(all, files...)
 	prog, pdiags := parser.ParseFiles(all)
 	if pdiags != nil && len(pdiags.Items) > 0 {

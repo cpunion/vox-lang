@@ -1,23 +1,68 @@
 package stdlib
 
 import (
-	_ "embed"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sync"
 
 	"voxlang/internal/source"
 )
 
-//go:embed src/std/prelude/lib.vox
-var preludeSrc string
-
-//go:embed src/std/testing/lib.vox
-var testingSrc string
-
 // Files returns stage0 stdlib sources that are implicitly available to all builds.
 //
 // These are compiled as if they were part of the root package under src/std/**.
-func Files() []*source.File {
-	return []*source.File{
-		source.NewFile("src/std/prelude/lib.vox", preludeSrc),
-		source.NewFile("src/std/testing/lib.vox", testingSrc),
+func Files() ([]*source.File, error) {
+	loadOnce.Do(load)
+	if loadErr != nil {
+		return nil, loadErr
 	}
+	out := make([]*source.File, len(loaded))
+	copy(out, loaded)
+	return out, nil
+}
+
+var (
+	loadOnce sync.Once
+	loadErr  error
+	loaded   []*source.File
+)
+
+func load() {
+	root, err := stage0RootDir()
+	if err != nil {
+		loadErr = err
+		return
+	}
+	preludePath := filepath.Join(root, "src", "std", "prelude", "lib.vox")
+	testingPath := filepath.Join(root, "src", "std", "testing", "lib.vox")
+
+	preludeSrc, err := os.ReadFile(preludePath)
+	if err != nil {
+		loadErr = fmt.Errorf("read stdlib file %q: %w", preludePath, err)
+		return
+	}
+	testingSrc, err := os.ReadFile(testingPath)
+	if err != nil {
+		loadErr = fmt.Errorf("read stdlib file %q: %w", testingPath, err)
+		return
+	}
+
+	loaded = []*source.File{
+		// Note: file names are virtualized to keep module resolution stable.
+		source.NewFile("src/std/prelude/lib.vox", string(preludeSrc)),
+		source.NewFile("src/std/testing/lib.vox", string(testingSrc)),
+	}
+}
+
+func stage0RootDir() (string, error) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok || file == "" {
+		return "", fmt.Errorf("runtime.Caller failed")
+	}
+	// stdlib.go lives at: <repo>/compiler/stage0/internal/stdlib/stdlib.go
+	// stage0 root is:      <repo>/compiler/stage0
+	dir := filepath.Dir(file)
+	return filepath.Clean(filepath.Join(dir, "..", "..")), nil
 }

@@ -228,7 +228,11 @@ fn main() -> i32 {
     E.None => 0,
   };
 }`)
-	prog, pdiags := parser.ParseFiles(append(stdlib.Files(), f))
+	stdFiles, err := stdlib.Files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, pdiags := parser.ParseFiles(append(stdFiles, f))
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		t.Fatalf("parse diags: %+v", pdiags.Items)
 	}

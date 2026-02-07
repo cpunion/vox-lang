@@ -111,7 +111,11 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 		return nil, nil, err
 	}
 	// Stage0 stdlib is always available and is compiled as part of the root package.
-	files = append(files, stdlib.Files()...)
+	stdFiles, err := stdlib.Files()
+	if err != nil {
+		return nil, nil, err
+	}
+	files = append(files, stdFiles...)
 
 	// Load path dependencies (including transitive).
 	depNames := make([]string, 0, len(deps))
