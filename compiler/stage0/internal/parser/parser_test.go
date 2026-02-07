@@ -95,3 +95,19 @@ fn main() -> i32 {
 	}
 	// struct decl count will be asserted once parser supports it
 }
+
+func TestParseEnumDeclAndCtorAndMatch(t *testing.T) {
+	f := source.NewFile("test.vox", `enum Option { Some(i32), None }
+fn main() -> i32 {
+  // enum constructor call + match expression
+  let x: Option = Option.Some(1);
+  return match x {
+    Option.Some(v) => v,
+    Option.None => 0,
+  };
+}`)
+	_, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+}

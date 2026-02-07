@@ -22,6 +22,7 @@ const (
 	TyString
 	TyUntypedInt
 	TyStruct
+	TyEnum
 )
 
 type Type struct {
@@ -47,6 +48,8 @@ func (t Type) String() string {
 		return "untyped-int"
 	case TyStruct:
 		return t.Name
+	case TyEnum:
+		return t.Name
 	default:
 		return "<bad>"
 	}
@@ -56,11 +59,14 @@ type CheckedProgram struct {
 	Prog       *ast.Program
 	FuncSigs   map[string]FuncSig
 	StructSigs map[string]StructSig
+	EnumSigs   map[string]EnumSig
 	ExprTypes  map[ast.Expr]Type
 	// CallTargets stores the resolved function name (possibly qualified, e.g. "dep::foo").
 	// Note: Vox surface syntax may use `dep.foo(...)`; it still resolves to `dep::foo` internally.
 	// for each call expression.
 	CallTargets map[*ast.CallExpr]string
+	// EnumCtors records which call expressions are enum constructors instead of function calls.
+	EnumCtors map[*ast.CallExpr]EnumCtorTarget
 }
 
 type FuncSig struct {
@@ -77,6 +83,25 @@ type StructSig struct {
 type StructFieldSig struct {
 	Name string
 	Ty   Type
+}
+
+type EnumSig struct {
+	Name         string
+	Variants     []EnumVariantSig
+	VariantIndex map[string]int
+}
+
+type EnumVariantSig struct {
+	Name   string
+	Fields []Type // stage0: arity 0/1
+}
+
+type EnumCtorTarget struct {
+	Enum    Type // TyEnum
+	Variant string
+	Tag     int
+	// Payload is TyUnit for unit variants.
+	Payload Type
 }
 
 type Options struct {
@@ -98,16 +123,27 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		diags:      &diag.Bag{},
 		funcSigs:   map[string]FuncSig{},
 		structSigs: map[string]StructSig{},
+		enumSigs:   map[string]EnumSig{},
 		exprTypes:  map[ast.Expr]Type{},
 		callTgts:   map[*ast.CallExpr]string{},
+		enumCtors:  map[*ast.CallExpr]EnumCtorTarget{},
 		opts:       opts,
 		imports:    map[*source.File]map[string]importTarget{},
 	}
 	c.collectStructSigs()
+	c.collectEnumSigs()
 	c.collectFuncSigs()
 	c.collectImports()
 	c.checkAll()
-	return &CheckedProgram{Prog: prog, FuncSigs: c.funcSigs, StructSigs: c.structSigs, ExprTypes: c.exprTypes, CallTargets: c.callTgts}, c.diags
+	return &CheckedProgram{
+		Prog:        prog,
+		FuncSigs:    c.funcSigs,
+		StructSigs:  c.structSigs,
+		EnumSigs:    c.enumSigs,
+		ExprTypes:   c.exprTypes,
+		CallTargets: c.callTgts,
+		EnumCtors:   c.enumCtors,
+	}, c.diags
 }
 
 type checker struct {
@@ -115,8 +151,10 @@ type checker struct {
 	diags      *diag.Bag
 	funcSigs   map[string]FuncSig
 	structSigs map[string]StructSig
+	enumSigs   map[string]EnumSig
 	exprTypes  map[ast.Expr]Type
 	callTgts   map[*ast.CallExpr]string
+	enumCtors  map[*ast.CallExpr]EnumCtorTarget
 
 	curFn     *ast.FuncDecl
 	scope     []map[string]varInfo
@@ -143,6 +181,10 @@ func (c *checker) collectStructSigs() {
 			continue
 		}
 		qname := names.QualifyFunc(st.Span.File.Name, st.Name)
+		if _, exists := c.enumSigs[qname]; exists {
+			c.errorAt(st.Span, "duplicate nominal type name (enum already exists): "+qname)
+			continue
+		}
 		if _, exists := c.structSigs[qname]; exists {
 			c.errorAt(st.Span, "duplicate struct: "+qname)
 			continue
@@ -169,6 +211,63 @@ func (c *checker) collectStructSigs() {
 			sig.Fields = append(sig.Fields, StructFieldSig{Name: f.Name, Ty: fty})
 		}
 		c.structSigs[qname] = sig
+	}
+}
+
+func (c *checker) collectEnumSigs() {
+	// First pass: register all enum names so payload types can reference other nominal types.
+	for _, en := range c.prog.Enums {
+		if en == nil || en.Span.File == nil {
+			continue
+		}
+		qname := names.QualifyFunc(en.Span.File.Name, en.Name)
+		if _, exists := c.structSigs[qname]; exists {
+			c.errorAt(en.Span, "duplicate nominal type name (struct already exists): "+qname)
+			continue
+		}
+		if _, exists := c.enumSigs[qname]; exists {
+			c.errorAt(en.Span, "duplicate enum: "+qname)
+			continue
+		}
+		c.enumSigs[qname] = EnumSig{Name: qname, VariantIndex: map[string]int{}}
+	}
+
+	// Second pass: fill variants.
+	for _, en := range c.prog.Enums {
+		if en == nil || en.Span.File == nil {
+			continue
+		}
+		qname := names.QualifyFunc(en.Span.File.Name, en.Name)
+		sig := c.enumSigs[qname]
+		sig.Variants = nil
+		sig.VariantIndex = map[string]int{}
+
+		// Stage0 limitation: enums are lowered to a (tag, payload) representation.
+		// To keep IR v0 + C backend small, we require at most one non-unit payload type.
+		payloadTy := Type{K: TyUnit}
+
+		for _, v := range en.Variants {
+			if _, exists := sig.VariantIndex[v.Name]; exists {
+				c.errorAt(v.Span, "duplicate variant: "+v.Name)
+				continue
+			}
+			if len(v.Fields) > 1 {
+				c.errorAt(v.Span, "stage0 enum payload arity > 1 is not supported yet")
+			}
+			fields := []Type{}
+			for _, ft := range v.Fields {
+				fty := c.typeFromAstInFile(ft, en.Span.File)
+				fields = append(fields, fty)
+				if payloadTy.K == TyUnit {
+					payloadTy = fty
+				} else if !sameType(payloadTy, fty) {
+					c.errorAt(v.Span, "stage0 enum payload type must be consistent across variants")
+				}
+			}
+			sig.VariantIndex[v.Name] = len(sig.Variants)
+			sig.Variants = append(sig.Variants, EnumVariantSig{Name: v.Name, Fields: fields})
+		}
+		c.enumSigs[qname] = sig
 	}
 }
 
@@ -476,6 +575,49 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 
+		// Enum constructor: `Enum.Variant(...)` (including qualified types like `dep.Option.Some(...)`).
+		if len(parts) >= 2 {
+			alias := parts[0]
+			if _, ok := c.lookupVar(alias); ok {
+				c.errorAt(e.S, "member calls on values are not supported yet")
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+			if c.curFn == nil || c.curFn.Span.File == nil {
+				c.errorAt(e.S, "internal error: missing file for call resolution")
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+			ety, es, ok := c.tryResolveEnumByParts(c.curFn.Span.File, parts[:len(parts)-1])
+			if ok {
+				varName := parts[len(parts)-1]
+				vidx, vok := es.VariantIndex[varName]
+				if !vok {
+					c.errorAt(e.S, "unknown variant: "+varName)
+					return c.setExprType(ex, Type{K: TyBad})
+				}
+				vs := es.Variants[vidx]
+				if len(vs.Fields) > 1 {
+					c.errorAt(e.S, "stage0 enum payload arity > 1 is not supported yet")
+					return c.setExprType(ex, Type{K: TyBad})
+				}
+				if len(e.Args) != len(vs.Fields) {
+					c.errorAt(e.S, fmt.Sprintf("wrong number of arguments: expected %d, got %d", len(vs.Fields), len(e.Args)))
+					return c.setExprType(ex, Type{K: TyBad})
+				}
+				for i, a := range e.Args {
+					at := c.checkExpr(a, vs.Fields[i])
+					if !sameType(vs.Fields[i], at) {
+						c.errorAt(a.Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", vs.Fields[i].String(), at.String()))
+					}
+				}
+				payload := Type{K: TyUnit}
+				if len(vs.Fields) == 1 {
+					payload = vs.Fields[0]
+				}
+				c.enumCtors[e] = EnumCtorTarget{Enum: ety, Variant: varName, Tag: vidx, Payload: payload}
+				return c.setExprType(ex, ety)
+			}
+		}
+
 		target := ""
 		if len(parts) == 1 {
 			name := parts[0]
@@ -500,11 +642,6 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			member := parts[len(parts)-1]
 			alias := qualParts[0]
 			extraMods := qualParts[1:]
-
-			if _, ok := c.lookupVar(alias); ok {
-				c.errorAt(e.S, "member calls on values are not supported yet")
-				return c.setExprType(ex, Type{K: TyBad})
-			}
 
 			if c.curFn.Span.File == nil {
 				c.errorAt(e.S, "internal error: missing file for import resolution")
@@ -542,6 +679,24 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		}
 		return c.setExprType(ex, sig.Ret)
 	case *ast.MemberExpr:
+		// Unit enum variant: `Enum.Variant` (including qualified enum types).
+		if c.curFn != nil && c.curFn.Span.File != nil {
+			parts, ok := calleeParts(ex)
+			if ok && len(parts) >= 2 {
+				alias := parts[0]
+				if _, ok := c.lookupVar(alias); !ok {
+					ety, es, ok := c.tryResolveEnumByParts(c.curFn.Span.File, parts[:len(parts)-1])
+					if ok {
+						vname := parts[len(parts)-1]
+						vidx, vok := es.VariantIndex[vname]
+						if vok && len(es.Variants[vidx].Fields) == 0 {
+							return c.setExprType(ex, ety)
+						}
+					}
+				}
+			}
+		}
+
 		recvTy := c.checkExpr(e.Recv, Type{K: TyBad})
 		if recvTy.K != TyStruct {
 			c.errorAt(e.S, "member access requires a struct receiver")
@@ -591,6 +746,80 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 		}
 		return c.setExprType(ex, sty)
+	case *ast.MatchExpr:
+		scrutTy := c.checkExpr(e.Scrutinee, Type{K: TyBad})
+		if scrutTy.K != TyEnum {
+			c.errorAt(e.S, "match scrutinee must be an enum (stage0)")
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		esig, ok := c.enumSigs[scrutTy.Name]
+		if !ok {
+			c.errorAt(e.S, "unknown enum type: "+scrutTy.Name)
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+
+		resultTy := expected
+		seenVariants := map[string]bool{}
+		hasWild := false
+
+		for _, arm := range e.Arms {
+			c.pushScope()
+			switch p := arm.Pat.(type) {
+			case *ast.WildPat:
+				hasWild = true
+			case *ast.VariantPat:
+				if c.curFn == nil || c.curFn.Span.File == nil {
+					c.errorAt(arm.S, "internal error: missing file for match")
+					break
+				}
+				pty, psig, ok := c.resolveEnumByParts(c.curFn.Span.File, p.TypeParts, p.S)
+				if ok && !sameType(scrutTy, pty) {
+					c.errorAt(p.S, "pattern enum type does not match scrutinee")
+				}
+				vidx, vok := psig.VariantIndex[p.Variant]
+				if !vok {
+					c.errorAt(p.S, "unknown variant: "+p.Variant)
+					break
+				}
+				if seenVariants[p.Variant] {
+					c.errorAt(p.S, "duplicate match arm for variant: "+p.Variant)
+				}
+				seenVariants[p.Variant] = true
+				v := psig.Variants[vidx]
+				if len(v.Fields) > 1 {
+					c.errorAt(p.S, "stage0 enum payload arity > 1 is not supported yet")
+				}
+				if len(p.Binds) != len(v.Fields) {
+					c.errorAt(p.S, fmt.Sprintf("wrong number of binders: expected %d, got %d", len(v.Fields), len(p.Binds)))
+				}
+				for i := 0; i < len(p.Binds) && i < len(v.Fields); i++ {
+					c.scopeTop()[p.Binds[i]] = varInfo{ty: v.Fields[i], mutable: false}
+				}
+			default:
+				c.errorAt(arm.S, "unsupported pattern (stage0)")
+			}
+
+			armTy := c.checkExpr(arm.Expr, resultTy)
+			if resultTy.K == TyBad {
+				if armTy.K == TyUntypedInt {
+					resultTy = Type{K: TyI64}
+				} else {
+					resultTy = armTy
+				}
+			} else if !sameType(resultTy, armTy) {
+				c.errorAt(arm.S, fmt.Sprintf("match arm type mismatch: expected %s, got %s", resultTy.String(), armTy.String()))
+			}
+			c.popScope()
+		}
+
+		if !hasWild {
+			for _, v := range esig.Variants {
+				if !seenVariants[v.Name] {
+					c.errorAt(e.S, "non-exhaustive match, missing variant: "+v.Name)
+				}
+			}
+		}
+		return c.setExprType(ex, resultTy)
 	default:
 		c.errorAt(ex.Span(), "unsupported expression")
 		return c.setExprType(ex, Type{K: TyBad})
@@ -632,9 +861,15 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 				if _, ok := c.structSigs[q1]; ok {
 					return Type{K: TyStruct, Name: q1}
 				}
+				if _, ok := c.enumSigs[q1]; ok {
+					return Type{K: TyEnum, Name: q1}
+				}
 				q2 := names.QualifyParts(pkg, nil, tt.Name)
 				if _, ok := c.structSigs[q2]; ok {
 					return Type{K: TyStruct, Name: q2}
+				}
+				if _, ok := c.enumSigs[q2]; ok {
+					return Type{K: TyEnum, Name: q2}
 				}
 			}
 			c.errorAt(tt.S, "unknown type: "+tt.Name)
@@ -682,7 +917,7 @@ func sameType(a, b Type) bool {
 	if a.K != b.K {
 		return false
 	}
-	if a.K == TyStruct {
+	if a.K == TyStruct || a.K == TyEnum {
 		return a.Name == b.Name
 	}
 	return true
@@ -771,6 +1006,66 @@ func (c *checker) resolveStructByParts(file *source.File, parts []string, s sour
 		return Type{K: TyBad}, StructSig{}, false
 	}
 	return Type{K: TyStruct, Name: q}, ss, true
+}
+
+func (c *checker) tryResolveEnumByParts(file *source.File, parts []string) (Type, EnumSig, bool) {
+	if len(parts) == 0 {
+		return Type{K: TyBad}, EnumSig{}, false
+	}
+	if len(parts) == 1 {
+		pkg, mod, _ := names.SplitOwnerAndModule(file.Name)
+		q1 := names.QualifyParts(pkg, mod, parts[0])
+		if es, ok := c.enumSigs[q1]; ok {
+			return Type{K: TyEnum, Name: q1}, es, true
+		}
+		q2 := names.QualifyParts(pkg, nil, parts[0])
+		if es, ok := c.enumSigs[q2]; ok {
+			return Type{K: TyEnum, Name: q2}, es, true
+		}
+		return Type{K: TyBad}, EnumSig{}, false
+	}
+
+	alias := parts[0]
+	extraMods := parts[1 : len(parts)-1]
+	name := parts[len(parts)-1]
+
+	m := c.imports[file]
+	tgt, ok := m[alias]
+	if !ok {
+		return Type{K: TyBad}, EnumSig{}, false
+	}
+	mod := append(append([]string{}, tgt.Mod...), extraMods...)
+	q := names.QualifyParts(tgt.Pkg, mod, name)
+	es, ok := c.enumSigs[q]
+	if !ok {
+		return Type{K: TyBad}, EnumSig{}, false
+	}
+	return Type{K: TyEnum, Name: q}, es, true
+}
+
+func (c *checker) resolveEnumByParts(file *source.File, parts []string, s source.Span) (Type, EnumSig, bool) {
+	if len(parts) == 0 {
+		c.errorAt(s, "missing enum name")
+		return Type{K: TyBad}, EnumSig{}, false
+	}
+	if ty, es, ok := c.tryResolveEnumByParts(file, parts); ok {
+		return ty, es, true
+	}
+
+	if len(parts) == 1 {
+		c.errorAt(s, "unknown type: "+parts[0])
+		return Type{K: TyBad}, EnumSig{}, false
+	}
+	alias := parts[0]
+	if file != nil {
+		m := c.imports[file]
+		if _, ok := m[alias]; !ok {
+			c.errorAt(s, "unknown module qualifier: "+alias+" (did you forget `import \""+alias+"\"`?)")
+			return Type{K: TyBad}, EnumSig{}, false
+		}
+	}
+	c.errorAt(s, "unknown type")
+	return Type{K: TyBad}, EnumSig{}, false
 }
 
 func (c *checker) isKnownLocalModule(fileName string, importPath string) bool {

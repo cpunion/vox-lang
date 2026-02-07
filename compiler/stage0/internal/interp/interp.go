@@ -19,6 +19,7 @@ const (
 	VInt
 	VString
 	VStruct
+	VEnum
 )
 
 type Value struct {
@@ -27,19 +28,45 @@ type Value struct {
 	B bool
 	S string
 	M map[string]Value // VStruct fields
+	E string           // VEnum qualified enum name
+	T int              // VEnum tag
+	P *Value           // VEnum payload (nil when no payload)
 }
 
 func unit() Value { return Value{K: VUnit} }
 
 func cloneValue(v Value) Value {
 	if v.K != VStruct {
-		return v
+		if v.K != VEnum {
+			return v
+		}
+		out := Value{K: VEnum, E: v.E, T: v.T}
+		if v.P != nil {
+			p := cloneValue(*v.P)
+			out.P = &p
+		}
+		return out
 	}
 	out := Value{K: VStruct, M: map[string]Value{}}
 	for k, fv := range v.M {
 		out.M[k] = cloneValue(fv)
 	}
 	return out
+}
+
+func derefOrUnit(v *Value) Value {
+	if v == nil {
+		return unit()
+	}
+	return *v
+}
+
+func cloneValuePtr(v *Value) *Value {
+	if v == nil {
+		return nil
+	}
+	c := cloneValue(*v)
+	return &c
 }
 
 type Runtime struct {
@@ -386,6 +413,21 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		}
 		return unit(), fmt.Errorf("unreachable")
 	case *ast.CallExpr:
+		if ctor, ok := rt.prog.EnumCtors[e]; ok {
+			if ctor.Payload.K == typecheck.TyUnit {
+				return Value{K: VEnum, E: ctor.Enum.Name, T: ctor.Tag}, nil
+			}
+			if len(e.Args) != 1 {
+				return unit(), fmt.Errorf("enum constructor expects 1 arg")
+			}
+			v, err := rt.evalExpr(e.Args[0])
+			if err != nil {
+				return unit(), err
+			}
+			p := cloneValue(v)
+			return Value{K: VEnum, E: ctor.Enum.Name, T: ctor.Tag, P: &p}, nil
+		}
+
 		target := rt.prog.CallTargets[e]
 		if target == "" {
 			// Fallback (should not happen once typechecker fills CallTargets).
@@ -417,6 +459,21 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		}
 		return rt.call(target, args)
 	case *ast.MemberExpr:
+		if ty, ok := rt.prog.ExprTypes[ex]; ok && ty.K == typecheck.TyEnum {
+			es, ok := rt.prog.EnumSigs[ty.Name]
+			if !ok {
+				return unit(), fmt.Errorf("unknown enum: %s", ty.Name)
+			}
+			tag, ok := es.VariantIndex[e.Name]
+			if !ok {
+				return unit(), fmt.Errorf("unknown variant: %s", e.Name)
+			}
+			if len(es.Variants[tag].Fields) != 0 {
+				return unit(), fmt.Errorf("non-unit variant requires constructor call")
+			}
+			return Value{K: VEnum, E: ty.Name, T: tag}, nil
+		}
+
 		recv, err := rt.evalExpr(e.Recv)
 		if err != nil {
 			return unit(), err
@@ -439,6 +496,46 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			m[init.Name] = cloneValue(v)
 		}
 		return Value{K: VStruct, M: m}, nil
+	case *ast.MatchExpr:
+		sv, err := rt.evalExpr(e.Scrutinee)
+		if err != nil {
+			return unit(), err
+		}
+		if sv.K != VEnum {
+			return unit(), fmt.Errorf("match scrutinee is not enum")
+		}
+		ety := rt.prog.ExprTypes[e.Scrutinee]
+		if ety.K != typecheck.TyEnum {
+			ety = typecheck.Type{K: typecheck.TyEnum, Name: sv.E}
+		}
+		es, ok := rt.prog.EnumSigs[ety.Name]
+		if !ok {
+			return unit(), fmt.Errorf("unknown enum: %s", ety.Name)
+		}
+		for _, arm := range e.Arms {
+			switch p := arm.Pat.(type) {
+			case *ast.WildPat:
+				return rt.evalExpr(arm.Expr)
+			case *ast.VariantPat:
+				tag, ok := es.VariantIndex[p.Variant]
+				if !ok {
+					return unit(), fmt.Errorf("unknown variant: %s", p.Variant)
+				}
+				if sv.T != tag {
+					continue
+				}
+				rt.pushFrame()
+				if len(p.Binds) == 1 {
+					rt.frame()[p.Binds[0]] = derefOrUnit(cloneValuePtr(sv.P))
+				}
+				v, err := rt.evalExpr(arm.Expr)
+				rt.popFrame()
+				return v, err
+			default:
+				return unit(), fmt.Errorf("unsupported pattern")
+			}
+		}
+		return unit(), fmt.Errorf("non-exhaustive match")
 	default:
 		return unit(), fmt.Errorf("unsupported expr")
 	}
@@ -475,6 +572,17 @@ func valueEq(a, b Value) bool {
 	case VStruct:
 		// Not needed for stage0 yet; keep it conservative.
 		return false
+	case VEnum:
+		if a.E != b.E || a.T != b.T {
+			return false
+		}
+		if a.P == nil && b.P == nil {
+			return true
+		}
+		if a.P == nil || b.P == nil {
+			return false
+		}
+		return valueEq(*a.P, *b.P)
 	default:
 		return false
 	}

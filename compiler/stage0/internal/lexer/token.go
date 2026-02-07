@@ -16,6 +16,7 @@ const (
 	// Keywords
 	TokenFn
 	TokenStruct
+	TokenEnum
 	TokenLet
 	TokenMut
 	TokenReturn
@@ -64,6 +65,7 @@ const (
 	TokenAndAnd
 	TokenOrOr
 	TokenArrow
+	TokenFatArrow
 )
 
 type Token struct {

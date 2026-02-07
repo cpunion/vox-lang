@@ -30,6 +30,7 @@ func ParseFiles(files []*source.File) (*ast.Program, *diag.Bag) {
 		if prog != nil {
 			merged.Imports = append(merged.Imports, prog.Imports...)
 			merged.Structs = append(merged.Structs, prog.Structs...)
+			merged.Enums = append(merged.Enums, prog.Enums...)
 			merged.Funcs = append(merged.Funcs, prog.Funcs...)
 		}
 		if d != nil && len(d.Items) > 0 {
@@ -59,6 +60,13 @@ func (p *Parser) parseProgram() *ast.Program {
 			}
 			continue
 		}
+		if p.match(lexer.TokenEnum) {
+			en := p.parseEnumDecl()
+			if en != nil {
+				prog.Enums = append(prog.Enums, en)
+			}
+			continue
+		}
 		if p.match(lexer.TokenFn) {
 			fn := p.parseFuncDecl()
 			if fn != nil {
@@ -66,7 +74,7 @@ func (p *Parser) parseProgram() *ast.Program {
 			}
 			continue
 		}
-		p.errorHere("expected `import`, `struct`, or `fn`")
+		p.errorHere("expected `import`, `struct`, `enum`, or `fn`")
 		p.advance()
 	}
 	return prog
@@ -92,7 +100,7 @@ func (p *Parser) parseImportDecl() *ast.ImportDecl {
 		endTok = p.prev()
 	} else {
 		switch p.peek().Kind {
-		case lexer.TokenFn, lexer.TokenStruct, lexer.TokenImport, lexer.TokenEOF:
+		case lexer.TokenFn, lexer.TokenStruct, lexer.TokenEnum, lexer.TokenImport, lexer.TokenEOF:
 			// ok
 		default:
 			p.errorHere("expected `;` or next top-level item after import")
@@ -130,6 +138,52 @@ func (p *Parser) parseStructDecl() *ast.StructDecl {
 		endTok = p.prev()
 	}
 	return &ast.StructDecl{Name: nameTok.Lexeme, Fields: fields, Span: joinSpan(startTok.Span, endTok.Span)}
+}
+
+func (p *Parser) parseEnumDecl() *ast.EnumDecl {
+	startTok := p.prev() // `enum`
+	nameTok := p.expect(lexer.TokenIdent, "expected enum name")
+	if nameTok.Kind != lexer.TokenIdent {
+		return nil
+	}
+	lbrace := p.expect(lexer.TokenLBrace, "expected `{` after enum name")
+	if lbrace.Kind != lexer.TokenLBrace {
+		return nil
+	}
+	variants := []ast.EnumVariant{}
+	for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
+		vname := p.expect(lexer.TokenIdent, "expected variant name")
+		fields := []ast.Type{}
+		end := vname.Span
+		if p.match(lexer.TokenLParen) {
+			if !p.at(lexer.TokenRParen) {
+				for {
+					ty := p.parseType()
+					fields = append(fields, ty)
+					end = ty.Span()
+					if p.match(lexer.TokenComma) {
+						continue
+					}
+					break
+				}
+			}
+			rp := p.expect(lexer.TokenRParen, "expected `)`")
+			end = rp.Span
+		}
+		variants = append(variants, ast.EnumVariant{Name: vname.Lexeme, Fields: fields, Span: joinSpan(vname.Span, end)})
+		if p.match(lexer.TokenComma) {
+			// allow trailing comma before }
+			continue
+		}
+		break
+	}
+	rbrace := p.expect(lexer.TokenRBrace, "expected `}`")
+	endTok := rbrace
+	_ = p.match(lexer.TokenSemicolon) // optional
+	if p.prev().Kind == lexer.TokenSemicolon {
+		endTok = p.prev()
+	}
+	return &ast.EnumDecl{Name: nameTok.Lexeme, Variants: variants, Span: joinSpan(startTok.Span, endTok.Span)}
 }
 
 func (p *Parser) parseFuncDecl() *ast.FuncDecl {
@@ -278,7 +332,7 @@ func (p *Parser) parseReturn() ast.Stmt {
 
 func (p *Parser) parseIf() ast.Stmt {
 	ifTok := p.expect(lexer.TokenIf, "expected `if`")
-	cond := p.parseExpr(0)
+	cond := p.parseExprNoStructLit(0)
 	thenBlk := p.parseBlock()
 	if thenBlk == nil {
 		return nil
@@ -302,7 +356,7 @@ func (p *Parser) parseIf() ast.Stmt {
 
 func (p *Parser) parseWhile() ast.Stmt {
 	whileTok := p.expect(lexer.TokenWhile, "expected `while`")
-	cond := p.parseExpr(0)
+	cond := p.parseExprNoStructLit(0)
 	body := p.parseBlock()
 	if body == nil {
 		return nil
@@ -350,8 +404,14 @@ func (p *Parser) parseType() ast.Type {
 }
 
 // Pratt parser
-func (p *Parser) parseExpr(minPrec int) ast.Expr {
-	left := p.parsePrefix()
+func (p *Parser) parseExpr(minPrec int) ast.Expr { return p.parseExprWith(minPrec, true) }
+
+// parseExprNoStructLit parses an expression but does not treat a following `{ ... }` as a struct literal.
+// This is used in control-flow contexts (if/while/match) where `{` is expected to start a block/arm list.
+func (p *Parser) parseExprNoStructLit(minPrec int) ast.Expr { return p.parseExprWith(minPrec, false) }
+
+func (p *Parser) parseExprWith(minPrec int, allowStructLit bool) ast.Expr {
+	left := p.parsePrefixWith(allowStructLit)
 	for {
 		op, prec, rightAssoc := p.peekInfix()
 		if prec < minPrec {
@@ -362,43 +422,46 @@ func (p *Parser) parseExpr(minPrec int) ast.Expr {
 		if rightAssoc {
 			nextMin = prec
 		}
-		right := p.parseExpr(nextMin)
+		right := p.parseExprWith(nextMin, allowStructLit)
 		left = &ast.BinaryExpr{Op: op, Left: left, Right: right, S: joinSpan(left.Span(), right.Span())}
 		_ = opTok
 	}
 	return left
 }
 
-func (p *Parser) parsePrefix() ast.Expr {
+func (p *Parser) parsePrefixWith(allowStructLit bool) ast.Expr {
 	tok := p.peek()
 	switch tok.Kind {
 	case lexer.TokenIdent:
 		p.advance()
 		ex := ast.Expr(&ast.IdentExpr{Name: tok.Lexeme, S: tok.Span})
-		return p.parsePostfix(ex)
+		return p.parsePostfix(ex, allowStructLit)
 	case lexer.TokenInt:
 		p.advance()
-		return p.parsePostfix(&ast.IntLit{Text: tok.Lexeme, S: tok.Span})
+		return p.parsePostfix(&ast.IntLit{Text: tok.Lexeme, S: tok.Span}, allowStructLit)
 	case lexer.TokenString:
 		p.advance()
-		return p.parsePostfix(&ast.StringLit{Text: tok.Lexeme, S: tok.Span})
+		return p.parsePostfix(&ast.StringLit{Text: tok.Lexeme, S: tok.Span}, allowStructLit)
 	case lexer.TokenTrue, lexer.TokenFalse:
 		p.advance()
 		v := tok.Kind == lexer.TokenTrue
-		return p.parsePostfix(&ast.BoolLit{Value: v, S: tok.Span})
+		return p.parsePostfix(&ast.BoolLit{Value: v, S: tok.Span}, allowStructLit)
 	case lexer.TokenLParen:
 		p.advance()
-		ex := p.parseExpr(0)
+		ex := p.parseExprWith(0, allowStructLit)
 		p.expect(lexer.TokenRParen, "expected `)`")
-		return p.parsePostfix(ex)
+		return p.parsePostfix(ex, allowStructLit)
 	case lexer.TokenMinus, lexer.TokenBang:
 		p.advance()
 		op := tok.Lexeme
 		if op == "" {
 			op = tokenOpString(tok.Kind)
 		}
-		ex := p.parseExpr(7)
-		return p.parsePostfix(&ast.UnaryExpr{Op: op, Expr: ex, S: joinSpan(tok.Span, ex.Span())})
+		ex := p.parseExprWith(7, allowStructLit)
+		return p.parsePostfix(&ast.UnaryExpr{Op: op, Expr: ex, S: joinSpan(tok.Span, ex.Span())}, allowStructLit)
+	case lexer.TokenMatch:
+		p.advance()
+		return p.parsePostfix(p.parseMatchExpr(tok), allowStructLit)
 	default:
 		p.errorHere("expected expression")
 		p.advance()
@@ -406,11 +469,78 @@ func (p *Parser) parsePrefix() ast.Expr {
 	}
 }
 
-func (p *Parser) parsePostfix(ex ast.Expr) ast.Expr {
+func (p *Parser) parseMatchExpr(matchTok lexer.Token) ast.Expr {
+	scrut := p.parseExprNoStructLit(0)
+	lb := p.expect(lexer.TokenLBrace, "expected `{` after match scrutinee")
+	arms := []ast.MatchArm{}
+	for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
+		pat := p.parsePattern()
+		arrow := p.expect(lexer.TokenFatArrow, "expected `=>` in match arm")
+		ex := p.parseExprWith(0, true)
+		end := ex.Span()
+		if arrow.Kind == lexer.TokenFatArrow {
+			end = ex.Span()
+		}
+		if p.match(lexer.TokenComma) {
+			end = p.prev().Span
+		}
+		arms = append(arms, ast.MatchArm{Pat: pat, Expr: ex, S: joinSpan(pat.Span(), end)})
+	}
+	rb := p.expect(lexer.TokenRBrace, "expected `}` to end match")
+	_ = lb
+	return &ast.MatchExpr{Scrutinee: scrut, Arms: arms, S: joinSpan(matchTok.Span, rb.Span)}
+}
+
+func (p *Parser) parsePattern() ast.Pattern {
+	if p.at(lexer.TokenIdent) && p.peek().Lexeme == "_" {
+		tok := p.advance()
+		return &ast.WildPat{S: tok.Span}
+	}
+	start := p.peek()
+	id := p.expect(lexer.TokenIdent, "expected pattern")
+	parts := []string{}
+	if id.Kind == lexer.TokenIdent {
+		parts = append(parts, id.Lexeme)
+	}
+	endSpan := id.Span
+	for p.match(lexer.TokenDot) {
+		n := p.expect(lexer.TokenIdent, "expected identifier after `.`")
+		if n.Kind == lexer.TokenIdent {
+			parts = append(parts, n.Lexeme)
+		}
+		endSpan = n.Span
+	}
+	binds := []string{}
+	if p.match(lexer.TokenLParen) {
+		if !p.at(lexer.TokenRParen) {
+			for {
+				b := p.expect(lexer.TokenIdent, "expected binder name")
+				if b.Kind == lexer.TokenIdent {
+					binds = append(binds, b.Lexeme)
+				}
+				if p.match(lexer.TokenComma) {
+					continue
+				}
+				break
+			}
+		}
+		rp := p.expect(lexer.TokenRParen, "expected `)`")
+		endSpan = rp.Span
+	}
+	if len(parts) < 2 {
+		p.errorAt(start.Span, "expected enum variant pattern like `Enum.Variant`")
+		return &ast.VariantPat{TypeParts: parts, Variant: "", Binds: binds, S: joinSpan(start.Span, endSpan)}
+	}
+	return &ast.VariantPat{TypeParts: parts[:len(parts)-1], Variant: parts[len(parts)-1], Binds: binds, S: joinSpan(start.Span, endSpan)}
+}
+
+func (p *Parser) parsePostfix(ex ast.Expr, allowStructLit bool) ast.Expr {
 	for {
-		if p.at(lexer.TokenLBrace) {
+		if allowStructLit && p.at(lexer.TokenLBrace) {
 			parts, ok := exprPathParts(ex)
 			if ok {
+				// Struct literals share the `{ ... }` token with blocks, so we only parse them when the
+				// caller has indicated it is safe (i.e. not in `if cond { ... }` / `match x { ... }`).
 				ex = p.parseStructLit(parts, ex.Span())
 				continue
 			}

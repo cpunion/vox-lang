@@ -72,7 +72,7 @@ type Tiny = @range(0..=3) i8;
 
 ## 枚举构造子点前缀简写（已定）
 
-当枚举类型可由上下文确定时，允许用 `.Variant` 代替 `Enum::Variant`：
+当枚举类型可由上下文确定时，允许用 `.Variant` 代替 `Enum.Variant`：
 
 ```vox
 let x: Option[i32] = .Some(1);
@@ -84,7 +84,7 @@ match x {
 }
 ```
 
-上下文不足以确定枚举类型时，必须写全路径：`Option::Some(1)`。
+上下文不足以确定枚举类型时，必须写全路径：`Option.Some(1)`。
 
 ## 禁止的引用语法位置
 

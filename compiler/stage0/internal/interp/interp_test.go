@@ -90,6 +90,21 @@ fn main() -> i32 {
 	}
 }
 
+func TestInterpEnumCtorAndMatch(t *testing.T) {
+	out := runMain(t, `enum Option { Some(i32), None }
+fn main() -> i32 {
+  // enum constructor call + match expression
+  let x: Option = Option.Some(1);
+  return match x {
+    Option.Some(v) => v,
+    Option.None => 0,
+  };
+}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
 func runMain(t *testing.T, src string) string {
 	t.Helper()
 	f := source.NewFile("src/main.vox", src)

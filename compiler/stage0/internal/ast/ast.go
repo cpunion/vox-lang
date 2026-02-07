@@ -5,6 +5,7 @@ import "voxlang/internal/source"
 type Program struct {
 	Imports []*ImportDecl
 	Structs []*StructDecl
+	Enums   []*EnumDecl
 	Funcs   []*FuncDecl
 }
 
@@ -32,6 +33,18 @@ type StructField struct {
 	Name string
 	Type Type
 	Span source.Span
+}
+
+type EnumDecl struct {
+	Name     string
+	Variants []EnumVariant
+	Span     source.Span
+}
+
+type EnumVariant struct {
+	Name   string
+	Fields []Type // stage0: tuple-like payload, arity 0/1 (typechecker enforces)
+	Span   source.Span
 }
 
 type Param struct {
@@ -230,6 +243,21 @@ type CallExpr struct {
 func (*CallExpr) exprNode()           {}
 func (e *CallExpr) Span() source.Span { return e.S }
 
+type MatchExpr struct {
+	Scrutinee Expr
+	Arms      []MatchArm
+	S         source.Span
+}
+
+type MatchArm struct {
+	Pat  Pattern
+	Expr Expr
+	S    source.Span
+}
+
+func (*MatchExpr) exprNode()           {}
+func (e *MatchExpr) Span() source.Span { return e.S }
+
 type StructLitExpr struct {
 	TypeParts []string
 	Inits     []FieldInit
@@ -244,3 +272,26 @@ type FieldInit struct {
 
 func (*StructLitExpr) exprNode()           {}
 func (e *StructLitExpr) Span() source.Span { return e.S }
+
+// Pattern (used by match)
+type Pattern interface {
+	patNode()
+	Span() source.Span
+}
+
+type WildPat struct {
+	S source.Span
+}
+
+func (*WildPat) patNode()            {}
+func (p *WildPat) Span() source.Span { return p.S }
+
+type VariantPat struct {
+	TypeParts []string // enum type path segments
+	Variant   string
+	Binds     []string // payload binders (stage0: arity 0/1)
+	S         source.Span
+}
+
+func (*VariantPat) patNode()            {}
+func (p *VariantPat) Span() source.Span { return p.S }

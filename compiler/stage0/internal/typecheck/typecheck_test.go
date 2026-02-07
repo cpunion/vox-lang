@@ -174,3 +174,23 @@ fn main() -> i32 {
 		t.Fatalf("type diags: %+v", tdiags.Items)
 	}
 }
+
+func TestEnumCtorAndMatch(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum Option { Some(i32), None }
+fn main() -> i32 {
+  // enum constructor call + match expression
+  let x: Option = Option.Some(1);
+  return match x {
+    Option.Some(v) => v,
+    Option.None => 0,
+  };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}

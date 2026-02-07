@@ -36,12 +36,20 @@ IR v0 只定义 stage0 必需类型：
 - `bool`
 - `unit`
 - `str`（当前用于 stage0 的 `String` 字面量与最小字符串比较/返回；后续会替换为真正的字符串/切片模型）
+- `struct(<qualified_name>)`（名义结构体类型）
+
+说明（Stage0 限定）：
+
+- `enum` 在 IR v0 中不单独建模，而是 **降低为 `struct`**：
+  - `tag: i32`（variant index）
+  - 可选 `payload: T`（Stage0 仅支持至多一个 payload 字段，且所有非 unit variant 的 payload 类型必须一致）
 
 ## 4. 程序结构
 
 一个 IR 文件包含：
 
 - 头：`ir v0`
+- 若干结构体定义（可选）：`struct <name> { <fields...> }`
 - 若干函数：`fn <name>(<params>) -> <ret>`
 - 函数包含若干 block（CFG）
 
@@ -96,6 +104,28 @@ store $v0 %t0
 ```
 %t0 = call i32 foo(%t1, %t2)
 call unit bar(%t0)
+```
+
+### 5.7 结构体（struct）
+
+结构体值在 IR v0 中是“按值”类型（在 stage0 C 后端中对应 C struct）。
+
+结构体字面量初始化：
+
+```
+%t0 = struct_init struct(Point) { x: 1, y: 2 }
+```
+
+字段读取：
+
+```
+%t1 = field_get i32 %t0 .x
+```
+
+字段写入（Stage0 先支持对局部 slot 的字段写入）：
+
+```
+store_field $v0 .x %t1
 ```
 
 ## 6. 终结指令（terminator）

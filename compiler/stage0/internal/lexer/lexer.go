@@ -82,6 +82,8 @@ func (lx *lexer) lexIdentOrKeyword() {
 		lx.emit(TokenFn, lex, start, lx.pos)
 	case "struct":
 		lx.emit(TokenStruct, lex, start, lx.pos)
+	case "enum":
+		lx.emit(TokenEnum, lex, start, lx.pos)
 	case "let":
 		lx.emit(TokenLet, lex, start, lx.pos)
 	case "mut":
@@ -202,6 +204,9 @@ func (lx *lexer) lexPunct() {
 		if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
 			lx.pos++
 			lx.emit(TokenEqEq, "==", start, lx.pos)
+		} else if lx.pos < len(lx.input) && lx.input[lx.pos] == '>' {
+			lx.pos++
+			lx.emit(TokenFatArrow, "=>", start, lx.pos)
 		} else {
 			lx.emit(TokenEq, "=", start, lx.pos)
 		}
