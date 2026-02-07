@@ -17,7 +17,8 @@ import (
 //   - src/a/lib.vox, src/a/x.vox         -> module ["a"]
 //   - src/utils/io/lib.vox, src/utils/io/x.vox -> module ["utils","io"]
 // - src/**/*_test.vox are treated as part of the directory module (file name doesn't form a module segment).
-// - tests/**.vox are treated as root module for now (empty module path), to keep test discovery simple.
+// - tests/**.vox are treated as belonging to a separate top-level module "tests" (and its subdirectories),
+//   so they cannot access private symbols from src/** by default (Go-like "external tests" behavior).
 func SplitOwnerAndModule(fileName string) (pkg string, mod []string, isTest bool) {
 	rel := filepath.ToSlash(fileName)
 	if rel == "" {
@@ -31,8 +32,24 @@ func SplitOwnerAndModule(fileName string) (pkg string, mod []string, isTest bool
 		rel = rest
 	}
 
-	if strings.HasPrefix(rel, "tests/") || rel == "tests" {
-		return pkg, nil, true
+	if rel == "tests" {
+		return pkg, []string{"tests"}, true
+	}
+	if strings.HasPrefix(rel, "tests/") {
+		isTest = true
+		path := strings.TrimPrefix(rel, "tests/")
+		dir := filepath.ToSlash(filepath.Dir(path))
+		out := []string{"tests"}
+		if dir != "." && dir != "" {
+			segs := strings.Split(dir, "/")
+			for _, s := range segs {
+				if s == "" || s == "." {
+					continue
+				}
+				out = append(out, s)
+			}
+		}
+		return pkg, out, true
 	}
 	if !strings.HasPrefix(rel, "src/") {
 		// Unknown layout; treat as root module.
