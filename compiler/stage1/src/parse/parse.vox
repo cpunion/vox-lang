@@ -7,6 +7,17 @@ pub enum ParseError {
   UnexpectedToken(lex.TokenKind, lex.TokenKind, i32), // expected, got, byte offset
 }
 
+pub fn parse_error_to_string(e: ParseError) -> String {
+  return match e {
+    ParseError.None => "none",
+    ParseError.Lex(le) => "lex error: ".concat(lex.lex_error_to_string(le)),
+    ParseError.UnexpectedToken(exp, got, at) =>
+      "unexpected token at ".concat(at.to_string())
+        .concat(": expected ").concat(lex.token_kind_name(exp))
+        .concat(", got ").concat(lex.token_kind_name(got)),
+  };
+}
+
 pub struct ParseResult {
   pub prog: ast.Program,
   pub err: ParseError,
@@ -72,6 +83,13 @@ fn peek_kind(p: Parser) -> lex.TokenKind {
 fn peek3_kind(p: Parser) -> lex.TokenKind {
   let toks: Vec[lex.Token] = p.toks;
   let i: i32 = p.pos + 2;
+  if i < toks.len() { return toks.get(i).kind; }
+  return lex.TokenKind.Eof;
+}
+
+fn peek4_kind(p: Parser) -> lex.TokenKind {
+  let toks: Vec[lex.Token] = p.toks;
+  let i: i32 = p.pos + 3;
   if i < toks.len() { return toks.get(i).kind; }
   return lex.TokenKind.Eof;
 }
@@ -175,6 +193,34 @@ fn parse_string_inner(p: Parser) -> ParseStringResult {
   if n >= 2 {
     s = s.slice(1, n - 1);
   }
+  // Unescape common sequences in string literals.
+  // Supported: \\ \" \n \r \t
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let b: i32 = s.byte_at(i);
+    if b == 92 { // '\\'
+      if (i + 1) < s.len() {
+        let nb: i32 = s.byte_at(i + 1);
+        if nb == 110 { out = out.concat("\n"); i = i + 2; continue; } // n
+        if nb == 114 { out = out.concat("\r"); i = i + 2; continue; } // r
+        if nb == 116 { out = out.concat("\t"); i = i + 2; continue; } // t
+        if nb == 34 { out = out.concat("\""); i = i + 2; continue; }  // "
+        if nb == 92 { out = out.concat("\\"); i = i + 2; continue; }  // \
+        // Unknown escape: drop '\' and keep next char as-is.
+        out = out.concat(s.slice(i + 1, i + 2));
+        i = i + 2;
+        continue;
+      }
+      // trailing '\' -> keep it
+      out = out.concat("\\");
+      i = i + 1;
+      continue;
+    }
+    out = out.concat(s.slice(i, i + 1));
+    i = i + 1;
+  }
+  s = out;
   return ParseStringResult { p: ar.p, s: s };
 }
 
@@ -551,7 +597,8 @@ fn parse_prefix(p: Parser) -> ParseExprResult {
     let ar1: AdvanceResult = advance(p);
     let r2: ParseExprResult = parse_expr(ar1.p, 0);
     let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.RParen);
-    return ParseExprResult { p: ar3.p, id: r2.id };
+    // Allow postfix ops on parenthesized expressions: `(expr).method(...)`.
+    return parse_postfix(ar3.p, r2.id);
   }
   let r0: ParseExprResult = parse_primary(p);
   return parse_postfix(r0.p, r0.id);
@@ -699,6 +746,20 @@ fn parse_stmt(p: Parser) -> ParseStmtResult {
     let r2: ParseExprResult = parse_expr(ar1.p, 0);
     let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.Semicolon);
     return ParseStmtResult { p: ar3.p, st: ast.Stmt.Return(true, r2.id) };
+  }
+
+  // field assignment: ident . ident = expr ;
+  if kind_is(k, lex.TokenKind.Ident) &&
+     kind_is(peek2_kind(p), lex.TokenKind.Dot) &&
+     kind_is(peek3_kind(p), lex.TokenKind.Ident) &&
+     kind_is(peek4_kind(p), lex.TokenKind.Eq) {
+    let r1: ParseIdentResult = parse_ident(p);
+    let ar2: AdvanceResult = expect(r1.p, lex.TokenKind.Dot);
+    let r3: ParseIdentResult = parse_ident(ar2.p);
+    let ar4: AdvanceResult = expect(r3.p, lex.TokenKind.Eq);
+    let r5: ParseExprResult = parse_expr(ar4.p, 0);
+    let ar6: AdvanceResult = expect(r5.p, lex.TokenKind.Semicolon);
+    return ParseStmtResult { p: ar6.p, st: ast.Stmt.AssignField(r1.name, r3.name, r5.id) };
   }
 
   // assignment: ident = expr ;

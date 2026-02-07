@@ -13,6 +13,12 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias],
     if rr.ok && is_vec_ty(ctx, rr.ty) {
       return tc_call_vec_method(ctx, w, mod_path, aliases, exprs, l0, rr.ty, mname, args, expected);
     }
+    if rr.ok && rr.ty == ctx.ty_string {
+      return tc_call_string_method(ctx, w, mod_path, aliases, exprs, l0, recv_id, mname, args, expected);
+    }
+    if rr.ok && (rr.ty == ctx.ty_i32 || rr.ty == ctx.ty_i64 || rr.ty == ctx.ty_bool) {
+      return tc_call_prim_method(ctx, w, mod_path, aliases, exprs, l0, recv_id, rr.ty, mname, args, expected);
+    }
   }
 
   // Enum variant shorthand: `.Variant(...)` (enum type must be known from context).
@@ -106,7 +112,66 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportA
     return ExprTyResult { ok: true, ty: elem };
   }
 
+  if mname == "join" {
+    // Stage0 parity: only Vec[String].join(String) -> String.
+    if elem != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    let sepr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(0), ctx.ty_string);
+    if !sepr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_string };
+  }
+
   return ExprTyResult { ok: false, ty: ctx.ty_bad };
+}
+
+fn tc_call_string_method(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, recv_id: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
+  let _rr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, recv_id, ctx.ty_string);
+
+  if mname == "len" {
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if expected != -1 && expected != ctx.ty_i32 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_i32 };
+  }
+  if mname == "byte_at" {
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    let idxr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(0), ctx.ty_i32);
+    if !idxr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if expected != -1 && expected != ctx.ty_i32 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_i32 };
+  }
+  if mname == "slice" {
+    if args.len() != 2 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    let sr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(0), ctx.ty_i32);
+    if !sr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    let er: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(1), ctx.ty_i32);
+    if !er.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_string };
+  }
+  if mname == "concat" {
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    let or: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(0), ctx.ty_string);
+    if !or.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_string };
+  }
+  if mname == "escape_c" {
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_string };
+  }
+
+  return ExprTyResult { ok: false, ty: ctx.ty_bad };
+}
+
+fn tc_call_prim_method(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, recv_id: i32, recv_ty: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
+  if mname != "to_string" { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  let rr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, recv_id, recv_ty);
+  if !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  return ExprTyResult { ok: true, ty: ctx.ty_string };
 }
 
 fn tc_call_func_unqualified(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, name: String, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {

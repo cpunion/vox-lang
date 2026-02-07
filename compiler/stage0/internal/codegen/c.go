@@ -53,8 +53,13 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	out.WriteString("  if (new_cap <= v->cap) return;\n")
 	out.WriteString("  if (new_cap < 4) new_cap = 4;\n")
 	out.WriteString("  size_t bytes = (size_t)new_cap * (size_t)v->elem_size;\n")
-	out.WriteString("  uint8_t* p = (uint8_t*)realloc(v->data, bytes);\n")
+	// Stage0 intentionally leaks Vec buffers so plain struct copies of `vox_vec`
+	// behave like persistent values (no realloc/free of the old buffer).
+	out.WriteString("  uint8_t* p = (uint8_t*)malloc(bytes);\n")
 	out.WriteString("  if (!p) { fprintf(stderr, \"out of memory\\n\"); exit(1); }\n")
+	out.WriteString("  if (v->data && v->len != 0) {\n")
+	out.WriteString("    memcpy(p, v->data, (size_t)v->len * (size_t)v->elem_size);\n")
+	out.WriteString("  }\n")
 	out.WriteString("  v->data = p; v->cap = new_cap;\n")
 	out.WriteString("}\n")
 	out.WriteString("static void vox_vec_push(vox_vec* v, const void* elem) {\n")
@@ -64,7 +69,7 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	out.WriteString("}\n")
 	out.WriteString("static int32_t vox_vec_len(const vox_vec* v) { return v->len; }\n")
 	out.WriteString("static void vox_vec_get(const vox_vec* v, int32_t idx, void* out) {\n")
-	out.WriteString("  if (idx < 0 || idx >= v->len) { fprintf(stderr, \"vec index out of bounds\\n\"); exit(1); }\n")
+	out.WriteString("  if (idx < 0 || idx >= v->len) { fprintf(stderr, \"vec index out of bounds: idx=%\" PRId32 \" len=%\" PRId32 \"\\n\", idx, v->len); exit(1); }\n")
 	out.WriteString("  memcpy(out, v->data + (size_t)idx * (size_t)v->elem_size, (size_t)v->elem_size);\n")
 	out.WriteString("}\n\n")
 

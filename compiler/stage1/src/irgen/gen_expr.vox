@@ -6,7 +6,24 @@ struct GenExprResult { ok: bool, err: String, g: Gen, val: ir.Value, ty: i32 }
 
 fn gen_expr(g0: Gen, id: i32, expected: i32) -> GenExprResult {
   let tr: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.aliases, g0.exprs, g0.locals, id, expected);
-  if !tr.ok { return GenExprResult { ok: false, err: "type error in expr", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+  if !tr.ok {
+    let n0: ast.ExprNode = ast.expr_pool_get(g0.exprs, id);
+    let hint: String = match n0 {
+      ast.ExprNode.Int(_v) => "Int",
+      ast.ExprNode.Bool(_v) => "Bool",
+      ast.ExprNode.Str(_v) => "Str",
+      ast.ExprNode.Ident(_s) => "Ident",
+      ast.ExprNode.DotIdent(_s) => "DotIdent",
+      ast.ExprNode.Unary(_op, _a) => "Unary",
+      ast.ExprNode.Binary(_op, _l, _r) => "Binary",
+      ast.ExprNode.If(_c, _t, _e) => "If",
+      ast.ExprNode.Member(_recv, _name) => "Member",
+      ast.ExprNode.Call(_callee, _targs, _args) => "Call",
+      ast.ExprNode.StructLit(_ty, _fields) => "StructLit",
+      ast.ExprNode.Match(_scr, _arms) => "Match",
+    };
+    return GenExprResult { ok: false, err: "type error in expr: ".concat(hint).concat(" in mod ").concat(g0.mod_path), g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+  }
 
   let n: ast.ExprNode = ast.expr_pool_get(g0.exprs, id);
   return match n {
@@ -98,6 +115,29 @@ fn gen_expr_binary(g0: Gen, op: ast.BinaryOp, l: i32, r: i32, out_ty: i32) -> Ge
   if !rr.ok { return rr; }
   g = rr.g;
 
+  // Special-case: enum equality against unit variants lowers to tag comparison.
+  let is_eqop: bool = match op { ast.BinaryOp.Eq => true, ast.BinaryOp.Ne => true, _ => false };
+  if is_eqop && tc.is_enum_ty(g.ctx, lr.ty) {
+    let lt: i32 = enum_unit_tag(g, l, lr.ty);
+    let rt: i32 = enum_unit_tag(g, r, lr.ty);
+    if lt != -1 || rt != -1 {
+      let unit_tag: i32 = if lt != -1 { lt } else { rt };
+      let other: ir.Value = if lt != -1 { rr.val } else { lr.val };
+
+      let nt: GenNewIdResult = gen_new_temp(g);
+      g = nt.g;
+      let tag_id: i32 = nt.id;
+      g = gen_emit(g, ir.Instr.EnumTag(tag_id, other));
+
+      let cmp: GenNewIdResult = gen_new_temp(g);
+      g = cmp.g;
+      let cmp_id: i32 = cmp.id;
+      let ck: ir.CmpKind = if match op { ast.BinaryOp.Eq => true, _ => false } { ir.CmpKind.Eq } else { ir.CmpKind.Ne };
+      g = gen_emit(g, ir.Instr.Cmp(cmp_id, ck, g.ctx.ty_i32, ir.v_temp(tag_id), ir.v_int(unit_tag)));
+      return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(cmp_id), ty: out_ty };
+    }
+  }
+
   let is_logic: bool = match op { ast.BinaryOp.AndAnd => true, ast.BinaryOp.OrOr => true, _ => false };
   if is_logic {
     let rt: GenNewIdResult = gen_new_temp(g);
@@ -137,6 +177,42 @@ fn gen_expr_binary(g0: Gen, op: ast.BinaryOp, l: i32, r: i32, out_ty: i32) -> Ge
   };
   g = gen_emit(g, ir.Instr.BinOp(tid2, bk, out_ty, lr.val, rr.val));
   return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid2), ty: out_ty };
+}
+
+fn enum_unit_tag(g0: Gen, id: i32, enum_ty: i32) -> i32 {
+  if !tc.is_enum_ty(g0.ctx, enum_ty) { return -1; }
+  let n: ast.ExprNode = ast.expr_pool_get(g0.exprs, id);
+
+  if match n { ast.ExprNode.Call(_c, _ta, _args) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.Call(c, _ta, _args) => c, _ => -1 };
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, ta, _args) => ta, _ => Vec() };
+    let args: Vec[i32] = match n { ast.ExprNode.Call(_c, _ta, a) => a, _ => Vec() };
+    if targs.len() == 0 && args.len() == 0 { return enum_unit_tag(g0, callee, enum_ty); }
+    return -1;
+  }
+
+  let var_name: String = match n {
+    ast.ExprNode.DotIdent(s) => s,
+    ast.ExprNode.Member(_recv, s) => s,
+    _ => "",
+  };
+  if var_name == "" { return -1; }
+
+  let et: ir.Ty = ir.ty_pool_get(g0.ctx.pool, enum_ty);
+  if et.kind != ir.TyKind.Enum { return -1; }
+  let fe: tc.FindEnumResult = tc.find_enum(g0.ctx, tc.ty_mod(et), tc.ty_name(et));
+  if !fe.found { return -1; }
+  let es: tc.EnumSig = fe.sig;
+  let mut vi: i32 = 0;
+  while vi < es.vars.len() {
+    let v: tc.EnumVariantSig = es.vars.get(vi);
+    if v.name == var_name {
+      if v.fields.len() != 0 { return -1; }
+      return vi;
+    }
+    vi = vi + 1;
+  }
+  return -1;
 }
 
 // Implementations live in gen_cf.vox / gen_member_struct.vox / gen_call_match.vox.

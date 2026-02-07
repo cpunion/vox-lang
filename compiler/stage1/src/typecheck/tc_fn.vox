@@ -1,4 +1,5 @@
 import "ast" as ast
+import "ir" as ir
 
 fn typecheck_fn(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, fnc: ast.FuncDecl) -> TcResult {
   let fr: FindFuncResult = find_func(ctx, mod_path, fnc.name);
@@ -42,6 +43,7 @@ fn tc_stmt(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], expr
   return match st {
     ast.Stmt.Let(mutable, name, has_ann, ann, init) => tc_stmt_let(ctx, w, mod_path, aliases, exprs, l0, mutable, name, has_ann, ann, init),
     ast.Stmt.Assign(name, rhs) => tc_stmt_assign(ctx, w, mod_path, aliases, exprs, l0, name, rhs),
+    ast.Stmt.AssignField(recv, field, rhs) => tc_stmt_assign_field(ctx, w, mod_path, aliases, exprs, l0, recv, field, rhs),
     ast.Stmt.Expr(eid) => tc_stmt_expr(ctx, w, mod_path, aliases, exprs, l0, eid),
     ast.Stmt.If(cond, then_b, has_else, else_b) => tc_stmt_if(ctx, w, mod_path, aliases, exprs, l0, ret_ty, cond, then_b, has_else, else_b),
     ast.Stmt.While(cond, body) => tc_stmt_while(ctx, w, mod_path, aliases, exprs, l0, ret_ty, cond, body),
@@ -78,6 +80,41 @@ fn tc_stmt_assign(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, rhs, vr.ty);
   if !er.ok { return TcStmtResult { ok: false, err: TcError.Msg("bad assign rhs"), ctx: ctx, locals: l0 }; }
   if er.ty != vr.ty { return TcStmtResult { ok: false, err: TcError.Msg("assign type mismatch"), ctx: ctx, locals: l0 }; }
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+}
+
+fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, recv: String, field: String, rhs: i32) -> TcStmtResult {
+  let vr: LookupVarResult = locals_lookup(l0, recv);
+  if !vr.found { return TcStmtResult { ok: false, err: TcError.Msg("unknown var"), ctx: ctx, locals: l0 }; }
+  if !vr.mutable { return TcStmtResult { ok: false, err: TcError.Msg("assign to immutable var"), ctx: ctx, locals: l0 }; }
+
+  let rt: ir.Ty = ir.ty_pool_get(ctx.pool, vr.ty);
+  if rt.kind != ir.TyKind.Struct { return TcStmtResult { ok: false, err: TcError.Msg("field assign recv must be struct"), ctx: ctx, locals: l0 }; }
+  let fs: FindStructResult = find_struct(ctx, rt.mod_path, rt.name);
+  if !fs.found { return TcStmtResult { ok: false, err: TcError.Msg("unknown struct type"), ctx: ctx, locals: l0 }; }
+  // Visibility: crossing modules requires both the type and the field to be pub.
+  if fs.sig.mod_path != mod_path && !fs.sig.is_pub { return TcStmtResult { ok: false, err: TcError.Msg("type is private"), ctx: ctx, locals: l0 }; }
+
+  let mut found: bool = false;
+  let mut fty: i32 = ctx.ty_bad;
+  let mut fpub: bool = false;
+  let mut i: i32 = 0;
+  while i < fs.sig.fields.len() {
+    let f: StructFieldSig = fs.sig.fields.get(i);
+    if f.name == field {
+      found = true;
+      fty = f.ty;
+      fpub = f.is_pub;
+      break;
+    }
+    i = i + 1;
+  }
+  if !found { return TcStmtResult { ok: false, err: TcError.Msg("unknown field"), ctx: ctx, locals: l0 }; }
+  if fs.sig.mod_path != mod_path && !fpub { return TcStmtResult { ok: false, err: TcError.Msg("field is private"), ctx: ctx, locals: l0 }; }
+
+  let er: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, rhs, fty);
+  if !er.ok { return TcStmtResult { ok: false, err: TcError.Msg("bad assign rhs"), ctx: ctx, locals: l0 }; }
+  if er.ty != fty { return TcStmtResult { ok: false, err: TcError.Msg("assign type mismatch"), ctx: ctx, locals: l0 }; }
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
 }
 

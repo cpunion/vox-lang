@@ -74,7 +74,8 @@ fn find_generic_func(m: tc.WorldModule, name: String) -> FindFuncDeclResult {
 
 pub fn generate_world(w: tc.World) -> GenResult {
   let br: tc.BuildCtxResult = tc.build_ctx(w);
-  let mut p: ir.Program = ir.program(br.ctx.pool);
+  let mut ctx: tc.Ctx = br.ctx;
+  let mut p: ir.Program = ir.program(ctx.pool);
   if !br.ok { return err0(p, "build_ctx failed"); }
 
   // Nominal defs from collected signatures.
@@ -142,17 +143,18 @@ pub fn generate_world(w: tc.World) -> GenResult {
 
     if has_str(emitted, want_name) { ti = ti + 1; continue; }
 
-    let mut r: GenFuncResult = GenFuncResult { ok: false, err: "", f: ir.Func { name: "", params: Vec(), ret: br.ctx.ty_bad, blocks: Vec() }, pending: Vec() };
+    let mut r: GenFuncResult = GenFuncResult { ok: false, err: "", ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, pending: Vec() };
     if t.kind == TaskKind.Normal {
       let fd: ast.FuncDecl = m2.prog.funcs.get(t.func_idx);
-      r = gen_func(br.ctx, w, t.mod_path, aliases, m2.prog.exprs, fd);
+      r = gen_func(ctx, w, t.mod_path, aliases, m2.prog.exprs, fd);
     } else {
       let fr: FindFuncDeclResult = find_generic_func(m2, t.base_name);
       if !fr.found { return err0(p, "missing generic fn for instantiation"); }
-      r = gen_func_inst(br.ctx, w, t.mod_path, aliases, m2.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs);
+      r = gen_func_inst(ctx, w, t.mod_path, aliases, m2.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs);
     }
 
     if !r.ok { return err0(p, r.err); }
+    ctx = r.ctx;
     emitted.push(want_name);
     p.funcs.push(r.f);
 
@@ -167,5 +169,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
     ti = ti + 1;
   }
 
+  // Keep the program's pool in sync with any types interned while lowering bodies.
+  p.pool = ctx.pool;
   return ok0(p);
 }

@@ -87,6 +87,63 @@ fn tc_expr_unary(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias]
 
 fn is_int_ty(ctx: Ctx, ty: i32) -> bool { return ty == ctx.ty_i32 || ty == ctx.ty_i64; }
 
+fn enum_unit_tag_in_enum(ctx: Ctx, enum_ty: i32, var_name: String) -> i32 {
+  let et: ir.Ty = ir.ty_pool_get(ctx.pool, enum_ty);
+  if et.kind != ir.TyKind.Enum { return -1; }
+  let fe: FindEnumResult = find_enum(ctx, ty_mod(et), ty_name(et));
+  if !fe.found { return -1; }
+  let es: EnumSig = fe.sig;
+  let mut vi: i32 = 0;
+  while vi < es.vars.len() {
+    let v: EnumVariantSig = es.vars.get(vi);
+    if v.name == var_name {
+      if v.fields.len() != 0 { return -1; }
+      return vi;
+    }
+    vi = vi + 1;
+  }
+  return -1;
+}
+
+fn is_enum_unit_value(ctx: Ctx, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, id: i32, enum_ty: i32) -> bool {
+  if !is_enum_ty(ctx, enum_ty) { return false; }
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
+  if match n { ast.ExprNode.DotIdent(_x) => true, _ => false } {
+    let name: String = match n { ast.ExprNode.DotIdent(s) => s, _ => "" };
+    return enum_unit_tag_in_enum(ctx, enum_ty, name) != -1;
+  }
+  if match n { ast.ExprNode.Call(_c, _targs, _args) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.Call(c, _targs, _args) => c, _ => -1 };
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, ta, _args) => ta, _ => Vec() };
+    let args: Vec[i32] = match n { ast.ExprNode.Call(_c, _ta, a) => a, _ => Vec() };
+    if targs.len() == 0 && args.len() == 0 { return is_enum_unit_value(ctx, mod_path, aliases, exprs, callee, enum_ty); }
+    return false;
+  }
+  if !match n { ast.ExprNode.Member(_recv, _name) => true, _ => false } { return false; }
+
+  // Only treat path-like member chains as enum unit values (e.g. `E.None` / `alias.E.None`).
+  let recv: i32 = match n { ast.ExprNode.Member(r, _name) => r, _ => -1 };
+  let name: String = match n { ast.ExprNode.Member(_r, s) => s, _ => "" };
+  let pr: ExprPartsResult = expr_parts(exprs, recv);
+  if !pr.ok { return false; }
+  let mut parts: Vec[String] = pr.parts;
+  parts.push(name);
+  if parts.len() != 2 && parts.len() != 3 { return false; }
+
+  // Ensure it resolves to the same enum type (avoid accidentally accepting field access that happens to share a name).
+  let want_et: ir.Ty = ir.ty_pool_get(ctx.pool, enum_ty);
+  let want_mod: String = ty_mod(want_et);
+  let want_name: String = ty_name(want_et);
+
+  let enum_mod: String = if parts.len() == 2 { mod_path } else { find_alias(aliases, parts.get(0)) };
+  if enum_mod == "" { return false; }
+  let enum_name: String = if parts.len() == 2 { parts.get(0) } else { parts.get(1) };
+  if enum_mod != want_mod || enum_name != want_name { return false; }
+
+  let var_name: String = if parts.len() == 2 { parts.get(1) } else { parts.get(2) };
+  return enum_unit_tag_in_enum(ctx, enum_ty, var_name) != -1;
+}
+
 fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, op: ast.BinaryOp, l: i32, r: i32, expected: i32) -> ExprTyResult {
   let lr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, l, -1);
   if !lr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
@@ -112,8 +169,16 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias
 
   if is_eq {
     // v0: primitive equality only (keep Stage1 aligned with Stage0 subset).
-    let ok_ty: bool = lr.ty == ctx.ty_bool || lr.ty == ctx.ty_i32 || lr.ty == ctx.ty_i64 || lr.ty == ctx.ty_string;
-    if !ok_ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    let ok_prim: bool = lr.ty == ctx.ty_bool || lr.ty == ctx.ty_i32 || lr.ty == ctx.ty_i64 || lr.ty == ctx.ty_string;
+    if !ok_prim {
+      // Stage0 parity: enum equality is only allowed against unit variant values (lowers to tag compare).
+      if is_enum_ty(ctx, lr.ty) {
+        let ok_unit: bool = is_enum_unit_value(ctx, mod_path, aliases, exprs, l, lr.ty) || is_enum_unit_value(ctx, mod_path, aliases, exprs, r, lr.ty);
+        if !ok_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+      } else {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad };
+      }
+    }
     if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     return ExprTyResult { ok: true, ty: ctx.ty_bool };
   }
