@@ -164,13 +164,22 @@ func TestPipelineEnumCtorAndMatchCompilesAndRuns(t *testing.T) {
 		t.Skip("cc not found")
 	}
 
-	f := source.NewFile("src/main.vox", `enum Option { Some(i32), None }
+	f := source.NewFile("src/main.vox", `enum E { A(i32), B(String), None }
 fn main() -> i32 {
-  // enum constructor call + match expression
-  let x: Option = Option.Some(1);
-  return match x {
-    Option.Some(v) => v,
-    Option.None => 0,
+  // enum constructor call + match expression (payload types differ across variants)
+  let x: E = E.B("hi");
+  let ok: bool = match x {
+    E.A(v) => v == 0,
+    E.B(s) => s == "hi",
+    E.None => false,
+  };
+  assert(ok);
+
+  let y: E = E.A(41);
+  return match y {
+    E.A(v) => v + 1,
+    E.B(s) => 0,
+    E.None => 0,
   };
 }`)
 	prog, pdiags := parser.Parse(f)
@@ -206,8 +215,8 @@ fn main() -> i32 {
 	if err != nil {
 		t.Fatalf("run failed: %v\n%s", err, string(out))
 	}
-	if got := strings.TrimSpace(string(out)); got != "1" {
-		t.Fatalf("expected output 1, got %q", got)
+	if got := strings.TrimSpace(string(out)); got != "42" {
+		t.Fatalf("expected output 42, got %q", got)
 	}
 }
 

@@ -37,12 +37,13 @@ IR v0 只定义 stage0 必需类型：
 - `unit`
 - `str`（当前用于 stage0 的 `String` 字面量与最小字符串比较/返回；后续会替换为真正的字符串/切片模型）
 - `struct(<qualified_name>)`（名义结构体类型）
+- `enum(<qualified_name>)`（名义枚举类型）
 
-说明（Stage0 限定）：
+说明（Stage0 实现策略）：
 
-- `enum` 在 IR v0 中不单独建模，而是 **降低为 `struct`**：
+- `enum` 在 stage0 C 后端降低为 tagged union：
   - `tag: i32`（variant index）
-  - 可选 `payload: T`（Stage0 仅支持至多一个 payload 字段，且所有非 unit variant 的 payload 类型必须一致）
+  - `union { ... } payload`（每个 variant 一个 union member；payload arity 目前仅支持 0/1）
 
 ## 4. 程序结构
 
@@ -50,6 +51,7 @@ IR v0 只定义 stage0 必需类型：
 
 - 头：`ir v0`
 - 若干结构体定义（可选）：`struct <name> { <fields...> }`
+- 若干枚举定义（可选）：`enum <name> { <variants...> }`
 - 若干函数：`fn <name>(<params>) -> <ret>`
 - 函数包含若干 block（CFG）
 
@@ -126,6 +128,27 @@ call unit bar(%t0)
 
 ```
 store_field $v0 .x %t1
+```
+
+### 5.8 枚举（enum）
+
+构造（variant index 由 `enum` 定义顺序决定）：
+
+```
+%t0 = enum_init enum(Option) Some(1)
+%t1 = enum_init enum(Option) None
+```
+
+读取 tag：
+
+```
+%t2 = enum_tag %t0
+```
+
+读取 payload（仅当该 variant 带 payload）：
+
+```
+%t3 = enum_payload i32 %t0 Some
 ```
 
 ## 6. 终结指令（terminator）

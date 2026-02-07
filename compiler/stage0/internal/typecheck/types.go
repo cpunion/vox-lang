@@ -242,10 +242,6 @@ func (c *checker) collectEnumSigs() {
 		sig.Variants = nil
 		sig.VariantIndex = map[string]int{}
 
-		// Stage0 limitation: enums are lowered to a (tag, payload) representation.
-		// To keep IR v0 + C backend small, we require at most one non-unit payload type.
-		payloadTy := Type{K: TyUnit}
-
 		for _, v := range en.Variants {
 			if _, exists := sig.VariantIndex[v.Name]; exists {
 				c.errorAt(v.Span, "duplicate variant: "+v.Name)
@@ -258,11 +254,6 @@ func (c *checker) collectEnumSigs() {
 			for _, ft := range v.Fields {
 				fty := c.typeFromAstInFile(ft, en.Span.File)
 				fields = append(fields, fty)
-				if payloadTy.K == TyUnit {
-					payloadTy = fty
-				} else if !sameType(payloadTy, fty) {
-					c.errorAt(v.Span, "stage0 enum payload type must be consistent across variants")
-				}
 			}
 			sig.VariantIndex[v.Name] = len(sig.Variants)
 			sig.Variants = append(sig.Variants, EnumVariantSig{Name: v.Name, Fields: fields})

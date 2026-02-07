@@ -17,11 +17,12 @@ const (
 	TI64
 	TString
 	TStruct
+	TEnum
 )
 
 type Type struct {
 	K TypeKind
-	// Name is set when K == TStruct (qualified name).
+	// Name is set when K == TStruct or K == TEnum (qualified name).
 	Name string
 }
 
@@ -39,6 +40,8 @@ func (t Type) String() string {
 		return "str"
 	case TStruct:
 		return "struct(" + t.Name + ")"
+	case TEnum:
+		return "enum(" + t.Name + ")"
 	default:
 		return "<bad>"
 	}
@@ -46,6 +49,7 @@ func (t Type) String() string {
 
 type Program struct {
 	Structs map[string]*Struct
+	Enums   map[string]*Enum
 	Funcs   map[string]*Func
 }
 
@@ -57,6 +61,17 @@ type Struct struct {
 type StructField struct {
 	Name string
 	Ty   Type
+}
+
+type Enum struct {
+	Name         string
+	Variants     []EnumVariant
+	VariantIndex map[string]int
+}
+
+type EnumVariant struct {
+	Name    string
+	Payload *Type // nil for unit variants
 }
 
 type Func struct {
@@ -330,6 +345,51 @@ func (i *StoreField) fmtString() string {
 	return fmt.Sprintf("store_field %s .%s %s", i.Slot.fmtString(), i.Field, i.Val.fmtString())
 }
 
+type EnumInit struct {
+	Dst     *Temp
+	Ty      Type   // enum type
+	Variant string // variant name
+	Payload Value  // optional (nil for unit variants)
+}
+
+func (*EnumInit) instrNode() {}
+func (i *EnumInit) fmtString() string {
+	var sb strings.Builder
+	sb.WriteString(i.Dst.fmtString())
+	sb.WriteString(" = enum_init ")
+	sb.WriteString(i.Ty.String())
+	sb.WriteByte(' ')
+	sb.WriteString(i.Variant)
+	if i.Payload != nil {
+		sb.WriteByte('(')
+		sb.WriteString(i.Payload.fmtString())
+		sb.WriteByte(')')
+	}
+	return sb.String()
+}
+
+type EnumTag struct {
+	Dst  *Temp
+	Recv Value
+}
+
+func (*EnumTag) instrNode() {}
+func (i *EnumTag) fmtString() string {
+	return fmt.Sprintf("%s = enum_tag %s", i.Dst.fmtString(), i.Recv.fmtString())
+}
+
+type EnumPayload struct {
+	Dst     *Temp
+	Ty      Type
+	Recv    Value
+	Variant string
+}
+
+func (*EnumPayload) instrNode() {}
+func (i *EnumPayload) fmtString() string {
+	return fmt.Sprintf("%s = enum_payload %s %s %s", i.Dst.fmtString(), i.Ty.String(), i.Recv.fmtString(), i.Variant)
+}
+
 type Call struct {
 	Dst  *Temp // optional when Ret is unit
 	Ret  Type
@@ -415,6 +475,32 @@ func (p *Program) Format() string {
 				sb.WriteString(f.Name)
 				sb.WriteString(": ")
 				sb.WriteString(f.Ty.String())
+			}
+			sb.WriteString(" }\n")
+		}
+	}
+
+	if len(p.Enums) > 0 {
+		enames := make([]string, 0, len(p.Enums))
+		for name := range p.Enums {
+			enames = append(enames, name)
+		}
+		sort.Strings(enames)
+		for _, name := range enames {
+			en := p.Enums[name]
+			sb.WriteString("enum ")
+			sb.WriteString(en.Name)
+			sb.WriteString(" { ")
+			for i, v := range en.Variants {
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(v.Name)
+				if v.Payload != nil {
+					sb.WriteByte('(')
+					sb.WriteString(v.Payload.String())
+					sb.WriteByte(')')
+				}
 			}
 			sb.WriteString(" }\n")
 		}

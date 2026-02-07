@@ -65,8 +65,8 @@ enum Result[T, E] {
 ```vox
 fn show(opt: Option[i32]) -> i32 {
   match opt {
-    Option::Some(v) => v,
-    Option::None => 0,
+    Option.Some(v) => v,
+    Option.None => 0,
   }
 }
 ```
@@ -78,7 +78,7 @@ let opt: Option[i32] = .Some(42);
 let opt: Option[i32] = .None;
 ```
 
-无法从上下文确定枚举类型时，必须使用全路径（例如 `Option::Some(42)`）。
+无法从上下文确定枚举类型时，必须使用全路径（例如 `Option.Some(42)`）。
 
 ## Union 类型（`|`，已定）
 

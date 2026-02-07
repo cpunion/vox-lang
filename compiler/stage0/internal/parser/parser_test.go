@@ -97,13 +97,22 @@ fn main() -> i32 {
 }
 
 func TestParseEnumDeclAndCtorAndMatch(t *testing.T) {
-	f := source.NewFile("test.vox", `enum Option { Some(i32), None }
+	f := source.NewFile("test.vox", `enum E { A(i32), B(String), None }
 fn main() -> i32 {
-  // enum constructor call + match expression
-  let x: Option = Option.Some(1);
-  return match x {
-    Option.Some(v) => v,
-    Option.None => 0,
+  // enum constructor call + match expression (payload types differ across variants)
+  let x: E = E.B("hi");
+  let ok: bool = match x {
+    E.A(v) => v == 0,
+    E.B(s) => s == "hi",
+    E.None => false,
+  };
+  assert(ok);
+
+  let y: E = E.A(41);
+  return match y {
+    E.A(v) => v + 1,
+    E.B(s) => 0,
+    E.None => 0,
   };
 }`)
 	_, diags := Parse(f)

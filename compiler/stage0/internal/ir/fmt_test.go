@@ -49,6 +49,10 @@ func TestFmtStringInstrAndTerm(t *testing.T) {
 		{name: "load", ins: &Load{Dst: &Temp{ID: 6}, Ty: Type{K: TI32}, Slot: s0}, want: "%t6 = load i32 $v0"},
 		{name: "call_unit", ins: &Call{Ret: Type{K: TUnit}, Name: "foo", Args: []Value{t0, p0}}, want: "call unit foo(%t0, %p0)"},
 		{name: "call_ret", ins: &Call{Dst: &Temp{ID: 7}, Ret: Type{K: TI32}, Name: "bar", Args: nil}, want: "%t7 = call i32 bar()"},
+		{name: "enum_init_payload", ins: &EnumInit{Dst: &Temp{ID: 8}, Ty: Type{K: TEnum, Name: "E"}, Variant: "A", Payload: &ConstInt{Ty: Type{K: TI32}, V: 1}}, want: "%t8 = enum_init enum(E) A(1)"},
+		{name: "enum_init_unit", ins: &EnumInit{Dst: &Temp{ID: 9}, Ty: Type{K: TEnum, Name: "E"}, Variant: "None"}, want: "%t9 = enum_init enum(E) None"},
+		{name: "enum_tag", ins: &EnumTag{Dst: &Temp{ID: 10}, Recv: t0}, want: "%t10 = enum_tag %t0"},
+		{name: "enum_payload", ins: &EnumPayload{Dst: &Temp{ID: 11}, Ty: Type{K: TI32}, Recv: t0, Variant: "A"}, want: "%t11 = enum_payload i32 %t0 A"},
 	}
 	for _, tc := range insCases {
 		t.Run("ins_"+tc.name, func(t *testing.T) {

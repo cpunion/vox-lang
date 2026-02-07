@@ -15,12 +15,12 @@ import (
 func Generate(p *typecheck.CheckedProgram) (*ir.Program, error) {
 	g := &gen{
 		p:        p,
-		out:      &ir.Program{Structs: map[string]*ir.Struct{}, Funcs: map[string]*ir.Func{}},
+		out:      &ir.Program{Structs: map[string]*ir.Struct{}, Enums: map[string]*ir.Enum{}, Funcs: map[string]*ir.Func{}},
 		tmpID:    0,
 		slotID:   0,
 		funcSigs: p.FuncSigs,
 	}
-	if err := g.genStructDefs(); err != nil {
+	if err := g.genNominalDefs(); err != nil {
 		return nil, err
 	}
 	for _, fn := range p.Prog.Funcs {
@@ -98,18 +98,18 @@ func (g *gen) emit(i ir.Instr) { g.curBlock.Instr = append(g.curBlock.Instr, i) 
 
 func (g *gen) term(t ir.Term) { g.curBlock.Term = t }
 
-func (g *gen) genStructDefs() error {
+func (g *gen) genNominalDefs() error {
 	if g.p == nil {
 		return nil
 	}
 
 	// Stable ordering for reproducible output.
-	var names []string
+	var snames []string
 	for name := range g.p.StructSigs {
-		names = append(names, name)
+		snames = append(snames, name)
 	}
-	sort.Strings(names)
-	for _, name := range names {
+	sort.Strings(snames)
+	for _, name := range snames {
 		ss := g.p.StructSigs[name]
 		st := &ir.Struct{Name: ss.Name}
 		for _, f := range ss.Fields {
@@ -122,7 +122,6 @@ func (g *gen) genStructDefs() error {
 		g.out.Structs[st.Name] = st
 	}
 
-	// Enums are lowered to a synthetic struct { tag: i32, payload?: T } in IR v0.
 	var enames []string
 	for name := range g.p.EnumSigs {
 		enames = append(enames, name)
@@ -130,24 +129,20 @@ func (g *gen) genStructDefs() error {
 	sort.Strings(enames)
 	for _, name := range enames {
 		es := g.p.EnumSigs[name]
-		// Determine payload type (must be consistent; typechecker enforces).
-		payload := typecheck.Type{K: typecheck.TyUnit}
-		for _, v := range es.Variants {
+		en := &ir.Enum{Name: es.Name, VariantIndex: map[string]int{}}
+		for i, v := range es.Variants {
+			var payload *ir.Type
 			if len(v.Fields) == 1 {
-				payload = v.Fields[0]
-				break
+				pty, err := g.irTypeFromChecked(v.Fields[0])
+				if err != nil {
+					return err
+				}
+				payload = &pty
 			}
+			en.VariantIndex[v.Name] = i
+			en.Variants = append(en.Variants, ir.EnumVariant{Name: v.Name, Payload: payload})
 		}
-		st := &ir.Struct{Name: es.Name}
-		st.Fields = append(st.Fields, ir.StructField{Name: "tag", Ty: ir.Type{K: ir.TI32}})
-		if payload.K != typecheck.TyUnit {
-			pty, err := g.irTypeFromChecked(payload)
-			if err != nil {
-				return err
-			}
-			st.Fields = append(st.Fields, ir.StructField{Name: "payload", Ty: pty})
-		}
-		g.out.Structs[st.Name] = st
+		g.out.Enums[en.Name] = en
 	}
 	return nil
 }
@@ -224,8 +219,7 @@ func (g *gen) irTypeFromChecked(t typecheck.Type) (ir.Type, error) {
 	case typecheck.TyStruct:
 		return ir.Type{K: ir.TStruct, Name: t.Name}, nil
 	case typecheck.TyEnum:
-		// Enums are represented as synthetic structs in IR v0.
-		return ir.Type{K: ir.TStruct, Name: t.Name}, nil
+		return ir.Type{K: ir.TEnum, Name: t.Name}, nil
 	default:
 		return ir.Type{}, fmt.Errorf("unsupported type")
 	}
@@ -526,15 +520,13 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			return nil, fmt.Errorf("unsupported binary op: %s", e.Op)
 		}
 	case *ast.CallExpr:
-		// Enum constructors are lowered as struct_init { tag, payload? }.
+		// Enum constructors are lowered as enum_init.
 		if ctor, ok := g.p.EnumCtors[e]; ok {
 			ety, err := g.irTypeFromChecked(ctor.Enum)
 			if err != nil {
 				return nil, err
 			}
-			tagTmp := g.newTemp()
-			g.emit(&ir.Const{Dst: tagTmp, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: int64(ctor.Tag)}})
-			fields := []ir.StructInitField{{Name: "tag", Val: tagTmp}}
+			var payload ir.Value
 			if ctor.Payload.K != typecheck.TyUnit {
 				if len(e.Args) != 1 {
 					return nil, fmt.Errorf("enum constructor expects 1 arg")
@@ -543,23 +535,10 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 				if err != nil {
 					return nil, err
 				}
-				fields = append(fields, ir.StructInitField{Name: "payload", Val: pv})
-			} else {
-				// Enum may still have a payload field (if other variants carry one); set it to zero.
-				if st, ok := g.out.Structs[ety.Name]; ok {
-					for _, f := range st.Fields {
-						if f.Name == "payload" {
-							z, err := g.zeroValue(f.Ty)
-							if err != nil {
-								return nil, err
-							}
-							fields = append(fields, ir.StructInitField{Name: "payload", Val: z})
-						}
-					}
-				}
+				payload = pv
 			}
 			tmp := g.newTemp()
-			g.emit(&ir.StructInit{Dst: tmp, Ty: ety, Fields: fields})
+			g.emit(&ir.EnumInit{Dst: tmp, Ty: ety, Variant: ctor.Variant, Payload: payload})
 			return tmp, nil
 		}
 
@@ -606,22 +585,9 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			if err != nil {
 				return nil, err
 			}
-			tagTmp := g.newTemp()
-			g.emit(&ir.Const{Dst: tagTmp, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: int64(tag)}})
-			fields := []ir.StructInitField{{Name: "tag", Val: tagTmp}}
-			if st, ok := g.out.Structs[ety.Name]; ok {
-				for _, f := range st.Fields {
-					if f.Name == "payload" {
-						z, err := g.zeroValue(f.Ty)
-						if err != nil {
-							return nil, err
-						}
-						fields = append(fields, ir.StructInitField{Name: "payload", Val: z})
-					}
-				}
-			}
 			tmp := g.newTemp()
-			g.emit(&ir.StructInit{Dst: tmp, Ty: ety, Fields: fields})
+			_ = tag // tag is implicit in enum definition; keep for debugging
+			g.emit(&ir.EnumInit{Dst: tmp, Ty: ety, Variant: e.Name})
 			return tmp, nil
 		}
 
@@ -667,9 +633,16 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	scrutTy := g.p.ExprTypes[m.Scrutinee]
+	if scrutTy.K != typecheck.TyEnum {
+		return nil, fmt.Errorf("match scrutinee must be enum")
+	}
+	es := g.p.EnumSigs[scrutTy.Name]
+
 	// Extract tag.
 	tagTmp := g.newTemp()
-	g.emit(&ir.FieldGet{Dst: tagTmp, Ty: ir.Type{K: ir.TI32}, Recv: scrut, Field: "tag"})
+	g.emit(&ir.EnumTag{Dst: tagTmp, Recv: scrut})
 
 	resTyChecked := g.p.ExprTypes[m]
 	resTy, err := g.irTypeFromChecked(resTyChecked)
@@ -695,19 +668,15 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 
 	// Prepare arm blocks.
 	type armInfo struct {
-		arm  ast.MatchArm
-		blk  *ir.Block
-		tag  *int
-		bind string
+		arm     ast.MatchArm
+		blk     *ir.Block
+		variant string
+		tag     *int
+		bind    string
+		bindTy  *typecheck.Type
 	}
 	var arms []armInfo
 	var wildBlk *ir.Block
-
-	scrutTy := g.p.ExprTypes[m.Scrutinee]
-	if scrutTy.K != typecheck.TyEnum {
-		return nil, fmt.Errorf("match scrutinee must be enum")
-	}
-	es := g.p.EnumSigs[scrutTy.Name]
 
 	for _, a := range m.Arms {
 		info := armInfo{arm: a, blk: g.newBlock(fmt.Sprintf("match_arm_%d", len(g.blocks)))}
@@ -716,9 +685,14 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 			wildBlk = info.blk
 		case *ast.VariantPat:
 			t := es.VariantIndex[p.Variant]
+			info.variant = p.Variant
 			info.tag = &t
 			if len(p.Binds) == 1 {
 				info.bind = p.Binds[0]
+				if len(es.Variants[t].Fields) == 1 {
+					bt := es.Variants[t].Fields[0]
+					info.bindTy = &bt
+				}
 			}
 		default:
 			return nil, fmt.Errorf("unsupported pattern in IR gen")
@@ -733,18 +707,22 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 			continue
 		}
 		nextDecide := g.newBlock(fmt.Sprintf("match_decide_%d", len(g.blocks)))
-		// Compare tag.
 		cmpTmp := g.newTemp()
-		g.emit(&ir.Cmp{Dst: cmpTmp, Op: ir.CmpEq, Ty: ir.Type{K: ir.TI32}, A: tagTmp, B: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: int64(*info.tag)}})
+		g.emit(&ir.Cmp{
+			Dst: cmpTmp,
+			Op:  ir.CmpEq,
+			Ty:  ir.Type{K: ir.TI32},
+			A:   tagTmp,
+			B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: int64(*info.tag)},
+		})
 		g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
-		// Start emitting in next decision block.
 		g.setBlock(nextDecide)
 	}
+
 	// Default branch.
 	if wildBlk != nil {
 		g.term(&ir.Br{Target: wildBlk.Name})
 	} else {
-		// Typechecker should guarantee exhaustiveness; keep a safe default.
 		g.term(&ir.Br{Target: endBlk.Name})
 	}
 
@@ -752,26 +730,17 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	for _, info := range arms {
 		g.setBlock(info.blk)
 		g.pushScope()
-		// If binder exists, it must be payload type of enum.
-		if info.bind != "" {
-			st, ok := g.out.Structs[scrutTy.Name]
-			if !ok {
-				return nil, fmt.Errorf("missing enum layout for %s", scrutTy.Name)
-			}
-			var payloadTy ir.Type
-			for _, f := range st.Fields {
-				if f.Name == "payload" {
-					payloadTy = f.Ty
-				}
-			}
-			if payloadTy.K == ir.TBad {
-				return nil, fmt.Errorf("enum %s has no payload field", scrutTy.Name)
+
+		if info.bind != "" && info.bindTy != nil {
+			pty, err := g.irTypeFromChecked(*info.bindTy)
+			if err != nil {
+				return nil, err
 			}
 			tmp := g.newTemp()
-			g.emit(&ir.FieldGet{Dst: tmp, Ty: payloadTy, Recv: scrut, Field: "payload"})
+			g.emit(&ir.EnumPayload{Dst: tmp, Ty: pty, Recv: scrut, Variant: info.variant})
 			slot := g.newSlot()
-			g.slotTypes[slot.ID] = payloadTy
-			g.emit(&ir.SlotDecl{Slot: slot, Ty: payloadTy})
+			g.slotTypes[slot.ID] = pty
+			g.emit(&ir.SlotDecl{Slot: slot, Ty: pty})
 			g.emit(&ir.Store{Slot: slot, Val: tmp})
 			g.declare(info.bind, slot)
 		}
@@ -783,6 +752,7 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 		if resSlot != nil && v != nil {
 			g.emit(&ir.Store{Slot: resSlot, Val: v})
 		}
+
 		g.popScope()
 		g.term(&ir.Br{Target: endBlk.Name})
 	}
@@ -825,28 +795,25 @@ func (g *gen) zeroValue(t ir.Type) (ir.Value, error) {
 			g.emit(&ir.StructInit{Dst: tmp, Ty: t, Fields: fields})
 			return tmp, nil
 		}
-		// Enums are represented as synthetic structs; synthesize a zero value as tag=0 (+ payload=0 if present).
-		if _, ok := g.p.EnumSigs[t.Name]; ok {
-			tmp := g.newTemp()
-			tagTmp := g.newTemp()
-			g.emit(&ir.Const{Dst: tagTmp, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 0}})
-			fields := []ir.StructInitField{{Name: "tag", Val: tagTmp}}
-			if st, ok := g.out.Structs[t.Name]; ok {
-				for _, f := range st.Fields {
-					if f.Name != "payload" {
-						continue
-					}
-					z, err := g.zeroValue(f.Ty)
-					if err != nil {
-						return nil, err
-					}
-					fields = append(fields, ir.StructInitField{Name: "payload", Val: z})
-				}
-			}
-			g.emit(&ir.StructInit{Dst: tmp, Ty: t, Fields: fields})
-			return tmp, nil
-		}
 		return nil, fmt.Errorf("unknown struct: %s", t.Name)
+	case ir.TEnum:
+		en, ok := g.out.Enums[t.Name]
+		if !ok || en == nil || len(en.Variants) == 0 {
+			return nil, fmt.Errorf("unknown enum: %s", t.Name)
+		}
+		// Deterministic zero value: first variant, with zero payload if needed.
+		v0 := en.Variants[0]
+		var payload ir.Value
+		if v0.Payload != nil {
+			z, err := g.zeroValue(*v0.Payload)
+			if err != nil {
+				return nil, err
+			}
+			payload = z
+		}
+		tmp := g.newTemp()
+		g.emit(&ir.EnumInit{Dst: tmp, Ty: t, Variant: v0.Name, Payload: payload})
+		return tmp, nil
 	default:
 		return &ir.ConstInt{Ty: t, V: 0}, nil
 	}

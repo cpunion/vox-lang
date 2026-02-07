@@ -91,17 +91,26 @@ fn main() -> i32 {
 }
 
 func TestInterpEnumCtorAndMatch(t *testing.T) {
-	out := runMain(t, `enum Option { Some(i32), None }
+	out := runMain(t, `enum E { A(i32), B(String), None }
 fn main() -> i32 {
-  // enum constructor call + match expression
-  let x: Option = Option.Some(1);
-  return match x {
-    Option.Some(v) => v,
-    Option.None => 0,
+  // enum constructor call + match expression (payload types differ across variants)
+  let x: E = E.B("hi");
+  let ok: bool = match x {
+    E.A(v) => v == 0,
+    E.B(s) => s == "hi",
+    E.None => false,
+  };
+  assert(ok);
+
+  let y: E = E.A(41);
+  return match y {
+    E.A(v) => v + 1,
+    E.B(s) => 0,
+    E.None => 0,
   };
 }`)
-	if out != "1" {
-		t.Fatalf("expected 1, got %q", out)
+	if out != "42" {
+		t.Fatalf("expected 42, got %q", out)
 	}
 }
 
