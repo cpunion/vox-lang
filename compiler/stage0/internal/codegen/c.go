@@ -11,11 +11,24 @@ import (
 type EmitOptions struct {
 	// When true, emit a C entrypoint main() that calls vox main and prints its return value.
 	EmitDriverMain bool
+	// When true, emit a C entrypoint main(argc, argv) that dispatches to vox test_* functions.
+	EmitTestMain bool
+	// TestFuncs is the ordered list of test function qualified names (e.g. "pkg::mod::test_x").
+	// Each test must have signature `fn() -> ()`.
+	TestFuncs []TestFunc
+}
+
+type TestFunc struct {
+	// Name is the IR function name (qualified).
+	Name string
 }
 
 func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	if p == nil {
 		return "", fmt.Errorf("nil program")
+	}
+	if opts.EmitDriverMain && opts.EmitTestMain {
+		return "", fmt.Errorf("cannot emit both driver main and test main")
 	}
 
 	var out bytes.Buffer
@@ -277,6 +290,34 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 		default:
 			return "", fmt.Errorf("unsupported main return type in driver")
 		}
+		out.WriteString("  return 0;\n")
+		out.WriteString("}\n")
+	}
+
+	if opts.EmitTestMain {
+		out.WriteString("int main(int argc, char** argv) {\n")
+		out.WriteString("  const char* want = argc >= 2 ? argv[1] : NULL;\n")
+		out.WriteString("  if (want && want[0] == '\\0') want = NULL;\n")
+		out.WriteString("  int ran = 0;\n")
+		for _, tf := range opts.TestFuncs {
+			f, ok := p.Funcs[tf.Name]
+			if !ok {
+				return "", fmt.Errorf("missing test function: %s", tf.Name)
+			}
+			if len(f.Params) != 0 || f.Ret.K != ir.TUnit {
+				return "", fmt.Errorf("invalid test signature: %s (expected fn() -> ())", tf.Name)
+			}
+			// if (!want || strcmp(want, "name") == 0) { ran=1; fn(); }
+			out.WriteString("  if (!want || strcmp(want, ")
+			out.WriteString(cStringLit(tf.Name))
+			out.WriteString(") == 0) { ran = 1; ")
+			out.WriteString(cFnName(tf.Name))
+			out.WriteString("(); }\n")
+		}
+		out.WriteString("  if (want && !ran) {\n")
+		out.WriteString("    fprintf(stderr, \"unknown test: %s\\n\", want);\n")
+		out.WriteString("    return 2;\n")
+		out.WriteString("  }\n")
 		out.WriteString("  return 0;\n")
 		out.WriteString("}\n")
 	}

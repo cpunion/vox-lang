@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"voxlang/internal/diag"
-	"voxlang/internal/interp"
 	"voxlang/internal/manifest"
 	"voxlang/internal/parser"
 	"voxlang/internal/source"
@@ -28,8 +27,6 @@ type BuildResult struct {
 	Manifest  *manifest.Manifest
 	Root      string
 	Program   *typecheck.CheckedProgram
-	RunResult string
-	TestLog   string
 }
 
 func InitPackage(dir string) error {
@@ -176,24 +173,6 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 
 	res := &BuildResult{Manifest: mani, Program: checked}
 	res.Root = root
-	if tests {
-		log, terr := interp.RunTests(checked)
-		res.TestLog = log
-		if terr != nil {
-			db := &diag.Bag{}
-			db.Add(root, 1, 1, terr.Error())
-			return res, db, nil
-		}
-	}
-	if run {
-		out, rerr := interp.RunMain(checked)
-		if rerr != nil {
-			db := &diag.Bag{}
-			db.Add(root, 1, 1, rerr.Error())
-			return res, db, nil
-		}
-		res.RunResult = out
-	}
 	return res, nil, nil
 }
 

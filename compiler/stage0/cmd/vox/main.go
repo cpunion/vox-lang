@@ -5,11 +5,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"voxlang/internal/codegen"
 	"voxlang/internal/diag"
 	"voxlang/internal/irgen"
 	"voxlang/internal/loader"
+	"voxlang/internal/names"
+	"voxlang/internal/typecheck"
 )
 
 func usage() {
@@ -133,15 +137,45 @@ func test(dir string) error {
 		return err
 	}
 	if diags != nil && len(diags.Items) > 0 {
-		// If tests ran, print the test log even when failing, to aid debugging.
-		if res != nil && res.TestLog != "" {
-			fmt.Fprint(os.Stdout, res.TestLog)
-		}
 		diag.Print(os.Stderr, diags)
 		return fmt.Errorf("test failed")
 	}
-	if res != nil && res.TestLog != "" {
-		fmt.Fprint(os.Stdout, res.TestLog)
+	if res == nil || res.Program == nil {
+		return fmt.Errorf("internal error: missing checked program")
+	}
+
+	// Discover tests (Go-like): tests/**.vox and src/**/*_test.vox, functions named `test_*`.
+	testNames := discoverTests(res.Program)
+	if len(testNames) == 0 {
+		fmt.Fprintln(os.Stdout, "[test] no tests found")
+		return nil
+	}
+
+	// Build a single test binary and run each test in a separate process so panics
+	// can be attributed to the current test.
+	bin, err := compileTests(abs, res, testNames)
+	if err != nil {
+		return err
+	}
+
+	passed := 0
+	failed := 0
+	for _, name := range testNames {
+		cmd := exec.Command(bin, name)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		if err := cmd.Run(); err != nil {
+			failed++
+			fmt.Fprintf(os.Stdout, "[FAIL] %s\n", name)
+			continue
+		}
+		passed++
+		fmt.Fprintf(os.Stdout, "[OK] %s\n", name)
+	}
+	fmt.Fprintf(os.Stdout, "[test] %d passed, %d failed\n", passed, failed)
+	if failed != 0 {
+		return fmt.Errorf("%d test(s) failed", failed)
 	}
 	return nil
 }
@@ -188,6 +222,72 @@ func compile(dir string) (string, error) {
 		return "", err
 	}
 
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		return "", fmt.Errorf("cc not found in PATH")
+	}
+	cmd := exec.Command(cc, "-std=c11", "-O0", "-g", cPath, "-o", binPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return binPath, nil
+}
+
+func discoverTests(p *typecheck.CheckedProgram) []string {
+	if p == nil || p.Prog == nil {
+		return nil
+	}
+	var out []string
+	for _, fn := range p.Prog.Funcs {
+		if fn == nil || fn.Span.File == nil {
+			continue
+		}
+		_, _, isTest := names.SplitOwnerAndModule(fn.Span.File.Name)
+		if !isTest {
+			continue
+		}
+		if strings.HasPrefix(fn.Name, "test_") {
+			out = append(out, names.QualifyFunc(fn.Span.File.Name, fn.Name))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func compileTests(dir string, res *loader.BuildResult, testNames []string) (string, error) {
+	irp, err := irgen.Generate(res.Program)
+	if err != nil {
+		return "", err
+	}
+	tfs := make([]codegen.TestFunc, 0, len(testNames))
+	for _, n := range testNames {
+		tfs = append(tfs, codegen.TestFunc{Name: n})
+	}
+	csrc, err := codegen.EmitC(irp, codegen.EmitOptions{EmitTestMain: true, TestFuncs: tfs})
+	if err != nil {
+		return "", err
+	}
+
+	outDir := filepath.Join(res.Root, "target", "debug")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return "", err
+	}
+	base := res.Manifest.Package.Name
+	if base == "" {
+		base = filepath.Base(res.Root)
+	}
+	irPath := filepath.Join(outDir, base+".test.ir")
+	cPath := filepath.Join(outDir, base+".test.c")
+	binPath := filepath.Join(outDir, base+".test")
+
+	if err := os.WriteFile(irPath, []byte(irp.Format()), 0o644); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(cPath, []byte(csrc), 0o644); err != nil {
+		return "", err
+	}
 	cc, err := exec.LookPath("cc")
 	if err != nil {
 		return "", fmt.Errorf("cc not found in PATH")

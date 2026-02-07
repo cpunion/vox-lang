@@ -102,8 +102,8 @@ edition = "2026"
 	if diags != nil && len(diags.Items) > 0 {
 		t.Fatalf("unexpected diagnostics: %+v", diags.Items)
 	}
-	if res == nil || !strings.Contains(res.TestLog, "test_basic") || !strings.Contains(res.TestLog, "[OK]") {
-		t.Fatalf("expected ok test log, got %q", res.TestLog)
+	if res == nil || res.Program == nil {
+		t.Fatalf("expected checked program")
 	}
 }
 
