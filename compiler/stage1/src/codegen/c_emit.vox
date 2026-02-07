@@ -1,6 +1,10 @@
 import "ir" as ir
 
-pub struct EmitOptions { pub emit_driver_main: bool }
+pub struct EmitOptions {
+  pub emit_driver_main: bool,
+  pub emit_test_main: bool,
+  pub test_funcs: Vec[String], // qualified IR names
+}
 
 fn emit_header_lines() -> Vec[String] {
   let mut out: Vec[String] = Vec();
@@ -86,6 +90,28 @@ fn emit_driver_main(pool: ir.TyPool, main_fn: ir.Func) -> Vec[String] {
   return out;
 }
 
+fn emit_test_main(test_funcs: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  out.push("int main(int argc, char** argv) {");
+  out.push("  vox__argc = argc;");
+  out.push("  vox__argv = argv;");
+  out.push("  if (argc < 2 || !argv[1]) {");
+  out.push("    fprintf(stderr, \"missing test name\\n\");");
+  out.push("    return 1;");
+  out.push("  }");
+  out.push("  const char* name = argv[1];");
+  let mut i: i32 = 0;
+  while i < test_funcs.len() {
+    let n: String = test_funcs.get(i);
+    out.push("  if (strcmp(name, \"".concat(n).concat("\") == 0) { ").concat(c_fn_name(n)).concat("(); return 0; }"));
+    i = i + 1;
+  }
+  out.push("  fprintf(stderr, \"unknown test: %s\\n\", name);");
+  out.push("  return 1;");
+  out.push("}");
+  return out;
+}
+
 pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
   let pool: ir.TyPool = p.pool;
   let mut out: Vec[String] = emit_header_lines();
@@ -108,10 +134,17 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
     j = j + 1;
   }
 
+  if opts.emit_driver_main && opts.emit_test_main {
+    panic("cannot emit both driver main and test main");
+  }
+
   if opts.emit_driver_main {
     let mr: MainResult = find_main(p);
     if !mr.found { panic("missing function main"); }
     out = append_lines(out, emit_driver_main(pool, mr.f));
+  }
+  if opts.emit_test_main {
+    out = append_lines(out, emit_test_main(opts.test_funcs));
   }
 
   return out.join("\n").concat("\n");

@@ -9,12 +9,16 @@ import "std/fs" as fs
 import "loader" as ld
 import "compile" as c
 import "manifest" as mf
+import "codegen" as cg
+import "parse" as p
+import "ast" as ast
 
 fn usage() -> () {
   print("vox_stage1 usage:\n");
   print("  vox_stage1 emit-c <out.c> <src...>\n");
   print("  vox_stage1 build  <out.bin> <src...>\n");
   print("  vox_stage1 build-pkg <out.bin>   # build from ./src\n");
+  print("  vox_stage1 test-pkg <out.bin>    # build+run tests from ./src and ./tests\n");
 }
 
 fn has_prefix(s: String, pre: String) -> bool {
@@ -33,6 +37,12 @@ fn is_test_path(p: String) -> bool {
   return false;
 }
 
+fn is_test_file_for_discovery(p: String) -> bool {
+  if has_prefix(p, "tests/") { return true; }
+  if has_prefix(p, "src/") && has_suffix(p, "_test.vox") { return true; }
+  return false;
+}
+
 fn has_std_under_src(paths: Vec[String]) -> bool {
   let mut i: i32 = 0;
   while i < paths.len() {
@@ -48,6 +58,20 @@ fn filter_pkg_sources(paths: Vec[String]) -> Vec[String] {
   while i < paths.len() {
     let p: String = paths.get(i);
     if has_prefix(p, "src/") && !is_test_path(p) {
+      out.push(p);
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn filter_pkg_test_sources(paths: Vec[String]) -> Vec[String] {
+  // For tests, include src/** (including _test.vox) and tests/**.
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < paths.len() {
+    let p: String = paths.get(i);
+    if has_prefix(p, "src/") || has_prefix(p, "tests/") {
       out.push(p);
     }
     i = i + 1;
@@ -82,6 +106,48 @@ fn stage1_root() -> String {
   let d2: String = dir_name(d1);
   let d3: String = dir_name(d2);
   return d3;
+}
+
+fn qname(mod_path: String, name: String) -> String {
+  if mod_path == "" || mod_path == "main" { return name; }
+  let mut s: String = mod_path;
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == 47 { // '/'
+      s = s.slice(0, i).concat(".").concat(s.slice(i + 1, s.len()));
+    }
+    i = i + 1;
+  }
+  return s.concat("::").concat(name);
+}
+
+fn starts_with(s: String, pre: String) -> bool { return has_prefix(s, pre); }
+
+fn discover_tests(paths: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < paths.len() {
+    let pth: String = paths.get(i);
+    if is_test_file_for_discovery(pth) {
+      let txt: String = fs.read_to_string(pth);
+      let r: p.ParseResult = p.parse_text(txt);
+      if r.err != p.ParseError.None {
+        // Fail fast: discovery should not ignore syntax errors.
+        panic("parse error in test file: ".concat(pth));
+      }
+      let mp: String = ld.mod_path_from_file_path(pth);
+      let mut fi: i32 = 0;
+      while fi < r.prog.funcs.len() {
+        let fd: ast.FuncDecl = r.prog.funcs.get(fi);
+        if starts_with(fd.name, "test_") {
+          out.push(qname(mp, fd.name));
+        }
+        fi = fi + 1;
+      }
+    }
+    i = i + 1;
+  }
+  return out;
 }
 
 fn load_deps_from_manifest() -> Vec[ld.SourceFile] {
@@ -163,7 +229,7 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(srcs);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let r: c.CompileResult = c.compile_files_to_c(files, true);
+    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: true, emit_test_main: false, test_funcs: Vec() });
     if !r.ok {
       print("compile failed: ".concat(r.err).concat("\n"));
       return 1;
@@ -177,7 +243,7 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(srcs);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let r: c.CompileResult = c.compile_files_to_c(files, true);
+    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: true, emit_test_main: false, test_funcs: Vec() });
     if !r.ok {
       print("compile failed: ".concat(r.err).concat("\n"));
       return 1;
@@ -202,7 +268,7 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let r: c.CompileResult = c.compile_files_to_c(files, true);
+    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: true, emit_test_main: false, test_funcs: Vec() });
     if !r.ok {
       print("compile failed: ".concat(r.err).concat("\n"));
       return 1;
@@ -215,6 +281,60 @@ fn main() -> i32 {
       print("cc failed\n");
       return 1;
     }
+    return 0;
+  }
+  if cmd == "test-pkg" {
+    let all: Vec[String] = fs.walk_vox_files(".");
+    let paths: Vec[String] = filter_pkg_test_sources(all);
+
+    let tests: Vec[String] = discover_tests(paths);
+    if tests.len() == 0 {
+      print("[test] no tests found\n");
+      return 0;
+    }
+
+    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths) { Vec() } else { load_stage1_std() };
+    let deps: Vec[ld.SourceFile] = load_deps_from_manifest();
+    let mut di: i32 = 0;
+    while di < deps.len() { files.push(deps.get(di)); di = di + 1; }
+    let user: Vec[ld.SourceFile] = load_files(paths);
+    let mut ui: i32 = 0;
+    while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
+
+    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: false, emit_test_main: true, test_funcs: tests });
+    if !r.ok {
+      print("compile failed: ".concat(r.err).concat("\n"));
+      return 1;
+    }
+
+    let cpath: String = out.concat(".test.c");
+    let bin: String = out.concat(".test");
+    fs.write_string(cpath, r.c);
+    let cmdline: String = "cc -std=c11 -O0 -g ".concat(cpath).concat(" -o ").concat(bin);
+    let code: i32 = proc.exec(cmdline);
+    if code != 0 {
+      print("cc failed\n");
+      return 1;
+    }
+
+    // Run each test in a separate process, stage0-like.
+    let mut passed: i32 = 0;
+    let mut failed: i32 = 0;
+    let mut ti: i32 = 0;
+    while ti < tests.len() {
+      let name: String = tests.get(ti);
+      let rc: i32 = proc.exec(bin.concat(" ").concat(name));
+      if rc != 0 {
+        failed = failed + 1;
+        print("[FAIL] ".concat(name).concat("\n"));
+      } else {
+        passed = passed + 1;
+        print("[OK] ".concat(name).concat("\n"));
+      }
+      ti = ti + 1;
+    }
+    print("[test] ".concat(passed.to_string()).concat(" passed, ").concat(failed.to_string()).concat(" failed\n"));
+    if failed != 0 { return 1; }
     return 0;
   }
 

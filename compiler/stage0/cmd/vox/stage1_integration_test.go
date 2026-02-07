@@ -79,3 +79,64 @@ dep = { path = "dep_pkg" }
 		t.Fatalf("unexpected output: %q", got)
 	}
 }
+
+func TestStage1ToolchainTestPkgRunsTests(t *testing.T) {
+	// 1) Build the stage1 compiler (vox_stage1) using stage0.
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1Bin, err := compile(stage1Dir)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	// 2) Create a tiny package with:
+	// - internal test file under src/**_test.vox (same package, can access private symbols)
+	// - integration test under tests/**.vox (external tests module, uses pub API)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src", "a"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "tests"), 0o755); err != nil {
+		t.Fatalf("mkdir tests: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write Vox.toml: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("fn main() -> i32 { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("write main: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "a", "a.vox"), []byte("pub fn one() -> i32 { return hidden(); }\nfn hidden() -> i32 { return 1; }\n"), 0o644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	// Same-package unit test: can call `hidden()` directly.
+	if err := os.WriteFile(filepath.Join(root, "src", "a", "a_test.vox"), []byte("import \"std/testing\" as t\nfn test_unit_private_access() -> () { t.assert_eq(hidden(), 1); }\n"), 0o644); err != nil {
+		t.Fatalf("write a_test: %v", err)
+	}
+	// External test: must use pub API.
+	if err := os.WriteFile(filepath.Join(root, "tests", "basic.vox"), []byte("import \"std/testing\" as t\nimport \"a\" as a\nfn test_integration_pub_api() -> () { t.assert_eq(a.one(), 1); }\n"), 0o644); err != nil {
+		t.Fatalf("write tests/basic: %v", err)
+	}
+
+	// 3) Use stage1 compiler to build+run tests.
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "test-pkg", outBin)
+	cmd.Dir = root
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage1 test-pkg failed: %v\n%s", err, string(b))
+	}
+	out := string(b)
+	if !strings.Contains(out, "[OK] a::test_unit_private_access") {
+		t.Fatalf("missing unit test ok line:\n%s", out)
+	}
+	if !strings.Contains(out, "[OK] tests::test_integration_pub_api") {
+		t.Fatalf("missing integration test ok line:\n%s", out)
+	}
+	if !strings.Contains(out, "[test] 2 passed, 0 failed") {
+		t.Fatalf("unexpected summary:\n%s", out)
+	}
+}
