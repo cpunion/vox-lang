@@ -106,6 +106,13 @@ func (c *checker) collectFuncSigs() {
 	// Higher-level helpers (assert/testing/etc.) should live in stdlib Vox sources.
 	c.funcSigs["panic"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
 	c.funcSigs["print"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
+	// Tooling/stdlib support builtins (stage0): used to bootstrap stage1 toolchain.
+	// These are intentionally low-level; prefer std wrappers (e.g. std/fs, std/process).
+	c.funcSigs["__read_file"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyString}}
+	c.funcSigs["__write_file"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}, {K: TyString}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["__exec"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyI32}}
+	c.funcSigs["__args"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
+	c.funcSigs["__walk_vox_files"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
 
 	for _, fn := range c.prog.Funcs {
 		qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)

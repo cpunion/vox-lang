@@ -1,7 +1,97 @@
-// Stage1 compiler (bootstrap target). This is a placeholder entrypoint for now.
+// Stage1 compiler (bootstrap target).
+//
+// Minimal CLI (v0):
+// - emit-c <out.c> <src1.vox> <src2.vox> ...
+// - build  <out.bin> <src1.vox> <src2.vox> ...
 
-fn main() -> i32 {
-  print("vox stage1\n");
-  return 0;
+import "std/process" as proc
+import "std/fs" as fs
+import "loader" as ld
+import "compile" as c
+
+fn usage() -> () {
+  print("vox_stage1 usage:\n");
+  print("  vox_stage1 emit-c <out.c> <src...>\n");
+  print("  vox_stage1 build  <out.bin> <src...>\n");
+  print("  vox_stage1 build-pkg <out.bin>   # build from ./src and ./tests\n");
 }
 
+fn load_files(paths: Vec[String]) -> Vec[ld.SourceFile] {
+  let mut out: Vec[ld.SourceFile] = Vec();
+  let mut i: i32 = 0;
+  while i < paths.len() {
+    let p: String = paths.get(i);
+    out.push(ld.SourceFile { path: p, text: fs.read_to_string(p) });
+    i = i + 1;
+  }
+  return out;
+}
+
+fn slice_vec(xs: Vec[String], start: i32) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = start;
+  while i < xs.len() { out.push(xs.get(i)); i = i + 1; }
+  return out;
+}
+
+fn main() -> i32 {
+  let args: Vec[String] = proc.args();
+  if args.len() < 2 {
+    usage();
+    return 1;
+  }
+  let cmd: String = args.get(0);
+  let out: String = args.get(1);
+  let srcs: Vec[String] = slice_vec(args, 2);
+
+  if cmd == "emit-c" {
+    if srcs.len() == 0 { usage(); return 1; }
+    let files: Vec[ld.SourceFile] = load_files(srcs);
+    let r: c.CompileResult = c.compile_files_to_c(files, true);
+    if !r.ok {
+      print("compile failed: ".concat(r.err).concat("\n"));
+      return 1;
+    }
+    fs.write_string(out, r.c);
+    return 0;
+  }
+  if cmd == "build" {
+    if srcs.len() == 0 { usage(); return 1; }
+    let files: Vec[ld.SourceFile] = load_files(srcs);
+    let r: c.CompileResult = c.compile_files_to_c(files, true);
+    if !r.ok {
+      print("compile failed: ".concat(r.err).concat("\n"));
+      return 1;
+    }
+    let cpath: String = out.concat(".c");
+    fs.write_string(cpath, r.c);
+    let cmdline: String = "cc -std=c11 -O0 -g ".concat(cpath).concat(" -o ").concat(out);
+    let code: i32 = proc.exec(cmdline);
+    if code != 0 {
+      print("cc failed\n");
+      return 1;
+    }
+    return 0;
+  }
+  if cmd == "build-pkg" {
+    let paths: Vec[String] = fs.walk_vox_files(".");
+    let files: Vec[ld.SourceFile] = load_files(paths);
+    let r: c.CompileResult = c.compile_files_to_c(files, true);
+    if !r.ok {
+      print("compile failed: ".concat(r.err).concat("\n"));
+      return 1;
+    }
+    let cpath: String = out.concat(".c");
+    fs.write_string(cpath, r.c);
+    let cmdline: String = "cc -std=c11 -O0 -g ".concat(cpath).concat(" -o ").concat(out);
+    let code: i32 = proc.exec(cmdline);
+    if code != 0 {
+      print("cc failed\n");
+      return 1;
+    }
+    return 0;
+  }
+
+  usage();
+  return 1;
+}

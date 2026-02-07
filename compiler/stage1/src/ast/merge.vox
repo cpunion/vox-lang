@@ -1,0 +1,132 @@
+// Program merge helpers (multi-file modules).
+//
+// Stage1 AST stores expressions in an index-based pool, so merging programs
+// requires shifting expression ids for the appended side.
+
+pub fn program_merge(a: Program, b: Program) -> Program {
+  let off: i32 = a.exprs.nodes.len();
+  let mut out: Program = a;
+
+  // Imports.
+  let mut ii: i32 = 0;
+  while ii < b.imports.len() {
+    out.imports.push(b.imports.get(ii));
+    ii = ii + 1;
+  }
+
+  // Nominal decls.
+  let mut si: i32 = 0;
+  while si < b.structs.len() {
+    out.structs.push(b.structs.get(si));
+    si = si + 1;
+  }
+  let mut ei: i32 = 0;
+  while ei < b.enums.len() {
+    out.enums.push(b.enums.get(ei));
+    ei = ei + 1;
+  }
+
+  // Func decls (shift expr ids inside bodies).
+  let mut fi: i32 = 0;
+  while fi < b.funcs.len() {
+    out.funcs.push(shift_func(b.funcs.get(fi), off));
+    fi = fi + 1;
+  }
+
+  // Expr pool (shift internal ids).
+  let mut nodes: Vec[ExprNode] = out.exprs.nodes;
+  let mut ni: i32 = 0;
+  while ni < b.exprs.nodes.len() {
+    nodes.push(shift_expr_node(b.exprs.nodes.get(ni), off));
+    ni = ni + 1;
+  }
+  out.exprs = ExprPool { nodes: nodes };
+  return out;
+}
+
+fn shift_func(fd: FuncDecl, off: i32) -> FuncDecl {
+  return FuncDecl {
+    is_pub: fd.is_pub,
+    name: fd.name,
+    type_params: fd.type_params,
+    params: fd.params,
+    ret: fd.ret,
+    body: shift_block(fd.body, off),
+  };
+}
+
+fn shift_block(b: Block, off: i32) -> Block {
+  let mut out: Vec[Stmt] = Vec();
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    out.push(shift_stmt(b.stmts.get(i), off));
+    i = i + 1;
+  }
+  return Block { stmts: out };
+}
+
+fn shift_stmt(s: Stmt, off: i32) -> Stmt {
+  return match s {
+    Stmt.Let(is_mut, name, has_ann, ann, init) =>
+      Stmt.Let(is_mut, name, has_ann, ann, init + off),
+    Stmt.Assign(name, ex) => Stmt.Assign(name, ex + off),
+    Stmt.Expr(ex) => Stmt.Expr(ex + off),
+    Stmt.If(cond, then_b, has_else, else_b) =>
+      Stmt.If(cond + off, shift_block(then_b, off), has_else, shift_block(else_b, off)),
+    Stmt.While(cond, body) => Stmt.While(cond + off, shift_block(body, off)),
+    Stmt.Break => Stmt.Break,
+    Stmt.Continue => Stmt.Continue,
+    Stmt.Return(has_ex, ex) =>
+      if has_ex { Stmt.Return(true, ex + off) } else { Stmt.Return(false, -1) },
+  };
+}
+
+fn shift_expr_node(n: ExprNode, off: i32) -> ExprNode {
+  return match n {
+    ExprNode.Int(v) => ExprNode.Int(v),
+    ExprNode.Bool(v) => ExprNode.Bool(v),
+    ExprNode.Ident(s) => ExprNode.Ident(s),
+    ExprNode.Str(s) => ExprNode.Str(s),
+    ExprNode.DotIdent(s) => ExprNode.DotIdent(s),
+    ExprNode.If(c, t, e) => ExprNode.If(c + off, t + off, e + off),
+    ExprNode.Unary(op, ex) => ExprNode.Unary(op, ex + off),
+    ExprNode.Binary(op, l, r) => ExprNode.Binary(op, l + off, r + off),
+    ExprNode.Member(recv, name) => ExprNode.Member(recv + off, name),
+    ExprNode.Call(callee, targs, args) => ExprNode.Call(callee + off, targs, shift_ids(args, off)),
+    ExprNode.StructLit(tyex, fields) => ExprNode.StructLit(tyex + off, shift_struct_lit_fields(fields, off)),
+    ExprNode.Match(scrut, arms) => ExprNode.Match(scrut + off, shift_match_arms(arms, off)),
+  };
+}
+
+fn shift_ids(xs: Vec[i32], off: i32) -> Vec[i32] {
+  let mut out: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    out.push(xs.get(i) + off);
+    i = i + 1;
+  }
+  return out;
+}
+
+fn shift_struct_lit_fields(fs: Vec[StructLitField], off: i32) -> Vec[StructLitField] {
+  let mut out: Vec[StructLitField] = Vec();
+  let mut i: i32 = 0;
+  while i < fs.len() {
+    let f: StructLitField = fs.get(i);
+    out.push(StructLitField { name: f.name, expr: f.expr + off });
+    i = i + 1;
+  }
+  return out;
+}
+
+fn shift_match_arms(arms: Vec[MatchArm], off: i32) -> Vec[MatchArm] {
+  let mut out: Vec[MatchArm] = Vec();
+  let mut i: i32 = 0;
+  while i < arms.len() {
+    let a: MatchArm = arms.get(i);
+    out.push(MatchArm { pat: a.pat, expr: a.expr + off });
+    i = i + 1;
+  }
+  return out;
+}
+

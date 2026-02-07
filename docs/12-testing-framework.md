@@ -15,6 +15,8 @@ CLI（见 `docs/15-toolchain.md`）：
 
 ```bash
 vox test
+vox test --engine=c
+vox test --engine=interp
 ```
 
 Stage0 行为：
@@ -22,6 +24,8 @@ Stage0 行为：
 - `vox build/run`：会忽略 `src/**/*_test.vox`
 - `vox test`：会包含 `src/**/*.vox` + `src/**/*_test.vox` + `tests/**/*.vox`，并执行所有 `test_*` 函数
 - 依赖包（path deps）的测试文件不会被加入（保持依赖纯净）
+ - `vox test --engine=c`（默认）：编译生成测试可执行文件并执行（更贴近最终语义）
+ - `vox test --engine=interp`：解释执行测试（用于快速对照；能力可能更受限）
 
 ## 2. 断言（Stage0）
 

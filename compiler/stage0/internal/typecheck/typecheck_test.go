@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"voxlang/internal/ast"
+	"voxlang/internal/diag"
 	"voxlang/internal/parser"
 	"voxlang/internal/source"
 	"voxlang/internal/stdlib"
@@ -318,6 +319,7 @@ func TestEnumEqualityAgainstUnitVariant(t *testing.T) {
 		name    string
 		src     string
 		wantErr string
+		files   []*source.File
 	}{
 		{
 			name: "ok",
@@ -327,6 +329,27 @@ fn main() -> i32 {
   let b: bool = x == .None;
   if b { return 1; } else { return 0; }
 }`,
+		},
+		{
+			name: "ok_named_unit_variant_value",
+			src: `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = E.A(1);
+  let b: bool = x == E.None;
+  if b { return 1; } else { return 0; }
+}`,
+		},
+		{
+			name: "ok_import_alias_qualified_unit_variant_value",
+			files: []*source.File{
+				source.NewFile("src/main.vox", `import "parse" as p
+fn main() -> i32 {
+  let x: p.ParseError = p.ParseError.None;
+  let b: bool = x == p.ParseError.None;
+  if b { return 1; } else { return 0; }
+}`),
+				source.NewFile("src/parse/parse.vox", `pub enum ParseError { None }`),
+			},
 		},
 		{
 			name:    "reject_payload_ctor_compare",
@@ -340,8 +363,14 @@ fn main() -> i32 {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			f := source.NewFile("src/main.vox", tt.src)
-			prog, pdiags := parser.Parse(f)
+			var prog *ast.Program
+			var pdiags *diag.Bag
+			if tt.files != nil {
+				prog, pdiags = parser.ParseFiles(tt.files)
+			} else {
+				f := source.NewFile("src/main.vox", tt.src)
+				prog, pdiags = parser.Parse(f)
+			}
 			if pdiags != nil && len(pdiags.Items) > 0 {
 				t.Fatalf("parse diags: %+v", pdiags.Items)
 			}

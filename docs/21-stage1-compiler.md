@@ -30,9 +30,11 @@
 - IR v0：`compiler/stage1/src/ir/**` 已对齐 `docs/19-ir-spec.md`（TyPool、Value/Instr/Term、Program 结构与 formatter）。
 - IRGen：`compiler/stage1/src/irgen/**` 已跑通 end-to-end（从 AST 生成 IR），并对泛型调用做单态化（worklist 生成可达的实例函数）。
 - codegen（C）：`compiler/stage1/src/codegen/**` 已支持 IR v0 -> 单文件 C 源码；并通过 `compiler/stage1/src/compile/**` 提供最小串联管线（用于端到端测试）。
+- loader（in-memory）：`compiler/stage1/src/loader/**` 已支持按 `src/`/`tests/` 目录规则把多文件合并为模块（`src/*.vox -> main`，`src/<dir>/** -> <dir>`，`tests/** -> tests/...`），用于多模块端到端编译测试。
+- stage1 CLI（最小）：`compiler/stage1/src/main.vox` 提供 `emit-c/build/build-pkg`，使用 `std/fs` 与 `std/process` 完成读写与调用系统 `cc`（用于自举前的工具链验证）。
 
 下一步（按依赖顺序）：
 
-1. Stage1 loader：按 `docs/03-module-package.md` 的包/多文件规则完善加载与诊断（当前以测试为主）。
-2. 工具链：把 C 源码接入实际编译/链接，产出可执行文件（先 `main` 模块 + 最小 std）。
+1. 工具链：把 Stage1 产出的 C 源码接入实际编译/链接，产出可执行文件（先 `main` 模块 + 最小 std）。
+2. 诊断：为 Stage1 AST 增加最小 span/位置模型，提升 loader/typecheck/irgen 报错可用性。
 3. 逐步扩展 Stage0 子集覆盖：更多类型、更多内建/stdlib（保持测试优先）。

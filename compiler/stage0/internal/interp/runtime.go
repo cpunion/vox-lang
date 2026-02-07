@@ -15,10 +15,16 @@ type Runtime struct {
 	prog  *typecheck.CheckedProgram
 	funcs map[string]*ast.FuncDecl
 	stack []map[string]Value
+	args  []string
 }
 
 func RunMain(p *typecheck.CheckedProgram) (string, error) {
+	return RunMainWithArgs(p, nil)
+}
+
+func RunMainWithArgs(p *typecheck.CheckedProgram, args []string) (string, error) {
 	rt := &Runtime{prog: p, funcs: map[string]*ast.FuncDecl{}}
+	rt.args = args
 	for _, fn := range p.Prog.Funcs {
 		rt.funcs[names.QualifyFunc(fn.Span.File.Name, fn.Name)] = fn
 	}

@@ -6,6 +6,8 @@
 
 - `std::prelude`：基础 trait 与常用类型导出
 - `std::string`：`String`、`str`、`StrView`
+- `std::fs`：最小文件系统能力（读写文件、枚举源文件；用于 stage1 工具链自举）
+- `std::process`：最小进程能力（args/exec；用于 stage1 工具链自举）
 - `std::sync`：`Arc[T]`、`Weak[T]`、（后续）`Mutex[T]`、`Atomic[T]`
 - `std::collections`：`Vec`、`Map` 等
 - `std::io`：文件/网络抽象（deferred，需与 effect/资源系统协调）

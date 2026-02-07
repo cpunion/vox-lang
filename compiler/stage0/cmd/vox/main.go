@@ -120,12 +120,22 @@ func main() {
 			os.Exit(1)
 		}
 	case "run":
-		eng, dir, err := parseEngineAndDir(os.Args[2:])
+		// Allow forwarding program args after `--`.
+		raw := os.Args[2:]
+		progArgs := []string{}
+		for i := 0; i < len(raw); i++ {
+			if raw[i] == "--" {
+				progArgs = append(progArgs, raw[i+1:]...)
+				raw = raw[:i]
+				break
+			}
+		}
+		eng, dir, err := parseEngineAndDir(raw)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
-		if err := run(dir, eng); err != nil {
+		if err := run(dir, eng, progArgs); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
@@ -189,7 +199,7 @@ func build(dir string, eng engine) error {
 	return err
 }
 
-func run(dir string, eng engine) error {
+func run(dir string, eng engine, progArgs []string) error {
 	if eng == engineInterp {
 		abs, err := filepath.Abs(dir)
 		if err != nil {
@@ -203,7 +213,7 @@ func run(dir string, eng engine) error {
 			diag.Print(os.Stderr, diags)
 			return fmt.Errorf("build failed")
 		}
-		out, err := interp.RunMain(res.Program)
+		out, err := interp.RunMainWithArgs(res.Program, progArgs)
 		if err != nil {
 			return err
 		}
@@ -216,7 +226,7 @@ func run(dir string, eng engine) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(bin)
+	cmd := exec.Command(bin, progArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
