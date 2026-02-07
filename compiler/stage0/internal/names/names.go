@@ -12,9 +12,10 @@ import (
 //
 // Module path rules (stage0):
 // - src/main.vox and src/lib.vox are the root module (empty module path).
-// - src/foo.vox -> module ["foo"]
-// - src/utils/lib.vox -> module ["utils"]
-// - src/utils/io.vox -> module ["utils","io"]
+// - src/**.vox files belong to the module represented by their directory path under src/.
+//   Examples:
+//   - src/a/lib.vox, src/a/x.vox         -> module ["a"]
+//   - src/utils/io/lib.vox, src/utils/io/x.vox -> module ["utils","io"]
 // - src/**/*_test.vox are treated as part of the directory module (file name doesn't form a module segment).
 // - tests/**.vox are treated as root module for now (empty module path), to keep test discovery simple.
 func SplitOwnerAndModule(fileName string) (pkg string, mod []string, isTest bool) {
@@ -39,32 +40,20 @@ func SplitOwnerAndModule(fileName string) (pkg string, mod []string, isTest bool
 	}
 
 	path := strings.TrimPrefix(rel, "src/")
-	// Go-like test files live "in the package/module" and should not introduce an extra module segment.
-	// Example: src/stage1_tests/smoke_test.vox => module ["stage1_tests"] (not ["stage1_tests","smoke_test"]).
 	if strings.HasSuffix(path, "_test.vox") {
 		isTest = true
-		dir := filepath.ToSlash(filepath.Dir(path))
-		if dir == "." || dir == "" {
-			return pkg, nil, true
-		}
-		segs := strings.Split(dir, "/")
-		out := make([]string, 0, len(segs))
-		for _, s := range segs {
-			if s == "" || s == "." {
-				continue
-			}
-			out = append(out, s)
-		}
-		return pkg, out, true
 	}
-	path = strings.TrimSuffix(path, ".vox")
-	if path == "main" || path == "lib" {
-		return pkg, nil, false
+	// Root module files are always in the root module.
+	if path == "main.vox" || path == "lib.vox" {
+		return pkg, nil, isTest
 	}
-	if strings.HasSuffix(path, "/lib") {
-		path = strings.TrimSuffix(path, "/lib")
+
+	// Directory-as-module: module path is the directory segments under src/.
+	dir := filepath.ToSlash(filepath.Dir(path))
+	if dir == "." || dir == "" {
+		return pkg, nil, isTest
 	}
-	segs := strings.Split(path, "/")
+	segs := strings.Split(dir, "/")
 	out := make([]string, 0, len(segs))
 	for _, s := range segs {
 		if s == "" || s == "." {
@@ -72,7 +61,7 @@ func SplitOwnerAndModule(fileName string) (pkg string, mod []string, isTest bool
 		}
 		out = append(out, s)
 	}
-	return pkg, out, false
+	return pkg, out, isTest
 }
 
 func QualifyParts(pkg string, mod []string, fnName string) string {

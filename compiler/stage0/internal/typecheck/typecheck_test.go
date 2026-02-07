@@ -249,7 +249,7 @@ fn main() -> i32 {
   // calling a private function must fail
   return a.secret();
 }`),
-		source.NewFile("src/a.vox", `fn secret() -> i32 { return 1; }`),
+		source.NewFile("src/a/lib.vox", `fn secret() -> i32 { return 1; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
 	if pdiags != nil && len(pdiags.Items) > 0 {
@@ -280,7 +280,7 @@ fn main() -> i32 {
   let s = a.S { x: 1 };
   return 0;
 }`),
-			source.NewFile("src/a.vox", `struct S { x: i32 }`),
+			source.NewFile("src/a/lib.vox", `struct S { x: i32 }`),
 		}
 		prog, pdiags := parser.ParseFiles(files)
 		if pdiags != nil && len(pdiags.Items) > 0 {
@@ -310,7 +310,7 @@ fn main() -> i32 {
   let s = a.make();
   return s.y;
 }`),
-			source.NewFile("src/a.vox", `pub struct S { pub x: i32, y: i32 }
+			source.NewFile("src/a/lib.vox", `pub struct S { pub x: i32, y: i32 }
 pub fn make() -> S { return S { x: 1, y: 2 }; }`),
 		}
 		prog, pdiags := parser.ParseFiles(files)
@@ -338,7 +338,7 @@ func TestPubInterfaceCannotExposePrivateTypes(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "a"
 fn main() -> i32 { return a.f(); }`),
-		source.NewFile("src/a.vox", `struct Hidden { x: i32 }
+		source.NewFile("src/a/lib.vox", `struct Hidden { x: i32 }
 pub fn f() -> Hidden { return Hidden { x: 1 }; }`),
 	}
 	prog, pdiags := parser.ParseFiles(files)
@@ -370,7 +370,7 @@ fn main() -> i32 {
   let t: a.S = id(s);
   return t.x;
 }`),
-		source.NewFile("src/a.vox", `pub struct S { pub x: i32 }
+		source.NewFile("src/a/lib.vox", `pub struct S { pub x: i32 }
 `),
 	}
 	prog, pdiags := parser.ParseFiles(files)

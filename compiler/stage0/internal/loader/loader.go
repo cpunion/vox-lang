@@ -332,8 +332,7 @@ func resolveAllPathDeps(root string, mani *manifest.Manifest) (map[string]string
 }
 
 func collectLocalModules(root string) (map[string]bool, error) {
-	// Module paths are import paths relative to src/ without ".vox".
-	// Directory modules are represented by src/<dir>/lib.vox and imported as "<dir>".
+	// Module paths are directory paths under src/ that contain at least one non-test .vox file.
 	srcDir := filepath.Join(root, "src")
 	out := map[string]bool{}
 	err := filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
@@ -362,12 +361,12 @@ func collectLocalModules(root string) (map[string]bool, error) {
 		if rel == "main.vox" || rel == "lib.vox" {
 			return nil
 		}
-		if strings.HasSuffix(rel, "/lib.vox") {
-			mod := strings.TrimSuffix(rel, "/lib.vox")
-			out[mod] = true
+		dir := filepath.ToSlash(filepath.Dir(rel))
+		if dir == "." || dir == "" {
+			// root module isn't importable
 			return nil
 		}
-		out[strings.TrimSuffix(rel, ".vox")] = true
+		out[dir] = true
 		return nil
 	})
 	if err != nil {

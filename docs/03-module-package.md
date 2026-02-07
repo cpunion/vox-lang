@@ -8,16 +8,25 @@
 
 ## 模块模型
 
-源码根目录默认 `src/`，目录结构定义模块路径：
+源码根目录默认 `src/`，**目录结构定义模块路径**；同一目录下的多个 `.vox` 文件属于同一个模块（类似 Go 的“一个目录一个包”）。
 
 ```
 project/
   src/
     main.vox
     utils/
-      lib.vox
-      io.vox
+      lib.vox   // 可选：约定的“入口文件名”，不影响语义
+      io.vox    // 与 lib.vox 同属 utils 模块
+      more.vox  // 与 lib.vox 同属 utils 模块
+    utils/io/
+      lib.vox   // 子模块 utils/io
 ```
+
+模块路径规则（当前决策）：
+
+- `src/` 目录本身是根模块；`src/*.vox` 都属于根模块（文件名不形成模块名）。
+- `src/<dir>/*.vox` 属于模块 `<dir>`。
+- `src/<dir>/<subdir>/*.vox` 属于模块 `<dir>/<subdir>`（以目录为边界）。
 
 ## 导入
 
@@ -25,6 +34,7 @@ project/
 
 ```vox
 import "utils"
+import "utils/io"
 import { read_file } from "utils/io"
 import "utils" as u
 ```

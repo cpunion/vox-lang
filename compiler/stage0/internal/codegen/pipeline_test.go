@@ -458,7 +458,7 @@ fn a__b() -> i32 { return 1; }
 fn main() -> i32 {
   return a__b() + a.b();
 }`),
-		source.NewFile("src/a.vox", `pub fn b() -> i32 { return 2; }`),
+		source.NewFile("src/a/lib.vox", `pub fn b() -> i32 { return 2; }`),
 	}
 	checked := parseAndCheckWithStdlib(t, files)
 	irp, err := irgen.Generate(checked)
