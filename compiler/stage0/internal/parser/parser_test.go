@@ -144,3 +144,17 @@ fn main() -> i32 { return f(); }
 		t.Fatalf("expected pub fn f and non-pub main")
 	}
 }
+
+func TestParseQualifiedTypePath(t *testing.T) {
+	f := source.NewFile("test.vox", `import "a"
+fn id(x: a.S) -> a.S { return x; }
+fn main() -> i32 {
+  let s: a.S = a.S { x: 1 };
+  let t: a.S = id(s);
+  return t.x;
+}`)
+	_, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+}

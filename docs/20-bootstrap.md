@@ -39,13 +39,14 @@ Stage0 的目标是“能写编译器”，但保持范围可控，不引入会�
 - 测试：Go 风格 `*_test.vox` + `test_*` 发现（见 `docs/12-testing-framework.md`）
 - 模块：`import "x" [as a]` + `a.name(...)`（见 `docs/03-module-package.md` 与 `docs/14-syntax-details.md`）
 - 可见性：默认私有 + `pub`（函数/结构体/枚举与结构体字段的最小子集）
+- 类型路径：类型位置支持 `a.Type`（用于跨模块/包引用名义类型）
 - 控制流：`while` + `break/continue`
 - 数据类型：`struct`（声明、字面量、字段读取/写入）
 - IR/后端：`String` 字面量最小支持（IR `str` + C 后端）；`struct` 降低到 C `typedef struct`
 - 数据类型：`enum` + `match`（Stage0 限制：variant payload 仅支持 0/1 个字段；后端降低为 `tag + union`）
 
 Stage0 下一步（仍属“可包含”范围，优先级高）：
-- 类型语法支持带路径的名义类型（例如 `a.Point` 出现在函数签名/字段类型中）
+- `import { name } from "path"` 的最小子集（可选；减少 `a.name(...)` 噪声）
 
 ### 明确不包含（Stage0 非目标）
 

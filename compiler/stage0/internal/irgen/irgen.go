@@ -395,6 +395,11 @@ func (g *gen) genStmt(st ast.Stmt, retTy ir.Type) error {
 }
 
 func (g *gen) typeOfLet(s *ast.LetStmt) typecheck.Type {
+	if g.p != nil {
+		if ty, ok := g.p.LetTypes[s]; ok {
+			return ty
+		}
+	}
 	if s.Init != nil {
 		return g.p.ExprTypes[s.Init]
 	}
@@ -832,7 +837,10 @@ func (g *gen) typeFromAstLimited(t ast.Type) typecheck.Type {
 	case *ast.UnitType:
 		return typecheck.Type{K: typecheck.TyUnit}
 	case *ast.NamedType:
-		switch tt.Name {
+		if len(tt.Parts) != 1 {
+			return typecheck.Type{K: typecheck.TyBad}
+		}
+		switch tt.Parts[0] {
 		case "i32":
 			return typecheck.Type{K: typecheck.TyI32}
 		case "i64":
@@ -844,14 +852,14 @@ func (g *gen) typeFromAstLimited(t ast.Type) typecheck.Type {
 		default:
 			if g != nil && g.p != nil && g.curFn != nil && g.curFn.Span.File != nil {
 				pkg, mod, _ := names.SplitOwnerAndModule(g.curFn.Span.File.Name)
-				q1 := names.QualifyParts(pkg, mod, tt.Name)
+				q1 := names.QualifyParts(pkg, mod, tt.Parts[0])
 				if _, ok := g.p.StructSigs[q1]; ok {
 					return typecheck.Type{K: typecheck.TyStruct, Name: q1}
 				}
 				if _, ok := g.p.EnumSigs[q1]; ok {
 					return typecheck.Type{K: typecheck.TyEnum, Name: q1}
 				}
-				q2 := names.QualifyParts(pkg, nil, tt.Name)
+				q2 := names.QualifyParts(pkg, nil, tt.Parts[0])
 				if _, ok := g.p.StructSigs[q2]; ok {
 					return typecheck.Type{K: typecheck.TyStruct, Name: q2}
 				}

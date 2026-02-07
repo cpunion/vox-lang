@@ -414,7 +414,19 @@ func (p *Parser) parseType() ast.Type {
 		return &ast.UnitType{S: joinSpan(lp.Span, rp.Span)}
 	}
 	nameTok := p.expect(lexer.TokenIdent, "expected type name")
-	t := &ast.NamedType{Name: nameTok.Lexeme, S: nameTok.Span}
+	parts := []string{}
+	endSpan := nameTok.Span
+	if nameTok.Kind == lexer.TokenIdent {
+		parts = append(parts, nameTok.Lexeme)
+	}
+	for p.match(lexer.TokenDot) {
+		id := p.expect(lexer.TokenIdent, "expected identifier after `.` in type path")
+		endSpan = id.Span
+		if id.Kind == lexer.TokenIdent {
+			parts = append(parts, id.Lexeme)
+		}
+	}
+	t := &ast.NamedType{Parts: parts, S: joinSpan(nameTok.Span, endSpan)}
 	// optional generic args: Name[...]
 	if p.match(lexer.TokenLBracket) {
 		if !p.at(lexer.TokenRBracket) {

@@ -322,3 +322,25 @@ pub fn f() -> Hidden { return Hidden { x: 1 }; }`),
 		t.Fatalf("expected private-in-public-interface diagnostic, got: %+v", tdiags.Items)
 	}
 }
+
+func TestQualifiedTypePathInSignature(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import "a"
+fn id(s: a.S) -> a.S { return s; }
+fn main() -> i32 {
+  let s: a.S = a.S { x: 1 };
+  let t: a.S = id(s);
+  return t.x;
+}`),
+		source.NewFile("src/a.vox", `pub struct S { pub x: i32 }
+`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}

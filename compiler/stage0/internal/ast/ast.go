@@ -64,9 +64,9 @@ type Type interface {
 }
 
 type NamedType struct {
-	Name string
-	Args []Type // optional, for future generics
-	S    source.Span
+	Parts []string
+	Args  []Type // optional, for future generics
+	S     source.Span
 }
 
 func (*NamedType) typeNode()           {}

@@ -61,6 +61,7 @@ type CheckedProgram struct {
 	StructSigs map[string]StructSig
 	EnumSigs   map[string]EnumSig
 	ExprTypes  map[ast.Expr]Type
+	LetTypes   map[*ast.LetStmt]Type
 	// CallTargets stores the resolved function name (possibly qualified, e.g. "dep::foo").
 	// Note: Vox surface syntax may use `dep.foo(...)`; it still resolves to `dep::foo` internally.
 	// for each call expression.
@@ -135,15 +136,16 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		structSigs: map[string]StructSig{},
 		enumSigs:   map[string]EnumSig{},
 		exprTypes:  map[ast.Expr]Type{},
+		letTypes:   map[*ast.LetStmt]Type{},
 		callTgts:   map[*ast.CallExpr]string{},
 		enumCtors:  map[*ast.CallExpr]EnumCtorTarget{},
 		opts:       opts,
 		imports:    map[*source.File]map[string]importTarget{},
 	}
+	c.collectImports()
 	c.collectStructSigs()
 	c.collectEnumSigs()
 	c.collectFuncSigs()
-	c.collectImports()
 	c.checkPubInterfaces()
 	c.checkAll()
 	return &CheckedProgram{
@@ -152,6 +154,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		StructSigs:  c.structSigs,
 		EnumSigs:    c.enumSigs,
 		ExprTypes:   c.exprTypes,
+		LetTypes:    c.letTypes,
 		CallTargets: c.callTgts,
 		EnumCtors:   c.enumCtors,
 	}, c.diags
@@ -164,6 +167,7 @@ type checker struct {
 	structSigs map[string]StructSig
 	enumSigs   map[string]EnumSig
 	exprTypes  map[ast.Expr]Type
+	letTypes   map[*ast.LetStmt]Type
 	callTgts   map[*ast.CallExpr]string
 	enumCtors  map[*ast.CallExpr]EnumCtorTarget
 
@@ -509,7 +513,9 @@ func (c *checker) checkStmt(st ast.Stmt, expectedRet Type) {
 			}
 			initTy = ann
 		}
-		c.scopeTop()[s.Name] = varInfo{ty: chooseType(ann, initTy), mutable: s.Mutable}
+		final := chooseType(ann, initTy)
+		c.scopeTop()[s.Name] = varInfo{ty: final, mutable: s.Mutable}
+		c.letTypes[s] = final
 	case *ast.AssignStmt:
 		vi, ok := c.lookupVar(s.Name)
 		if !ok {
@@ -994,7 +1000,49 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 	case *ast.UnitType:
 		return Type{K: TyUnit}
 	case *ast.NamedType:
-		switch tt.Name {
+		if len(tt.Parts) == 0 {
+			c.errorAt(tt.S, "missing type name")
+			return Type{K: TyBad}
+		}
+		// Qualified types: a.b.C
+		if len(tt.Parts) > 1 {
+			if file == nil {
+				c.errorAt(tt.S, "unknown type")
+				return Type{K: TyBad}
+			}
+			alias := tt.Parts[0]
+			extraMods := tt.Parts[1 : len(tt.Parts)-1]
+			name := tt.Parts[len(tt.Parts)-1]
+
+			m := c.imports[file]
+			tgt, ok := m[alias]
+			if !ok {
+				c.errorAt(tt.S, "unknown module qualifier: "+alias+" (did you forget `import \""+alias+"\"`?)")
+				return Type{K: TyBad}
+			}
+			mod := append(append([]string{}, tgt.Mod...), extraMods...)
+			q := names.QualifyParts(tgt.Pkg, mod, name)
+			if ss, ok := c.structSigs[q]; ok {
+				if !c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+					c.errorAt(tt.S, "type is private: "+q)
+					return Type{K: TyBad}
+				}
+				return Type{K: TyStruct, Name: q}
+			}
+			if es, ok := c.enumSigs[q]; ok {
+				if !c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Pub) {
+					c.errorAt(tt.S, "type is private: "+q)
+					return Type{K: TyBad}
+				}
+				return Type{K: TyEnum, Name: q}
+			}
+			c.errorAt(tt.S, "unknown type: "+q)
+			return Type{K: TyBad}
+		}
+
+		// Single-segment types: builtins or local/root nominal types.
+		name := tt.Parts[0]
+		switch name {
 		case "i32":
 			return Type{K: TyI32}
 		case "i64":
@@ -1007,7 +1055,7 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 			if file != nil {
 				private := ""
 				pkg, mod, _ := names.SplitOwnerAndModule(file.Name)
-				q1 := names.QualifyParts(pkg, mod, tt.Name)
+				q1 := names.QualifyParts(pkg, mod, name)
 				if ss, ok := c.structSigs[q1]; ok {
 					if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
 						return Type{K: TyStruct, Name: q1}
@@ -1022,7 +1070,7 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 						private = q1
 					}
 				}
-				q2 := names.QualifyParts(pkg, nil, tt.Name)
+				q2 := names.QualifyParts(pkg, nil, name)
 				if ss, ok := c.structSigs[q2]; ok {
 					if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
 						return Type{K: TyStruct, Name: q2}
@@ -1044,7 +1092,7 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 					return Type{K: TyBad}
 				}
 			}
-			c.errorAt(tt.S, "unknown type: "+tt.Name)
+			c.errorAt(tt.S, "unknown type: "+name)
 			return Type{K: TyBad}
 		}
 	default:
