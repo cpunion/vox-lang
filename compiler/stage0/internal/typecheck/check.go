@@ -284,11 +284,11 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		// Enum constructor: `Enum.Variant(...)` (including qualified types like `dep.Option.Some(...)`).
 		if len(parts) >= 2 {
 			alias := parts[0]
-			if vi, ok := c.lookupVar(alias); ok {
-				// Vec methods on local vars: v.push(...), v.len(), v.get(i)
-				if len(parts) == 2 && vi.ty.K == TyVec && vi.ty.Elem != nil {
-					method := parts[1]
-					switch method {
+				if vi, ok := c.lookupVar(alias); ok {
+					// Vec methods on local vars: v.push(...), v.len(), v.get(i)
+					if len(parts) == 2 && vi.ty.K == TyVec && vi.ty.Elem != nil {
+						method := parts[1]
+						switch method {
 					case "push":
 						if len(e.Args) != 1 {
 							c.errorAt(e.S, "Vec.push expects 1 arg")
@@ -324,6 +324,34 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 						return c.setExprType(ex, *vi.ty.Elem)
 					default:
 						c.errorAt(e.S, "unknown Vec method: "+method)
+						return c.setExprType(ex, Type{K: TyBad})
+					}
+				}
+
+				// String methods on local vars: s.len(), s.byte_at(i)
+				if len(parts) == 2 && vi.ty.K == TyString {
+					method := parts[1]
+					switch method {
+					case "len":
+						if len(e.Args) != 0 {
+							c.errorAt(e.S, "String.len expects 0 args")
+							return c.setExprType(ex, Type{K: TyBad})
+						}
+						c.strCalls[e] = StrCallTarget{Kind: StrCallLen, RecvName: alias}
+						return c.setExprType(ex, Type{K: TyI32})
+					case "byte_at":
+						if len(e.Args) != 1 {
+							c.errorAt(e.S, "String.byte_at expects 1 arg")
+							return c.setExprType(ex, Type{K: TyBad})
+						}
+						idxTy := c.checkExpr(e.Args[0], Type{K: TyI32})
+						if idxTy.K != TyI32 {
+							c.errorAt(e.Args[0].Span(), "String.byte_at index must be i32")
+						}
+						c.strCalls[e] = StrCallTarget{Kind: StrCallByteAt, RecvName: alias}
+						return c.setExprType(ex, Type{K: TyI32})
+					default:
+						c.errorAt(e.S, "unknown String method: "+method)
 						return c.setExprType(ex, Type{K: TyBad})
 					}
 				}

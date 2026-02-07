@@ -26,6 +26,7 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	out.WriteString("#include <stdio.h>\n")
 	out.WriteString("#include <stdlib.h>\n\n")
 	out.WriteString("#include <string.h>\n\n")
+	out.WriteString("#include <limits.h>\n\n")
 
 	// Minimal Vec runtime (stage0): by-value elements, no drop glue.
 	out.WriteString("typedef struct { uint8_t* data; int32_t len; int32_t cap; int32_t elem_size; } vox_vec;\n")
@@ -49,6 +50,19 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	out.WriteString("static void vox_vec_get(const vox_vec* v, int32_t idx, void* out) {\n")
 	out.WriteString("  if (idx < 0 || idx >= v->len) { fprintf(stderr, \"vec index out of bounds\\n\"); exit(1); }\n")
 	out.WriteString("  memcpy(out, v->data + (size_t)idx * (size_t)v->elem_size, (size_t)v->elem_size);\n")
+	out.WriteString("}\n\n")
+
+	// Minimal string runtime helpers (stage0).
+	out.WriteString("static int32_t vox_str_len(const char* s) {\n")
+	out.WriteString("  if (!s) return 0;\n")
+	out.WriteString("  size_t n = strlen(s);\n")
+	out.WriteString("  if (n > INT32_MAX) { fprintf(stderr, \"string too long\\n\"); exit(1); }\n")
+	out.WriteString("  return (int32_t)n;\n")
+	out.WriteString("}\n")
+	out.WriteString("static int32_t vox_str_byte_at(const char* s, int32_t idx) {\n")
+	out.WriteString("  int32_t n = vox_str_len(s);\n")
+	out.WriteString("  if (idx < 0 || idx >= n) { fprintf(stderr, \"string index out of bounds\\n\"); exit(1); }\n")
+	out.WriteString("  return (int32_t)(uint8_t)s[idx];\n")
 	out.WriteString("}\n\n")
 
 	// Runtime builtins

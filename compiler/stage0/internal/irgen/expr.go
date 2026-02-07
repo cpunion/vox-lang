@@ -184,6 +184,32 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			}
 		}
 
+		// String ops are special-cased in stage0 and lowered to dedicated IR.
+		if sc, ok := g.p.StrCalls[e]; ok {
+			slot, ok := g.lookup(sc.RecvName)
+			if !ok {
+				return nil, fmt.Errorf("unknown string receiver: %s", sc.RecvName)
+			}
+			recv := g.newTemp()
+			g.emit(&ir.Load{Dst: recv, Ty: ir.Type{K: ir.TString}, Slot: slot})
+			switch sc.Kind {
+			case typecheck.StrCallLen:
+				tmp := g.newTemp()
+				g.emit(&ir.StrLen{Dst: tmp, Recv: recv})
+				return tmp, nil
+			case typecheck.StrCallByteAt:
+				idx, err := g.genExpr(e.Args[0])
+				if err != nil {
+					return nil, err
+				}
+				tmp := g.newTemp()
+				g.emit(&ir.StrByteAt{Dst: tmp, Recv: recv, Idx: idx})
+				return tmp, nil
+			default:
+				return nil, fmt.Errorf("unsupported string call kind")
+			}
+		}
+
 		// Enum constructors are lowered as enum_init.
 		if ctor, ok := g.p.EnumCtors[e]; ok {
 			ety, err := g.irTypeFromChecked(ctor.Enum)

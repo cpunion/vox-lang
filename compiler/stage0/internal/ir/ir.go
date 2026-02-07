@@ -442,6 +442,28 @@ func (i *VecGet) fmtString() string {
 	return fmt.Sprintf("%s = vec_get %s %s %s", i.Dst.fmtString(), i.Ty.String(), i.Recv.fmtString(), i.Idx.fmtString())
 }
 
+// String intrinsics (stage0)
+type StrLen struct {
+	Dst  *Temp
+	Recv Value
+}
+
+func (*StrLen) instrNode() {}
+func (i *StrLen) fmtString() string {
+	return fmt.Sprintf("%s = str_len %s", i.Dst.fmtString(), i.Recv.fmtString())
+}
+
+type StrByteAt struct {
+	Dst  *Temp
+	Recv Value
+	Idx  Value
+}
+
+func (*StrByteAt) instrNode() {}
+func (i *StrByteAt) fmtString() string {
+	return fmt.Sprintf("%s = str_byte_at %s %s", i.Dst.fmtString(), i.Recv.fmtString(), i.Idx.fmtString())
+}
+
 type Call struct {
 	Dst  *Temp // optional when Ret is unit
 	Ret  Type

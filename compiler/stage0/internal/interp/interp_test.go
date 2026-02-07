@@ -153,6 +153,18 @@ fn main() -> i32 { return id(41) + 1; }`)
 	}
 }
 
+func TestInterpStringLenAndByteAt(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+  let s: String = "abc";
+  let n: i32 = s.len();
+  let b0: i32 = s.byte_at(0);
+  return n + b0; // 3 + 'a'(97) = 100
+}`)
+	if out != "100" {
+		t.Fatalf("expected 100, got %q", out)
+	}
+}
+
 func runMain(t *testing.T, src string) string {
 	t.Helper()
 	f := source.NewFile("src/main.vox", src)

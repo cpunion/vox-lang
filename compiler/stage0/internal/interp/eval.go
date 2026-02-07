@@ -293,6 +293,39 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			}
 		}
 
+		if sc, ok := rt.prog.StrCalls[e]; ok {
+			fr, ok := rt.lookup(sc.RecvName)
+			if !ok {
+				return unit(), fmt.Errorf("unknown variable: %s", sc.RecvName)
+			}
+			recv := fr[sc.RecvName]
+			if recv.K != VString {
+				return unit(), fmt.Errorf("String method requires string receiver")
+			}
+			switch sc.Kind {
+			case typecheck.StrCallLen:
+				return Value{K: VInt, I: int64(len(recv.S))}, nil
+			case typecheck.StrCallByteAt:
+				if len(e.Args) != 1 {
+					return unit(), fmt.Errorf("String.byte_at expects 1 arg")
+				}
+				idxV, err := rt.evalExpr(e.Args[0])
+				if err != nil {
+					return unit(), err
+				}
+				if idxV.K != VInt {
+					return unit(), fmt.Errorf("String.byte_at index must be int")
+				}
+				idx := int(idxV.I)
+				if idx < 0 || idx >= len(recv.S) {
+					return unit(), fmt.Errorf("String.byte_at index out of bounds")
+				}
+				return Value{K: VInt, I: int64(recv.S[idx])}, nil
+			default:
+				return unit(), fmt.Errorf("unsupported string call")
+			}
+		}
+
 		if ctor, ok := rt.prog.EnumCtors[e]; ok {
 			if ctor.Payload.K == typecheck.TyUnit {
 				return Value{K: VEnum, E: ctor.Enum.Name, T: ctor.Tag}, nil

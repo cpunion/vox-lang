@@ -39,6 +39,7 @@ type CheckedProgram struct {
 	ExprTypes  map[ast.Expr]Type
 	LetTypes   map[*ast.LetStmt]Type
 	VecCalls   map[*ast.CallExpr]VecCallTarget
+	StrCalls   map[*ast.CallExpr]StrCallTarget
 	// CallTargets stores the resolved function name (possibly qualified, e.g. "dep::foo").
 	// Note: Vox surface syntax may use `dep.foo(...)`; it still resolves to `dep::foo` internally.
 	// for each call expression.
@@ -112,6 +113,19 @@ type VecCallTarget struct {
 	Elem     Type
 }
 
+type StrCallKind int
+
+const (
+	StrCallBad StrCallKind = iota
+	StrCallLen
+	StrCallByteAt
+)
+
+type StrCallTarget struct {
+	Kind     StrCallKind
+	RecvName string // for methods on local variables
+}
+
 type Options struct {
 	// AllowedPkgs is the set of importable package names in the current build.
 	// When nil, imports are accepted without validation.
@@ -135,6 +149,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		exprTypes:     map[ast.Expr]Type{},
 		letTypes:      map[*ast.LetStmt]Type{},
 		vecCalls:      map[*ast.CallExpr]VecCallTarget{},
+		strCalls:      map[*ast.CallExpr]StrCallTarget{},
 		callTgts:      map[*ast.CallExpr]string{},
 		enumCtors:     map[*ast.CallExpr]EnumCtorTarget{},
 		enumUnits:     map[*ast.MemberExpr]EnumCtorTarget{},
@@ -162,6 +177,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		ExprTypes:   c.exprTypes,
 		LetTypes:    c.letTypes,
 		VecCalls:    c.vecCalls,
+		StrCalls:    c.strCalls,
 		CallTargets: c.callTgts,
 		EnumCtors:   c.enumCtors,
 		EnumUnitVariants: c.enumUnits,
@@ -177,6 +193,7 @@ type checker struct {
 	exprTypes  map[ast.Expr]Type
 	letTypes   map[*ast.LetStmt]Type
 	vecCalls   map[*ast.CallExpr]VecCallTarget
+	strCalls   map[*ast.CallExpr]StrCallTarget
 	callTgts   map[*ast.CallExpr]string
 	enumCtors  map[*ast.CallExpr]EnumCtorTarget
 	enumUnits  map[*ast.MemberExpr]EnumCtorTarget
