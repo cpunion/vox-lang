@@ -2,6 +2,7 @@ package interp
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"voxlang/internal/ast"
@@ -145,10 +146,10 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		}
 		return Value{K: VInt, I: n}, nil
 	case *ast.StringLit:
-		// includes quotes; keep it simple for stage0
-		s := e.Text
-		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-			s = s[1 : len(s)-1]
+		// Keep runtime semantics aligned with IR generation (Go-like unquoting).
+		s, err := strconv.Unquote(e.Text)
+		if err != nil {
+			return unit(), fmt.Errorf("invalid string literal")
 		}
 		return Value{K: VString, S: s}, nil
 	case *ast.BoolLit:
