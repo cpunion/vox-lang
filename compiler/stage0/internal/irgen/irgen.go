@@ -22,6 +22,10 @@ func Generate(p *typecheck.CheckedProgram) (*ir.Program, error) {
 		return nil, err
 	}
 	for _, fn := range p.Prog.Funcs {
+		if fn != nil && len(fn.TypeParams) != 0 {
+			// Stage0 generic functions are monomorphized on demand; only concrete instantiations are lowered.
+			continue
+		}
 		f, err := g.genFunc(fn)
 		if err != nil {
 			return nil, err

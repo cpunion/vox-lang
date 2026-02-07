@@ -19,6 +19,7 @@ const (
 	TyStruct
 	TyEnum
 	TyVec
+	TyParam
 )
 
 type Type struct {
@@ -47,11 +48,12 @@ type CheckedProgram struct {
 }
 
 type FuncSig struct {
-	Pub      bool
-	OwnerPkg string
-	OwnerMod []string
-	Params   []Type
-	Ret      Type
+	Pub        bool
+	OwnerPkg   string
+	OwnerMod   []string
+	TypeParams []string
+	Params     []Type
+	Ret        Type
 }
 
 type StructSig struct {
@@ -122,20 +124,23 @@ type Options struct {
 
 func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 	c := &checker{
-		prog:       prog,
-		diags:      &diag.Bag{},
-		funcSigs:   map[string]FuncSig{},
-		structSigs: map[string]StructSig{},
-		enumSigs:   map[string]EnumSig{},
-		exprTypes:  map[ast.Expr]Type{},
-		letTypes:   map[*ast.LetStmt]Type{},
-		vecCalls:   map[*ast.CallExpr]VecCallTarget{},
-		callTgts:   map[*ast.CallExpr]string{},
-		enumCtors:  map[*ast.CallExpr]EnumCtorTarget{},
-		opts:       opts,
-		imports:    map[*source.File]map[string]importTarget{},
-		namedFuncs: map[*source.File]map[string]string{},
-		namedTypes: map[*source.File]map[string]Type{},
+		prog:          prog,
+		diags:         &diag.Bag{},
+		funcSigs:      map[string]FuncSig{},
+		structSigs:    map[string]StructSig{},
+		enumSigs:      map[string]EnumSig{},
+		exprTypes:     map[ast.Expr]Type{},
+		letTypes:      map[*ast.LetStmt]Type{},
+		vecCalls:      map[*ast.CallExpr]VecCallTarget{},
+		callTgts:      map[*ast.CallExpr]string{},
+		enumCtors:     map[*ast.CallExpr]EnumCtorTarget{},
+		opts:          opts,
+		imports:       map[*source.File]map[string]importTarget{},
+		namedFuncs:    map[*source.File]map[string]string{},
+		namedTypes:    map[*source.File]map[string]Type{},
+		funcDecls:     map[string]*ast.FuncDecl{},
+		instantiated:  map[string]bool{},
+		instantiating: map[string]bool{},
 	}
 	c.collectImports()
 	c.collectStructSigs()
@@ -170,6 +175,7 @@ type checker struct {
 	enumCtors  map[*ast.CallExpr]EnumCtorTarget
 
 	curFn     *ast.FuncDecl
+	curTyVars map[string]bool
 	scope     []map[string]varInfo
 	loopDepth int
 
@@ -181,6 +187,12 @@ type checker struct {
 	// Named type imports: file -> localName -> qualified type.
 	namedTypes map[*source.File]map[string]Type
 	pending    []pendingNamedImport
+
+	// Generic monomorphization (stage0 minimal).
+	funcDecls     map[string]*ast.FuncDecl // qualified name -> decl (includes generic defs)
+	instantiated  map[string]bool          // qualified name of instantiated concrete function
+	pendingInsts  []pendingInstantiation
+	instantiating map[string]bool // recursion guard
 }
 
 type varInfo struct {

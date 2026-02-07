@@ -127,6 +127,14 @@ func TestInterpVecPushLenGet(t *testing.T) {
 	}
 }
 
+func TestInterpGenericFuncIdInference(t *testing.T) {
+	out := runMain(t, `fn id[T](x: T) -> T { return x; }
+fn main() -> i32 { return id(41) + 1; }`)
+	if out != "42" {
+		t.Fatalf("expected 42, got %q", out)
+	}
+}
+
 func runMain(t *testing.T, src string) string {
 	t.Helper()
 	f := source.NewFile("src/main.vox", src)

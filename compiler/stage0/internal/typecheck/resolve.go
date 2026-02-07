@@ -53,6 +53,9 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 
 		// Single-segment types: builtins or local/root nominal types.
 		name := tt.Parts[0]
+		if c.curTyVars != nil && c.curTyVars[name] {
+			return Type{K: TyParam, Name: name}
+		}
 		switch name {
 		case "i32":
 			return Type{K: TyI32}

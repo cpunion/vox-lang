@@ -9,7 +9,16 @@ import (
 )
 
 func (c *checker) checkAll() {
-	for _, fn := range c.prog.Funcs {
+	// Note: stage0 generic functions are monomorphized on demand. We only typecheck
+	// concrete (non-generic) functions and instantiated clones.
+	for i := 0; i < len(c.prog.Funcs); i++ {
+		fn := c.prog.Funcs[i]
+		if fn == nil || fn.Span.File == nil {
+			continue
+		}
+		if len(fn.TypeParams) != 0 {
+			continue
+		}
 		c.curFn = fn
 		qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)
 		sig := c.funcSigs[qname]
@@ -19,6 +28,8 @@ func (c *checker) checkAll() {
 		}
 		c.checkBlock(fn.Body, sig.Ret)
 		c.popScope()
+
+		c.materializePendingInstantiations()
 	}
 }
 
@@ -401,6 +412,14 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		sig, ok := c.funcSigs[target]
 		if !ok {
 			c.errorAt(e.S, "unknown function: "+target)
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		// Generic function instantiation (stage0 minimal): monomorphize on demand.
+		if instTarget, instSig, ok := c.maybeInstantiateCall(e, target, sig, expected); ok {
+			target = instTarget
+			sig = instSig
+		} else if len(e.TypeArgs) > 0 {
+			c.errorAt(e.S, "type arguments provided for non-generic function: "+target)
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 		if c.curFn != nil && c.curFn.Span.File != nil && !c.canAccess(c.curFn.Span.File, sig.OwnerPkg, sig.OwnerMod, sig.Pub) {

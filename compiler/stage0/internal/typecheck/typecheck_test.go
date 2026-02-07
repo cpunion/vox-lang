@@ -1,6 +1,7 @@
 package typecheck
 
 import (
+	"strings"
 	"testing"
 
 	"voxlang/internal/ast"
@@ -154,6 +155,38 @@ fn main() -> i32 {
 	}
 	if !found {
 		t.Fatalf("expected member-call-on-value diag, got: %+v", tdiags.Items)
+	}
+}
+
+func TestGenericFuncInferenceAndMonomorphization(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn id[T](x: T) -> T { return x; }
+fn main() -> i32 { return id(1); }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	// Find call expr: id(1)
+	var call *ast.CallExpr
+	for _, fn := range prog.Funcs {
+		if fn.Name != "main" {
+			continue
+		}
+		ret := fn.Body.Stmts[0].(*ast.ReturnStmt)
+		call = ret.Expr.(*ast.CallExpr)
+	}
+	if call == nil {
+		t.Fatalf("missing call expr")
+	}
+	tgt := checked.CallTargets[call]
+	if !strings.HasPrefix(tgt, "id$") {
+		t.Fatalf("expected monomorphized call target starting with id$, got %q", tgt)
+	}
+	if _, ok := checked.FuncSigs[tgt]; !ok {
+		t.Fatalf("expected instantiated function sig %q to exist", tgt)
 	}
 }
 

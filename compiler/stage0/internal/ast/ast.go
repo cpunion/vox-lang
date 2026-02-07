@@ -23,12 +23,13 @@ type ImportName struct {
 }
 
 type FuncDecl struct {
-	Pub    bool
-	Name   string
-	Params []Param
-	Ret    Type
-	Body   *BlockStmt
-	Span   source.Span
+	Pub        bool
+	Name       string
+	TypeParams []string // generic type parameters, e.g. fn id[T](x: T) -> T
+	Params     []Param
+	Ret        Type
+	Body       *BlockStmt
+	Span       source.Span
 }
 
 type StructDecl struct {
@@ -246,9 +247,10 @@ func (*BinaryExpr) exprNode()           {}
 func (e *BinaryExpr) Span() source.Span { return e.S }
 
 type CallExpr struct {
-	Callee Expr
-	Args   []Expr
-	S      source.Span
+	Callee   Expr
+	TypeArgs []Type // optional explicit type args for generic calls: f[i32](...)
+	Args     []Expr
+	S        source.Span
 }
 
 func (*CallExpr) exprNode()           {}

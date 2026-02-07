@@ -192,3 +192,25 @@ func TestParseVecMethods(t *testing.T) {
 		t.Fatalf("unexpected diags: %+v", diags.Items)
 	}
 }
+
+func TestParseGenericFuncAndExplicitTypeArgsCall(t *testing.T) {
+	f := source.NewFile("test.vox", `fn id[T](x: T) -> T { return x; }
+fn main() -> i32 { return id[i32](1); }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Funcs) != 2 {
+		t.Fatalf("expected 2 funcs, got %d", len(prog.Funcs))
+	}
+	id := prog.Funcs[0]
+	if id.Name != "id" || len(id.TypeParams) != 1 || id.TypeParams[0] != "T" {
+		t.Fatalf("unexpected generic func decl: %#v", id)
+	}
+	mainFn := prog.Funcs[1]
+	ret := mainFn.Body.Stmts[0].(*ast.ReturnStmt)
+	call := ret.Expr.(*ast.CallExpr)
+	if len(call.TypeArgs) != 1 {
+		t.Fatalf("expected 1 call type arg, got %d", len(call.TypeArgs))
+	}
+}

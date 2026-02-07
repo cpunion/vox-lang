@@ -254,6 +254,23 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 	if nameTok.Kind != lexer.TokenIdent {
 		return nil
 	}
+	// Optional generic params: fn id[T](...)
+	var typeParams []string
+	if p.match(lexer.TokenLBracket) {
+		if !p.at(lexer.TokenRBracket) {
+			for {
+				id := p.expect(lexer.TokenIdent, "expected type parameter name")
+				if id.Kind == lexer.TokenIdent {
+					typeParams = append(typeParams, id.Lexeme)
+				}
+				if p.match(lexer.TokenComma) {
+					continue
+				}
+				break
+			}
+		}
+		p.expect(lexer.TokenRBracket, "expected `]` to end type parameters")
+	}
 	p.expect(lexer.TokenLParen, "expected `(`")
 	var params []ast.Param
 	if !p.at(lexer.TokenRParen) {
@@ -279,11 +296,12 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 		return nil
 	}
 	return &ast.FuncDecl{
-		Name:   nameTok.Lexeme,
-		Params: params,
-		Ret:    ret,
-		Body:   body,
-		Span:   joinSpan(startTok.Span, body.S),
+		Name:       nameTok.Lexeme,
+		TypeParams: typeParams,
+		Params:     params,
+		Ret:        ret,
+		Body:       body,
+		Span:       joinSpan(startTok.Span, body.S),
 	}
 }
 
@@ -609,6 +627,7 @@ func (p *Parser) parsePattern() ast.Pattern {
 }
 
 func (p *Parser) parsePostfix(ex ast.Expr, allowStructLit bool) ast.Expr {
+	var pendingTypeArgs []ast.Type
 	for {
 		if allowStructLit && p.at(lexer.TokenLBrace) {
 			parts, ok := exprPathParts(ex)
@@ -620,8 +639,30 @@ func (p *Parser) parsePostfix(ex ast.Expr, allowStructLit bool) ast.Expr {
 			}
 		}
 		if p.match(lexer.TokenDot) {
+			if len(pendingTypeArgs) != 0 {
+				p.errorHere("type arguments must be followed by a call")
+				pendingTypeArgs = nil
+			}
 			id := p.expect(lexer.TokenIdent, "expected identifier after `.`")
 			ex = &ast.MemberExpr{Recv: ex, Name: id.Lexeme, S: joinSpan(ex.Span(), id.Span)}
+			continue
+		}
+		if p.match(lexer.TokenLBracket) {
+			if len(pendingTypeArgs) != 0 {
+				p.errorHere("unexpected nested type argument list")
+			}
+			pendingTypeArgs = nil
+			if !p.at(lexer.TokenRBracket) {
+				for {
+					ta := p.parseType()
+					pendingTypeArgs = append(pendingTypeArgs, ta)
+					if p.match(lexer.TokenComma) {
+						continue
+					}
+					break
+				}
+			}
+			p.expect(lexer.TokenRBracket, "expected `]` to end type arguments")
 			continue
 		}
 		if p.match(lexer.TokenLParen) {
@@ -636,10 +677,14 @@ func (p *Parser) parsePostfix(ex ast.Expr, allowStructLit bool) ast.Expr {
 				}
 			}
 			rp := p.expect(lexer.TokenRParen, "expected `)`")
-			ex = &ast.CallExpr{Callee: ex, Args: args, S: joinSpan(ex.Span(), rp.Span)}
+			ex = &ast.CallExpr{Callee: ex, TypeArgs: pendingTypeArgs, Args: args, S: joinSpan(ex.Span(), rp.Span)}
+			pendingTypeArgs = nil
 			continue
 		}
 		break
+	}
+	if len(pendingTypeArgs) != 0 {
+		p.errorHere("type arguments must be followed by a call")
 	}
 	return ex
 }

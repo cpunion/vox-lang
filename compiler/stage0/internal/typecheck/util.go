@@ -29,6 +29,8 @@ func (t Type) String() string {
 			return "Vec[<bad>]"
 		}
 		return "Vec[" + t.Elem.String() + "]"
+	case TyParam:
+		return t.Name
 	default:
 		return "<bad>"
 	}
@@ -65,6 +67,9 @@ func sameType(a, b Type) bool {
 			return false
 		}
 		return sameType(*a.Elem, *b.Elem)
+	}
+	if a.K == TyParam {
+		return a.Name == b.Name
 	}
 	return true
 }

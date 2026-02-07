@@ -158,6 +158,52 @@ fn main() -> i32 {
 	}
 }
 
+func TestPipelineGenericFuncCompilesAndRuns(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("cc not found")
+	}
+
+	f := source.NewFile("src/main.vox", `fn id[T](x: T) -> T { return x; }
+fn main() -> i32 { return id(41) + 1; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	irp, err := irgen.Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrc, err := EmitC(irp, EmitOptions{EmitDriverMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	cPath := filepath.Join(dir, "a.c")
+	binPath := filepath.Join(dir, "a.out")
+	if err := writeFile(cPath, csrc); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(cc, "-std=c11", "-O0", "-g", cPath, "-o", binPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, string(out))
+	}
+	run := exec.Command(binPath)
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "42" {
+		t.Fatalf("expected output 42, got %q", got)
+	}
+}
+
 func TestPipelineVecCompilesAndRuns(t *testing.T) {
 	cc, err := exec.LookPath("cc")
 	if err != nil {

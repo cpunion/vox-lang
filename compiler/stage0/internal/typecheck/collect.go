@@ -118,6 +118,7 @@ func (c *checker) collectFuncSigs() {
 
 	for _, fn := range c.prog.Funcs {
 		qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)
+		c.funcDecls[qname] = fn
 		if _, exists := c.funcSigs[qname]; exists {
 			c.errorAt(fn.Span, "duplicate function: "+qname)
 			continue
@@ -127,10 +128,21 @@ func (c *checker) collectFuncSigs() {
 		sig.Pub = fn.Pub
 		sig.OwnerPkg = pkg
 		sig.OwnerMod = mod
+		sig.TypeParams = append([]string{}, fn.TypeParams...)
+		// Allow type params in the signature for generic functions.
+		if len(fn.TypeParams) > 0 {
+			c.curTyVars = map[string]bool{}
+			for _, tp := range fn.TypeParams {
+				c.curTyVars[tp] = true
+			}
+		} else {
+			c.curTyVars = nil
+		}
 		for _, p := range fn.Params {
 			sig.Params = append(sig.Params, c.typeFromAstInFile(p.Type, fn.Span.File))
 		}
 		sig.Ret = c.typeFromAstInFile(fn.Ret, fn.Span.File)
+		c.curTyVars = nil
 		c.funcSigs[qname] = sig
 	}
 	// main presence check (stage0)
