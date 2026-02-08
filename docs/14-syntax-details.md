@@ -82,6 +82,13 @@ type Value = I32: i32 | Str: String;
 - 推荐写 `Label: Type`，使构造与匹配有稳定名字：`.I32(1)`、`.Str("x")`。
 - 对简单名义类型允许省略 label：`type X = Foo | Bar;`。
 
+当前实现（Stage0/Stage1 v0）：
+
+- 仅支持 **labeled** 形式：`type Name = A: TA | B: TB | ...`（每个 variant 当前只有 1 个 payload 类型）。
+- 语义上等价于同名 `enum` 声明（即“tagged union”），并复用 `enum` 的构造与 `match` 机制。
+  - 例如 `type Value = I32: i32 | Str: String;` 等价于 `enum Value { I32(i32), Str(String) }`。
+  - 因此 `Value.I32(1)`、以及在期望类型已知时的简写 `.I32(1)` 都可用。
+
 ## 字符串字面量
 
 语法：

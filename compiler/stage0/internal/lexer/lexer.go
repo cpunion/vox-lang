@@ -238,7 +238,7 @@ func (lx *lexer) lexPunct() {
 			lx.pos++
 			lx.emit(TokenOrOr, "||", start, lx.pos)
 		} else {
-			lx.emit(TokenBad, string(ch), start, lx.pos)
+			lx.emit(TokenPipe, "|", start, lx.pos)
 		}
 	case '"':
 		lx.pos-- // back to opening

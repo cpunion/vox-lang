@@ -23,7 +23,7 @@ func TestLexKeywordsAndPunct(t *testing.T) {
 // keywords
 fn let mut return if else true false type const static import pub match as from while break continue
 // punct/op
-(){}[] , ; : :: . + - * / % ! = == != < <= > >= && || ->
+(){}[] , ; : :: . + - * / % ! = == != < <= > >= && | || ->
 // string
 "a\nb\t\"c\"\\"
 `)
@@ -71,6 +71,17 @@ func TestLexSingleAmpersandIsBad(t *testing.T) {
 	}
 	if toks[0].Kind != TokenBad {
 		t.Fatalf("expected TokenBad for single &, got %v", toks[0].Kind)
+	}
+}
+
+func TestLexSinglePipeIsToken(t *testing.T) {
+	f := source.NewFile("test.vox", `|`)
+	toks := Lex(f)
+	if len(toks) < 2 {
+		t.Fatalf("expected at least 2 tokens")
+	}
+	if toks[0].Kind != TokenPipe {
+		t.Fatalf("expected TokenPipe for single |, got %v", toks[0].Kind)
 	}
 }
 

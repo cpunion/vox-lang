@@ -110,6 +110,7 @@ struct ParsePatResult { p: Parser, pat: ast.Pat }
 struct ParseArmResult { p: Parser, arm: ast.MatchArm }
 struct ParseTypeParamsResult { p: Parser, tps: Vec[String] }
 struct ParseBracedExprResult { p: Parser, id: i32 }
+struct ParseTypeDeclResult { p: Parser, is_union: bool, t: ast.TypeAliasDecl, e: ast.EnumDecl }
 
 fn dummy_token() -> lex.Token {
   return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0 };
@@ -1105,6 +1106,64 @@ fn parse_type_alias_decl(p: Parser, is_pub: bool) -> ParseTypeAliasResult {
   return ParseTypeAliasResult { p: q, t: ast.TypeAliasDecl { file: p.file, is_pub: is_pub, name: r1.name, ty: r3.ty } };
 }
 
+fn parse_type_decl(p: Parser, is_pub: bool) -> ParseTypeDeclResult {
+  // Either:
+  // - type alias: `type Name = TypeName;`
+  // - union type decl (tagged union): `type Name = A: TA | B: TB;` (stage1 v0 only labeled form)
+  let ar0: AdvanceResult = expect(p, lex.TokenKind.KwType);
+  let r1: ParseIdentResult = parse_ident(ar0.p);
+  let ar2: AdvanceResult = expect(r1.p, lex.TokenKind.Eq);
+
+  // Disambiguation: union uses labeled arms `Ident :`.
+  if kind_is(peek_kind(ar2.p), lex.TokenKind.Ident) && kind_is(peek2_kind(ar2.p), lex.TokenKind.Colon) {
+    let mut q: Parser = ar2.p;
+    let mut vars: Vec[ast.EnumVariantDecl] = Vec();
+    while !q.has_err {
+      let rlbl: ParseIdentResult = parse_ident(q);
+      let arcol: AdvanceResult = expect(rlbl.p, lex.TokenKind.Colon);
+      let rty: ParseTypeResult = parse_type_name(arcol.p);
+      vars.push(ast.EnumVariantDecl { name: rlbl.name, fields: vec1_type(rty.ty) });
+      q = rty.p;
+      if kind_is(peek_kind(q), lex.TokenKind.Pipe) {
+        let arbar: AdvanceResult = advance(q);
+        q = arbar.p;
+        continue;
+      }
+      break;
+    }
+    if kind_is(peek_kind(q), lex.TokenKind.Semicolon) {
+      let arsemi: AdvanceResult = advance(q);
+      q = arsemi.p;
+    }
+    return ParseTypeDeclResult {
+      p: q,
+      is_union: true,
+      t: ast.TypeAliasDecl { file: "", is_pub: false, name: "", ty: ast.TypeName { parts: Vec(), args: Vec() } },
+      e: ast.EnumDecl { file: p.file, is_pub: is_pub, name: r1.name, variants: vars },
+    };
+  }
+
+  // Alias fallback.
+  let r3: ParseTypeResult = parse_type_name(ar2.p);
+  let mut q2: Parser = r3.p;
+  if kind_is(peek_kind(q2), lex.TokenKind.Semicolon) {
+    let ar4: AdvanceResult = advance(q2);
+    q2 = ar4.p;
+  }
+  return ParseTypeDeclResult {
+    p: q2,
+    is_union: false,
+    t: ast.TypeAliasDecl { file: p.file, is_pub: is_pub, name: r1.name, ty: r3.ty },
+    e: ast.EnumDecl { file: "", is_pub: false, name: "", variants: Vec() },
+  };
+}
+
+fn vec1_type(x: ast.TypeName) -> Vec[ast.TypeName] {
+  let mut v: Vec[ast.TypeName] = Vec();
+  v.push(x);
+  return v;
+}
+
 fn parse_params(p: Parser) -> ParseParamsResult {
   let mut q: Parser = p;
   let mut params: Vec[ast.Param] = Vec();
@@ -1152,9 +1211,13 @@ fn parse_params(p: Parser) -> ParseParamsResult {
 	      }
 	      let k: lex.TokenKind = peek_kind(q);
 	      if kind_is(k, lex.TokenKind.KwType) {
-	        let r: ParseTypeAliasResult = parse_type_alias_decl(q, is_pub);
+	        let r: ParseTypeDeclResult = parse_type_decl(q, is_pub);
 	        q = r.p;
-	        types.push(r.t);
+	        if r.is_union {
+	          enums.push(r.e);
+	        } else {
+	          types.push(r.t);
+	        }
 	      } else if kind_is(k, lex.TokenKind.KwStruct) {
 	        let r: ParseStructResult = parse_struct_decl(q, is_pub);
 	        q = r.p;

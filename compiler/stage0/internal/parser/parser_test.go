@@ -97,6 +97,27 @@ fn main() -> i32 { return 0; }`)
 	}
 }
 
+func TestParseUnionTypeDeclLowersToEnum(t *testing.T) {
+	f := source.NewFile("test.vox", `type Value = I32: i32 | Str: String
+fn main() -> i32 {
+  let x: Value = .I32(1);
+  return match x { .I32(v) => v, .Str(_s) => 0 };
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Enums) != 1 {
+		t.Fatalf("expected 1 enum (from union type), got %d", len(prog.Enums))
+	}
+	if prog.Enums[0].Name != "Value" {
+		t.Fatalf("expected enum Value, got %q", prog.Enums[0].Name)
+	}
+	if len(prog.Enums[0].Variants) != 2 || prog.Enums[0].Variants[0].Name != "I32" || prog.Enums[0].Variants[1].Name != "Str" {
+		t.Fatalf("unexpected union variants: %#v", prog.Enums[0].Variants)
+	}
+}
+
 func TestParseWhileBreakContinue(t *testing.T) {
 	f := source.NewFile("test.vox", `fn main() -> i32 {
   let mut x: i32 = 0;

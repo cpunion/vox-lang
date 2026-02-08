@@ -59,10 +59,13 @@ func (p *Parser) parseProgram() *ast.Program {
 		if p.match(lexer.TokenPub) {
 			switch {
 			case p.match(lexer.TokenType):
-				td := p.parseTypeAliasDecl()
-				if td != nil {
-					td.Pub = true
-					prog.Types = append(prog.Types, td)
+				r := p.parseTypeDecl()
+				if r.alias != nil {
+					r.alias.Pub = true
+					prog.Types = append(prog.Types, r.alias)
+				} else if r.en != nil {
+					r.en.Pub = true
+					prog.Enums = append(prog.Enums, r.en)
 				}
 			case p.match(lexer.TokenStruct):
 				st := p.parseStructDecl()
@@ -90,9 +93,11 @@ func (p *Parser) parseProgram() *ast.Program {
 		}
 
 		if p.match(lexer.TokenType) {
-			td := p.parseTypeAliasDecl()
-			if td != nil {
-				prog.Types = append(prog.Types, td)
+			r := p.parseTypeDecl()
+			if r.alias != nil {
+				prog.Types = append(prog.Types, r.alias)
+			} else if r.en != nil {
+				prog.Enums = append(prog.Enums, r.en)
 			}
 			continue
 		}
@@ -123,20 +128,57 @@ func (p *Parser) parseProgram() *ast.Program {
 	return prog
 }
 
-func (p *Parser) parseTypeAliasDecl() *ast.TypeAliasDecl {
+type typeDeclResult struct {
+	alias *ast.TypeAliasDecl
+	en    *ast.EnumDecl
+}
+
+func (p *Parser) parseTypeDecl() typeDeclResult {
 	startTok := p.prev() // `type`
 	nameTok := p.expect(lexer.TokenIdent, "expected type name")
 	if nameTok.Kind != lexer.TokenIdent {
-		return nil
+		return typeDeclResult{}
 	}
-	p.expect(lexer.TokenEq, "expected `=` in type alias")
+	p.expect(lexer.TokenEq, "expected `=` in type declaration")
+
+	// Union type declaration (tagged union): `type Name = A: TA | B: TB;`
+	// Disambiguation rule (Stage0/Stage1 v0): union uses labeled arms, i.e. `Ident :`.
+	if p.at(lexer.TokenIdent) && p.peekN(1).Kind == lexer.TokenColon {
+		vars := []ast.EnumVariant{}
+		for {
+			lbl := p.expect(lexer.TokenIdent, "expected union variant label")
+			p.expect(lexer.TokenColon, "expected `:` after union variant label")
+			ty := p.parseType()
+			endTok := p.prev()
+			if lbl.Kind == lexer.TokenIdent {
+				vars = append(vars, ast.EnumVariant{
+					Name:   lbl.Lexeme,
+					Fields: []ast.Type{ty},
+					Span:   joinSpan(lbl.Span, endTok.Span),
+				})
+			}
+			if p.match(lexer.TokenPipe) {
+				continue
+			}
+			// Optional semicolon.
+			if p.match(lexer.TokenSemicolon) {
+				endTok = p.prev()
+			}
+			return typeDeclResult{
+				en: &ast.EnumDecl{Name: nameTok.Lexeme, Variants: vars, Span: joinSpan(startTok.Span, endTok.Span)},
+			}
+		}
+	}
+
+	// Type alias: `type Name = Type;`
 	ty := p.parseType()
 	endTok := p.prev()
-	// Optional semicolon.
 	if p.match(lexer.TokenSemicolon) {
 		endTok = p.prev()
 	}
-	return &ast.TypeAliasDecl{Name: nameTok.Lexeme, Type: ty, Span: joinSpan(startTok.Span, endTok.Span)}
+	return typeDeclResult{
+		alias: &ast.TypeAliasDecl{Name: nameTok.Lexeme, Type: ty, Span: joinSpan(startTok.Span, endTok.Span)},
+	}
 }
 
 func (p *Parser) parseImportDecl() *ast.ImportDecl {

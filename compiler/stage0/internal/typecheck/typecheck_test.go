@@ -454,6 +454,22 @@ fn main() -> i32 {
 	}
 }
 
+func TestUnionTypeDeclTypechecks(t *testing.T) {
+	f := source.NewFile("src/main.vox", `type Value = I32: i32 | Str: String
+fn main() -> i32 {
+  let x: Value = .I32(1);
+  return match x { .I32(v) => v, .Str(_s) => 0 };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestEnumCtorAndMatchShorthand(t *testing.T) {
 	f := source.NewFile("src/main.vox", `enum E { A(i32), None }
 fn main() -> i32 {

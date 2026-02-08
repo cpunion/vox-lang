@@ -64,6 +64,7 @@ const (
 	TokenGt
 	TokenGtEq
 	TokenAndAnd
+	TokenPipe
 	TokenOrOr
 	TokenArrow
 	TokenFatArrow
