@@ -148,6 +148,23 @@ Stage0/Stage1 目前支持的 `match` pattern 形态：
 - `Enum.Variant(...)`：枚举 variant pattern
 - `.Variant(...)`：枚举 variant pattern（点前缀简写；当枚举类型可由上下文确定时）
 
+## 类型别名（type alias）
+
+声明一个类型别名：
+
+```vox
+type I = i32;
+type V = Vec[I];
+```
+
+别名本身只出现在**类型位置**（不引入值命名空间），例如不允许用 `Alias.Variant(...)` 作为 enum 构造子路径。
+
+可以导出别名：
+
+```vox
+pub type Size = i64;
+```
+
 ### 绑定模式（bind pattern）
 
 `match` 的 pattern 允许使用单个标识符作为“绑定模式”，它总是匹配，并将 scrutinee 绑定到该名字：
