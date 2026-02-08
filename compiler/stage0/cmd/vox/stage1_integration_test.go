@@ -214,7 +214,7 @@ dep = { path = "dep_pkg" }
 
 	// This used to be a potential collision in C backends if mangling wasn't collision-free:
 	// - local function: dep__one
-	// - dep package function: dep::one
+	// - dep package function: pkg.dep::one
 	mainSrc := "import \"dep\" as dep\nfn dep__one() -> i32 { return 1; }\nfn main() -> i32 { return dep__one() + dep.one(); }\n"
 	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte(mainSrc), 0o644); err != nil {
 		t.Fatalf("write main: %v", err)

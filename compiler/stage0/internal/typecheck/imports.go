@@ -1,8 +1,82 @@
 package typecheck
 
 import (
+	"strings"
+
 	"voxlang/internal/names"
 )
+
+func splitImportScheme(path string) (scheme string, rest string) {
+	if strings.HasPrefix(path, "pkg:") {
+		return "pkg", path[len("pkg:"):]
+	}
+	if strings.HasPrefix(path, "mod:") {
+		return "mod", path[len("mod:"):]
+	}
+	if strings.HasPrefix(path, "std:") {
+		return "std", path[len("std:"):]
+	}
+	return "", path
+}
+
+func internalPkgName(name string) string { return "pkg." + name }
+
+func (c *checker) initPresence() {
+	if c.presentPkgs != nil {
+		return
+	}
+	c.presentPkgs = map[string]bool{}
+	c.presentModsByPkg = map[string]map[string]bool{}
+
+	addFile := func(fileName string) {
+		if fileName == "" {
+			return
+		}
+		pkg, mod, _ := names.SplitOwnerAndModule(fileName)
+		c.presentPkgs[pkg] = true
+		m := c.presentModsByPkg[pkg]
+		if m == nil {
+			m = map[string]bool{}
+			c.presentModsByPkg[pkg] = m
+		}
+		m[strings.Join(mod, "/")] = true
+	}
+
+	for _, imp := range c.prog.Imports {
+		if imp != nil && imp.Span.File != nil {
+			addFile(imp.Span.File.Name)
+		}
+	}
+	for _, d := range c.prog.Funcs {
+		if d != nil && d.Span.File != nil {
+			addFile(d.Span.File.Name)
+		}
+	}
+	for _, d := range c.prog.Structs {
+		if d != nil && d.Span.File != nil {
+			addFile(d.Span.File.Name)
+		}
+	}
+	for _, d := range c.prog.Enums {
+		if d != nil && d.Span.File != nil {
+			addFile(d.Span.File.Name)
+		}
+	}
+}
+
+func (c *checker) hasPkgInProgram(pkg string) bool {
+	c.initPresence()
+	return c.presentPkgs[pkg]
+}
+
+func (c *checker) hasModuleInProgram(pkg string, modPath string) bool {
+	c.initPresence()
+	m := c.presentModsByPkg[pkg]
+	if m == nil {
+		return false
+	}
+	return m[modPath]
+}
 
 func (c *checker) collectImports() {
 	for _, imp := range c.prog.Imports {
@@ -12,23 +86,99 @@ func (c *checker) collectImports() {
 
 		path := imp.Path
 		alias := imp.Alias
+		scheme, raw := splitImportScheme(path)
+
+		ownerPkg, _, _ := names.SplitOwnerAndModule(imp.Span.File.Name)
 
 		var tgt importTarget
-		if c.opts.AllowedPkgs != nil && c.opts.AllowedPkgs[path] {
-			// dependency root import
-			tgt = importTarget{Pkg: path, Mod: nil}
-			if alias == "" {
-				alias = path
-			}
-		} else {
-			// local module import
-			if !c.isKnownLocalModule(imp.Span.File.Name, path) {
-				c.errorAt(imp.Span, "unknown local module: "+path)
+		switch scheme {
+		case "std":
+			// std:... always resolves to the root std module namespace.
+			localPath := "std/" + raw
+			if !c.isKnownLocalModule(imp.Span.File.Name, localPath) {
+				c.errorAt(imp.Span, "unknown local module: "+localPath)
 				continue
 			}
-			tgt = importTarget{Pkg: "", Mod: splitModPath(path)}
+			tgt = importTarget{Pkg: "", Mod: splitModPath(localPath)}
 			if alias == "" {
-				alias = defaultImportAlias(path)
+				alias = defaultImportAlias(localPath)
+			}
+		case "mod":
+			// mod:... forces local module within the importing package.
+			localPath := raw
+			// Special-case std: allow importing std/** from any package without requiring a local copy.
+			localOwnerPkg := ownerPkg
+			if localPath == "std" || strings.HasPrefix(localPath, "std/") {
+				localOwnerPkg = ""
+			}
+			if !c.isKnownLocalModule(imp.Span.File.Name, localPath) {
+				c.errorAt(imp.Span, "unknown local module: "+localPath)
+				continue
+			}
+			tgt = importTarget{Pkg: localOwnerPkg, Mod: splitModPath(localPath)}
+			if alias == "" {
+				alias = defaultImportAlias(localPath)
+			}
+		case "pkg":
+			// pkg:... forces dependency package.
+			depName, depMod, _ := strings.Cut(raw, "/")
+			if depName == "" {
+				c.errorAt(imp.Span, "invalid dependency import: "+raw)
+				continue
+			}
+			if c.opts.AllowedPkgs != nil && !c.opts.AllowedPkgs[depName] {
+				c.errorAt(imp.Span, "unknown dependency package: "+depName)
+				continue
+			}
+			tgt = importTarget{Pkg: internalPkgName(depName), Mod: splitModPath(depMod)}
+			if alias == "" {
+				alias = defaultImportAlias(raw)
+			}
+		default:
+			// Default: local module wins; if both local and dep exist, require explicit pkg:/mod:.
+			if raw == "" {
+				c.errorAt(imp.Span, "invalid import path")
+				continue
+			}
+
+			// Treat std/** as a root module, regardless of which package is importing it.
+			localOwnerPkg := ownerPkg
+			if raw == "std" || strings.HasPrefix(raw, "std/") {
+				localOwnerPkg = ""
+			}
+
+			depName, depMod, _ := strings.Cut(raw, "/")
+			depPkg := internalPkgName(depName)
+
+			hasDep := depName != "" && c.hasPkgInProgram(depPkg)
+			hasLocal := c.hasModuleInProgram(localOwnerPkg, raw)
+
+			if hasDep && hasLocal {
+				c.errorAt(imp.Span, "ambiguous import: "+raw+" (use pkg: or mod:)")
+				continue
+			}
+
+			// If neither is present in the parsed program, fall back to manifest-based validation if provided.
+			if !hasDep && !hasLocal && c.opts.AllowedPkgs != nil && c.opts.AllowedPkgs[depName] {
+				hasDep = true
+			}
+
+			if hasDep {
+				tgt = importTarget{Pkg: depPkg, Mod: splitModPath(depMod)}
+				if alias == "" {
+					alias = defaultImportAlias(raw)
+				}
+				break
+			}
+
+			// local module import (in-package, unless it's std/** handled above)
+			if !c.isKnownLocalModule(imp.Span.File.Name, raw) {
+				c.errorAt(imp.Span, "unknown local module: "+raw)
+				continue
+			}
+			tgt = importTarget{Pkg: localOwnerPkg, Mod: splitModPath(raw)}
+			if alias == "" {
+				alias = defaultImportAlias(raw)
 			}
 		}
 

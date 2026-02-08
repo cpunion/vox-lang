@@ -11,15 +11,15 @@ import (
 // Root package files keep relPath like "src/main.vox" or "tests/basic.vox".
 //
 // Module path rules (stage0):
-// - src/main.vox is the executable entrypoint but still belongs to the root module.
-// - Any file directly under src/ belongs to the root module (file name doesn't affect module path).
-// - src/**.vox files belong to the module represented by their directory path under src/.
-//   Examples:
+//   - src/main.vox is the executable entrypoint but still belongs to the root module.
+//   - Any file directly under src/ belongs to the root module (file name doesn't affect module path).
+//   - src/**.vox files belong to the module represented by their directory path under src/.
+//     Examples:
 //   - src/a/a.vox, src/a/x.vox              -> module ["a"]
 //   - src/utils/io/file.vox, src/utils/io/x.vox -> module ["utils","io"]
-// - src/**/*_test.vox are treated as part of the directory module (file name doesn't form a module segment).
-// - tests/**.vox are treated as belonging to a separate top-level module "tests" (and its subdirectories),
-//   so they cannot access private symbols from src/** by default (Go-like "external tests" behavior).
+//   - src/**/*_test.vox are treated as part of the directory module (file name doesn't form a module segment).
+//   - tests/**.vox are treated as belonging to a separate top-level module "tests" (and its subdirectories),
+//     so they cannot access private symbols from src/** by default (Go-like "external tests" behavior).
 func SplitOwnerAndModule(fileName string) (pkg string, mod []string, isTest bool) {
 	rel := filepath.ToSlash(fileName)
 	if rel == "" {
@@ -29,7 +29,11 @@ func SplitOwnerAndModule(fileName string) (pkg string, mod []string, isTest bool
 	// Optional dependency prefix: "<depName>/..."
 	first, rest, ok := strings.Cut(rel, "/")
 	if ok && first != "src" && first != "tests" {
-		pkg = first
+		// Namespace dependency packages to avoid collisions with local modules.
+		// For example:
+		// - root local module: src/dep/** -> qname "dep::foo"
+		// - dependency package: dep/src/** -> qname "pkg.dep::foo"
+		pkg = "pkg." + first
 		rel = rest
 	}
 

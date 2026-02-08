@@ -24,9 +24,9 @@ const (
 )
 
 type BuildResult struct {
-	Manifest  *manifest.Manifest
-	Root      string
-	Program   *typecheck.CheckedProgram
+	Manifest *manifest.Manifest
+	Root     string
+	Program  *typecheck.CheckedProgram
 }
 
 func InitPackage(dir string) error {
@@ -163,7 +163,7 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 		mods["std/testing"] = true
 		mods["std/fs"] = true
 		mods["std/process"] = true
-		modByPkg[depName] = mods
+		modByPkg["pkg."+depName] = mods
 	}
 
 	allowed := map[string]bool{}

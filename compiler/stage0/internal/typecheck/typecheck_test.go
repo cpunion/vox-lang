@@ -71,8 +71,8 @@ fn main() -> i32 { return m.one(); }`),
 	if call == nil {
 		t.Fatalf("missing call expr")
 	}
-	if got := checked.CallTargets[call]; got != "mathlib::one" {
-		t.Fatalf("expected call target mathlib::one, got %q", got)
+	if got := checked.CallTargets[call]; got != "pkg.mathlib::one" {
+		t.Fatalf("expected call target pkg.mathlib::one, got %q", got)
 	}
 }
 
@@ -110,15 +110,15 @@ func TestBreakContinueOutsideLoop(t *testing.T) {
 }
 
 func TestWhileConditionMustBeBool(t *testing.T) {
- 	f := source.NewFile("src/main.vox", `fn main() -> i32 { while 1 { } return 0; }`)
- 	prog, pdiags := parser.Parse(f)
- 	if pdiags != nil && len(pdiags.Items) > 0 {
- 		t.Fatalf("parse diags: %+v", pdiags.Items)
- 	}
- 	_, tdiags := Check(prog, Options{})
- 	if tdiags == nil || len(tdiags.Items) == 0 {
- 		t.Fatalf("expected diagnostics")
- 	}
+	f := source.NewFile("src/main.vox", `fn main() -> i32 { while 1 { } return 0; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
 	found := false
 	for _, it := range tdiags.Items {
 		if it.Msg == "while condition must be bool" {
@@ -632,8 +632,8 @@ fn main() -> i32 { return uno(); }`),
 	if call == nil {
 		t.Fatalf("missing call expr")
 	}
-	if got := checked.CallTargets[call]; got != "dep::one" {
-		t.Fatalf("expected call target dep::one, got %q", got)
+	if got := checked.CallTargets[call]; got != "pkg.dep::one" {
+		t.Fatalf("expected call target pkg.dep::one, got %q", got)
 	}
 }
 
@@ -653,7 +653,7 @@ fn main() -> i32 { return one(); }`),
 	}
 	found := false
 	for _, it := range tdiags.Items {
-		if it.Msg == "function is private: dep::one" {
+		if it.Msg == "function is private: pkg.dep::one" {
 			found = true
 			break
 		}

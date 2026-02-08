@@ -41,8 +41,8 @@ type CheckedProgram struct {
 	VecCalls   map[*ast.CallExpr]VecCallTarget
 	StrCalls   map[*ast.CallExpr]StrCallTarget
 	ToStrCalls map[*ast.CallExpr]ToStrTarget
-	// CallTargets stores the resolved function name (possibly qualified, e.g. "dep::foo").
-	// Note: Vox surface syntax may use `dep.foo(...)`; it still resolves to `dep::foo` internally.
+	// CallTargets stores the resolved function name (possibly qualified, e.g. "dep::foo" or "pkg.dep::foo").
+	// Note: Vox surface syntax may use `dep.foo(...)`; it still resolves to `...::foo` internally.
 	// for each call expression.
 	CallTargets map[*ast.CallExpr]string
 	// EnumCtors records which call expressions are enum constructors instead of function calls.
@@ -247,6 +247,11 @@ type checker struct {
 	instantiated  map[string]bool          // qualified name of instantiated concrete function
 	pendingInsts  []pendingInstantiation
 	instantiating map[string]bool // recursion guard
+
+	// Presence info inferred from the parsed program (file layout).
+	// Used to disambiguate imports even when build-manifest validation is disabled in Options{} tests.
+	presentPkgs      map[string]bool            // qualified pkg name -> present
+	presentModsByPkg map[string]map[string]bool // qualified pkg name -> module path ("a/b") -> present
 }
 
 type varInfo struct {
