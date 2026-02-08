@@ -134,3 +134,32 @@ func TestLowerMatchIntAndStrPatterns(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLowerShortCircuitLogicOps(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn rhs() -> bool { panic("rhs executed"); return true; }
+fn main() -> bool {
+  // Must lower to condbr + blocks (short-circuit), not eager "and/or" instructions.
+  let a: bool = false && rhs();
+  let b: bool = true || rhs();
+  return a == false && b == true;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	irp, err := Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := irp.Format()
+	if !strings.Contains(s, "condbr") {
+		t.Fatalf("expected IR to contain condbr for short-circuit; got:\n%s", s)
+	}
+	if strings.Contains(s, " = and ") || strings.Contains(s, " = or ") {
+		t.Fatalf("expected short-circuit lowering to avoid eager and/or; got:\n%s", s)
+	}
+}

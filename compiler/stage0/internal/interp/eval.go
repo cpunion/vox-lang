@@ -184,6 +184,40 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		if err != nil {
 			return unit(), err
 		}
+
+		// Short-circuit logical ops.
+		// These must not evaluate RHS when the result is already determined by LHS.
+		if e.Op == "&&" || e.Op == "||" {
+			if l.K != VBool {
+				return unit(), fmt.Errorf("logical op expects bool")
+			}
+			if e.Op == "&&" {
+				if !l.B {
+					return Value{K: VBool, B: false}, nil
+				}
+				r, err := rt.evalExpr(e.Right)
+				if err != nil {
+					return unit(), err
+				}
+				if r.K != VBool {
+					return unit(), fmt.Errorf("logical op expects bool")
+				}
+				return Value{K: VBool, B: r.B}, nil
+			}
+			// "||"
+			if l.B {
+				return Value{K: VBool, B: true}, nil
+			}
+			r, err := rt.evalExpr(e.Right)
+			if err != nil {
+				return unit(), err
+			}
+			if r.K != VBool {
+				return unit(), fmt.Errorf("logical op expects bool")
+			}
+			return Value{K: VBool, B: r.B}, nil
+		}
+
 		r, err := rt.evalExpr(e.Right)
 		if err != nil {
 			return unit(), err
@@ -219,14 +253,6 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 				eq = !eq
 			}
 			return Value{K: VBool, B: eq}, nil
-		case "&&", "||":
-			if l.K != VBool || r.K != VBool {
-				return unit(), fmt.Errorf("logical op expects bool")
-			}
-			if e.Op == "&&" {
-				return Value{K: VBool, B: l.B && r.B}, nil
-			}
-			return Value{K: VBool, B: l.B || r.B}, nil
 		default:
 			return unit(), fmt.Errorf("unknown op: %s", e.Op)
 		}

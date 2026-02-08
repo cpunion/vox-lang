@@ -95,6 +95,11 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			return g.genEnumUnitEq(e)
 		}
 
+		// Short-circuit logical ops.
+		if e.Op == "&&" || e.Op == "||" {
+			return g.genShortCircuitLogic(e)
+		}
+
 		l, err := g.genExpr(e.Left)
 		if err != nil {
 			return nil, err
@@ -555,6 +560,60 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 	default:
 		return nil, fmt.Errorf("unsupported expr in IR gen")
 	}
+}
+
+func (g *gen) genShortCircuitLogic(e *ast.BinaryExpr) (ir.Value, error) {
+	// Both operators return bool.
+	resTy := ir.Type{K: ir.TBool}
+
+	cond, err := g.genExpr(e.Left)
+	if err != nil {
+		return nil, err
+	}
+
+	resSlot := g.newSlot()
+	g.slotTypes[resSlot.ID] = resTy
+	g.emit(&ir.SlotDecl{Slot: resSlot, Ty: resTy})
+	g.emit(&ir.Store{Slot: resSlot, Val: &ir.ConstBool{V: false}})
+
+	rhsBlk := g.newBlock(fmt.Sprintf("logic_rhs_%d", len(g.blocks)))
+	scBlk := g.newBlock(fmt.Sprintf("logic_sc_%d", len(g.blocks)))
+	endBlk := g.newBlock(fmt.Sprintf("logic_end_%d", len(g.blocks)))
+
+	// For "&&": if cond then eval RHS else short-circuit false.
+	// For "||": if cond then short-circuit true else eval RHS.
+	if e.Op == "&&" {
+		g.term(&ir.CondBr{Cond: cond, Then: rhsBlk.Name, Else: scBlk.Name})
+	} else {
+		g.term(&ir.CondBr{Cond: cond, Then: scBlk.Name, Else: rhsBlk.Name})
+	}
+
+	// Short-circuit block.
+	g.setBlock(scBlk)
+	if e.Op == "&&" {
+		g.emit(&ir.Store{Slot: resSlot, Val: &ir.ConstBool{V: false}})
+	} else {
+		g.emit(&ir.Store{Slot: resSlot, Val: &ir.ConstBool{V: true}})
+	}
+	g.term(&ir.Br{Target: endBlk.Name})
+
+	// RHS block.
+	g.setBlock(rhsBlk)
+	rv, err := g.genExpr(e.Right)
+	if err != nil {
+		return nil, err
+	}
+	if rv == nil {
+		return nil, fmt.Errorf("logical op rhs must produce a value")
+	}
+	g.emit(&ir.Store{Slot: resSlot, Val: rv})
+	g.term(&ir.Br{Target: endBlk.Name})
+
+	// End.
+	g.setBlock(endBlk)
+	tmp := g.newTemp()
+	g.emit(&ir.Load{Dst: tmp, Ty: resTy, Slot: resSlot})
+	return tmp, nil
 }
 
 func (g *gen) curFnRetIRType() (ir.Type, error) {

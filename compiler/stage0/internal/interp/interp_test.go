@@ -230,6 +230,28 @@ func TestInterpStringSlice(t *testing.T) {
 	}
 }
 
+func TestShortCircuitAndAndDoesNotEvalRHS(t *testing.T) {
+	out := runMain(t, `fn rhs() -> bool { panic("rhs executed"); return true; }
+fn main() -> i32 {
+  let x: bool = false && rhs();
+  return if x { 1 } else { 0 };
+}`)
+	if out != "0" {
+		t.Fatalf("expected 0, got %q", out)
+	}
+}
+
+func TestShortCircuitOrOrDoesNotEvalRHS(t *testing.T) {
+	out := runMain(t, `fn rhs() -> bool { panic("rhs executed"); return true; }
+fn main() -> i32 {
+  let x: bool = true || rhs();
+  return if x { 1 } else { 0 };
+}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
 func runMain(t *testing.T, src string) string {
 	t.Helper()
 	f := source.NewFile("src/main.vox", src)
