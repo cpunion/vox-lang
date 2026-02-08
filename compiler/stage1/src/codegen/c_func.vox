@@ -64,6 +64,54 @@ fn c_str_lit(s: String) -> String {
   return "\"".concat(s.escape_c()).concat("\"");
 }
 
+fn is_int_scalar_kind(k: ir.TyKind) -> bool {
+  return match k {
+    ir.TyKind.I8 => true,
+    ir.TyKind.U8 => true,
+    ir.TyKind.I32 => true,
+    ir.TyKind.U32 => true,
+    ir.TyKind.I64 => true,
+    ir.TyKind.U64 => true,
+    ir.TyKind.USize => true,
+    _ => false,
+  };
+}
+
+fn is_signed_int_kind(k: ir.TyKind) -> bool {
+  return match k { ir.TyKind.I8 => true, ir.TyKind.I32 => true, ir.TyKind.I64 => true, _ => false };
+}
+
+fn unsigned_peer_c_type(k: ir.TyKind) -> String {
+  return match k {
+    ir.TyKind.I8 => "uint8_t",
+    ir.TyKind.U8 => "uint8_t",
+    ir.TyKind.I32 => "uint32_t",
+    ir.TyKind.U32 => "uint32_t",
+    ir.TyKind.I64 => "uint64_t",
+    ir.TyKind.U64 => "uint64_t",
+    ir.TyKind.USize => "uint64_t",
+    _ => "uint64_t",
+  };
+}
+
+fn signed_min_macro(k: ir.TyKind) -> String {
+  return match k {
+    ir.TyKind.I8 => "INT8_MIN",
+    ir.TyKind.I32 => "INT32_MIN",
+    ir.TyKind.I64 => "INT64_MIN",
+    _ => "",
+  };
+}
+
+fn signed_max_macro(k: ir.TyKind) -> String {
+  return match k {
+    ir.TyKind.I8 => "INT8_MAX",
+    ir.TyKind.I32 => "INT32_MAX",
+    ir.TyKind.I64 => "INT64_MAX",
+    _ => "",
+  };
+}
+
 struct LocalsResult { slots: Vec[IdTy], temps: Vec[IdTy], max_slot: i32, max_temp: i32 }
 
 fn locals0() -> LocalsResult { return LocalsResult { slots: Vec(), temps: Vec(), max_slot: -1, max_temp: -1 }; }
@@ -249,6 +297,53 @@ fn emit_instr_enum_init(pool: ir.TyPool, p: ir.Program, tid: i32, ty: i32, varia
   return vec1(s);
 }
 
+fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a: ir.Value, b: ir.Value) -> Vec[String] {
+  let t: ir.Ty = ir.ty_pool_get(pool, ty);
+  if !is_int_scalar_kind(t.kind) { panic("binop int helper expects int type"); }
+  let dst_cty: String = c_type(pool, ty);
+
+  // + - * wrap (stage0 parity). Avoid signed overflow UB by computing in unsigned and memcpy back.
+  let is_mul: bool = match op { ir.BinOpKind.Mul => true, _ => false };
+  let is_add: bool = match op { ir.BinOpKind.Add => true, _ => false };
+  let is_sub: bool = match op { ir.BinOpKind.Sub => true, _ => false };
+  if is_add || is_sub || is_mul {
+    if !is_signed_int_kind(t.kind) {
+      // Unsigned arithmetic is well-defined modulo 2^N.
+      let u64expr: String = "((uint64_t)".concat(c_value(a)).concat(") ").concat(c_binop(op)).concat(" ((uint64_t)").concat(c_value(b)).concat(")");
+      return vec1("  ".concat(c_temp_name(tid)).concat(" = (").concat(dst_cty).concat(")").concat(u64expr).concat(";"));
+    }
+    let uty: String = unsigned_peer_c_type(t.kind);
+    let tmp_name: String = "vox_tmp_".concat(c_temp_name(tid));
+    let mut out: Vec[String] = Vec();
+    out.push("  {");
+    out.push("    ".concat(uty).concat(" ua = (").concat(uty).concat(")").concat(c_value(a)).concat(";"));
+    out.push("    ".concat(uty).concat(" ub = (").concat(uty).concat(")").concat(c_value(b)).concat(";"));
+    out.push("    ".concat(uty).concat(" ur = (").concat(uty).concat(")(ua ").concat(c_binop(op)).concat(" ub);"));
+    out.push("    ".concat(dst_cty).concat(" ").concat(tmp_name).concat("; memcpy(&").concat(tmp_name).concat(", &ur, sizeof(").concat(tmp_name).concat("));"));
+    out.push("    ".concat(c_temp_name(tid)).concat(" = ").concat(tmp_name).concat(";"));
+    out.push("  }");
+    return out;
+  }
+
+  // / % panics on division by zero; signed also panics on MIN/-1 overflow.
+  let is_div: bool = match op { ir.BinOpKind.Div => true, _ => false };
+  let is_mod: bool = match op { ir.BinOpKind.Mod => true, _ => false };
+  if is_div || is_mod {
+    let mut out2: Vec[String] = Vec();
+    out2.push("  if (".concat(c_value(b)).concat(" == (").concat(dst_cty).concat(")0) { vox_builtin_panic(\"division by zero\"); }"));
+    if is_signed_int_kind(t.kind) {
+      let minm: String = signed_min_macro(t.kind);
+      let maxm: String = signed_max_macro(t.kind);
+      if minm.len() == 0 || maxm.len() == 0 { panic("missing signed min/max macro"); }
+      out2.push("  if (".concat(c_value(a)).concat(" == ").concat(minm).concat(" && ").concat(c_value(b)).concat(" == (").concat(dst_cty).concat(")-1) { vox_builtin_panic(\"division overflow\"); }"));
+    }
+    out2.push("  ".concat(c_temp_name(tid)).concat(" = (").concat(dst_cty).concat(")(").concat(c_value(a)).concat(" ").concat(c_binop(op)).concat(" ").concat(c_value(b)).concat(");"));
+    return out2;
+  }
+
+  panic("unknown binop");
+}
+
 fn emit_instr_call(has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec[ir.Value]) -> Vec[String] {
   if name == "panic" {
     if args.len() != 1 { panic("panic expects 1 arg"); }
@@ -300,7 +395,11 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr) -> Vec[String] {
     ir.Instr.SlotDecl(_sid, _ty) => vec0(),
 
     ir.Instr.Const(tid, _ty, v) => vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_value(v)).concat(";")),
-    ir.Instr.BinOp(tid, op, _ty, a, b) => vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_value(a)).concat(" ").concat(c_binop(op)).concat(" ").concat(c_value(b)).concat(";")),
+    ir.Instr.BinOp(tid, op, ty, a, b) => {
+      let bt: ir.Ty = ir.ty_pool_get(pool, ty);
+      if is_int_scalar_kind(bt.kind) { emit_instr_binop_int(pool, tid, op, ty, a, b) }
+      else { vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_value(a)).concat(" ").concat(c_binop(op)).concat(" ").concat(c_value(b)).concat(";")) }
+    },
     ir.Instr.Cmp(tid, op, oty, a, b) => emit_instr_cmp(pool, tid, op, oty, a, b),
     ir.Instr.And(tid, a, b) => vec1("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_value(a)).concat(" && ").concat(c_value(b)).concat(");")),
     ir.Instr.Or(tid, a, b) => vec1("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_value(a)).concat(" || ").concat(c_value(b)).concat(");")),

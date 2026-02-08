@@ -69,10 +69,23 @@
 
 Stage0 为了保持实现范围可控，对相等运算符有额外约束：
 
-- `bool/i32/i64/String`：支持完整 `==`/`!=`。
+- `bool/<int>/String`：支持完整 `==`/`!=`。
+  - 其中 `<int>` 指整数标量类型：`i8/u8/i32/u32/i64/u64/usize`。
 - `enum`：仅支持与 **unit variant**（无 payload 的构造子值）比较，例如 `x == E.None`。
   - 该比较降低为 `enum_tag(x) == tag(E.None)`。
   - 不支持 `E.A(1) == E.A(2)` 这类 payload 比较（Stage1 再引入更完整的机制）。
+
+## 整数算术（Stage0/Stage1 v0，已定）
+
+对整数标量类型（`i8/u8/i32/u32/i64/u64/usize`），当前语义约束为：
+
+- `+ - *`：wrapping（按位宽截断），不 panic。
+- `/ %`：
+  - 除以 0 必须 `panic("division by zero")`。
+  - 对有符号类型（`i8/i32/i64`），`MIN / -1` 与 `MIN % -1` 必须 `panic("division overflow")`（避免后端 UB）。
+- `expr as <int>`：整数到整数的显式转换是 **checked cast**：
+  - 若编译期可确定溢出：编译错误。
+  - 否则在转换点插入运行时检查；越界必须 panic（错误消息由后端决定）。
 
 ## `if` 表达式（Stage0 增补，已定）
 
@@ -220,7 +233,7 @@ pub const NAME: String = "vox";
   - 字面量：`123` / `true` / `"txt"`
   - 其他常量引用（含跨模块的 `import` 访问）
   - `-x` / `!x`
-  - `expr as <int>`（显式整数转换；例如 `i64 as i32` 在编译期可确定溢出时会报错，否则运行时检查并在失败时 panic）
+  - `expr as <int>`（显式整数转换；在 const 表达式中溢出一定会在编译期报错）
   - `+ - * / %`、比较、`== !=`、`&& ||`
   - `if cond { a } else { b }`（cond 必须为常量 bool）
 - 不支持在 const 初始化中调用函数、构造 struct/enum、`match` 等（后续由 `comptime` 统一解决）。

@@ -109,6 +109,7 @@ Stage0 IR v0 定义“整数到整数”的显式转换：
 
 - `int_cast`：转换不 panic（截断/按位转换语义，细节后续细化；stage0 目前很少生成）。
 - `int_cast_checked`：必须进行运行时范围检查；越界必须 `panic`。
+- `int_cast`/`int_cast_checked` 的 `dst/src` 当前允许所有整数标量类型：`i8/u8/i32/u32/i64/u64/usize`。
 
 ### 5.4.2 范围检查（`@range`）
 
@@ -125,6 +126,7 @@ range_check i64 0 3 %t0
 
 - `range_check` 没有结果值，只做检查。
 - 若值不在 `[lo, hi]`（包含端点）内，必须 `panic("range check failed")`。
+- `range_check` 的类型参数当前允许所有整数标量类型：`i8/u8/i32/u32/i64/u64/usize`。
 
 ### 5.5 局部槽位（可变变量）
 
