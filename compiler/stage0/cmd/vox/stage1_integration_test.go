@@ -6,12 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"voxlang/internal/codegen"
 )
 
 func TestStage1ToolchainBuildsMultiModuleProgram(t *testing.T) {
 	// 1) Build the stage1 compiler (vox_stage1) using stage0.
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compile(stage1Dir)
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
 	if err != nil {
 		t.Fatalf("build stage1 failed: %v", err)
 	}
@@ -83,7 +85,7 @@ dep = { path = "dep_pkg" }
 func TestStage1ToolchainTestPkgRunsTests(t *testing.T) {
 	// 1) Build the stage1 compiler (vox_stage1) using stage0.
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compile(stage1Dir)
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
 	if err != nil {
 		t.Fatalf("build stage1 failed: %v", err)
 	}
@@ -144,7 +146,7 @@ edition = "2026"
 func TestStage1ToolchainSelfBuildsStage1AndBuildsPackage(t *testing.T) {
 	// 1) Build stage1 compiler A (vox_stage1) using stage0.
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1BinA, err := compile(stage1Dir)
+	stage1BinA, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
 	if err != nil {
 		t.Fatalf("build stage1 failed: %v", err)
 	}
@@ -236,7 +238,7 @@ dep = { path = "dep_pkg" }
 func TestStage1ExitCodeNonZeroOnBuildPkgFailure(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0.
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compile(stage1Dir)
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
 	if err != nil {
 		t.Fatalf("build stage1 failed: %v", err)
 	}
@@ -273,7 +275,7 @@ edition = "2026"
 func TestStage1BuildPkgIsQuietOnSuccess(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0.
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compile(stage1Dir)
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
 	if err != nil {
 		t.Fatalf("build stage1 failed: %v", err)
 	}

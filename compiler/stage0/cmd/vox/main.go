@@ -298,6 +298,10 @@ func test(dir string, eng engine) error {
 }
 
 func compile(dir string) (string, error) {
+	return compileWithDriver(dir, codegen.DriverMainUser)
+}
+
+func compileWithDriver(dir string, driver codegen.DriverMainKind) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return "", err
@@ -315,7 +319,7 @@ func compile(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	csrc, err := codegen.EmitC(irp, codegen.EmitOptions{EmitDriverMain: true})
+	csrc, err := codegen.EmitC(irp, codegen.EmitOptions{EmitDriverMain: true, DriverMainKind: driver})
 	if err != nil {
 		return "", err
 	}
