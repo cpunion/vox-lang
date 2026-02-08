@@ -110,7 +110,29 @@ func TestBreakContinueOutsideLoop(t *testing.T) {
 }
 
 func TestWhileConditionMustBeBool(t *testing.T) {
-	f := source.NewFile("src/main.vox", `fn main() -> i32 { while 1 { } return 0; }`)
+ 	f := source.NewFile("src/main.vox", `fn main() -> i32 { while 1 { } return 0; }`)
+ 	prog, pdiags := parser.Parse(f)
+ 	if pdiags != nil && len(pdiags.Items) > 0 {
+ 		t.Fatalf("parse diags: %+v", pdiags.Items)
+ 	}
+ 	_, tdiags := Check(prog, Options{})
+ 	if tdiags == nil || len(tdiags.Items) == 0 {
+ 		t.Fatalf("expected diagnostics")
+ 	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "while condition must be bool" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected while condition diag, got: %+v", tdiags.Items)
+	}
+}
+
+func TestReservedToolingBuiltinsAreNotCallableFromUserCode(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main() -> i32 { __exec("echo hi"); return 0; }`)
 	prog, pdiags := parser.Parse(f)
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		t.Fatalf("parse diags: %+v", pdiags.Items)
@@ -121,13 +143,13 @@ func TestWhileConditionMustBeBool(t *testing.T) {
 	}
 	found := false
 	for _, it := range tdiags.Items {
-		if it.Msg == "while condition must be bool" {
+		if it.Msg == "reserved builtin: __exec" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected while condition diag, got: %+v", tdiags.Items)
+		t.Fatalf("expected reserved builtin diagnostic, got: %+v", tdiags.Items)
 	}
 }
 

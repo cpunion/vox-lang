@@ -3,6 +3,7 @@ package typecheck
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"voxlang/internal/ast"
 	"voxlang/internal/names"
@@ -524,6 +525,23 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			c.errorAt(e.S, "unknown function: "+target)
 			return c.setExprType(ex, Type{K: TyBad})
 		}
+
+		// Tooling/runtime intrinsics are reserved for stdlib implementation.
+		// Keep them out of normal user code so "language builtins" stay minimal.
+		if strings.Contains(target, "__") {
+			callee := target
+			if k := strings.LastIndex(target, "::"); k >= 0 {
+				callee = target[k+2:]
+			}
+			if strings.HasPrefix(callee, "__") && c.curFn != nil && c.curFn.Span.File != nil {
+				_, mod, _ := names.SplitOwnerAndModule(c.curFn.Span.File.Name)
+				if len(mod) == 0 || mod[0] != "std" {
+					c.errorAt(e.S, "reserved builtin: "+callee)
+					return c.setExprType(ex, Type{K: TyBad})
+				}
+			}
+		}
+
 		// Generic function instantiation (stage0 minimal): monomorphize on demand.
 		if instTarget, instSig, ok := c.maybeInstantiateCall(e, target, sig, expected); ok {
 			target = instTarget
