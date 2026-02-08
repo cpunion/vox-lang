@@ -8,6 +8,7 @@ vox build --release
 
 vox run
 vox ir
+vox c
 vox test
 
 vox fmt
@@ -57,6 +58,8 @@ stage0 的 `vox build` 会在包根目录的 `target/debug/` 下产出：
 - `<pkg>.ir`：IR v0 文本（见 `docs/19-ir-spec.md`）
 - `<pkg>.c`：后端生成的 C（阶段性后端）
 - `<pkg>`：可执行文件
+
+另：`vox c [dir]` 会把当前 stage0 生成的 C 直接打印到 stdout（用于快速审阅后端输出）。
 
 ## Stage1 编译器 CLI（自举目标）
 

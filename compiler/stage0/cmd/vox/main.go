@@ -22,6 +22,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  vox init [dir]")
 	fmt.Fprintln(os.Stderr, "  vox ir [--engine=c|interp] [dir]")
+	fmt.Fprintln(os.Stderr, "  vox c [dir]")
 	fmt.Fprintln(os.Stderr, "  vox build [--engine=c|interp] [dir]")
 	fmt.Fprintln(os.Stderr, "  vox run [--engine=c|interp] [dir]")
 	fmt.Fprintln(os.Stderr, "  vox test [--engine=c|interp] [dir]")
@@ -109,6 +110,15 @@ func main() {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
+	case "c":
+		dir := "."
+		if len(os.Args) >= 3 {
+			dir = os.Args[2]
+		}
+		if err := dumpC(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
 	case "build":
 		eng, dir, err := parseEngineAndDir(os.Args[2:])
 		if err != nil {
@@ -176,6 +186,35 @@ func dumpIR(dir string) error {
 		return err
 	}
 	fmt.Fprint(os.Stdout, irp.Format())
+	return nil
+}
+
+func emitCForDir(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	res, diags, err := loader.BuildPackage(abs, false)
+	if err != nil {
+		return "", err
+	}
+	if diags != nil && len(diags.Items) > 0 {
+		diag.Print(os.Stderr, diags)
+		return "", fmt.Errorf("build failed")
+	}
+	irp, err := irgen.Generate(res.Program)
+	if err != nil {
+		return "", err
+	}
+	return codegen.EmitC(irp, codegen.EmitOptions{EmitDriverMain: true, DriverMainKind: codegen.DriverMainUser})
+}
+
+func dumpC(dir string) error {
+	csrc, err := emitCForDir(dir)
+	if err != nil {
+		return err
+	}
+	fmt.Fprint(os.Stdout, csrc)
 	return nil
 }
 
