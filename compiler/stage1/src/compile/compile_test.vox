@@ -79,14 +79,14 @@ fn test_compile_rejects_user_defines_reserved_name() -> () {
 fn test_codegen_no_symbol_collision_between_pkg_and_plain_names() -> () {
   // Ensure C backend name mangling stays collision-free:
   // local: dep__one (unqualified)
-  // dep package: dep::one
+  // dep package: pkg.dep::one
   let mut fs: Vec[ld.SourceFile] = Vec();
   fs.push(ld.SourceFile { path: "src/main.vox", text: "import \"dep\" as dep\nfn dep__one() -> i32 { return 1; }\nfn main() -> i32 { return dep__one() + dep.one(); }" });
   fs.push(ld.SourceFile { path: "dep/src/dep.vox", text: "pub fn one() -> i32 { return 2; }" });
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
   t.assert(r.ok);
   t.assert(contains(r.c, cg.c_fn_name("dep__one")));
-  t.assert(contains(r.c, cg.c_fn_name("dep::one")));
+  t.assert(contains(r.c, cg.c_fn_name("pkg.dep::one")));
 }
 
 fn test_compile_imports_are_file_local() -> () {
@@ -108,4 +108,26 @@ fn test_compile_rejects_duplicate_import_alias_in_file() -> () {
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
   t.assert(!r.ok);
   t.assert(contains(r.err, "duplicate import alias"));
+}
+
+fn test_compile_ambiguous_import_requires_scheme() -> () {
+  // If a local module `dep` and a dependency package `dep` both exist,
+  // plain `import "dep"` is ambiguous and must be disambiguated with `pkg:` or `mod:`.
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile { path: "src/dep/dep.vox", text: "pub fn one() -> i32 { return 1; }" });
+  fs.push(ld.SourceFile { path: "dep/src/dep.vox", text: "pub fn one() -> i32 { return 2; }" });
+  fs.push(ld.SourceFile { path: "src/main.vox", text: "import \"dep\" as dep\nfn main() -> i32 { return dep.one(); }" });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "ambiguous import"));
+}
+
+fn test_compile_pkg_scheme_disambiguates_import() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile { path: "src/dep/dep.vox", text: "pub fn one() -> i32 { return 1; }" });
+  fs.push(ld.SourceFile { path: "dep/src/dep.vox", text: "pub fn one() -> i32 { return 2; }" });
+  fs.push(ld.SourceFile { path: "src/main.vox", text: "import \"pkg:dep\" as dep\nfn main() -> i32 { return dep.one(); }" });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(r.ok);
+  t.assert(contains(r.c, cg.c_fn_name("pkg.dep::one")));
 }

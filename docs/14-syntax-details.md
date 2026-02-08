@@ -203,6 +203,10 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 ```vox
 import "dep"
 import "dep" as d
+
+// 显式消歧义：
+import "pkg:dep" as d  // 依赖包 dep（vox.toml [dependencies]）
+import "mod:dep" as d  // 本地模块 dep（src/dep/**）
 ```
 
 命名导入（可导入 `pub` 的函数与名义类型）：
@@ -220,3 +224,4 @@ fn main() -> i32 {
 
 - `import { ... } from "path"` 中每个名字会在目标命名空间中解析为函数或名义类型（`struct/enum`）。
 - 若同名同时存在函数与类型，则报错 `ambiguous imported name`（Stage0 先不混用命名空间）。
+- `import "x"` 的默认解析为“同包本地模块优先，其次依赖包”；若出现歧义，必须用 `pkg:` / `mod:` 显式指定。

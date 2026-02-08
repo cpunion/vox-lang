@@ -37,6 +37,10 @@ import "utils"
 import "utils/io"
 import { read_file } from "utils/io"
 import "utils" as u
+
+// 显式命名空间（用于消歧义）：
+import "pkg:dep" as dep   // 依赖包 dep（来自 vox.toml [dependencies]）
+import "mod:dep" as dep   // 本地模块 dep（来自 src/dep/**）
 ```
 
 导入后，模块名（或别名）作为命名空间，通过 `.` 访问其中的符号：
@@ -69,8 +73,7 @@ fn main() -> i32 {
 规则（当前决策）：
 
 - 使用 `pkg.name(...)` 形式访问依赖包符号时，必须在同一文件中先写 `import "pkg"`（或 `import "pkg" as alias` 后用 `alias.name(...)`）。
-- 依赖包名（`vox.toml` 的 `[dependencies]` key）不应与本地模块路径冲突（例如同时存在依赖包 `dep` 与本地目录 `src/dep/**`）。
-  - 当前 Stage1 实现会直接报错，避免把两个来源的源码合并到同一个模块里。
+- Import 默认按“同包本地模块优先，其次依赖包”的策略解析；若出现歧义（同名本地模块与依赖包同时存在），必须用 `pkg:` / `mod:` 显式指定。
 
 ## 导出
 

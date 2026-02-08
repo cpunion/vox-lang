@@ -25,6 +25,8 @@ pub struct ImportAliasesResult {
   pub aliases: Vec[ImportAlias],
 }
 
+struct ResolveImportResult { ok: bool, err: TcError, path: String }
+
 fn ok_aliases(xs: Vec[ImportAlias]) -> ImportAliasesResult {
   return ImportAliasesResult { ok: true, err: TcError.None, aliases: xs };
 }
@@ -32,6 +34,9 @@ fn ok_aliases(xs: Vec[ImportAlias]) -> ImportAliasesResult {
 fn err_aliases(msg: String) -> ImportAliasesResult {
   return ImportAliasesResult { ok: false, err: TcError.Msg(msg), aliases: Vec() };
 }
+
+fn ok_path(p: String) -> ResolveImportResult { return ResolveImportResult { ok: true, err: TcError.None, path: p }; }
+fn err_path(msg: String) -> ResolveImportResult { return ResolveImportResult { ok: false, err: TcError.Msg(msg), path: "" }; }
 
 fn last_path_seg(path: String) -> String {
   let n: i32 = path.len();
@@ -45,6 +50,93 @@ fn last_path_seg(path: String) -> String {
   return path;
 }
 
+fn has_prefix(s: String, pre: String) -> bool {
+  if s.len() < pre.len() { return false; }
+  return s.slice(0, pre.len()) == pre;
+}
+
+struct Cut1Result { ok: bool, head: String, tail: String }
+
+fn cut1(s: String) -> Cut1Result {
+  let n: i32 = s.len();
+  let mut i: i32 = 0;
+  while i < n {
+    if s.byte_at(i) == 47 { // '/'
+      return Cut1Result { ok: true, head: s.slice(0, i), tail: s.slice(i + 1, n) };
+    }
+    i = i + 1;
+  }
+  return Cut1Result { ok: false, head: "", tail: "" };
+}
+
+fn pkg_base_from_file(file: String) -> String {
+  // Dependency files are virtualized as "<depName>/src/..." or "<depName>/tests/...".
+  let r0: Cut1Result = cut1(file);
+  if r0.ok && (has_prefix(r0.tail, "src/") || has_prefix(r0.tail, "tests/")) {
+    let owner: String = r0.head;
+    if owner != "src" && owner != "tests" {
+      return "pkg/".concat(owner);
+    }
+  }
+  return "";
+}
+
+fn join_base(base: String, p: String) -> String {
+  if base == "" { return p; }
+  if p == "" { return base; }
+  return base.concat("/").concat(p);
+}
+
+fn strip_scheme(p: String) -> String {
+  if has_prefix(p, "pkg:") { return p.slice(4, p.len()); }
+  if has_prefix(p, "mod:") { return p.slice(4, p.len()); }
+  if has_prefix(p, "std:") { return p.slice(4, p.len()); }
+  return p;
+}
+
+fn default_import_alias(path: String, alias0: String) -> String {
+  if alias0 != "" { return alias0; }
+  return last_path_seg(strip_scheme(path));
+}
+
+fn resolve_import_path(w: World, file: String, path: String) -> ResolveImportResult {
+  // Canonical module paths:
+  // - local modules: "<mod>" or "<dir>/<subdir>"
+  // - dependency packages: "pkg/<dep>" (and its submodules "pkg/<dep>/<dir>")
+  //
+  // Import schemes:
+  // - "pkg:<dep>"  force dependency package
+  // - "mod:<path>" force local module in the current package
+  //
+  // Plain "dep" prefers local module if present in the current package, otherwise a dependency package.
+  let base: String = pkg_base_from_file(file);
+
+  if has_prefix(path, "pkg:") {
+    let raw: String = path.slice(4, path.len());
+    return ok_path("pkg/".concat(raw));
+  }
+  if has_prefix(path, "mod:") {
+    let raw: String = path.slice(4, path.len());
+    return ok_path(join_base(base, raw));
+  }
+  if has_prefix(path, "std:") {
+    let raw: String = path.slice(4, path.len());
+    return ok_path("std/".concat(raw));
+  }
+
+  let local: String = join_base(base, path);
+  let pkg: String = "pkg/".concat(path);
+  let has_local: bool = find_mod(w, local).found;
+  let has_pkg: bool = find_mod(w, pkg).found;
+  if has_local && has_pkg {
+    return err_path("ambiguous import: ".concat(path).concat(" (use pkg: or mod:)"));
+  }
+  if has_local { return ok_path(local); }
+  if has_pkg { return ok_path(pkg); }
+  // Unknown: keep the local candidate, so the caller can produce a good error.
+  return ok_path(local);
+}
+
 fn contains_str(vs: Vec[String], s: String) -> bool {
   let mut i: i32 = 0;
   while i < vs.len() {
@@ -54,19 +146,21 @@ fn contains_str(vs: Vec[String], s: String) -> bool {
   return false;
 }
 
-pub fn build_import_aliases(imps: Vec[ast.ImportDecl], file: String) -> ImportAliasesResult {
+pub fn build_import_aliases(w: World, imps: Vec[ast.ImportDecl], file: String) -> ImportAliasesResult {
   let mut out: Vec[ImportAlias] = Vec();
   let mut seen: Vec[String] = Vec();
   let mut i: i32 = 0;
   while i < imps.len() {
     let imp: ast.ImportDecl = imps.get(i);
     if imp.file != file { i = i + 1; continue; }
-    let alias: String = if imp.alias == "" { last_path_seg(imp.path) } else { imp.alias };
+    let alias: String = default_import_alias(imp.path, imp.alias);
     if contains_str(seen, alias) {
       return err_aliases("duplicate import alias: ".concat(alias));
     }
     seen.push(alias);
-    out.push(ImportAlias { alias: alias, path: imp.path });
+    let rr: ResolveImportResult = resolve_import_path(w, imp.file, imp.path);
+    if !rr.ok { return ImportAliasesResult { ok: false, err: rr.err, aliases: Vec() }; }
+    out.push(ImportAlias { alias: alias, path: rr.path });
     i = i + 1;
   }
   return ok_aliases(out);

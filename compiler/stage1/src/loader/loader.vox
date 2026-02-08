@@ -15,7 +15,6 @@ pub struct LoadWorldResult {
 
 pub fn world_from_files(files: Vec[SourceFile]) -> LoadWorldResult {
   let mut mods: Vec[tc.WorldModule] = Vec();
-  let mut origins: Vec[ModOrigin] = Vec();
 
   let mut i: i32 = 0;
   while i < files.len() {
@@ -24,12 +23,6 @@ pub fn world_from_files(files: Vec[SourceFile]) -> LoadWorldResult {
     if mp == "" {
       return LoadWorldResult { ok: false, err: "unsupported file path: ".concat(f.path), world: tc.World { mods: Vec() } };
     }
-    let is_dep: bool = dep_prefix(f.path) != "";
-    let or0: OriginResult = record_mod_origin(origins, mp, is_dep);
-    if !or0.ok {
-      return LoadWorldResult { ok: false, err: or0.err, world: tc.World { mods: Vec() } };
-    }
-    origins = or0.origins;
 
     let r: p.ParseResult = p.parse_text_with_path(f.path, f.text);
     if r.err != p.ParseError.None {
@@ -41,52 +34,6 @@ pub fn world_from_files(files: Vec[SourceFile]) -> LoadWorldResult {
   }
 
   return LoadWorldResult { ok: true, err: "", world: tc.World { mods: mods } };
-}
-
-struct ModOrigin { mp: String, has_root: bool, has_dep: bool }
-
-struct OriginResult { ok: bool, err: String, origins: Vec[ModOrigin] }
-
-fn record_mod_origin(origins0: Vec[ModOrigin], mp: String, is_dep: bool) -> OriginResult {
-  let mut origins: Vec[ModOrigin] = origins0;
-  let mut i: i32 = 0;
-  while i < origins.len() {
-    let mo: ModOrigin = origins.get(i);
-    if mo.mp == mp {
-      // Reject ambiguous/merging module keys: same module path cannot be both
-      // a dependency package module and a root-package local module.
-      if is_dep && mo.has_root {
-        return OriginResult { ok: false, err: "module path conflict between local module and dependency package: ".concat(mp), origins: origins0 };
-      }
-      if !is_dep && mo.has_dep {
-        return OriginResult { ok: false, err: "module path conflict between local module and dependency package: ".concat(mp), origins: origins0 };
-      }
-      // Update flags by rewriting the element.
-      let upd: ModOrigin = ModOrigin { mp: mo.mp, has_root: mo.has_root || !is_dep, has_dep: mo.has_dep || is_dep };
-      let mut out: Vec[ModOrigin] = Vec();
-      let mut j: i32 = 0;
-      while j < origins.len() {
-        if j == i { out.push(upd); } else { out.push(origins.get(j)); }
-        j = j + 1;
-      }
-      return OriginResult { ok: true, err: "", origins: out };
-    }
-    i = i + 1;
-  }
-  origins.push(ModOrigin { mp: mp, has_root: !is_dep, has_dep: is_dep });
-  return OriginResult { ok: true, err: "", origins: origins };
-}
-
-fn dep_prefix(pth: String) -> String {
-  // Dependency file paths are prefixed as "<depName>/src/..." or "<depName>/tests/...".
-  let r0: Cut1Result = cut1(pth);
-  if r0.ok && (has_prefix(r0.tail, "src/") || has_prefix(r0.tail, "tests/")) {
-    let owner: String = r0.head;
-    if owner != "src" && owner != "tests" {
-      return owner;
-    }
-  }
-  return "";
 }
 
 fn upsert_mod(mods: Vec[tc.WorldModule], mp: String, prog: ast.Program) -> Vec[tc.WorldModule] {
@@ -113,7 +60,7 @@ pub fn mod_path_from_file_path(pth: String) -> String {
   // Optional dependency prefix: "<depName>/src/..." or "<depName>/tests/...".
   let r0: Cut1Result = cut1(pth);
   if r0.ok && (has_prefix(r0.tail, "src/") || has_prefix(r0.tail, "tests/")) {
-    let owner: String = r0.head;
+    let owner: String = "pkg/".concat(r0.head);
     let tail: String = r0.tail;
     if has_prefix(tail, "src/") {
       let rest: String = tail.slice(4, tail.len());
