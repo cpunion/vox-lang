@@ -115,20 +115,46 @@ fn tc_expr_dot_ident(ctx: Ctx, mod_path: String, name: String, expected: i32) ->
 
 fn tc_expr_int(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyResult {
   // Infer integer literal type:
-  // - if expected is i32/i64, constrain to that type with range check
+  // - if expected is an integer scalar type, constrain to that type with range check
   // - otherwise, pick i32 if it fits, else i64 if it fits.
-  if expected == ctx.ty_i32 {
-    let pr: ParseI32DecResult = parse_i32_dec(text);
-    if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i32 literal out of range") }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
-  }
-  if expected == ctx.ty_i64 {
-    let pr2: ParseI64DecResult = parse_i64_dec(text);
-    if !pr2.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i64 literal out of range") }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_i64, err: TcError.None };
-  }
   if expected != -1 {
-    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal requires expected i32 or i64") };
+    // Range types require an explicit `as` cast.
+    let eb: i32 = strip_range(ctx, expected);
+    if eb != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal requires expected scalar int") }; }
+
+    let pr: ParseI64DecResult = parse_i64_dec(text);
+    if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal out of range") }; }
+    let v: i64 = pr.val;
+
+    if expected == ctx.ty_i8 {
+      if v < -128 || v > 127 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i8 literal out of range") }; }
+      return ExprTyResult { ok: true, ty: ctx.ty_i8, err: TcError.None };
+    }
+    if expected == ctx.ty_u8 {
+      if v < 0 || v > 255 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "u8 literal out of range") }; }
+      return ExprTyResult { ok: true, ty: ctx.ty_u8, err: TcError.None };
+    }
+    if expected == ctx.ty_i32 {
+      if v < -2147483648 || v > 2147483647 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i32 literal out of range") }; }
+      return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
+    }
+    if expected == ctx.ty_u32 {
+      if v < 0 || v > 4294967295 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "u32 literal out of range") }; }
+      return ExprTyResult { ok: true, ty: ctx.ty_u32, err: TcError.None };
+    }
+    if expected == ctx.ty_i64 {
+      return ExprTyResult { ok: true, ty: ctx.ty_i64, err: TcError.None };
+    }
+    if expected == ctx.ty_u64 {
+      if v < 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "u64 literal out of range") }; }
+      // v0 limitation: literals are parsed as i64, so this only supports up to i64::MAX.
+      return ExprTyResult { ok: true, ty: ctx.ty_u64, err: TcError.None };
+    }
+    if expected == ctx.ty_usize {
+      if v < 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "usize literal out of range") }; }
+      return ExprTyResult { ok: true, ty: ctx.ty_usize, err: TcError.None };
+    }
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal requires expected scalar int") };
   }
 
   let pr3: ParseI32DecResult = parse_i32_dec(text);
@@ -167,16 +193,27 @@ fn tc_expr_ident(ctx: Ctx, mod_path: String, imps: Imports, l0: Locals, name: St
 }
 
 fn tc_expr_unary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, op: ast.UnaryOp, a: i32, expected: i32) -> ExprTyResult {
-  let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, -1);
-  if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let is_not: bool = match op { ast.UnaryOp.Not => true, _ => false };
   if is_not {
+    let ar0: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, ctx.ty_bool);
+    if !ar0.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
   }
+  let mut a_expected: i32 = -1;
+  if expected != -1 {
+    let eb: i32 = strip_range(ctx, expected);
+    let et: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
+    let ok: bool = match et.kind { ir.TyKind.I8 => true, ir.TyKind.I32 => true, ir.TyKind.I64 => true, _ => false };
+    if ok { a_expected = eb; }
+  }
+  let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, a_expected);
+  if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   // Negation: `-x` is an integer op; ranges widen to base.
   let out: i32 = strip_range(ctx, ar.ty);
-  if out != ctx.ty_i32 && out != ctx.ty_i64 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  let ot: ir.Ty = ir.ty_pool_get(ctx.pool, out);
+  let is_signed_int: bool = match ot.kind { ir.TyKind.I8 => true, ir.TyKind.I32 => true, ir.TyKind.I64 => true, _ => false };
+  if !is_signed_int { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   if expected != -1 && !assignable_to(ctx, expected, out) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: out, err: TcError.None };
 }
