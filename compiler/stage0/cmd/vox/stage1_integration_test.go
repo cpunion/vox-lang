@@ -256,19 +256,30 @@ edition = "2026"
 `), 0o644); err != nil {
 		t.Fatalf("write vox.toml: %v", err)
 	}
-	// Missing expression after return.
-	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("fn main() -> i32 { return ; }\n"), 0o644); err != nil {
+	// Typecheck error: unknown function.
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("fn main() -> i32 { nope(); return 0; }\n"), 0o644); err != nil {
 		t.Fatalf("write src: %v", err)
 	}
 
 	outBin := filepath.Join(root, "out")
 	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
 	cmd.Dir = root
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err = cmd.Run()
+	b, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("expected stage1 build-pkg to fail with non-zero exit code")
+	}
+	if !strings.Contains(string(b), "compile failed") {
+		t.Fatalf("expected compile error output, got:\n%s", string(b))
+	}
+	if strings.Contains(string(b), "panic") {
+		t.Fatalf("expected no panic for compile error, got:\n%s", string(b))
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		if ee.ExitCode() == 0 {
+			t.Fatalf("expected non-zero exit code")
+		}
+	} else {
+		t.Fatalf("expected *exec.ExitError, got %T: %v", err, err)
 	}
 }
 
