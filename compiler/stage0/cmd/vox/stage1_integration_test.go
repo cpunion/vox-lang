@@ -238,6 +238,112 @@ dep = { path = "dep_pkg" }
 	}
 }
 
+func TestStage1BuildPkgImportSchemesDisambiguateDepAndLocalModule(t *testing.T) {
+	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	// Root package with a local module "dep" and a dependency package also named "dep".
+	// Plain `import "dep"` must be ambiguous and require `pkg:`/`mod:`.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src", "dep"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// Dependency package: dep.
+	depRoot := filepath.Join(root, "dep_pkg")
+	if err := os.MkdirAll(filepath.Join(depRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir dep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "vox.toml"), []byte(`[package]
+name = "dep"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write dep vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "src", "dep.vox"), []byte("pub fn one() -> i32 { return 1; }\n"), 0o644); err != nil {
+		t.Fatalf("write dep src: %v", err)
+	}
+
+	// Local module: dep.
+	if err := os.WriteFile(filepath.Join(root, "src", "dep", "dep.vox"), []byte("pub fn one() -> i32 { return 100; }\n"), 0o644); err != nil {
+		t.Fatalf("write local dep module: %v", err)
+	}
+
+	// Root package manifest depends on dep by path.
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = { path = "dep_pkg" }
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+
+	// 1) Plain import should fail due to ambiguity.
+	ambiguousMain := "import \"dep\" as dep\nfn main() -> i32 { return dep.one(); }\n"
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte(ambiguousMain), 0o644); err != nil {
+		t.Fatalf("write main: %v", err)
+	}
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	b, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected stage1 build-pkg to fail on ambiguous import")
+	}
+	if !strings.Contains(string(b), "ambiguous import") {
+		t.Fatalf("expected ambiguous import output, got:\n%s", string(b))
+	}
+
+	// 2) pkg:dep should resolve to the dependency package.
+	pkgMain := "import \"pkg:dep\" as dep\nfn main() -> i32 { return dep.one(); }\n"
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte(pkgMain), 0o644); err != nil {
+		t.Fatalf("write main: %v", err)
+	}
+	cmd2 := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd2.Dir = root
+	if b2, err := cmd2.CombinedOutput(); err != nil {
+		t.Fatalf("stage1 build-pkg failed: %v\n%s", err, string(b2))
+	}
+	run := exec.Command(outBin)
+	run.Dir = root
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run built program failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "1" {
+		t.Fatalf("unexpected output: %q", got)
+	}
+
+	// 3) mod:dep should resolve to the local module.
+	modMain := "import \"mod:dep\" as dep\nfn main() -> i32 { return dep.one(); }\n"
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte(modMain), 0o644); err != nil {
+		t.Fatalf("write main: %v", err)
+	}
+	cmd3 := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd3.Dir = root
+	if b3, err := cmd3.CombinedOutput(); err != nil {
+		t.Fatalf("stage1 build-pkg failed: %v\n%s", err, string(b3))
+	}
+	run2 := exec.Command(outBin)
+	run2.Dir = root
+	out2, err := run2.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run built program failed: %v\n%s", err, string(out2))
+	}
+	if got := strings.TrimSpace(string(out2)); got != "100" {
+		t.Fatalf("unexpected output: %q", got)
+	}
+}
+
 func TestStage1BuildPkgFailsOnInvalidManifest(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
