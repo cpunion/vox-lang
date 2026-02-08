@@ -33,6 +33,12 @@ src/main.vox:3:5: lex error: unexpected char
 
 Stage1 v0 的 typecheck/irgen 错误以字符串为主，**但当 AST 节点拥有 span 信息时**，必须输出精确的 `file:line:col`。
 
+建议优先级：
+
+- 表达式错误：使用表达式自身的 span（例如 call/field/match 等）
+- 语句错误：使用语句起始 token 的 span
+- 顶层声明错误：若暂时没有 span，则回退到 `file:1:1`
+
 在 AST/Span 尚未完整接入之前，**仍然要求输出遵循本章基本格式**；当无法确定精确位置时：
 
 - `line/col` 统一使用 `1:1` 作为兜底

@@ -19,8 +19,7 @@ fn typecheck_fn(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
 
   let r: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, l, sig.ret, fnc.body);
   if !r.ok {
-    // Body errors don't have spans yet; attach the function's source file.
-    return TcResult { ok: false, err: type_error(fnc.file, tc_error_to_string(r.err)) };
+    return TcResult { ok: false, err: r.err };
   }
   return TcResult { ok: true, err: TcError.None };
 }
@@ -44,59 +43,59 @@ fn tc_block(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.Expr
 
 fn tc_stmt(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, st: ast.Stmt) -> TcStmtResult {
   return match st {
-    ast.Stmt.Let(_sp, mutable, name, has_ann, ann, init) => tc_stmt_let(ctx, w, mod_path, imps, exprs, l0, mutable, name, has_ann, ann, init),
-    ast.Stmt.Assign(_sp, name, rhs) => tc_stmt_assign(ctx, w, mod_path, imps, exprs, l0, name, rhs),
-    ast.Stmt.AssignField(_sp, recv, field, rhs) => tc_stmt_assign_field(ctx, w, mod_path, imps, exprs, l0, recv, field, rhs),
-    ast.Stmt.Expr(_sp, eid) => tc_stmt_expr(ctx, w, mod_path, imps, exprs, l0, eid),
-    ast.Stmt.If(_sp, cond, then_b, has_else, else_b) => tc_stmt_if(ctx, w, mod_path, imps, exprs, l0, ret_ty, cond, then_b, has_else, else_b),
-    ast.Stmt.While(_sp, cond, body) => tc_stmt_while(ctx, w, mod_path, imps, exprs, l0, ret_ty, cond, body),
+    ast.Stmt.Let(sp, mutable, name, has_ann, ann, init) => tc_stmt_let(ctx, w, mod_path, imps, exprs, l0, sp, mutable, name, has_ann, ann, init),
+    ast.Stmt.Assign(sp, name, rhs) => tc_stmt_assign(ctx, w, mod_path, imps, exprs, l0, sp, name, rhs),
+    ast.Stmt.AssignField(sp, recv, field, rhs) => tc_stmt_assign_field(ctx, w, mod_path, imps, exprs, l0, sp, recv, field, rhs),
+    ast.Stmt.Expr(sp, eid) => tc_stmt_expr(ctx, w, mod_path, imps, exprs, l0, sp, eid),
+    ast.Stmt.If(sp, cond, then_b, has_else, else_b) => tc_stmt_if(ctx, w, mod_path, imps, exprs, l0, ret_ty, sp, cond, then_b, has_else, else_b),
+    ast.Stmt.While(sp, cond, body) => tc_stmt_while(ctx, w, mod_path, imps, exprs, l0, ret_ty, sp, cond, body),
     ast.Stmt.Break(_sp) => TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 },
     ast.Stmt.Continue(_sp) => TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 },
-    ast.Stmt.Return(_sp, has, eid) => tc_stmt_return(ctx, w, mod_path, imps, exprs, l0, ret_ty, has, eid),
+    ast.Stmt.Return(sp, has, eid) => tc_stmt_return(ctx, w, mod_path, imps, exprs, l0, ret_ty, sp, has, eid),
   };
 }
 
-fn tc_stmt_let(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, mutable: bool, name: String, has_ann: bool, ann: ast.TypeName, init: i32) -> TcStmtResult {
+fn tc_stmt_let(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, mutable: bool, name: String, has_ann: bool, ann: ast.TypeName, init: i32) -> TcStmtResult {
   let mut c: Ctx = ctx;
   let mut expected: i32 = -1;
   if has_ann {
     let rr: ResolveTyResult = resolve_type(c, w, mod_path, imps, Vec(), ann);
     c = rr.ctx;
-    if !rr.ok { return TcStmtResult { ok: false, err: TcError.Msg("bad let annotation"), ctx: c, locals: l0 }; }
+    if !rr.ok { return TcStmtResult { ok: false, err: type_error_at(sp, "bad let annotation"), ctx: c, locals: l0 }; }
     expected = rr.idx;
   }
   let er: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l0, init, expected);
-  if !er.ok { return TcStmtResult { ok: false, err: TcError.Msg("bad let init"), ctx: c, locals: l0 }; }
+  if !er.ok { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, init), "bad let init"), ctx: c, locals: l0 }; }
   let mut final_ty: i32 = er.ty;
   if has_ann {
     final_ty = expected;
-    if final_ty != er.ty { return TcStmtResult { ok: false, err: TcError.Msg("let init type mismatch"), ctx: c, locals: l0 }; }
+    if final_ty != er.ty { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, init), "let init type mismatch"), ctx: c, locals: l0 }; }
   }
   let l1: Locals = locals_decl(l0, name, final_ty, mutable);
   return TcStmtResult { ok: true, err: TcError.None, ctx: c, locals: l1 };
 }
 
-fn tc_stmt_assign(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, name: String, rhs: i32) -> TcStmtResult {
+fn tc_stmt_assign(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, name: String, rhs: i32) -> TcStmtResult {
   let vr: LookupVarResult = locals_lookup(l0, name);
-  if !vr.found { return TcStmtResult { ok: false, err: TcError.Msg("unknown var"), ctx: ctx, locals: l0 }; }
-  if !vr.mutable { return TcStmtResult { ok: false, err: TcError.Msg("assign to immutable var"), ctx: ctx, locals: l0 }; }
+  if !vr.found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown var"), ctx: ctx, locals: l0 }; }
+  if !vr.mutable { return TcStmtResult { ok: false, err: type_error_at(sp, "assign to immutable var"), ctx: ctx, locals: l0 }; }
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, rhs, vr.ty);
-  if !er.ok { return TcStmtResult { ok: false, err: TcError.Msg("bad assign rhs"), ctx: ctx, locals: l0 }; }
-  if er.ty != vr.ty { return TcStmtResult { ok: false, err: TcError.Msg("assign type mismatch"), ctx: ctx, locals: l0 }; }
+  if !er.ok { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "bad assign rhs"), ctx: ctx, locals: l0 }; }
+  if er.ty != vr.ty { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "assign type mismatch"), ctx: ctx, locals: l0 }; }
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
 }
 
-fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv: String, field: String, rhs: i32) -> TcStmtResult {
+fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, recv: String, field: String, rhs: i32) -> TcStmtResult {
   let vr: LookupVarResult = locals_lookup(l0, recv);
-  if !vr.found { return TcStmtResult { ok: false, err: TcError.Msg("unknown var"), ctx: ctx, locals: l0 }; }
-  if !vr.mutable { return TcStmtResult { ok: false, err: TcError.Msg("assign to immutable var"), ctx: ctx, locals: l0 }; }
+  if !vr.found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown var"), ctx: ctx, locals: l0 }; }
+  if !vr.mutable { return TcStmtResult { ok: false, err: type_error_at(sp, "assign to immutable var"), ctx: ctx, locals: l0 }; }
 
   let rt: ir.Ty = ir.ty_pool_get(ctx.pool, vr.ty);
-  if rt.kind != ir.TyKind.Struct { return TcStmtResult { ok: false, err: TcError.Msg("field assign recv must be struct"), ctx: ctx, locals: l0 }; }
+  if rt.kind != ir.TyKind.Struct { return TcStmtResult { ok: false, err: type_error_at(sp, "field assign recv must be struct"), ctx: ctx, locals: l0 }; }
   let fs: FindStructResult = find_struct(ctx, rt.mod_path, rt.name);
-  if !fs.found { return TcStmtResult { ok: false, err: TcError.Msg("unknown struct type"), ctx: ctx, locals: l0 }; }
+  if !fs.found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown struct type"), ctx: ctx, locals: l0 }; }
   // Visibility: crossing modules requires both the type and the field to be pub.
-  if fs.sig.mod_path != mod_path && !fs.sig.is_pub { return TcStmtResult { ok: false, err: TcError.Msg("type is private"), ctx: ctx, locals: l0 }; }
+  if fs.sig.mod_path != mod_path && !fs.sig.is_pub { return TcStmtResult { ok: false, err: type_error_at(sp, "type is private"), ctx: ctx, locals: l0 }; }
 
   let mut found: bool = false;
   let mut fty: i32 = ctx.ty_bad;
@@ -112,25 +111,25 @@ fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exp
     }
     i = i + 1;
   }
-  if !found { return TcStmtResult { ok: false, err: TcError.Msg("unknown field"), ctx: ctx, locals: l0 }; }
-  if fs.sig.mod_path != mod_path && !fpub { return TcStmtResult { ok: false, err: TcError.Msg("field is private"), ctx: ctx, locals: l0 }; }
+  if !found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown field"), ctx: ctx, locals: l0 }; }
+  if fs.sig.mod_path != mod_path && !fpub { return TcStmtResult { ok: false, err: type_error_at(sp, "field is private"), ctx: ctx, locals: l0 }; }
 
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, rhs, fty);
-  if !er.ok { return TcStmtResult { ok: false, err: TcError.Msg("bad assign rhs"), ctx: ctx, locals: l0 }; }
-  if er.ty != fty { return TcStmtResult { ok: false, err: TcError.Msg("assign type mismatch"), ctx: ctx, locals: l0 }; }
+  if !er.ok { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "bad assign rhs"), ctx: ctx, locals: l0 }; }
+  if er.ty != fty { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "assign type mismatch"), ctx: ctx, locals: l0 }; }
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
 }
 
-fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, eid: i32) -> TcStmtResult {
+fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, _sp: ast.Span, eid: i32) -> TcStmtResult {
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, eid, -1);
-  if !er.ok { return TcStmtResult { ok: false, err: TcError.Msg("bad expr stmt"), ctx: ctx, locals: l0 }; }
+  if !er.ok { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, eid), "bad expr stmt"), ctx: ctx, locals: l0 }; }
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
 }
 
-fn tc_stmt_if(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, cond: i32, then_b: ast.Block, has_else: bool, else_b: ast.Block) -> TcStmtResult {
+fn tc_stmt_if(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, _sp: ast.Span, cond: i32, then_b: ast.Block, has_else: bool, else_b: ast.Block) -> TcStmtResult {
   let cr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, cond, ctx.ty_bool);
-  if !cr.ok { return TcStmtResult { ok: false, err: TcError.Msg("bad if cond"), ctx: ctx, locals: l0 }; }
-  if cr.ty != ctx.ty_bool { return TcStmtResult { ok: false, err: TcError.Msg("if cond must be bool"), ctx: ctx, locals: l0 }; }
+  if !cr.ok { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, cond), "bad if cond"), ctx: ctx, locals: l0 }; }
+  if cr.ty != ctx.ty_bool { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, cond), "if cond must be bool"), ctx: ctx, locals: l0 }; }
 
   let r1: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, locals_enter(l0), ret_ty, then_b);
   if !r1.ok { return r1; }
@@ -141,22 +140,22 @@ fn tc_stmt_if(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.Ex
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
 }
 
-fn tc_stmt_while(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, cond: i32, body: ast.Block) -> TcStmtResult {
+fn tc_stmt_while(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, _sp: ast.Span, cond: i32, body: ast.Block) -> TcStmtResult {
   let cr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, cond, ctx.ty_bool);
-  if !cr.ok { return TcStmtResult { ok: false, err: TcError.Msg("bad while cond"), ctx: ctx, locals: l0 }; }
-  if cr.ty != ctx.ty_bool { return TcStmtResult { ok: false, err: TcError.Msg("while cond must be bool"), ctx: ctx, locals: l0 }; }
+  if !cr.ok { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, cond), "bad while cond"), ctx: ctx, locals: l0 }; }
+  if cr.ty != ctx.ty_bool { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, cond), "while cond must be bool"), ctx: ctx, locals: l0 }; }
   let r1: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, locals_enter(l0), ret_ty, body);
   if !r1.ok { return r1; }
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
 }
 
-fn tc_stmt_return(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, has: bool, eid: i32) -> TcStmtResult {
+fn tc_stmt_return(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, sp: ast.Span, has: bool, eid: i32) -> TcStmtResult {
   if !has {
-    if ret_ty != ctx.ty_unit { return TcStmtResult { ok: false, err: TcError.Msg("return type mismatch"), ctx: ctx, locals: l0 }; }
+    if ret_ty != ctx.ty_unit { return TcStmtResult { ok: false, err: type_error_at(sp, "return type mismatch"), ctx: ctx, locals: l0 }; }
     return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
   }
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, eid, ret_ty);
-  if !er.ok { return TcStmtResult { ok: false, err: TcError.Msg("bad return expr"), ctx: ctx, locals: l0 }; }
-  if er.ty != ret_ty { return TcStmtResult { ok: false, err: TcError.Msg("return type mismatch"), ctx: ctx, locals: l0 }; }
+  if !er.ok { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, eid), "bad return expr"), ctx: ctx, locals: l0 }; }
+  if er.ty != ret_ty { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, eid), "return type mismatch"), ctx: ctx, locals: l0 }; }
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
 }
