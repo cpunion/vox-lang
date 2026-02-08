@@ -232,3 +232,40 @@ dep = { path = "dep_pkg" }
 		t.Fatalf("unexpected output: %q", got)
 	}
 }
+
+func TestStage1ExitCodeNonZeroOnBuildPkgFailure(t *testing.T) {
+	// Build stage1 compiler (vox_stage1) using stage0.
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1Bin, err := compile(stage1Dir)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	// Create a package with a syntax error so Stage1 reports a compile error
+	// via return code (not panic), and ensure the process exit code is non-zero.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+	// Missing expression after return.
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("fn main() -> i32 { return ; }\n"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
+	if err == nil {
+		t.Fatalf("expected stage1 build-pkg to fail with non-zero exit code")
+	}
+}
