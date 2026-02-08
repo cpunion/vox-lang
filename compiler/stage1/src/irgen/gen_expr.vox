@@ -161,6 +161,13 @@ fn gen_expr_binary(g0: Gen, op: ast.BinaryOp, l: i32, r: i32, out_ty: i32) -> Ge
   let lr: GenExprResult = gen_expr(g, l, -1);
   if !lr.ok { return lr; }
   g = lr.g;
+
+  // Short-circuit logical ops: do not evaluate RHS eagerly.
+  let is_logic: bool = match op { ast.BinaryOp.AndAnd => true, ast.BinaryOp.OrOr => true, _ => false };
+  if is_logic {
+    return gen_expr_short_circuit_logic(g, op, lr.val, r, out_ty);
+  }
+
   let rr: GenExprResult = gen_expr(g, r, lr.ty);
   if !rr.ok { return rr; }
   g = rr.g;
@@ -186,16 +193,6 @@ fn gen_expr_binary(g0: Gen, op: ast.BinaryOp, l: i32, r: i32, out_ty: i32) -> Ge
       g = gen_emit(g, ir.Instr.Cmp(cmp_id, ck, g.ctx.ty_i32, ir.v_temp(tag_id), ir.v_int(unit_tag)));
       return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(cmp_id), ty: out_ty };
     }
-  }
-
-  let is_logic: bool = match op { ast.BinaryOp.AndAnd => true, ast.BinaryOp.OrOr => true, _ => false };
-  if is_logic {
-    let rt: GenNewIdResult = gen_new_temp(g);
-    g = rt.g;
-    let tid: i32 = rt.id;
-    let ins: ir.Instr = if match op { ast.BinaryOp.AndAnd => true, _ => false } { ir.Instr.And(tid, lr.val, rr.val) } else { ir.Instr.Or(tid, lr.val, rr.val) };
-    g = gen_emit(g, ins);
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
   }
 
   let is_cmp: bool = match op { ast.BinaryOp.Lt => true, ast.BinaryOp.Le => true, ast.BinaryOp.Gt => true, ast.BinaryOp.Ge => true, ast.BinaryOp.Eq => true, ast.BinaryOp.Ne => true, _ => false };
@@ -227,6 +224,63 @@ fn gen_expr_binary(g0: Gen, op: ast.BinaryOp, l: i32, r: i32, out_ty: i32) -> Ge
   };
   g = gen_emit(g, ir.Instr.BinOp(tid2, bk, out_ty, lr.val, rr.val));
   return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid2), ty: out_ty };
+}
+
+fn gen_expr_short_circuit_logic(g0: Gen, op: ast.BinaryOp, lhs: ir.Value, rhs_id: i32, out_ty: i32) -> GenExprResult {
+  let mut g: Gen = g0;
+  if out_ty != g.ctx.ty_bool { return GenExprResult { ok: false, err: "logical op must be bool", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+  // Use a slot for the result (matches if-expr lowering pattern).
+  let rs: GenNewIdResult = gen_new_slot(g);
+  g = rs.g;
+  let res_slot: i32 = rs.id;
+  g = gen_emit(g, ir.Instr.SlotDecl(res_slot, out_ty));
+  g = gen_emit(g, ir.Instr.Store(res_slot, ir.v_bool(false)));
+
+  let base: i32 = g.blocks.len();
+  let r_rhs: GenNewIdResult = gen_new_block(g, "logic_rhs_".concat(base.to_string()));
+  g = r_rhs.g;
+  let rhs_idx: i32 = r_rhs.id;
+  let r_sc: GenNewIdResult = gen_new_block(g, "logic_sc_".concat(base.to_string()));
+  g = r_sc.g;
+  let sc_idx: i32 = r_sc.id;
+  let r_end: GenNewIdResult = gen_new_block(g, "logic_end_".concat(base.to_string()));
+  g = r_end.g;
+  let end_idx: i32 = r_end.id;
+
+  let is_and: bool = match op { ast.BinaryOp.AndAnd => true, _ => false };
+  if is_and {
+    g = gen_term(g, ir.Term.CondBr(lhs, g.blocks.get(rhs_idx).name, g.blocks.get(sc_idx).name));
+  } else {
+    g = gen_term(g, ir.Term.CondBr(lhs, g.blocks.get(sc_idx).name, g.blocks.get(rhs_idx).name));
+  }
+
+  // Short-circuit block.
+  g = gen_set_block(g, sc_idx);
+  if is_and {
+    g = gen_emit(g, ir.Instr.Store(res_slot, ir.v_bool(false)));
+  } else {
+    g = gen_emit(g, ir.Instr.Store(res_slot, ir.v_bool(true)));
+  }
+  g = gen_term(g, ir.Term.Br(g.blocks.get(end_idx).name));
+
+  // RHS block.
+  g = gen_set_block(g, rhs_idx);
+  let rr: GenExprResult = gen_expr(g, rhs_id, g.ctx.ty_bool);
+  if !rr.ok { return rr; }
+  g = rr.g;
+  g = gen_emit(g, ir.Instr.Store(res_slot, rr.val));
+  if !g.blocks.get(g.cur).has_term {
+    g = gen_term(g, ir.Term.Br(g.blocks.get(end_idx).name));
+  }
+
+  // End block.
+  g = gen_set_block(g, end_idx);
+  let rt: GenNewIdResult = gen_new_temp(g);
+  g = rt.g;
+  let tid: i32 = rt.id;
+  g = gen_emit(g, ir.Instr.Load(tid, out_ty, res_slot));
+  return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
 }
 
 fn enum_unit_tag(g0: Gen, id: i32, enum_ty: i32) -> i32 {
