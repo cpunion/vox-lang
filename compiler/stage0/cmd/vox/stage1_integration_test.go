@@ -170,6 +170,74 @@ dep = { path = "dep_pkg" }
 	}
 }
 
+func TestStage1BuildPkgNoSymbolCollisionBetweenQualifiedAndPlainNames(t *testing.T) {
+	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	// root package with a path dep.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// dep package.
+	depRoot := filepath.Join(root, "dep_pkg")
+	if err := os.MkdirAll(filepath.Join(depRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir dep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "vox.toml"), []byte(`[package]
+name = "dep"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write dep vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "src", "dep.vox"), []byte("pub fn one() -> i32 { return 2; }\n"), 0o644); err != nil {
+		t.Fatalf("write dep src: %v", err)
+	}
+
+	// Root package manifest.
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = { path = "dep_pkg" }
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+
+	// This used to be a potential collision in C backends if mangling wasn't collision-free:
+	// - local function: dep__one
+	// - dep package function: dep::one
+	mainSrc := "import \"dep\" as dep\nfn dep__one() -> i32 { return 1; }\nfn main() -> i32 { return dep__one() + dep.one(); }\n"
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte(mainSrc), 0o644); err != nil {
+		t.Fatalf("write main: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("stage1 build-pkg failed: %v\n%s", err, string(b))
+	}
+
+	run := exec.Command(outBin)
+	run.Dir = root
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run built program failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "3" {
+		t.Fatalf("unexpected output: %q", got)
+	}
+}
+
 func TestStage1BuildPkgFailsOnInvalidManifest(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
