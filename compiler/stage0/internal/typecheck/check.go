@@ -308,57 +308,57 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		}
 
 		// Vec constructor: `Vec()` with expected type `Vec[T]`.
-			if cal, ok := e.Callee.(*ast.IdentExpr); ok && cal.Name == "Vec" && expected.K == TyVec {
-				if len(e.Args) != 0 {
-					c.errorAt(e.S, "Vec() expects 0 args")
-					return c.setExprType(ex, Type{K: TyBad})
-				}
+		if cal, ok := e.Callee.(*ast.IdentExpr); ok && cal.Name == "Vec" && expected.K == TyVec {
+			if len(e.Args) != 0 {
+				c.errorAt(e.S, "Vec() expects 0 args")
+				return c.setExprType(ex, Type{K: TyBad})
+			}
 			if expected.Elem == nil || expected.Elem.K == TyBad {
 				c.errorAt(e.S, "cannot infer Vec element type")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
-				c.vecCalls[e] = VecCallTarget{Kind: VecCallNew, Elem: *expected.Elem}
-				return c.setExprType(ex, expected)
-			}
+			c.vecCalls[e] = VecCallTarget{Kind: VecCallNew, Elem: *expected.Elem}
+			return c.setExprType(ex, expected)
+		}
 
-			// Enum constructor shorthand: `.Variant(...)` where the enum type is known from expected context.
-			if de, ok := e.Callee.(*ast.DotExpr); ok {
-				if expected.K != TyEnum {
-					c.errorAt(e.S, "enum variant shorthand requires an expected enum type")
-					return c.setExprType(ex, Type{K: TyBad})
-				}
-				es, ok := c.enumSigs[expected.Name]
-				if !ok {
-					c.errorAt(e.S, "unknown enum type: "+expected.Name)
-					return c.setExprType(ex, Type{K: TyBad})
-				}
-				vidx, vok := es.VariantIndex[de.Name]
-				if !vok {
-					c.errorAt(e.S, "unknown variant: "+de.Name)
-					return c.setExprType(ex, Type{K: TyBad})
-				}
-				vs := es.Variants[vidx]
-				if len(e.Args) != len(vs.Fields) {
-					c.errorAt(e.S, fmt.Sprintf("wrong number of arguments: expected %d, got %d", len(vs.Fields), len(e.Args)))
-					return c.setExprType(ex, Type{K: TyBad})
-				}
-				for i, a := range e.Args {
-					at := c.checkExpr(a, vs.Fields[i])
-					if !sameType(vs.Fields[i], at) {
-						c.errorAt(a.Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", vs.Fields[i].String(), at.String()))
-					}
-				}
-				fields := make([]Type, 0, len(vs.Fields))
-				fields = append(fields, vs.Fields...)
-				c.enumCtors[e] = EnumCtorTarget{Enum: expected, Variant: de.Name, Tag: vidx, Fields: fields}
-				return c.setExprType(ex, expected)
-			}
-
-			parts, ok := calleeParts(e.Callee)
-			if !ok || len(parts) == 0 {
-				c.errorAt(e.S, "callee must be an identifier or member path (stage0)")
+		// Enum constructor shorthand: `.Variant(...)` where the enum type is known from expected context.
+		if de, ok := e.Callee.(*ast.DotExpr); ok {
+			if expected.K != TyEnum {
+				c.errorAt(e.S, "enum variant shorthand requires an expected enum type")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
+			es, ok := c.enumSigs[expected.Name]
+			if !ok {
+				c.errorAt(e.S, "unknown enum type: "+expected.Name)
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+			vidx, vok := es.VariantIndex[de.Name]
+			if !vok {
+				c.errorAt(e.S, "unknown variant: "+de.Name)
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+			vs := es.Variants[vidx]
+			if len(e.Args) != len(vs.Fields) {
+				c.errorAt(e.S, fmt.Sprintf("wrong number of arguments: expected %d, got %d", len(vs.Fields), len(e.Args)))
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+			for i, a := range e.Args {
+				at := c.checkExpr(a, vs.Fields[i])
+				if !sameType(vs.Fields[i], at) {
+					c.errorAt(a.Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", vs.Fields[i].String(), at.String()))
+				}
+			}
+			fields := make([]Type, 0, len(vs.Fields))
+			fields = append(fields, vs.Fields...)
+			c.enumCtors[e] = EnumCtorTarget{Enum: expected, Variant: de.Name, Tag: vidx, Fields: fields}
+			return c.setExprType(ex, expected)
+		}
+
+		parts, ok := calleeParts(e.Callee)
+		if !ok || len(parts) == 0 {
+			c.errorAt(e.S, "callee must be an identifier or member path (stage0)")
+			return c.setExprType(ex, Type{K: TyBad})
+		}
 
 		// Enum constructor: `Enum.Variant(...)` (including qualified types like `dep.Option.Some(...)`).
 		if len(parts) >= 2 {
@@ -594,29 +594,29 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 		}
 		return c.setExprType(ex, sig.Ret)
-		case *ast.DotExpr:
-			// Unit enum variant shorthand: `.Variant` where enum type is known from expected context.
-			if expected.K != TyEnum {
-				c.errorAt(e.S, "enum variant shorthand requires an expected enum type")
-				return c.setExprType(ex, Type{K: TyBad})
-			}
-			es, ok := c.enumSigs[expected.Name]
-			if !ok {
-				c.errorAt(e.S, "unknown enum type: "+expected.Name)
-				return c.setExprType(ex, Type{K: TyBad})
-			}
-			vidx, vok := es.VariantIndex[e.Name]
-			if !vok {
-				c.errorAt(e.S, "unknown variant: "+e.Name)
-				return c.setExprType(ex, Type{K: TyBad})
-			}
-			if len(es.Variants[vidx].Fields) != 0 {
-				c.errorAt(e.S, "unit variant shorthand requires a unit variant")
-				return c.setExprType(ex, Type{K: TyBad})
-			}
-			c.enumUnits[e] = EnumCtorTarget{Enum: expected, Variant: e.Name, Tag: vidx}
-			return c.setExprType(ex, expected)
-		case *ast.MemberExpr:
+	case *ast.DotExpr:
+		// Unit enum variant shorthand: `.Variant` where enum type is known from expected context.
+		if expected.K != TyEnum {
+			c.errorAt(e.S, "enum variant shorthand requires an expected enum type")
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		es, ok := c.enumSigs[expected.Name]
+		if !ok {
+			c.errorAt(e.S, "unknown enum type: "+expected.Name)
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		vidx, vok := es.VariantIndex[e.Name]
+		if !vok {
+			c.errorAt(e.S, "unknown variant: "+e.Name)
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		if len(es.Variants[vidx].Fields) != 0 {
+			c.errorAt(e.S, "unit variant shorthand requires a unit variant")
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+		c.enumUnits[e] = EnumCtorTarget{Enum: expected, Variant: e.Name, Tag: vidx}
+		return c.setExprType(ex, expected)
+	case *ast.MemberExpr:
 		// Unit enum variant: `Enum.Variant` (including qualified enum types).
 		if c.curFn != nil && c.curFn.Span.File != nil {
 			parts, ok := calleeParts(ex)
@@ -767,25 +767,31 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			switch p := arm.Pat.(type) {
 			case *ast.WildPat:
 				hasWild = true
-				case *ast.VariantPat:
-					if c.curFn == nil || c.curFn.Span.File == nil {
-						c.errorAt(arm.S, "internal error: missing file for match")
-						break
+			case *ast.BindPat:
+				// Always matches, but introduces a name for the scrutinee.
+				hasWild = true
+				if p.Name != "" {
+					c.scopeTop()[p.Name] = varInfo{ty: scrutTy, mutable: false}
+				}
+			case *ast.VariantPat:
+				if c.curFn == nil || c.curFn.Span.File == nil {
+					c.errorAt(arm.S, "internal error: missing file for match")
+					break
+				}
+				pty := scrutTy
+				psig := esig
+				ok := true
+				if len(p.TypeParts) != 0 {
+					pty, psig, ok = c.resolveEnumByParts(c.curFn.Span.File, p.TypeParts, p.S)
+					if ok && !sameType(scrutTy, pty) {
+						c.errorAt(p.S, "pattern enum type does not match scrutinee")
 					}
-					pty := scrutTy
-					psig := esig
-					ok := true
-					if len(p.TypeParts) != 0 {
-						pty, psig, ok = c.resolveEnumByParts(c.curFn.Span.File, p.TypeParts, p.S)
-						if ok && !sameType(scrutTy, pty) {
-							c.errorAt(p.S, "pattern enum type does not match scrutinee")
-						}
-					}
-					vidx, vok := psig.VariantIndex[p.Variant]
-					if !vok {
-						c.errorAt(p.S, "unknown variant: "+p.Variant)
-						break
-					}
+				}
+				vidx, vok := psig.VariantIndex[p.Variant]
+				if !vok {
+					c.errorAt(p.S, "unknown variant: "+p.Variant)
+					break
+				}
 				if seenVariants[p.Variant] {
 					c.errorAt(p.S, "duplicate match arm for variant: "+p.Variant)
 				}

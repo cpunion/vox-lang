@@ -347,3 +347,12 @@ type VariantPat struct {
 
 func (*VariantPat) patNode()            {}
 func (p *VariantPat) Span() source.Span { return p.S }
+
+// BindPat always matches and binds the scrutinee to Name (like a named `_`).
+type BindPat struct {
+	Name string
+	S    source.Span
+}
+
+func (*BindPat) patNode()            {}
+func (p *BindPat) Span() source.Span { return p.S }

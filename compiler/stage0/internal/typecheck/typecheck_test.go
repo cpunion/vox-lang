@@ -378,6 +378,31 @@ fn main() -> i32 {
 	}
 }
 
+func TestMatchBindPatTypechecks(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = E.A(1);
+  return match x {
+    v => match v {
+      E.A(n) => n,
+      E.None => 0,
+    },
+  };
+}`)
+	stdFiles, err := stdlib.Files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, pdiags := parser.ParseFiles(append(stdFiles, f))
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestEnumCtorAndMatchShorthand(t *testing.T) {
 	f := source.NewFile("src/main.vox", `enum E { A(i32), None }
 fn main() -> i32 {

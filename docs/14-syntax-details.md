@@ -137,6 +137,24 @@ match x {
 
 上下文不足以确定枚举类型时，必须写全路径：`Option.Some(1)`。
 
+### 绑定模式（bind pattern）
+
+`match` 的 pattern 允许使用单个标识符作为“绑定模式”，它总是匹配，并将 scrutinee 绑定到该名字：
+
+```vox
+match x {
+  v => match v {
+    .Some(n) => n,
+    .None => 0,
+  },
+}
+```
+
+说明：
+
+- `v` 的类型等于 scrutinee 的类型（这里是 `Option[i32]`）。
+- 绑定模式等价于“带名字的 `_`”，所以也会让 `match` 变为穷尽（后续 arm 不会被执行；Stage0 暂不做 unreachable 检测）。
+
 ## 禁止的引用语法位置
 
 为配合“临时借用”规则：

@@ -68,3 +68,28 @@ fn main() -> i32 {
 		t.Fatal(err)
 	}
 }
+
+func TestLowerMatchBindPat(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = E.A(1);
+  return match x {
+    v => match v {
+      E.A(n) => n,
+      E.None => 0,
+    },
+  };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	_, err := Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+}

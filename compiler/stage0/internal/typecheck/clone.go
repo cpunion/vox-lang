@@ -88,6 +88,9 @@ func clonePat(p ast.Pattern) ast.Pattern {
 	case *ast.WildPat:
 		cp := *x
 		return &cp
+	case *ast.BindPat:
+		cp := *x
+		return &cp
 	case *ast.VariantPat:
 		cp := &ast.VariantPat{
 			TypeParts: append([]string{}, x.TypeParts...),

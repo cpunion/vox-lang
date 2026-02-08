@@ -744,8 +744,16 @@ func (p *Parser) parsePattern() ast.Pattern {
 		endSpan = rp.Span
 	}
 	if len(parts) < 2 {
-		p.errorAt(start.Span, "expected enum variant pattern like `Enum.Variant`")
-		return &ast.VariantPat{TypeParts: parts, Variant: "", Binds: binds, S: joinSpan(start.Span, endSpan)}
+		// Bind pattern: `name` always matches and binds the scrutinee to `name`.
+		// `_` is handled earlier as WildPat.
+		if len(binds) != 0 {
+			p.errorAt(start.Span, "bind pattern does not take payload binders")
+		}
+		name := ""
+		if len(parts) == 1 {
+			name = parts[0]
+		}
+		return &ast.BindPat{Name: name, S: joinSpan(start.Span, endSpan)}
 	}
 	return &ast.VariantPat{TypeParts: parts[:len(parts)-1], Variant: parts[len(parts)-1], Binds: binds, S: joinSpan(start.Span, endSpan)}
 }

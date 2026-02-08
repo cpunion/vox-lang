@@ -49,12 +49,13 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 
 	// Prepare arm blocks.
 	type armInfo struct {
-		arm     ast.MatchArm
-		blk     *ir.Block
-		variant string
-		tag     *int
-		binds   []string
-		bindTys []typecheck.Type
+		arm       ast.MatchArm
+		blk       *ir.Block
+		variant   string
+		tag       *int
+		bindScrut string
+		binds     []string
+		bindTys   []typecheck.Type
 	}
 	var arms []armInfo
 	var wildBlk *ir.Block
@@ -64,6 +65,9 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 		switch p := a.Pat.(type) {
 		case *ast.WildPat:
 			wildBlk = info.blk
+		case *ast.BindPat:
+			wildBlk = info.blk
+			info.bindScrut = p.Name
 		case *ast.VariantPat:
 			t := es.VariantIndex[p.Variant]
 			info.variant = p.Variant
@@ -112,9 +116,21 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	}
 
 	// Arm blocks.
+	scrutIRTy, err := g.irTypeFromChecked(scrutTy)
+	if err != nil {
+		return nil, err
+	}
 	for _, info := range arms {
 		g.setBlock(info.blk)
 		g.pushScope()
+
+		if info.bindScrut != "" {
+			slot := g.newSlot()
+			g.slotTypes[slot.ID] = scrutIRTy
+			g.emit(&ir.SlotDecl{Slot: slot, Ty: scrutIRTy})
+			g.emit(&ir.Store{Slot: slot, Val: scrut})
+			g.declare(info.bindScrut, slot)
+		}
 
 		for i := 0; i < len(info.binds) && i < len(info.bindTys); i++ {
 			pty, err := g.irTypeFromChecked(info.bindTys[i])
