@@ -160,6 +160,9 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		out.WriteString(";\n")
 		return nil
 	case *ir.BinOp:
+		if isIntType(i.Ty) {
+			return emitIntBinOp(out, i)
+		}
 		out.WriteString("  ")
 		out.WriteString(cTempName(i.Dst.ID))
 		out.WriteString(" = ")
@@ -637,6 +640,120 @@ func uintMaxMacro(k ir.TypeKind) string {
 		return "UINT64_MAX"
 	default:
 		return "UINT64_MAX"
+	}
+}
+
+func cUnsignedType(t ir.Type) (string, error) {
+	switch t.K {
+	case ir.TI8, ir.TU8:
+		return "uint8_t", nil
+	case ir.TI32, ir.TU32:
+		return "uint32_t", nil
+	case ir.TI64, ir.TU64, ir.TUSize:
+		return "uint64_t", nil
+	default:
+		return "", fmt.Errorf("not an int type: %s", t.String())
+	}
+}
+
+func emitIntBinOp(out *bytes.Buffer, i *ir.BinOp) error {
+	if i == nil {
+		return fmt.Errorf("nil binop")
+	}
+	if !isIntType(i.Ty) {
+		return fmt.Errorf("int binop requires int type")
+	}
+	switch i.Op {
+	case ir.OpAdd, ir.OpSub, ir.OpMul:
+		// Wrapping semantics for all integer types, without signed overflow UB.
+		ut, err := cUnsignedType(i.Ty)
+		if err != nil {
+			return err
+		}
+		out.WriteString("  {\n")
+		out.WriteString("    ")
+		out.WriteString(ut)
+		out.WriteString(" _a; memcpy(&_a, &")
+		out.WriteString(cValue(i.A))
+		out.WriteString(", sizeof(_a));\n")
+		out.WriteString("    ")
+		out.WriteString(ut)
+		out.WriteString(" _b; memcpy(&_b, &")
+		out.WriteString(cValue(i.B))
+		out.WriteString(", sizeof(_b));\n")
+		out.WriteString("    ")
+		out.WriteString(ut)
+		out.WriteString(" _r = _a ")
+		out.WriteString(stringToCOp(string(i.Op)))
+		out.WriteString(" _b;\n")
+		out.WriteString("    memcpy(&")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(", &_r, sizeof(_r));\n")
+		out.WriteString("  }\n")
+		return nil
+	case ir.OpDiv, ir.OpMod:
+		// Division/modulo: check divide-by-zero; signed MIN/-1 overflows.
+		if intSigned(i.Ty.K) {
+			out.WriteString("  {\n")
+			out.WriteString("    int64_t _a = (int64_t)")
+			out.WriteString(cValue(i.A))
+			out.WriteString(";\n")
+			out.WriteString("    int64_t _b = (int64_t)")
+			out.WriteString(cValue(i.B))
+			out.WriteString(";\n")
+			out.WriteString("    if (_b == 0) { vox_builtin_panic(\"division by zero\"); }\n")
+			out.WriteString("    if (_a == (int64_t)")
+			out.WriteString(intMinMacro(i.Ty.K))
+			out.WriteString(" && _b == -1) { vox_builtin_panic(\"division overflow\"); }\n")
+			out.WriteString("    int64_t _r = _a ")
+			if i.Op == ir.OpDiv {
+				out.WriteString("/")
+			} else {
+				out.WriteString("%")
+			}
+			out.WriteString(" _b;\n")
+			out.WriteString("    ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = (")
+			out.WriteString(cType(i.Ty))
+			out.WriteString(")_r;\n")
+			out.WriteString("  }\n")
+			return nil
+		}
+
+		// Unsigned division/modulo.
+		ut, err := cUnsignedType(i.Ty)
+		if err != nil {
+			return err
+		}
+		out.WriteString("  {\n")
+		out.WriteString("    ")
+		out.WriteString(ut)
+		out.WriteString(" _a; memcpy(&_a, &")
+		out.WriteString(cValue(i.A))
+		out.WriteString(", sizeof(_a));\n")
+		out.WriteString("    ")
+		out.WriteString(ut)
+		out.WriteString(" _b; memcpy(&_b, &")
+		out.WriteString(cValue(i.B))
+		out.WriteString(", sizeof(_b));\n")
+		out.WriteString("    if (_b == 0) { vox_builtin_panic(\"division by zero\"); }\n")
+		out.WriteString("    ")
+		out.WriteString(ut)
+		out.WriteString(" _r = _a ")
+		if i.Op == ir.OpDiv {
+			out.WriteString("/")
+		} else {
+			out.WriteString("%")
+		}
+		out.WriteString(" _b;\n")
+		out.WriteString("    memcpy(&")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(", &_r, sizeof(_r));\n")
+		out.WriteString("  }\n")
+		return nil
+	default:
+		return fmt.Errorf("unsupported int binop: %s", i.Op)
 	}
 }
 
