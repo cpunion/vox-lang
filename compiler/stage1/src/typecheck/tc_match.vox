@@ -1,8 +1,8 @@
 import "ast" as ast
 import "ir" as ir
 
-fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, scrut: i32, arms: Vec[ast.MatchArm], expected: i32) -> ExprTyResult {
-  let sr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, scrut, -1);
+fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, scrut: i32, arms: Vec[ast.MatchArm], expected: i32) -> ExprTyResult {
+  let sr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, scrut, -1);
   if !sr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
 
   // v0: match on enums/ints/strings only (enough for stage1 tests).
@@ -19,11 +19,11 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias]
   while ai < arms.len() {
     let arm: ast.MatchArm = arms.get(ai);
     let lr: Locals = locals_enter(l0);
-    let pr: PatLocalsResult = tc_pat(ctx, mod_path, aliases, sr.ty, scrut_t, arm.pat, lr);
+    let pr: PatLocalsResult = tc_pat(ctx, mod_path, imps, sr.ty, scrut_t, arm.pat, lr);
     if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
 
     let want: i32 = out_ty;
-    let er: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, pr.locals, arm.expr, want);
+    let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, pr.locals, arm.expr, want);
     if !er.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
 
     if out_ty == -1 {
@@ -42,17 +42,17 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias]
 
 struct PatLocalsResult { ok: bool, locals: Locals }
 
-fn tc_pat(ctx: Ctx, mod_path: String, aliases: Vec[ImportAlias], scrut_ty: i32, scrut_t: ir.Ty, pat: ast.Pat, l0: Locals) -> PatLocalsResult {
+fn tc_pat(ctx: Ctx, mod_path: String, imps: Imports, scrut_ty: i32, scrut_t: ir.Ty, pat: ast.Pat, l0: Locals) -> PatLocalsResult {
   return match pat {
     ast.Pat.Wild => PatLocalsResult { ok: true, locals: l0 },
     ast.Pat.Bind(name) => PatLocalsResult { ok: true, locals: locals_decl(l0, name, scrut_ty, false) },
     ast.Pat.Int(_) => if scrut_ty == ctx.ty_i32 { PatLocalsResult { ok: true, locals: l0 } } else { PatLocalsResult { ok: false, locals: l0 } },
     ast.Pat.Str(_) => if scrut_ty == ctx.ty_string { PatLocalsResult { ok: true, locals: l0 } } else { PatLocalsResult { ok: false, locals: l0 } },
-    ast.Pat.EnumVariant(enum_parts, var_name, binders) => tc_pat_enum(ctx, mod_path, aliases, scrut_t, enum_parts, var_name, binders, l0),
+    ast.Pat.EnumVariant(enum_parts, var_name, binders) => tc_pat_enum(ctx, mod_path, imps, scrut_t, enum_parts, var_name, binders, l0),
   };
 }
 
-fn tc_pat_enum(ctx: Ctx, mod_path: String, aliases: Vec[ImportAlias], scrut_t: ir.Ty, enum_parts: Vec[String], var_name: String, binders: Vec[String], l0: Locals) -> PatLocalsResult {
+fn tc_pat_enum(ctx: Ctx, mod_path: String, imps: Imports, scrut_t: ir.Ty, enum_parts: Vec[String], var_name: String, binders: Vec[String], l0: Locals) -> PatLocalsResult {
   let is_enum: bool = match scrut_t.kind { ir.TyKind.Enum => true, _ => false };
   if !is_enum { return PatLocalsResult { ok: false, locals: l0 }; }
 
@@ -83,9 +83,22 @@ fn tc_pat_enum(ctx: Ctx, mod_path: String, aliases: Vec[ImportAlias], scrut_t: i
   }
 
   if enum_parts.len() != 1 && enum_parts.len() != 2 { return PatLocalsResult { ok: false, locals: l0 }; }
-  let enum_mod: String = if enum_parts.len() == 1 { mod_path } else { find_alias(aliases, enum_parts.get(0)) };
-  if enum_mod == "" { return PatLocalsResult { ok: false, locals: l0 }; }
-  let enum_name: String = if enum_parts.len() == 1 { enum_parts.get(0) } else { enum_parts.get(1) };
+  let mut enum_mod: String = "";
+  let mut enum_name: String = "";
+  if enum_parts.len() == 1 {
+    enum_mod = mod_path;
+    enum_name = enum_parts.get(0);
+    let nt: NamedTypeImport = find_named_type(imps.named_types, enum_name);
+    if nt.local != "" {
+      if nt.kind != named_type_kind_enum() { return PatLocalsResult { ok: false, locals: l0 }; }
+      enum_mod = nt.mod_path;
+      enum_name = nt.name;
+    }
+  } else {
+    enum_mod = find_alias(imps.aliases, enum_parts.get(0));
+    if enum_mod == "" { return PatLocalsResult { ok: false, locals: l0 }; }
+    enum_name = enum_parts.get(1);
+  }
 
   // Pattern enum must match scrutinee enum type.
   if ty_mod(scrut_t) != enum_mod || ty_name(scrut_t) != enum_name { return PatLocalsResult { ok: false, locals: l0 }; }

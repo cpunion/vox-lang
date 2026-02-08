@@ -1,7 +1,7 @@
 import "ast" as ast
 import "ir" as ir
 
-fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {
+fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {
   // Method calls: `recv.method(...)` for built-in types.
   let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
   let is_member: bool = match cn { ast.ExprNode.Member(_, _) => true, _ => false };
@@ -9,15 +9,15 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias],
     let recv_id: i32 = match cn { ast.ExprNode.Member(r, _) => r, _ => -1 };
     let mname: String = match cn { ast.ExprNode.Member(_, n) => n, _ => "" };
 
-    let rr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, recv_id, -1);
+    let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv_id, -1);
     if rr.ok && is_vec_ty(ctx, rr.ty) {
-      return tc_call_vec_method(ctx, w, mod_path, aliases, exprs, l0, rr.ty, mname, args, expected);
+      return tc_call_vec_method(ctx, w, mod_path, imps, exprs, l0, rr.ty, mname, args, expected);
     }
     if rr.ok && rr.ty == ctx.ty_string {
-      return tc_call_string_method(ctx, w, mod_path, aliases, exprs, l0, recv_id, mname, args, expected);
+      return tc_call_string_method(ctx, w, mod_path, imps, exprs, l0, recv_id, mname, args, expected);
     }
     if rr.ok && (rr.ty == ctx.ty_i32 || rr.ty == ctx.ty_i64 || rr.ty == ctx.ty_bool) {
-      return tc_call_prim_method(ctx, w, mod_path, aliases, exprs, l0, recv_id, rr.ty, mname, args, expected);
+      return tc_call_prim_method(ctx, w, mod_path, imps, exprs, l0, recv_id, rr.ty, mname, args, expected);
     }
   }
 
@@ -40,7 +40,7 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias],
         let mut ai: i32 = 0;
         while ai < args.len() {
           let want: i32 = v.fields.get(ai);
-          let ar: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(ai), want);
+          let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(ai), want);
           if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
           if ar.ty != want { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
           ai = ai + 1;
@@ -68,31 +68,36 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias],
 
   // Resolve function call.
   if parts.len() == 1 {
-    return tc_call_func_unqualified(ctx, w, mod_path, aliases, exprs, l0, parts.get(0), type_args, args, expected);
+    return tc_call_func_unqualified(ctx, w, mod_path, imps, exprs, l0, parts.get(0), type_args, args, expected);
   }
   if parts.len() == 2 {
-    let mp: String = find_alias(aliases, parts.get(0));
+    let mp: String = find_alias(imps.aliases, parts.get(0));
     if mp != "" {
-      return tc_call_func_qualified(ctx, w, mod_path, aliases, exprs, l0, mp, parts.get(1), type_args, args, expected);
+      return tc_call_func_qualified(ctx, w, mod_path, imps, exprs, l0, mp, parts.get(1), type_args, args, expected);
     }
-    // Otherwise: `Enum.Variant(...)` in current module.
-    return tc_call_enum_ctor(ctx, w, mod_path, aliases, exprs, l0, mod_path, parts.get(0), parts.get(1), args, expected);
+    // Otherwise: `Enum.Variant(...)` in current module, or via a named imported enum type.
+    let nt: NamedTypeImport = find_named_type(imps.named_types, parts.get(0));
+    if nt.local != "" {
+      if nt.kind != named_type_kind_enum() { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+      return tc_call_enum_ctor(ctx, w, mod_path, imps, exprs, l0, nt.mod_path, nt.name, parts.get(1), args, expected);
+    }
+    return tc_call_enum_ctor(ctx, w, mod_path, imps, exprs, l0, mod_path, parts.get(0), parts.get(1), args, expected);
   }
   if parts.len() == 3 {
-    let mp: String = find_alias(aliases, parts.get(0));
+    let mp: String = find_alias(imps.aliases, parts.get(0));
     if mp == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    return tc_call_enum_ctor(ctx, w, mod_path, aliases, exprs, l0, mp, parts.get(1), parts.get(2), args, expected);
+    return tc_call_enum_ctor(ctx, w, mod_path, imps, exprs, l0, mp, parts.get(1), parts.get(2), args, expected);
   }
 
   return ExprTyResult { ok: false, ty: ctx.ty_bad };
 }
 
-fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, recv_ty: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
+fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv_ty: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
   let elem: i32 = vec_elem(ctx, recv_ty);
 
   if mname == "push" {
     if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    let ar: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(0), elem);
+    let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), elem);
     if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     if expected != -1 && expected != ctx.ty_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     return ExprTyResult { ok: true, ty: ctx.ty_unit };
@@ -106,7 +111,7 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportA
 
   if mname == "get" {
     if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    let idxr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(0), ctx.ty_i32);
+    let idxr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_i32);
     if !idxr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     if expected != -1 && expected != elem { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     return ExprTyResult { ok: true, ty: elem };
@@ -116,7 +121,7 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportA
     // Stage0 parity: only Vec[String].join(String) -> String.
     if elem != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    let sepr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(0), ctx.ty_string);
+    let sepr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_string);
     if !sepr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     return ExprTyResult { ok: true, ty: ctx.ty_string };
@@ -125,8 +130,8 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportA
   return ExprTyResult { ok: false, ty: ctx.ty_bad };
 }
 
-fn tc_call_string_method(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, recv_id: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
-  let _rr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, recv_id, ctx.ty_string);
+fn tc_call_string_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv_id: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
+  let _rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv_id, ctx.ty_string);
 
   if mname == "len" {
     if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
@@ -135,23 +140,23 @@ fn tc_call_string_method(ctx: Ctx, w: World, mod_path: String, aliases: Vec[Impo
   }
   if mname == "byte_at" {
     if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    let idxr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(0), ctx.ty_i32);
+    let idxr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_i32);
     if !idxr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     if expected != -1 && expected != ctx.ty_i32 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     return ExprTyResult { ok: true, ty: ctx.ty_i32 };
   }
   if mname == "slice" {
     if args.len() != 2 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    let sr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(0), ctx.ty_i32);
+    let sr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_i32);
     if !sr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    let er: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(1), ctx.ty_i32);
+    let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(1), ctx.ty_i32);
     if !er.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     return ExprTyResult { ok: true, ty: ctx.ty_string };
   }
   if mname == "concat" {
     if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    let or: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, args.get(0), ctx.ty_string);
+    let or: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_string);
     if !or.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     return ExprTyResult { ok: true, ty: ctx.ty_string };
@@ -165,26 +170,32 @@ fn tc_call_string_method(ctx: Ctx, w: World, mod_path: String, aliases: Vec[Impo
   return ExprTyResult { ok: false, ty: ctx.ty_bad };
 }
 
-fn tc_call_prim_method(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, recv_id: i32, recv_ty: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
+fn tc_call_prim_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv_id: i32, recv_ty: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
   if mname != "to_string" { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  let rr: ExprTyResult = tc_expr(ctx, w, mod_path, aliases, exprs, l0, recv_id, recv_ty);
+  let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv_id, recv_ty);
   if !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   return ExprTyResult { ok: true, ty: ctx.ty_string };
 }
 
-fn tc_call_func_unqualified(ctx: Ctx, w: World, mod_path: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, name: String, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {
+fn tc_call_func_unqualified(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, name: String, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {
+  let nf: NamedFuncImport = find_named_func(imps.named_funcs, name);
+  if nf.local != "" {
+    let frx: FindFuncResult = find_func(ctx, nf.mod_path, nf.name);
+    if !frx.found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, nf.mod_path, frx.sig, type_args, args, expected);
+  }
   // Prefer local module, otherwise prelude fallback.
   let fr0: FindFuncResult = find_func(ctx, mod_path, name);
   if fr0.found {
-    return tc_call_func_sig(ctx, w, mod_path, aliases, exprs, l0, mod_path, fr0.sig, type_args, args, expected);
+    return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, mod_path, fr0.sig, type_args, args, expected);
   }
   let prelude: String = "std/prelude";
   let fr1: FindFuncResult = find_func(ctx, prelude, name);
   if fr1.found {
     if !fr1.sig.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    return tc_call_func_sig(ctx, w, mod_path, aliases, exprs, l0, prelude, fr1.sig, type_args, args, expected);
+    return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, prelude, fr1.sig, type_args, args, expected);
   }
   // Builtins live in the root namespace.
   let fr2: FindFuncResult = find_func(ctx, "", name);
@@ -192,19 +203,19 @@ fn tc_call_func_unqualified(ctx: Ctx, w: World, mod_path: String, aliases: Vec[I
     if is_reserved_intrinsic_name(name) && !is_std_module(mod_path) {
       return ExprTyResult { ok: false, ty: ctx.ty_bad };
     }
-    return tc_call_func_sig(ctx, w, mod_path, aliases, exprs, l0, "", fr2.sig, type_args, args, expected);
+    return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, "", fr2.sig, type_args, args, expected);
   }
   return ExprTyResult { ok: false, ty: ctx.ty_bad };
 }
 
-fn tc_call_func_qualified(ctx: Ctx, w: World, cur_mod: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, target_mod: String, name: String, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {
+fn tc_call_func_qualified(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, target_mod: String, name: String, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {
   let fr: FindFuncResult = find_func(ctx, target_mod, name);
   if !fr.found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   if target_mod != cur_mod && !fr.sig.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  return tc_call_func_sig(ctx, w, cur_mod, aliases, exprs, l0, target_mod, fr.sig, type_args, args, expected);
+  return tc_call_func_sig(ctx, w, cur_mod, imps, exprs, l0, target_mod, fr.sig, type_args, args, expected);
 }
 
-fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, target_mod: String, sig: FuncSig, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {
+fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, target_mod: String, sig: FuncSig, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {
   let _tm: String = target_mod; // reserved for future: implicit receiver / UFCS.
   if args.len() != sig.params.len() { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
 
@@ -213,7 +224,7 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, aliases: Vec[ImportAlia
     let mut i: i32 = 0;
     while i < args.len() {
       let want: i32 = sig.params.get(i);
-      let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, aliases, exprs, l0, args.get(i), want);
+      let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want);
       if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
       if ar.ty != want { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
       i = i + 1;
@@ -238,7 +249,7 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, aliases: Vec[ImportAlia
   // Explicit type args win (when provided).
   let mut ti: i32 = 0;
   while ti < type_args.len() {
-    let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, aliases, Vec(), type_args.get(ti));
+    let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), type_args.get(ti));
     if !tr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     let tp: String = sig.type_params.get(ti);
     let cur: i32 = subs_lookup(subs, tp);
@@ -253,7 +264,7 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, aliases: Vec[ImportAlia
     let want0: i32 = subst_ty(ctx, sig.params.get(i), subs);
     let want_t: ir.Ty = ir.ty_pool_get(ctx.pool, want0);
     let want: i32 = if want_t.kind == ir.TyKind.Param { -1 } else { want0 };
-    let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, aliases, exprs, l0, args.get(i), want);
+    let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want);
     if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     let ur2: UnifyResult = unify_ty(ctx, sig.params.get(i), ar.ty, subs);
     if !ur2.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
@@ -275,7 +286,7 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, aliases: Vec[ImportAlia
   return ExprTyResult { ok: true, ty: out_ty };
 }
 
-fn tc_call_enum_ctor(ctx: Ctx, w: World, cur_mod: String, aliases: Vec[ImportAlias], exprs: ast.ExprPool, l0: Locals, enum_mod: String, enum_name: String, var_name: String, args: Vec[i32], expected: i32) -> ExprTyResult {
+fn tc_call_enum_ctor(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, enum_mod: String, enum_name: String, var_name: String, args: Vec[i32], expected: i32) -> ExprTyResult {
   let fe: FindEnumResult = find_enum(ctx, enum_mod, enum_name);
   if !fe.found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   let es: EnumSig = fe.sig;
@@ -289,7 +300,7 @@ fn tc_call_enum_ctor(ctx: Ctx, w: World, cur_mod: String, aliases: Vec[ImportAli
       let mut ai: i32 = 0;
       while ai < args.len() {
         let want: i32 = v.fields.get(ai);
-        let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, aliases, exprs, l0, args.get(ai), want);
+        let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(ai), want);
         if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
         if ar.ty != want { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
         ai = ai + 1;

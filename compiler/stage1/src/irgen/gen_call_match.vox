@@ -38,6 +38,26 @@ fn match_arm_info_enum(blk: i32, expr: i32, es: tc.EnumSig, vname: String, binde
   return MatchArmInfo { blk: blk, has_tag: true, tag: tag, variant: vname, binds: binders, bind_tys: tys, is_wild: false, expr: expr };
 }
 
+fn find_named_func_import(named: Vec[tc.NamedFuncImport], local: String) -> tc.NamedFuncImport {
+  let mut i: i32 = 0;
+  while i < named.len() {
+    let it: tc.NamedFuncImport = named.get(i);
+    if it.local == local { return it; }
+    i = i + 1;
+  }
+  return tc.NamedFuncImport { local: "", mod_path: "", name: "" };
+}
+
+fn find_named_type_import(named: Vec[tc.NamedTypeImport], local: String) -> tc.NamedTypeImport {
+  let mut i: i32 = 0;
+  while i < named.len() {
+    let it: tc.NamedTypeImport = named.get(i);
+    if it.local == local { return it; }
+    i = i + 1;
+  }
+  return tc.NamedTypeImport { local: "", mod_path: "", name: "", kind: 0 };
+}
+
 fn vec_recv_slot(g0: Gen, recv_id: i32, recv_ty: i32) -> VecRecvSlotResult {
   let n: ast.ExprNode = ast.expr_pool_get(g0.exprs, recv_id);
   if match n { ast.ExprNode.Ident(_x) => true, _ => false } {
@@ -66,7 +86,7 @@ fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i
   if is_member {
     let recv_id: i32 = match cn { ast.ExprNode.Member(r, _n) => r, _ => -1 };
     let mname: String = match cn { ast.ExprNode.Member(_r, n) => n, _ => "" };
-    let rr: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.aliases, g0.exprs, g0.locals, recv_id, -1);
+    let rr: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.imps, g0.exprs, g0.locals, recv_id, -1);
     if rr.ok && tc.is_vec_ty(g0.ctx, rr.ty) {
       return gen_call_vec_method(g0, recv_id, rr.ty, mname, args, out_ty);
     }
@@ -106,6 +126,12 @@ fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i
   // Unqualified function call (with prelude fallback).
   if parts.len() == 1 {
     let name: String = parts.get(0);
+    let nf: tc.NamedFuncImport = find_named_func_import(g0.imps.named_funcs, name);
+    if nf.local != "" {
+      let frx: tc.FindFuncResult = tc.find_func(g0.ctx, nf.mod_path, nf.name);
+      if frx.found { return gen_call_func(g0, nf.mod_path, nf.name, frx.sig, ta, args, out_ty); }
+      return GenExprResult { ok: false, err: "unknown fn", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+    }
     let fr0: tc.FindFuncResult = tc.find_func(g0.ctx, g0.mod_path, name);
     if fr0.found { return gen_call_func(g0, g0.mod_path, name, fr0.sig, ta, args, out_ty); }
     let prelude: String = "std/prelude";
@@ -118,17 +144,21 @@ fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i
 
   // Qualified calls.
   if parts.len() == 2 {
-    let mp: String = tc.find_alias(g0.aliases, parts.get(0));
+    let mp: String = tc.find_alias(g0.imps.aliases, parts.get(0));
     if mp != "" {
       let fr: tc.FindFuncResult = tc.find_func(g0.ctx, mp, parts.get(1));
       if !fr.found { return GenExprResult { ok: false, err: "unknown fn", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
       return gen_call_func(g0, mp, parts.get(1), fr.sig, ta, args, out_ty);
     }
-    // Enum ctor in current module.
+    // Otherwise: `Enum.Variant(...)` in current module, or via a named imported enum type.
+    let nt: tc.NamedTypeImport = find_named_type_import(g0.imps.named_types, parts.get(0));
+    if nt.local != "" {
+      return gen_call_enum_ctor(g0, nt.mod_path, nt.name, parts.get(1), args, out_ty);
+    }
     return gen_call_enum_ctor(g0, g0.mod_path, parts.get(0), parts.get(1), args, out_ty);
   }
   if parts.len() == 3 {
-    let mp: String = tc.find_alias(g0.aliases, parts.get(0));
+    let mp: String = tc.find_alias(g0.imps.aliases, parts.get(0));
     if mp == "" { return GenExprResult { ok: false, err: "unknown module alias", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
     return gen_call_enum_ctor(g0, mp, parts.get(1), parts.get(2), args, out_ty);
   }
@@ -206,7 +236,7 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   // Explicit type args.
   let mut ti: i32 = 0;
   while ti < type_args.len() {
-    let tr: tc.ResolveTyResult = tc.resolve_type(g.ctx, g.w, g.mod_path, g.aliases, Vec(), type_args.get(ti));
+    let tr: tc.ResolveTyResult = tc.resolve_type(g.ctx, g.w, g.mod_path, g.imps, Vec(), type_args.get(ti));
     g.ctx = tr.ctx;
     if !tr.ok { return GenExprResult { ok: false, err: "bad type arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
     let tp: String = sig.type_params.get(ti);
@@ -499,7 +529,7 @@ fn gen_expr_match(g0: Gen, scrut: i32, arms: Vec[ast.MatchArm], out_ty: i32) -> 
   if !sr.ok { return sr; }
   g = sr.g;
 
-  let sty: tc.ExprTyResult = tc.tc_expr(g.ctx, g.w, g.mod_path, g.aliases, g.exprs, g.locals, scrut, -1);
+  let sty: tc.ExprTyResult = tc.tc_expr(g.ctx, g.w, g.mod_path, g.imps, g.exprs, g.locals, scrut, -1);
   if !sty.ok || !tc.is_enum_ty(g.ctx, sty.ty) { return GenExprResult { ok: false, err: "match scrut must be enum", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
   let et: ir.Ty = ir.ty_pool_get(g.ctx.pool, sty.ty);
   let fe: tc.FindEnumResult = tc.find_enum(g.ctx, tc.ty_mod(et), tc.ty_name(et));
