@@ -60,6 +60,28 @@ fn main() -> i32 { return utils.one(); }`)
 	}
 }
 
+func TestBuildPackage_StdModulesAreImportable(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "vox.toml"), `[package]
+name = "a"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+`)
+	mustWrite(t, filepath.Join(dir, "src", "main.vox"), `import "std/process" as p
+import "std/fs" as fs
+fn main() -> i32 { let a: Vec[String] = p.args(); fs.write_string("out.txt", "x"); return a.len(); }`)
+
+	_, diags, err := BuildPackage(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags.Items)
+	}
+}
+
 func TestBuildPackage_IgnoresSrcTestFiles(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "vox.toml"), `[package]

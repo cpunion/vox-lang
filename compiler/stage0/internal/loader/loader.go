@@ -151,6 +151,8 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 	// Built-in std modules (stage0 subset).
 	rootMods["std/prelude"] = true
 	rootMods["std/testing"] = true
+	rootMods["std/fs"] = true
+	rootMods["std/process"] = true
 	modByPkg[""] = rootMods
 	for depName, depRoot := range deps {
 		mods, err := collectLocalModules(depRoot)
@@ -159,6 +161,8 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 		}
 		mods["std/prelude"] = true
 		mods["std/testing"] = true
+		mods["std/fs"] = true
+		mods["std/process"] = true
 		modByPkg[depName] = mods
 	}
 
