@@ -235,6 +235,63 @@ dep = { path = "dep_pkg" }
 	}
 }
 
+func TestStage1SelfBuiltCompilerIsQuietOnSuccess(t *testing.T) {
+	// 1) Build stage1 compiler A (vox_stage1) using stage0 (tool driver).
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1BinA, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	stage1DirAbs, err := filepath.Abs(stage1Dir)
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+
+	// 2) Use stage1 A to self-build stage1 B as a *tool* binary (quiet, exit-code based).
+	outRel := filepath.Join("target", "debug", "vox_stage1_b_tool")
+	if err := os.MkdirAll(filepath.Join(stage1DirAbs, "target", "debug"), 0o755); err != nil {
+		t.Fatalf("mkdir target/debug: %v", err)
+	}
+	cmd := exec.Command(stage1BinA, "build-pkg", "--driver=tool", outRel)
+	cmd.Dir = stage1DirAbs
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage1 A self-build (tool) failed: %v\n%s", err, string(b))
+	}
+
+	stage1BinB := filepath.Join(stage1DirAbs, outRel)
+	if _, err := os.Stat(stage1BinB); err != nil {
+		t.Fatalf("missing stage1 B tool binary: %v", err)
+	}
+
+	// 3) Running stage1 B successfully should not print a trailing "0".
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("fn main() -> i32 { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	outBin := filepath.Join(root, "out")
+	cmd2 := exec.Command(stage1BinB, "build-pkg", outBin)
+	cmd2.Dir = root
+	b2, err := cmd2.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage1 B build-pkg failed: %v\n%s", err, string(b2))
+	}
+	if got := strings.TrimSpace(string(b2)); got != "" {
+		t.Fatalf("expected no output on success, got:\n%s", got)
+	}
+}
+
 func TestStage1ExitCodeNonZeroOnBuildPkgFailure(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0.
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))

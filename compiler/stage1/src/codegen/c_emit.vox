@@ -1,7 +1,10 @@
 import "ir" as ir
 
+pub enum DriverMainKind { User, Tool }
+
 pub struct EmitOptions {
   pub emit_driver_main: bool,
+  pub driver_main_kind: DriverMainKind,
   pub emit_test_main: bool,
   pub test_funcs: Vec[String], // qualified IR names
 }
@@ -62,30 +65,42 @@ fn find_main(p: ir.Program) -> MainResult {
 
 struct MainResult { found: bool, f: ir.Func }
 
-fn emit_driver_main(pool: ir.TyPool, main_fn: ir.Func) -> Vec[String] {
+fn emit_driver_main(pool: ir.TyPool, main_fn: ir.Func, kind: DriverMainKind) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("int main(int argc, char** argv) {");
   out.push("  vox__argc = argc;");
   out.push("  vox__argv = argv;");
   let rt: ir.Ty = ir.ty_pool_get(pool, main_fn.ret);
-  if rt.kind == ir.TyKind.Unit {
-    out.push("  ".concat(c_fn_name("main")).concat("();"));
-  } else if rt.kind == ir.TyKind.Bool {
-    out.push("  bool v = ".concat(c_fn_name("main")).concat("();"));
-    out.push("  printf(\"%s\\n\", v ? \"true\" : \"false\");");
-  } else if rt.kind == ir.TyKind.I32 {
-    out.push("  int32_t v = ".concat(c_fn_name("main")).concat("();"));
-    out.push("  printf(\"%\" PRId32 \"\\n\", v);");
-  } else if rt.kind == ir.TyKind.I64 {
-    out.push("  int64_t v = ".concat(c_fn_name("main")).concat("();"));
-    out.push("  printf(\"%\" PRId64 \"\\n\", v);");
-  } else if rt.kind == ir.TyKind.String {
-    out.push("  const char* v = ".concat(c_fn_name("main")).concat("();"));
-    out.push("  printf(\"%s\\n\", v ? v : \"\");");
+  if kind == DriverMainKind.User {
+    if rt.kind == ir.TyKind.Unit {
+      out.push("  ".concat(c_fn_name("main")).concat("();"));
+    } else if rt.kind == ir.TyKind.Bool {
+      out.push("  bool v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  printf(\"%s\\n\", v ? \"true\" : \"false\");");
+    } else if rt.kind == ir.TyKind.I32 {
+      out.push("  int32_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  printf(\"%\" PRId32 \"\\n\", v);");
+    } else if rt.kind == ir.TyKind.I64 {
+      out.push("  int64_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  printf(\"%\" PRId64 \"\\n\", v);");
+    } else if rt.kind == ir.TyKind.String {
+      out.push("  const char* v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  printf(\"%s\\n\", v ? v : \"\");");
+    } else {
+      panic("unsupported main return type in driver");
+    }
+    out.push("  return 0;");
   } else {
-    panic("unsupported main return type in driver");
+    if rt.kind == ir.TyKind.Unit {
+      out.push("  ".concat(c_fn_name("main")).concat("();"));
+      out.push("  return 0;");
+    } else if rt.kind == ir.TyKind.I32 {
+      out.push("  int32_t rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  return (int)rc;");
+    } else {
+      panic("unsupported main return type in tool driver (expected () or i32)");
+    }
   }
-  out.push("  return 0;");
   out.push("}");
   return out;
 }
@@ -141,7 +156,7 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
   if opts.emit_driver_main {
     let mr: MainResult = find_main(p);
     if !mr.found { panic("missing function main"); }
-    out = append_lines(out, emit_driver_main(pool, mr.f));
+    out = append_lines(out, emit_driver_main(pool, mr.f, opts.driver_main_kind));
   }
   if opts.emit_test_main {
     out = append_lines(out, emit_test_main(opts.test_funcs));
