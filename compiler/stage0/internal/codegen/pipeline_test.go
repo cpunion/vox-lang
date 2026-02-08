@@ -791,6 +791,50 @@ func TestPipelineAsCastI64ToI32CheckedOverflowPanics(t *testing.T) {
 	}
 }
 
+func TestPipelineNegativeI8LiteralFoldsToConst(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("cc not found")
+	}
+
+	checked := parseAndCheckWithStdlib(t, []*source.File{
+		source.NewFile("src/main.vox", `fn main() -> i32 {
+  let x: i8 = -5;
+  return x as i32;
+}`),
+	})
+	irp, err := irgen.Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrc, err := EmitC(irp, EmitOptions{EmitDriverMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(csrc, "INT8_C(-5)") {
+		t.Fatalf("expected folded negative literal, got C:\n%s", csrc)
+	}
+
+	dir := t.TempDir()
+	cPath := filepath.Join(dir, "a.c")
+	binPath := filepath.Join(dir, "a.out")
+	if err := writeFile(cPath, csrc); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(cc, "-std=c11", "-O0", "-g", cPath, "-o", binPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, string(out))
+	}
+	run := exec.Command(binPath)
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "-5" {
+		t.Fatalf("expected output -5, got %q", got)
+	}
+}
+
 func TestPipelineRangeCastPanics(t *testing.T) {
 	cc, err := exec.LookPath("cc")
 	if err != nil {

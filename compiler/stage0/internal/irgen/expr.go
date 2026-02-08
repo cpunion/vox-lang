@@ -72,6 +72,21 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			return tmp, nil
 		}
 		if e.Op == "-" {
+			// Constant fold: -(integer literal).
+			// This keeps generated C readable (e.g. INT8_C(-5)) instead of (0 - 5).
+			if lit, ok := e.Expr.(*ast.IntLit); ok {
+				ty := g.p.ExprTypes[ex]
+				irty, err := g.irTypeFromChecked(ty)
+				if err != nil {
+					return nil, err
+				}
+				u := parseUint64(lit.Text)
+				n := uint64(int64(-int64(u)))
+				tmp := g.newTemp()
+				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstInt{Ty: irty, Bits: n}})
+				return tmp, nil
+			}
+
 			// 0 - x
 			a, err := g.genExpr(e.Expr)
 			if err != nil {
