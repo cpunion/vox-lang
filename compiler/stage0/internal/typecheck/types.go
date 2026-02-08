@@ -173,6 +173,9 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		funcSigs:      map[string]FuncSig{},
 		structSigs:    map[string]StructSig{},
 		enumSigs:      map[string]EnumSig{},
+		typeAliases:   map[string]TypeAliasSig{},
+		typeAliasTy:   map[string]Type{},
+		typeAliasBusy: map[string]bool{},
 		exprTypes:     map[ast.Expr]Type{},
 		letTypes:      map[*ast.LetStmt]Type{},
 		vecCalls:      map[*ast.CallExpr]VecCallTarget{},
@@ -191,6 +194,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 	}
 	c.collectImports()
 	c.collectNominalSigs()
+	c.collectTypeAliasSigs()
 	c.fillStructSigs()
 	c.fillEnumSigs()
 	c.collectFuncSigs()
@@ -214,19 +218,22 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 }
 
 type checker struct {
-	prog       *ast.Program
-	diags      *diag.Bag
-	funcSigs   map[string]FuncSig
-	structSigs map[string]StructSig
-	enumSigs   map[string]EnumSig
-	exprTypes  map[ast.Expr]Type
-	letTypes   map[*ast.LetStmt]Type
-	vecCalls   map[*ast.CallExpr]VecCallTarget
-	strCalls   map[*ast.CallExpr]StrCallTarget
-	toStrCalls map[*ast.CallExpr]ToStrTarget
-	callTgts   map[*ast.CallExpr]string
-	enumCtors  map[*ast.CallExpr]EnumCtorTarget
-	enumUnits  map[ast.Expr]EnumCtorTarget
+	prog          *ast.Program
+	diags         *diag.Bag
+	funcSigs      map[string]FuncSig
+	structSigs    map[string]StructSig
+	enumSigs      map[string]EnumSig
+	typeAliases   map[string]TypeAliasSig
+	typeAliasTy   map[string]Type
+	typeAliasBusy map[string]bool
+	exprTypes     map[ast.Expr]Type
+	letTypes      map[*ast.LetStmt]Type
+	vecCalls      map[*ast.CallExpr]VecCallTarget
+	strCalls      map[*ast.CallExpr]StrCallTarget
+	toStrCalls    map[*ast.CallExpr]ToStrTarget
+	callTgts      map[*ast.CallExpr]string
+	enumCtors     map[*ast.CallExpr]EnumCtorTarget
+	enumUnits     map[ast.Expr]EnumCtorTarget
 
 	curFn     *ast.FuncDecl
 	curTyVars map[string]bool

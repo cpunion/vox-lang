@@ -29,6 +29,7 @@ func ParseFiles(files []*source.File) (*ast.Program, *diag.Bag) {
 		prog, d := Parse(f)
 		if prog != nil {
 			merged.Imports = append(merged.Imports, prog.Imports...)
+			merged.Types = append(merged.Types, prog.Types...)
 			merged.Structs = append(merged.Structs, prog.Structs...)
 			merged.Enums = append(merged.Enums, prog.Enums...)
 			merged.Funcs = append(merged.Funcs, prog.Funcs...)
@@ -57,6 +58,12 @@ func (p *Parser) parseProgram() *ast.Program {
 		// Optional visibility modifier.
 		if p.match(lexer.TokenPub) {
 			switch {
+			case p.match(lexer.TokenType):
+				td := p.parseTypeAliasDecl()
+				if td != nil {
+					td.Pub = true
+					prog.Types = append(prog.Types, td)
+				}
 			case p.match(lexer.TokenStruct):
 				st := p.parseStructDecl()
 				if st != nil {
@@ -76,12 +83,19 @@ func (p *Parser) parseProgram() *ast.Program {
 					prog.Funcs = append(prog.Funcs, fn)
 				}
 			default:
-				p.errorHere("expected `fn`, `struct`, or `enum` after `pub`")
+				p.errorHere("expected `type`, `fn`, `struct`, or `enum` after `pub`")
 				p.advance()
 			}
 			continue
 		}
 
+		if p.match(lexer.TokenType) {
+			td := p.parseTypeAliasDecl()
+			if td != nil {
+				prog.Types = append(prog.Types, td)
+			}
+			continue
+		}
 		if p.match(lexer.TokenStruct) {
 			st := p.parseStructDecl()
 			if st != nil {
@@ -103,10 +117,26 @@ func (p *Parser) parseProgram() *ast.Program {
 			}
 			continue
 		}
-		p.errorHere("expected `import`, `struct`, `enum`, or `fn`")
+		p.errorHere("expected `import`, `type`, `struct`, `enum`, or `fn`")
 		p.advance()
 	}
 	return prog
+}
+
+func (p *Parser) parseTypeAliasDecl() *ast.TypeAliasDecl {
+	startTok := p.prev() // `type`
+	nameTok := p.expect(lexer.TokenIdent, "expected type name")
+	if nameTok.Kind != lexer.TokenIdent {
+		return nil
+	}
+	p.expect(lexer.TokenEq, "expected `=` in type alias")
+	ty := p.parseType()
+	endTok := p.prev()
+	// Optional semicolon.
+	if p.match(lexer.TokenSemicolon) {
+		endTok = p.prev()
+	}
+	return &ast.TypeAliasDecl{Name: nameTok.Lexeme, Type: ty, Span: joinSpan(startTok.Span, endTok.Span)}
 }
 
 func (p *Parser) parseImportDecl() *ast.ImportDecl {
@@ -161,7 +191,7 @@ func (p *Parser) parseImportDecl() *ast.ImportDecl {
 		endTok = p.prev()
 	} else {
 		switch p.peek().Kind {
-		case lexer.TokenPub, lexer.TokenFn, lexer.TokenStruct, lexer.TokenEnum, lexer.TokenImport, lexer.TokenEOF:
+		case lexer.TokenPub, lexer.TokenType, lexer.TokenFn, lexer.TokenStruct, lexer.TokenEnum, lexer.TokenImport, lexer.TokenEOF:
 			// ok
 		default:
 			p.errorHere("expected `;` or next top-level item after import")

@@ -435,6 +435,25 @@ func TestMatchIntAndStrPatternsTypecheck(t *testing.T) {
 	}
 }
 
+func TestTypeAliasResolves(t *testing.T) {
+	f := source.NewFile("src/main.vox", `type I = i32
+type V = Vec[I]
+fn main() -> i32 {
+  let x: I = 1;
+  let mut v: V = Vec();
+  v.push(x);
+  return v.len();
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestEnumCtorAndMatchShorthand(t *testing.T) {
 	f := source.NewFile("src/main.vox", `enum E { A(i32), None }
 fn main() -> i32 {

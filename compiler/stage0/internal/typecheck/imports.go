@@ -241,6 +241,10 @@ func (c *checker) resolveNamedImports() {
 				c.errorAt(pi.Span, "import name conflicts with local definition: "+local)
 				continue
 			}
+			if _, ok := c.typeAliases[qLocal]; ok {
+				c.errorAt(pi.Span, "import name conflicts with local definition: "+local)
+				continue
+			}
 
 			if _, exists := m[local]; exists || tm[local].K != TyBad {
 				c.errorAt(pi.Span, "duplicate imported name: "+local)
@@ -276,6 +280,11 @@ func (c *checker) resolveNamedImports() {
 					continue
 				}
 				tm[local] = Type{K: TyEnum, Name: target}
+			}
+			// type alias
+			if _, ok := c.typeAliases[target]; ok {
+				found++
+				tm[local] = c.resolveTypeAliasType(target, pi.File, pi.Span)
 			}
 
 			if found == 0 {

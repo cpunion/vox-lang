@@ -4,6 +4,7 @@ import "voxlang/internal/source"
 
 type Program struct {
 	Imports []*ImportDecl
+	Types   []*TypeAliasDecl
 	Structs []*StructDecl
 	Enums   []*EnumDecl
 	Funcs   []*FuncDecl
@@ -20,6 +21,13 @@ type ImportName struct {
 	Name  string
 	Alias string // optional local alias
 	Span  source.Span
+}
+
+type TypeAliasDecl struct {
+	Pub  bool
+	Name string
+	Type Type
+	Span source.Span
 }
 
 type FuncDecl struct {

@@ -81,6 +81,22 @@ fn main() -> i32 { return uno(); }`)
 	}
 }
 
+func TestParseTypeAliasDecl(t *testing.T) {
+	f := source.NewFile("test.vox", `type I = i32
+type V = Vec[i32]
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Types) != 2 {
+		t.Fatalf("expected 2 type aliases, got %d", len(prog.Types))
+	}
+	if prog.Types[0].Name != "I" || prog.Types[1].Name != "V" {
+		t.Fatalf("unexpected type aliases: %#v", prog.Types)
+	}
+}
+
 func TestParseWhileBreakContinue(t *testing.T) {
 	f := source.NewFile("test.vox", `fn main() -> i32 {
   let mut x: i32 = 0;

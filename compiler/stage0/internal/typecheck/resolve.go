@@ -47,6 +47,9 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 				}
 				return Type{K: TyEnum, Name: q}
 			}
+			if _, ok := c.typeAliases[q]; ok {
+				return c.resolveTypeAliasType(q, file, tt.S)
+			}
 			c.errorAt(tt.S, "unknown type: "+q)
 			return Type{K: TyBad}
 		}
@@ -92,9 +95,12 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 					}
 				}
 				if tm := c.namedTypes[file]; tm != nil {
-					if ty := tm[name]; ty.K == TyStruct || ty.K == TyEnum {
+					if ty := tm[name]; ty.K != TyBad {
 						return ty
 					}
+				}
+				if _, ok := c.typeAliases[q1]; ok {
+					return c.resolveTypeAliasType(q1, file, tt.S)
 				}
 				q2 := names.QualifyParts(pkg, nil, name)
 				if ss, ok := c.structSigs[q2]; ok {
@@ -112,6 +118,9 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 					if private == "" {
 						private = q2
 					}
+				}
+				if _, ok := c.typeAliases[q2]; ok {
+					return c.resolveTypeAliasType(q2, file, tt.S)
 				}
 				if private != "" {
 					c.errorAt(tt.S, "type is private: "+private)
