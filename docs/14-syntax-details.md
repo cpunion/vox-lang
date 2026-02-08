@@ -186,6 +186,15 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
   - Stage0 当前支持：局部变量 `v.push(x)`，以及可变局部 struct 的直接字段 `s.items.push(x)`。
   - 其它更复杂的 place（例如多级字段）后续再扩展。
 
+### 保留的 `__*` 低层 intrinsic（Stage0/Stage1 自举期）
+
+除 `panic/print` 外，自举期还存在少量以 `__` 开头的低层 intrinsic（用于 `std/fs`、`std/process` 等最小工具链能力）。
+
+约束（Stage0）：
+
+- **非 `std/**` 模块禁止直接调用**以 `__` 开头的函数（例如 `__exec(...)`）。
+- 这些名字保留给标准库实现与自举工具链，用户代码应通过 `std/fs`、`std/process` 等封装接口使用。
+
 ## 导入语法（Stage0 最小子集）
 
 模块/包导入：
