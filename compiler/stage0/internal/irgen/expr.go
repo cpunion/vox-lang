@@ -33,6 +33,26 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 		g.emit(&ir.Const{Dst: tmp, Ty: ir.Type{K: ir.TString}, Val: &ir.ConstStr{S: s}})
 		return tmp, nil
 	case *ast.IdentExpr:
+		// Const reference lowers to IR const (inlined; no globals in v0).
+		if cv, ok := g.p.ConstExprValues[ex]; ok {
+			ty := g.p.ExprTypes[ex]
+			irty, err := g.irTypeFromChecked(ty)
+			if err != nil {
+				return nil, err
+			}
+			tmp := g.newTemp()
+			switch cv.K {
+			case typecheck.ConstInt:
+				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstInt{Ty: irty, V: cv.I64}})
+			case typecheck.ConstBool:
+				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstBool{V: cv.B}})
+			case typecheck.ConstStr:
+				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstStr{S: cv.S}})
+			default:
+				return nil, fmt.Errorf("bad const reference")
+			}
+			return tmp, nil
+		}
 		slot, ok := g.lookup(e.Name)
 		if !ok {
 			return nil, fmt.Errorf("unknown variable: %s", e.Name)
@@ -465,6 +485,27 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 		}
 		return nil, fmt.Errorf("unresolved unit enum variant shorthand")
 	case *ast.MemberExpr:
+		// Const reference lowers to IR const (inlined; no globals in v0).
+		if cv, ok := g.p.ConstExprValues[ex]; ok {
+			ty := g.p.ExprTypes[ex]
+			irty, err := g.irTypeFromChecked(ty)
+			if err != nil {
+				return nil, err
+			}
+			tmp := g.newTemp()
+			switch cv.K {
+			case typecheck.ConstInt:
+				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstInt{Ty: irty, V: cv.I64}})
+			case typecheck.ConstBool:
+				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstBool{V: cv.B}})
+			case typecheck.ConstStr:
+				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstStr{S: cv.S}})
+			default:
+				return nil, fmt.Errorf("bad const reference")
+			}
+			return tmp, nil
+		}
+
 		// Unit enum variant value: `Enum.Variant`.
 		if cu, ok := g.p.EnumUnitVariants[e]; ok {
 			ety, err := g.irTypeFromChecked(cu.Enum)

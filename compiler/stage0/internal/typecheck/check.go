@@ -211,6 +211,14 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		if vi, ok := c.lookupVar(e.Name); ok {
 			return c.setExprType(ex, vi.ty)
 		}
+		// const reference (value position)
+		if e.S.File != nil {
+			_, sig, v, ok := c.lookupConstName(e.S.File, e.Name, e.S)
+			if ok && v.K != ConstBad {
+				c.constRefs[ex] = v
+				return c.setExprType(ex, sig.Ty)
+			}
+		}
 		// function name is allowed as callee only
 		if _, ok := c.funcSigs[e.Name]; ok {
 			return c.setExprType(ex, Type{K: TyBad})
@@ -617,6 +625,21 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		c.enumUnits[e] = EnumCtorTarget{Enum: expected, Variant: e.Name, Tag: vidx}
 		return c.setExprType(ex, expected)
 	case *ast.MemberExpr:
+		// Module const: `alias.NAME` / `alias.mod.NAME` (only when base isn't a local variable).
+		if c.curFn != nil && c.curFn.Span.File != nil {
+			parts, ok := calleeParts(ex)
+			if ok && len(parts) >= 2 {
+				alias := parts[0]
+				if _, ok := c.lookupVar(alias); !ok {
+					_, sig, v, ok2 := c.lookupConstByParts(c.curFn.Span.File, parts, e.S)
+					if ok2 && v.K != ConstBad {
+						c.constRefs[ex] = v
+						return c.setExprType(ex, sig.Ty)
+					}
+				}
+			}
+		}
+
 		// Unit enum variant: `Enum.Variant` (including qualified enum types).
 		if c.curFn != nil && c.curFn.Span.File != nil {
 			parts, ok := calleeParts(ex)

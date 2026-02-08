@@ -52,6 +52,16 @@ func (c *checker) initPresence() {
 			addFile(d.Span.File.Name)
 		}
 	}
+	for _, d := range c.prog.Types {
+		if d != nil && d.Span.File != nil {
+			addFile(d.Span.File.Name)
+		}
+	}
+	for _, d := range c.prog.Consts {
+		if d != nil && d.Span.File != nil {
+			addFile(d.Span.File.Name)
+		}
+	}
 	for _, d := range c.prog.Structs {
 		if d != nil && d.Span.File != nil {
 			addFile(d.Span.File.Name)
@@ -218,6 +228,11 @@ func (c *checker) resolveNamedImports() {
 			tm = map[string]Type{}
 			c.namedTypes[pi.File] = tm
 		}
+		cm := c.namedConsts[pi.File]
+		if cm == nil {
+			cm = map[string]string{}
+			c.namedConsts[pi.File] = cm
+		}
 		for _, nm := range pi.Names {
 			local := nm.Alias
 			if local == "" {
@@ -229,6 +244,10 @@ func (c *checker) resolveNamedImports() {
 
 			// Reject collisions with local module definitions.
 			qLocal := names.QualifyParts(ownerPkg, ownerMod, local)
+			if _, ok := c.constSigs[qLocal]; ok {
+				c.errorAt(pi.Span, "import name conflicts with local definition: "+local)
+				continue
+			}
 			if _, ok := c.funcSigs[qLocal]; ok {
 				c.errorAt(pi.Span, "import name conflicts with local definition: "+local)
 				continue
@@ -246,7 +265,7 @@ func (c *checker) resolveNamedImports() {
 				continue
 			}
 
-			if _, exists := m[local]; exists || tm[local].K != TyBad {
+			if _, exists := m[local]; exists || tm[local].K != TyBad || cm[local] != "" {
 				c.errorAt(pi.Span, "duplicate imported name: "+local)
 				continue
 			}
@@ -254,6 +273,15 @@ func (c *checker) resolveNamedImports() {
 			target := names.QualifyParts(pi.Tgt.Pkg, pi.Tgt.Mod, nm.Name)
 
 			var found int
+			// const
+			if cs, ok := c.constSigs[target]; ok {
+				found++
+				if !c.canAccess(pi.File, cs.OwnerPkg, cs.OwnerMod, cs.Pub) {
+					c.errorAt(pi.Span, "const is private: "+target)
+					continue
+				}
+				cm[local] = target
+			}
 			// function
 			if sig, ok := c.funcSigs[target]; ok {
 				found++
@@ -295,6 +323,7 @@ func (c *checker) resolveNamedImports() {
 				// Keep it simple: avoid mixing namespaces in stage0.
 				c.errorAt(pi.Span, "ambiguous imported name: "+target)
 				// best-effort: drop any partial bindings
+				delete(cm, local)
 				delete(m, local)
 				delete(tm, local)
 				continue

@@ -25,6 +25,12 @@ pub struct NamedFuncImport {
   pub name: String,
 }
 
+pub struct NamedConstImport {
+  pub local: String,
+  pub mod_path: String,
+  pub name: String,
+}
+
 // kind tags (avoid enum comparisons in stage0 subset)
 pub fn named_type_kind_struct() -> i32 { return 1; }
 pub fn named_type_kind_enum() -> i32 { return 2; }
@@ -40,6 +46,7 @@ pub struct NamedTypeImport {
 pub struct Imports {
   pub aliases: Vec[ImportAlias],
   pub named_funcs: Vec[NamedFuncImport],
+  pub named_consts: Vec[NamedConstImport],
   pub named_types: Vec[NamedTypeImport],
 }
 
@@ -231,6 +238,16 @@ fn find_named_func(named: Vec[NamedFuncImport], local: String) -> NamedFuncImpor
   return NamedFuncImport { local: "", mod_path: "", name: "" };
 }
 
+pub fn find_named_const(named: Vec[NamedConstImport], local: String) -> NamedConstImport {
+  let mut i: i32 = 0;
+  while i < named.len() {
+    let it: NamedConstImport = named.get(i);
+    if it.local == local { return it; }
+    i = i + 1;
+  }
+  return NamedConstImport { local: "", mod_path: "", name: "" };
+}
+
 fn find_named_type(named: Vec[NamedTypeImport], local: String) -> NamedTypeImport {
   let mut i: i32 = 0;
   while i < named.len() {
@@ -246,7 +263,7 @@ fn ok_imps(imps: Imports) -> ImportsResult {
 }
 
 fn err_imps(file: String, msg: String) -> ImportsResult {
-  return ImportsResult { ok: false, err: import_error(file, msg), imps: Imports { aliases: Vec(), named_funcs: Vec(), named_types: Vec() } };
+  return ImportsResult { ok: false, err: import_error(file, msg), imps: Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() } };
 }
 
 fn find_decl_pub_fn(w: World, mod_path: String, name: String) -> bool {
@@ -301,6 +318,19 @@ fn find_decl_pub_type_alias(w: World, mod_path: String, name: String) -> bool {
   return false;
 }
 
+fn find_decl_pub_const(w: World, mod_path: String, name: String) -> bool {
+  let fm: FindModResult = find_mod(w, mod_path);
+  if !fm.found { return false; }
+  let m: WorldModule = w.mods.get(fm.idx);
+  let mut i: i32 = 0;
+  while i < m.prog.consts.len() {
+    let cd: ast.ConstDecl = m.prog.consts.get(i);
+    if cd.name == name { return cd.is_pub; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn has_decl_fn_any(w: World, mod_path: String, name: String) -> bool {
   let fm: FindModResult = find_mod(w, mod_path);
   if !fm.found { return false; }
@@ -320,6 +350,18 @@ fn has_decl_type_alias_any(w: World, mod_path: String, name: String) -> bool {
   let mut i: i32 = 0;
   while i < m.prog.types.len() {
     if m.prog.types.get(i).name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn has_decl_const_any(w: World, mod_path: String, name: String) -> bool {
+  let fm: FindModResult = find_mod(w, mod_path);
+  if !fm.found { return false; }
+  let m: WorldModule = w.mods.get(fm.idx);
+  let mut i: i32 = 0;
+  while i < m.prog.consts.len() {
+    if m.prog.consts.get(i).name == name { return true; }
     i = i + 1;
   }
   return false;
@@ -359,6 +401,11 @@ fn local_decl_conflicts(w: World, cur_mod: String, local: String) -> bool {
     i = i + 1;
   }
   i = 0;
+  while i < m.prog.consts.len() {
+    if m.prog.consts.get(i).name == local { return true; }
+    i = i + 1;
+  }
+  i = 0;
   while i < m.prog.funcs.len() {
     if m.prog.funcs.get(i).name == local { return true; }
     i = i + 1;
@@ -378,10 +425,11 @@ fn local_decl_conflicts(w: World, cur_mod: String, local: String) -> bool {
 
 pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file: String) -> ImportsResult {
   let ar: ImportAliasesResult = build_import_aliases(w, imps, file);
-  if !ar.ok { return ImportsResult { ok: false, err: ar.err, imps: Imports { aliases: Vec(), named_funcs: Vec(), named_types: Vec() } }; }
+  if !ar.ok { return ImportsResult { ok: false, err: ar.err, imps: Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() } }; }
   let aliases: Vec[ImportAlias] = ar.aliases;
 
   let mut named_funcs: Vec[NamedFuncImport] = Vec();
+  let mut named_consts: Vec[NamedConstImport] = Vec();
   let mut named_types: Vec[NamedTypeImport] = Vec();
   let mut seen: Vec[String] = Vec();
 
@@ -392,7 +440,7 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
     if imp.names.len() == 0 { ii = ii + 1; continue; }
 
     let rr: ResolveImportResult = resolve_import_path(w, file, imp.path);
-    if !rr.ok { return ImportsResult { ok: false, err: rr.err, imps: Imports { aliases: Vec(), named_funcs: Vec(), named_types: Vec() } }; }
+    if !rr.ok { return ImportsResult { ok: false, err: rr.err, imps: Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() } }; }
     let target_mod: String = rr.path;
     let fm: FindModResult = find_mod(w, target_mod);
     if !fm.found { return err_imps(file, "unknown module import: ".concat(imp.path)); }
@@ -409,11 +457,13 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
 
       let target: String = qname(target_mod, nm.name);
       let has_fn: bool = has_decl_fn_any(w, target_mod, nm.name);
+      let has_const: bool = has_decl_const_any(w, target_mod, nm.name);
       let has_type_alias: bool = has_decl_type_alias_any(w, target_mod, nm.name);
       let has_struct: bool = has_decl_struct_any(w, target_mod, nm.name);
       let has_enum: bool = has_decl_enum_any(w, target_mod, nm.name);
       let mut found: i32 = 0;
       if has_fn { found = found + 1; }
+      if has_const { found = found + 1; }
       if has_type_alias { found = found + 1; }
       if has_struct { found = found + 1; }
       if has_enum { found = found + 1; }
@@ -424,6 +474,9 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
       if has_fn {
         if target_mod != cur_mod && !find_decl_pub_fn(w, target_mod, nm.name) { return err_imps(file, "function is private: ".concat(target)); }
         named_funcs.push(NamedFuncImport { local: local, mod_path: target_mod, name: nm.name });
+      } else if has_const {
+        if target_mod != cur_mod && !find_decl_pub_const(w, target_mod, nm.name) { return err_imps(file, "const is private: ".concat(target)); }
+        named_consts.push(NamedConstImport { local: local, mod_path: target_mod, name: nm.name });
       } else if has_type_alias {
         if target_mod != cur_mod && !find_decl_pub_type_alias(w, target_mod, nm.name) { return err_imps(file, "type is private: ".concat(target)); }
         named_types.push(NamedTypeImport { local: local, mod_path: target_mod, name: nm.name, kind: named_type_kind_alias() });
@@ -442,5 +495,5 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
     ii = ii + 1;
   }
 
-  return ok_imps(Imports { aliases: aliases, named_funcs: named_funcs, named_types: named_types });
+  return ok_imps(Imports { aliases: aliases, named_funcs: named_funcs, named_consts: named_consts, named_types: named_types });
 }

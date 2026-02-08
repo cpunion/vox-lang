@@ -172,6 +172,34 @@ type V = Vec[I];
 pub type Size = i64;
 ```
 
+## 常量（const，Stage0/Stage1 v0）
+
+声明一个模块级常量：
+
+```vox
+const N: i32 = 10;
+pub const NAME: String = "vox";
+```
+
+约束（Stage0/Stage1 v0）：
+
+- `const` 必须在顶层声明（不支持在函数内声明 const）。
+- 必须写明类型注解：`const X: T = ...`
+- 初始化表达式必须是 **const expression**（常量表达式），目前仅支持：
+  - 字面量：`123` / `true` / `"txt"`
+  - 其他常量引用（含跨模块的 `import` 访问）
+  - `-x` / `!x`
+  - `+ - * / %`、比较、`== !=`、`&& ||`
+  - `if cond { a } else { b }`（cond 必须为常量 bool）
+- 不支持在 const 初始化中调用函数、构造 struct/enum、`match` 等（后续由 `comptime` 统一解决）。
+
+可见性与导入（Stage0/Stage1 v0）：
+
+- 默认私有，跨模块访问需要 `pub const`。
+- 支持：
+  - 通过模块别名访问：`import "pkg:dep" as d; d.MAX_RETRY`
+  - 通过命名导入访问：`import { MAX_RETRY } from "pkg:dep"; MAX_RETRY`
+
 ### 绑定模式（bind pattern）
 
 `match` 的 pattern 允许使用单个标识符作为“绑定模式”，它总是匹配，并将 scrutinee 绑定到该名字：

@@ -50,6 +50,25 @@ type CheckedProgram struct {
 	// EnumUnitVariants records which member expressions are unit enum variant values (Enum.Variant).
 	// This disambiguates enum literals from struct-field access that returns an enum-typed value.
 	EnumUnitVariants map[ast.Expr]EnumCtorTarget
+	// ConstExprValues records which expressions are constant references, and their evaluated values.
+	// These are lowered directly to IR constants (no globals in v0).
+	ConstExprValues map[ast.Expr]ConstValue
+}
+
+type ConstValueKind int
+
+const (
+	ConstBad ConstValueKind = iota
+	ConstInt
+	ConstBool
+	ConstStr
+)
+
+type ConstValue struct {
+	K   ConstValueKind
+	I64 int64
+	B   bool
+	S   string
 }
 
 type FuncSig struct {
@@ -176,6 +195,10 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		typeAliases:   map[string]TypeAliasSig{},
 		typeAliasTy:   map[string]Type{},
 		typeAliasBusy: map[string]bool{},
+		constSigs:     map[string]ConstSig{},
+		constDecls:    map[string]*ast.ConstDecl{},
+		constVals:     map[string]ConstValue{},
+		constBusy:     map[string]bool{},
 		exprTypes:     map[ast.Expr]Type{},
 		letTypes:      map[*ast.LetStmt]Type{},
 		vecCalls:      map[*ast.CallExpr]VecCallTarget{},
@@ -184,10 +207,12 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		callTgts:      map[*ast.CallExpr]string{},
 		enumCtors:     map[*ast.CallExpr]EnumCtorTarget{},
 		enumUnits:     map[ast.Expr]EnumCtorTarget{},
+		constRefs:     map[ast.Expr]ConstValue{},
 		opts:          opts,
 		imports:       map[*source.File]map[string]importTarget{},
 		namedFuncs:    map[*source.File]map[string]string{},
 		namedTypes:    map[*source.File]map[string]Type{},
+		namedConsts:   map[*source.File]map[string]string{},
 		funcDecls:     map[string]*ast.FuncDecl{},
 		instantiated:  map[string]bool{},
 		instantiating: map[string]bool{},
@@ -198,7 +223,9 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 	c.fillStructSigs()
 	c.fillEnumSigs()
 	c.collectFuncSigs()
+	c.collectConstSigs()
 	c.resolveNamedImports()
+	c.evalAllConsts()
 	c.checkPubInterfaces()
 	c.checkAll()
 	return &CheckedProgram{
@@ -214,7 +241,15 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 		CallTargets:      c.callTgts,
 		EnumCtors:        c.enumCtors,
 		EnumUnitVariants: c.enumUnits,
+		ConstExprValues:  c.constRefs,
 	}, c.diags
+}
+
+type ConstSig struct {
+	Pub      bool
+	OwnerPkg string
+	OwnerMod []string
+	Ty       Type
 }
 
 type checker struct {
@@ -226,6 +261,10 @@ type checker struct {
 	typeAliases   map[string]TypeAliasSig
 	typeAliasTy   map[string]Type
 	typeAliasBusy map[string]bool
+	constSigs     map[string]ConstSig
+	constDecls    map[string]*ast.ConstDecl
+	constVals     map[string]ConstValue
+	constBusy     map[string]bool
 	exprTypes     map[ast.Expr]Type
 	letTypes      map[*ast.LetStmt]Type
 	vecCalls      map[*ast.CallExpr]VecCallTarget
@@ -234,6 +273,7 @@ type checker struct {
 	callTgts      map[*ast.CallExpr]string
 	enumCtors     map[*ast.CallExpr]EnumCtorTarget
 	enumUnits     map[ast.Expr]EnumCtorTarget
+	constRefs     map[ast.Expr]ConstValue
 
 	curFn     *ast.FuncDecl
 	curTyVars map[string]bool
@@ -247,6 +287,8 @@ type checker struct {
 	namedFuncs map[*source.File]map[string]string
 	// Named type imports: file -> localName -> qualified type.
 	namedTypes map[*source.File]map[string]Type
+	// Named const imports: file -> localName -> qualified const target.
+	namedConsts map[*source.File]map[string]string
 	pending    []pendingNamedImport
 
 	// Generic monomorphization (stage0 minimal).

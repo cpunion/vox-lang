@@ -454,6 +454,77 @@ fn main() -> i32 {
 	}
 }
 
+func TestConstDeclTypechecksAndInlines(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const N: i32 = 1 + 2 * 3
+fn main() -> i32 { return N; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestConstImportAliasAccessRequiresPub(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import "dep" as d
+fn main() -> i32 { return d.N; }`),
+		source.NewFile("dep/src/dep.vox", `const N: i32 = 3`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "const is private") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected private const error, got: %+v", tdiags.Items)
+	}
+}
+
+func TestConstImportAliasAccessPubOk(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import "dep" as d
+fn main() -> i32 { return d.N; }`),
+		source.NewFile("dep/src/dep.vox", `pub const N: i32 = 3`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestNamedImportResolvesConstValue(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import { N } from "dep"
+fn main() -> i32 { return N; }`),
+		source.NewFile("dep/src/dep.vox", `pub const N: i32 = 7`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestUnionTypeDeclTypechecks(t *testing.T) {
 	f := source.NewFile("src/main.vox", `type Value = I32: i32 | Str: String
 fn main() -> i32 {

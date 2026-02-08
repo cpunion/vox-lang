@@ -97,6 +97,22 @@ fn main() -> i32 { return 0; }`)
 	}
 }
 
+func TestParseConstDecl(t *testing.T) {
+	f := source.NewFile("test.vox", `const N: i32 = 10
+pub const M: i64 = 20;
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Consts) != 2 {
+		t.Fatalf("expected 2 const decls, got %d", len(prog.Consts))
+	}
+	if prog.Consts[0].Name != "N" || prog.Consts[1].Name != "M" || !prog.Consts[1].Pub {
+		t.Fatalf("unexpected consts: %#v", prog.Consts)
+	}
+}
+
 func TestParseUnionTypeDeclLowersToEnum(t *testing.T) {
 	f := source.NewFile("test.vox", `type Value = I32: i32 | Str: String
 fn main() -> i32 {

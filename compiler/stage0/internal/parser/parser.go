@@ -30,6 +30,7 @@ func ParseFiles(files []*source.File) (*ast.Program, *diag.Bag) {
 		if prog != nil {
 			merged.Imports = append(merged.Imports, prog.Imports...)
 			merged.Types = append(merged.Types, prog.Types...)
+			merged.Consts = append(merged.Consts, prog.Consts...)
 			merged.Structs = append(merged.Structs, prog.Structs...)
 			merged.Enums = append(merged.Enums, prog.Enums...)
 			merged.Funcs = append(merged.Funcs, prog.Funcs...)
@@ -67,6 +68,12 @@ func (p *Parser) parseProgram() *ast.Program {
 					r.en.Pub = true
 					prog.Enums = append(prog.Enums, r.en)
 				}
+			case p.match(lexer.TokenConst):
+				cd := p.parseConstDecl()
+				if cd != nil {
+					cd.Pub = true
+					prog.Consts = append(prog.Consts, cd)
+				}
 			case p.match(lexer.TokenStruct):
 				st := p.parseStructDecl()
 				if st != nil {
@@ -86,7 +93,7 @@ func (p *Parser) parseProgram() *ast.Program {
 					prog.Funcs = append(prog.Funcs, fn)
 				}
 			default:
-				p.errorHere("expected `type`, `fn`, `struct`, or `enum` after `pub`")
+				p.errorHere("expected `type`, `const`, `fn`, `struct`, or `enum` after `pub`")
 				p.advance()
 			}
 			continue
@@ -98,6 +105,13 @@ func (p *Parser) parseProgram() *ast.Program {
 				prog.Types = append(prog.Types, r.alias)
 			} else if r.en != nil {
 				prog.Enums = append(prog.Enums, r.en)
+			}
+			continue
+		}
+		if p.match(lexer.TokenConst) {
+			cd := p.parseConstDecl()
+			if cd != nil {
+				prog.Consts = append(prog.Consts, cd)
 			}
 			continue
 		}
@@ -122,7 +136,7 @@ func (p *Parser) parseProgram() *ast.Program {
 			}
 			continue
 		}
-		p.errorHere("expected `import`, `type`, `struct`, `enum`, or `fn`")
+		p.errorHere("expected `import`, `type`, `const`, `struct`, `enum`, or `fn`")
 		p.advance()
 	}
 	return prog
@@ -179,6 +193,32 @@ func (p *Parser) parseTypeDecl() typeDeclResult {
 	return typeDeclResult{
 		alias: &ast.TypeAliasDecl{Name: nameTok.Lexeme, Type: ty, Span: joinSpan(startTok.Span, endTok.Span)},
 	}
+}
+
+func (p *Parser) parseConstDecl() *ast.ConstDecl {
+	startTok := p.prev() // `const`
+	nameTok := p.expect(lexer.TokenIdent, "expected const name")
+	if nameTok.Kind != lexer.TokenIdent {
+		return nil
+	}
+	p.expect(lexer.TokenColon, "expected `:` after const name")
+	ty := p.parseType()
+	p.expect(lexer.TokenEq, "expected `=` in const declaration")
+	ex := p.parseExpr(0)
+
+	endTok := p.prev()
+	// Optional semicolon: if absent, next token must start a new top-level item.
+	if p.match(lexer.TokenSemicolon) {
+		endTok = p.prev()
+	} else {
+		switch p.peek().Kind {
+		case lexer.TokenPub, lexer.TokenType, lexer.TokenConst, lexer.TokenFn, lexer.TokenStruct, lexer.TokenEnum, lexer.TokenImport, lexer.TokenEOF:
+			// ok
+		default:
+			p.errorHere("expected `;` or next top-level item after const")
+		}
+	}
+	return &ast.ConstDecl{Name: nameTok.Lexeme, Type: ty, Expr: ex, Span: joinSpan(startTok.Span, endTok.Span)}
 }
 
 func (p *Parser) parseImportDecl() *ast.ImportDecl {

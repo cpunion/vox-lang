@@ -14,7 +14,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
     ast.ExprNode.Int(_) => tc_expr_int(ctx, expected),
     ast.ExprNode.Str(_) => tc_expr_str(ctx, expected),
     ast.ExprNode.Bool(_) => tc_expr_bool(ctx, expected),
-    ast.ExprNode.Ident(name) => tc_expr_ident(ctx, l0, name, expected),
+    ast.ExprNode.Ident(name) => tc_expr_ident(ctx, mod_path, imps, l0, name, expected),
     ast.ExprNode.DotIdent(name) => tc_expr_dot_ident(ctx, mod_path, name, expected),
     ast.ExprNode.Block(b) => tc_expr_block(ctx, w, mod_path, imps, exprs, l0, b, expected),
 
@@ -99,11 +99,22 @@ fn tc_expr_bool(ctx: Ctx, expected: i32) -> ExprTyResult {
   return ExprTyResult { ok: true, ty: ctx.ty_bool };
 }
 
-fn tc_expr_ident(ctx: Ctx, l0: Locals, name: String, expected: i32) -> ExprTyResult {
+fn tc_expr_ident(ctx: Ctx, mod_path: String, imps: Imports, l0: Locals, name: String, expected: i32) -> ExprTyResult {
   let vr: LookupVarResult = locals_lookup(l0, name);
-  if !vr.found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  if expected != -1 && vr.ty != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  return ExprTyResult { ok: true, ty: vr.ty };
+  if vr.found {
+    if expected != -1 && vr.ty != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    return ExprTyResult { ok: true, ty: vr.ty };
+  }
+
+  // Const reference.
+  let ni: NamedConstImport = find_named_const(imps.named_consts, name);
+  let want_mod: String = if ni.local != "" { ni.mod_path } else { mod_path };
+  let want_name: String = if ni.local != "" { ni.name } else { name };
+  let cs: ConstSig = find_const(ctx, want_mod, want_name);
+  if cs.name == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if want_mod != mod_path && !cs.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if expected != -1 && cs.ty != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  return ExprTyResult { ok: true, ty: cs.ty };
 }
 
 fn tc_expr_unary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, op: ast.UnaryOp, a: i32, expected: i32) -> ExprTyResult {
