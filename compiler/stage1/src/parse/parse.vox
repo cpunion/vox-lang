@@ -98,6 +98,7 @@ struct ParseTypeResult { p: Parser, ty: ast.TypeName }
 	struct ParseFnResult { p: Parser, f: ast.FuncDecl }
 	struct ParseStructResult { p: Parser, s: ast.StructDecl }
 	struct ParseEnumResult { p: Parser, e: ast.EnumDecl }
+	struct ParseTypeAliasResult { p: Parser, t: ast.TypeAliasDecl }
 	struct ParseProgramResult { p: Parser, prog: ast.Program }
 	struct ParseImportResult { p: Parser, imp: ast.ImportDecl }
 	struct ParseStringResult { p: Parser, s: String }
@@ -1090,6 +1091,20 @@ fn parse_enum_decl(p: Parser, is_pub: bool) -> ParseEnumResult {
 	  return ParseEnumResult { p: ar5.p, e: ast.EnumDecl { file: p.file, is_pub: is_pub, name: r2.name, variants: vars } };
 }
 
+fn parse_type_alias_decl(p: Parser, is_pub: bool) -> ParseTypeAliasResult {
+  // `type Name = Type;` (semicolon optional)
+  let ar0: AdvanceResult = expect(p, lex.TokenKind.KwType);
+  let r1: ParseIdentResult = parse_ident(ar0.p);
+  let ar2: AdvanceResult = expect(r1.p, lex.TokenKind.Eq);
+  let r3: ParseTypeResult = parse_type_name(ar2.p);
+  let mut q: Parser = r3.p;
+  if kind_is(peek_kind(q), lex.TokenKind.Semicolon) {
+    let ar4: AdvanceResult = advance(q);
+    q = ar4.p;
+  }
+  return ParseTypeAliasResult { p: q, t: ast.TypeAliasDecl { file: p.file, is_pub: is_pub, name: r1.name, ty: r3.ty } };
+}
+
 fn parse_params(p: Parser) -> ParseParamsResult {
   let mut q: Parser = p;
   let mut params: Vec[ast.Param] = Vec();
@@ -1118,6 +1133,7 @@ fn parse_params(p: Parser) -> ParseParamsResult {
 	fn parse_program(p: Parser) -> ParseProgramResult {
 	  let mut q: Parser = p;
 	  let mut imports: Vec[ast.ImportDecl] = Vec();
+	  let mut types: Vec[ast.TypeAliasDecl] = Vec();
 	  let mut structs: Vec[ast.StructDecl] = Vec();
 	  let mut enums: Vec[ast.EnumDecl] = Vec();
 	  let mut funcs: Vec[ast.FuncDecl] = Vec();
@@ -1135,7 +1151,11 @@ fn parse_params(p: Parser) -> ParseParamsResult {
 	        is_pub = true;
 	      }
 	      let k: lex.TokenKind = peek_kind(q);
-	      if kind_is(k, lex.TokenKind.KwStruct) {
+	      if kind_is(k, lex.TokenKind.KwType) {
+	        let r: ParseTypeAliasResult = parse_type_alias_decl(q, is_pub);
+	        q = r.p;
+	        types.push(r.t);
+	      } else if kind_is(k, lex.TokenKind.KwStruct) {
 	        let r: ParseStructResult = parse_struct_decl(q, is_pub);
 	        q = r.p;
 	        structs.push(r.s);
@@ -1150,13 +1170,13 @@ fn parse_params(p: Parser) -> ParseParamsResult {
 	      }
 	    }
 	  }
-	  return ParseProgramResult { p: q, prog: ast.Program { imports: imports, structs: structs, enums: enums, funcs: funcs, exprs: q.exprs } };
+	  return ParseProgramResult { p: q, prog: ast.Program { imports: imports, types: types, structs: structs, enums: enums, funcs: funcs, exprs: q.exprs } };
 	}
 
 	pub fn parse_text_with_path(path: String, text: String) -> ParseResult {
 	  let lr: lex.LexResult = lex.lex_text(text);
 	  if !lex_err_none(lr.err) {
-	    return ParseResult { prog: ast.Program { imports: Vec(), structs: Vec(), enums: Vec(), funcs: Vec(), exprs: ast.expr_pool() }, err: ParseError.Lex(lr.err) };
+	    return ParseResult { prog: ast.Program { imports: Vec(), types: Vec(), structs: Vec(), enums: Vec(), funcs: Vec(), exprs: ast.expr_pool() }, err: ParseError.Lex(lr.err) };
 	  }
 	  let p: Parser = Parser { file: path, text: text, toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None, exprs: ast.expr_pool() };
 	  let r: ParseProgramResult = parse_program(p);

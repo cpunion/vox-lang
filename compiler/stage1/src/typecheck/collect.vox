@@ -6,6 +6,196 @@ struct TcCtxResult {
   ctx: Ctx,
 }
 
+struct AliasItem { mod_path: String, decl: ast.TypeAliasDecl }
+
+fn alias_qname(mod_path: String, name: String) -> String {
+  return mod_path.concat("::").concat(name);
+}
+
+fn contains_str_local(vs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < vs.len() {
+    if vs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn contains_i32(vs: Vec[i32], x: i32) -> bool {
+  let mut i: i32 = 0;
+  while i < vs.len() {
+    if vs.get(i) == x { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn find_alias_item(items: Vec[AliasItem], mod_path: String, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < items.len() {
+    let it: AliasItem = items.get(i);
+    if it.mod_path == mod_path && it.decl.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn has_resolved_alias(ctx: Ctx, mod_path: String, name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < ctx.type_aliases.len() {
+    let a: TypeAliasSig = ctx.type_aliases.get(i);
+    if a.mod_path == mod_path && a.name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn set_i32_at(xs0: Vec[i32], idx: i32, val: i32) -> Vec[i32] {
+  let mut xs: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    xs.push(if i == idx { val } else { xs0.get(i) });
+    i = i + 1;
+  }
+  return xs;
+}
+
+fn collect_alias_deps(items: Vec[AliasItem], cur_mod: String, imps: Imports, tn: ast.TypeName) -> Vec[i32] {
+  let mut deps: Vec[i32] = Vec();
+
+  // Visit the current node (only when not generic).
+  if tn.args.len() == 0 {
+    if tn.parts.len() == 1 {
+      let mut mod_path: String = cur_mod;
+      let mut name: String = tn.parts.get(0);
+      let ni: NamedTypeImport = find_named_type(imps.named_types, name);
+      if ni.local != "" {
+        mod_path = ni.mod_path;
+        name = ni.name;
+      }
+      let ai: i32 = find_alias_item(items, mod_path, name);
+      if ai != -1 && !contains_i32(deps, ai) { deps.push(ai); }
+    } else if tn.parts.len() == 2 {
+      let mp: String = find_alias(imps.aliases, tn.parts.get(0));
+      if mp != "" {
+        let ai: i32 = find_alias_item(items, mp, tn.parts.get(1));
+        if ai != -1 && !contains_i32(deps, ai) { deps.push(ai); }
+      }
+    }
+  }
+
+  // Recurse into generic args.
+  let mut i: i32 = 0;
+  while i < tn.args.len() {
+    let ds: Vec[i32] = collect_alias_deps(items, cur_mod, imps, tn.args.get(i));
+    let mut j: i32 = 0;
+    while j < ds.len() {
+      let d: i32 = ds.get(j);
+      if !contains_i32(deps, d) { deps.push(d); }
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+
+  return deps;
+}
+
+struct ResolveAliasResult { ok: bool, err: TcError, ctx: Ctx, states: Vec[i32] }
+
+fn resolve_alias(ctx0: Ctx, w: World, items: Vec[AliasItem], states0: Vec[i32], idx: i32) -> ResolveAliasResult {
+  let st: i32 = states0.get(idx); // 0 pending, 1 resolving, 2 done
+  if st == 2 { return ResolveAliasResult { ok: true, err: TcError.None, ctx: ctx0, states: states0 }; }
+  if st == 1 {
+    let it0: AliasItem = items.get(idx);
+    return ResolveAliasResult { ok: false, err: type_error(it0.decl.file, "type alias cycle: ".concat(alias_qname(it0.mod_path, it0.decl.name))), ctx: ctx0, states: states0 };
+  }
+
+  let mut c: Ctx = ctx0;
+  let mut states: Vec[i32] = set_i32_at(states0, idx, 1);
+  let it: AliasItem = items.get(idx);
+
+  let fm: FindModResult = find_mod(w, it.mod_path);
+  if !fm.found {
+    return ResolveAliasResult { ok: false, err: type_error(it.decl.file, "unknown module for type alias"), ctx: c, states: states };
+  }
+  let m: WorldModule = w.mods.get(fm.idx);
+  let ir: ImportsResult = build_imports(w, it.mod_path, m.prog.imports, it.decl.file);
+  if !ir.ok { return ResolveAliasResult { ok: false, err: ir.err, ctx: c, states: states }; }
+  let imps: Imports = ir.imps;
+
+  // Resolve dependencies (other type aliases referenced from the RHS).
+  let deps: Vec[i32] = collect_alias_deps(items, it.mod_path, imps, it.decl.ty);
+  let mut di: i32 = 0;
+  while di < deps.len() {
+    let dep_idx: i32 = deps.get(di);
+    if dep_idx != idx {
+      let rr: ResolveAliasResult = resolve_alias(c, w, items, states, dep_idx);
+      if !rr.ok { return rr; }
+      c = rr.ctx;
+      states = rr.states;
+    }
+    di = di + 1;
+  }
+
+  // Resolve the alias RHS type.
+  let tr: ResolveTyResult = resolve_type(c, w, it.mod_path, imps, Vec(), it.decl.ty);
+  c = tr.ctx;
+  if !tr.ok {
+    return ResolveAliasResult { ok: false, err: type_error(it.decl.file, "type resolve failed in type alias"), ctx: c, states: states };
+  }
+
+  // Cache the resolved alias for later use sites.
+  if !has_resolved_alias(c, it.mod_path, it.decl.name) {
+    c.type_aliases.push(TypeAliasSig { mod_path: it.mod_path, name: it.decl.name, is_pub: it.decl.is_pub, ty: tr.idx });
+  }
+
+  states = set_i32_at(states, idx, 2);
+  return ResolveAliasResult { ok: true, err: TcError.None, ctx: c, states: states };
+}
+
+fn collect_type_aliases(ctx: Ctx, w: World) -> TcCtxResult {
+  let mut c: Ctx = ctx;
+
+  // Gather all type alias decls across modules (multi-file modules are already merged).
+  let mut items: Vec[AliasItem] = Vec();
+  let mut seen: Vec[String] = Vec();
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: WorldModule = w.mods.get(mi);
+    let mut ti: i32 = 0;
+    while ti < m.prog.types.len() {
+      let td: ast.TypeAliasDecl = m.prog.types.get(ti);
+      if is_reserved_intrinsic_name(td.name) {
+        return TcCtxResult { ok: false, err: type_error(td.file, "reserved name: ".concat(td.name)), ctx: c };
+      }
+      let qn: String = alias_qname(m.path, td.name);
+      if contains_str_local(seen, qn) {
+        return TcCtxResult { ok: false, err: type_error(td.file, "duplicate type alias: ".concat(td.name)), ctx: c };
+      }
+      seen.push(qn);
+      items.push(AliasItem { mod_path: m.path, decl: td });
+      ti = ti + 1;
+    }
+    mi = mi + 1;
+  }
+
+  // Resolve with recursion + cycle detection.
+  let mut states: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < items.len() { states.push(0); i = i + 1; }
+
+  i = 0;
+  while i < items.len() {
+    let rr: ResolveAliasResult = resolve_alias(c, w, items, states, i);
+    if !rr.ok { return TcCtxResult { ok: false, err: rr.err, ctx: rr.ctx }; }
+    c = rr.ctx;
+    states = rr.states;
+    i = i + 1;
+  }
+
+  return TcCtxResult { ok: true, err: TcError.None, ctx: c };
+}
+
 fn collect_structs(ctx: Ctx, w: World) -> TcCtxResult {
   let mut c: Ctx = ctx;
   let mut mi: i32 = 0;

@@ -26,8 +26,9 @@ pub struct NamedFuncImport {
 }
 
 // kind tags (avoid enum comparisons in stage0 subset)
-fn named_type_kind_struct() -> i32 { return 1; }
-fn named_type_kind_enum() -> i32 { return 2; }
+pub fn named_type_kind_struct() -> i32 { return 1; }
+pub fn named_type_kind_enum() -> i32 { return 2; }
+pub fn named_type_kind_alias() -> i32 { return 3; }
 
 pub struct NamedTypeImport {
   pub local: String,
@@ -287,6 +288,19 @@ fn find_decl_pub_enum(w: World, mod_path: String, name: String) -> bool {
   return false;
 }
 
+fn find_decl_pub_type_alias(w: World, mod_path: String, name: String) -> bool {
+  let fm: FindModResult = find_mod(w, mod_path);
+  if !fm.found { return false; }
+  let m: WorldModule = w.mods.get(fm.idx);
+  let mut i: i32 = 0;
+  while i < m.prog.types.len() {
+    let td: ast.TypeAliasDecl = m.prog.types.get(i);
+    if td.name == name { return td.is_pub; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn has_decl_fn_any(w: World, mod_path: String, name: String) -> bool {
   let fm: FindModResult = find_mod(w, mod_path);
   if !fm.found { return false; }
@@ -294,6 +308,18 @@ fn has_decl_fn_any(w: World, mod_path: String, name: String) -> bool {
   let mut i: i32 = 0;
   while i < m.prog.funcs.len() {
     if m.prog.funcs.get(i).name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn has_decl_type_alias_any(w: World, mod_path: String, name: String) -> bool {
+  let fm: FindModResult = find_mod(w, mod_path);
+  if !fm.found { return false; }
+  let m: WorldModule = w.mods.get(fm.idx);
+  let mut i: i32 = 0;
+  while i < m.prog.types.len() {
+    if m.prog.types.get(i).name == name { return true; }
     i = i + 1;
   }
   return false;
@@ -328,6 +354,11 @@ fn local_decl_conflicts(w: World, cur_mod: String, local: String) -> bool {
   if !fm.found { return false; }
   let m: WorldModule = w.mods.get(fm.idx);
   let mut i: i32 = 0;
+  while i < m.prog.types.len() {
+    if m.prog.types.get(i).name == local { return true; }
+    i = i + 1;
+  }
+  i = 0;
   while i < m.prog.funcs.len() {
     if m.prog.funcs.get(i).name == local { return true; }
     i = i + 1;
@@ -378,10 +409,12 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
 
       let target: String = qname(target_mod, nm.name);
       let has_fn: bool = has_decl_fn_any(w, target_mod, nm.name);
+      let has_type_alias: bool = has_decl_type_alias_any(w, target_mod, nm.name);
       let has_struct: bool = has_decl_struct_any(w, target_mod, nm.name);
       let has_enum: bool = has_decl_enum_any(w, target_mod, nm.name);
       let mut found: i32 = 0;
       if has_fn { found = found + 1; }
+      if has_type_alias { found = found + 1; }
       if has_struct { found = found + 1; }
       if has_enum { found = found + 1; }
 
@@ -391,6 +424,9 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
       if has_fn {
         if target_mod != cur_mod && !find_decl_pub_fn(w, target_mod, nm.name) { return err_imps(file, "function is private: ".concat(target)); }
         named_funcs.push(NamedFuncImport { local: local, mod_path: target_mod, name: nm.name });
+      } else if has_type_alias {
+        if target_mod != cur_mod && !find_decl_pub_type_alias(w, target_mod, nm.name) { return err_imps(file, "type is private: ".concat(target)); }
+        named_types.push(NamedTypeImport { local: local, mod_path: target_mod, name: nm.name, kind: named_type_kind_alias() });
       } else if has_struct {
         if target_mod != cur_mod && !find_decl_pub_struct(w, target_mod, nm.name) { return err_imps(file, "type is private: ".concat(target)); }
         named_types.push(NamedTypeImport { local: local, mod_path: target_mod, name: nm.name, kind: named_type_kind_struct() });
