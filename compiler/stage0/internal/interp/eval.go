@@ -611,22 +611,64 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		if err != nil {
 			return unit(), err
 		}
-		if sv.K != VEnum {
-			return unit(), fmt.Errorf("match scrutinee is not enum")
-		}
-		ety := rt.prog.ExprTypes[e.Scrutinee]
-		if ety.K != typecheck.TyEnum {
-			ety = typecheck.Type{K: typecheck.TyEnum, Name: sv.E}
-		}
-		es, ok := rt.prog.EnumSigs[ety.Name]
-		if !ok {
-			return unit(), fmt.Errorf("unknown enum: %s", ety.Name)
+		// Enum metadata is only needed when matching enum variant patterns.
+		var es typecheck.EnumSig
+		hasEnumSig := false
+		if sv.K == VEnum {
+			ety := rt.prog.ExprTypes[e.Scrutinee]
+			if ety.K != typecheck.TyEnum {
+				ety = typecheck.Type{K: typecheck.TyEnum, Name: sv.E}
+			}
+			sig, ok := rt.prog.EnumSigs[ety.Name]
+			if !ok {
+				return unit(), fmt.Errorf("unknown enum: %s", ety.Name)
+			}
+			es = sig
+			hasEnumSig = true
 		}
 		for _, arm := range e.Arms {
 			switch p := arm.Pat.(type) {
 			case *ast.WildPat:
 				return rt.evalExpr(arm.Expr)
+			case *ast.BindPat:
+				// Bind pattern always matches and binds the scrutinee to Name.
+				rt.pushFrame()
+				rt.frame()[p.Name] = cloneValue(sv)
+				v, err := rt.evalExpr(arm.Expr)
+				rt.popFrame()
+				return v, err
+			case *ast.IntPat:
+				if sv.K != VInt {
+					continue
+				}
+				// typechecker guaranteed parseability
+				var n int64
+				for i := 0; i < len(p.Text); i++ {
+					n = n*10 + int64(p.Text[i]-'0')
+				}
+				if sv.I != n {
+					continue
+				}
+				return rt.evalExpr(arm.Expr)
+			case *ast.StrPat:
+				if sv.K != VString {
+					continue
+				}
+				s, err := strconv.Unquote(p.Text)
+				if err != nil {
+					return unit(), fmt.Errorf("invalid string pattern")
+				}
+				if sv.S != s {
+					continue
+				}
+				return rt.evalExpr(arm.Expr)
 			case *ast.VariantPat:
+				if sv.K != VEnum {
+					continue
+				}
+				if !hasEnumSig {
+					return unit(), fmt.Errorf("internal: missing enum sig for match")
+				}
 				tag, ok := es.VariantIndex[p.Variant]
 				if !ok {
 					return unit(), fmt.Errorf("unknown variant: %s", p.Variant)

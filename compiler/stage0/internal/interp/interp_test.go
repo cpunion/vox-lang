@@ -133,6 +133,46 @@ fn main() -> i32 {
 	}
 }
 
+func TestInterpMatchIntPatterns(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+	  let x: i32 = 1;
+	  return match x { 0 => 10, 1 => 20, _ => 30 };
+	}`)
+	if out != "20" {
+		t.Fatalf("expected 20, got %q", out)
+	}
+}
+
+func TestInterpMatchI64Patterns(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+	  let x: i64 = 3000000000;
+	  return match x { 3000000000 => 1, _ => 0 };
+	}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
+func TestInterpMatchStringPatterns(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+	  let s: String = "a";
+	  return match s { "a" => 1, _ => 0 };
+	}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
+func TestInterpMatchBindPattern(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+	  let x: i32 = 41;
+	  return match x { v => v + 1 };
+	}`)
+	if out != "42" {
+		t.Fatalf("expected 42, got %q", out)
+	}
+}
+
 func TestInterpStructFieldOfEnumType(t *testing.T) {
 	out := runMain(t, `enum K { A, B }
 struct S { k: K }

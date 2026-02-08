@@ -18,9 +18,10 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	scrutTy := g.p.ExprTypes[m.Scrutinee]
 	isEnum := scrutTy.K == typecheck.TyEnum
 	isI32 := scrutTy.K == typecheck.TyI32
+	isI64 := scrutTy.K == typecheck.TyI64
 	isStr := scrutTy.K == typecheck.TyString
-	if !isEnum && !isI32 && !isStr {
-		return nil, fmt.Errorf("match scrutinee must be enum/i32/String")
+	if !isEnum && !isI32 && !isI64 && !isStr {
+		return nil, fmt.Errorf("match scrutinee must be enum/i32/i64/String")
 	}
 	var es typecheck.EnumSig
 	var tagTmp *ir.Temp
@@ -68,20 +69,20 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	var arms []armInfo
 	var wildBlk *ir.Block
 
-	for _, a := range m.Arms {
-		info := armInfo{arm: a, blk: g.newBlock(fmt.Sprintf("match_arm_%d", len(g.blocks)))}
-		switch p := a.Pat.(type) {
+		for _, a := range m.Arms {
+			info := armInfo{arm: a, blk: g.newBlock(fmt.Sprintf("match_arm_%d", len(g.blocks)))}
+			switch p := a.Pat.(type) {
 		case *ast.WildPat:
 			wildBlk = info.blk
 		case *ast.BindPat:
 			wildBlk = info.blk
 			info.bindScrut = p.Name
-		case *ast.IntPat:
-			if !isI32 {
-				return nil, fmt.Errorf("int pattern requires i32 scrutinee")
-			}
-			v := parseInt64(p.Text)
-			info.intPat = &v
+			case *ast.IntPat:
+				if !isI32 && !isI64 {
+					return nil, fmt.Errorf("int pattern requires i32/i64 scrutinee")
+				}
+				v := parseInt64(p.Text)
+				info.intPat = &v
 		case *ast.StrPat:
 			if !isStr {
 				return nil, fmt.Errorf("string pattern requires String scrutinee")
@@ -132,16 +133,20 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 				B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: int64(*info.tag)},
 			})
 			g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
-		} else if info.intPat != nil {
-			g.emit(&ir.Cmp{
-				Dst: cmpTmp,
-				Op:  ir.CmpEq,
-				Ty:  ir.Type{K: ir.TI32},
-				A:   scrut,
-				B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: *info.intPat},
-			})
-			g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
-		} else {
+			} else if info.intPat != nil {
+				cmpTy := ir.Type{K: ir.TI32}
+				if isI64 {
+					cmpTy = ir.Type{K: ir.TI64}
+				}
+				g.emit(&ir.Cmp{
+					Dst: cmpTmp,
+					Op:  ir.CmpEq,
+					Ty:  cmpTy,
+					A:   scrut,
+					B:   &ir.ConstInt{Ty: cmpTy, V: *info.intPat},
+				})
+				g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
+			} else {
 			g.emit(&ir.Cmp{
 				Dst: cmpTmp,
 				Op:  ir.CmpEq,

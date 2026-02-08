@@ -769,15 +769,16 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 		return c.setExprType(ex, thenTy)
-	case *ast.MatchExpr:
-		scrutTy := c.checkExpr(e.Scrutinee, Type{K: TyBad})
-		isEnum := scrutTy.K == TyEnum
-		isI32 := scrutTy.K == TyI32
-		isStr := scrutTy.K == TyString
-		if !isEnum && !isI32 && !isStr {
-			c.errorAt(e.S, "match scrutinee must be enum/i32/String (stage0)")
-			return c.setExprType(ex, Type{K: TyBad})
-		}
+		case *ast.MatchExpr:
+			scrutTy := c.checkExpr(e.Scrutinee, Type{K: TyBad})
+			isEnum := scrutTy.K == TyEnum
+			isI32 := scrutTy.K == TyI32
+			isI64 := scrutTy.K == TyI64
+			isStr := scrutTy.K == TyString
+			if !isEnum && !isI32 && !isI64 && !isStr {
+				c.errorAt(e.S, "match scrutinee must be enum/i32/i64/String (stage0)")
+				return c.setExprType(ex, Type{K: TyBad})
+			}
 		var esig EnumSig
 		if isEnum {
 			var ok bool
@@ -803,17 +804,17 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				if p.Name != "" {
 					c.scopeTop()[p.Name] = varInfo{ty: scrutTy, mutable: false}
 				}
-			case *ast.IntPat:
-				if !isI32 {
-					c.errorAt(p.S, "integer pattern only allowed when scrutinee is i32 (stage0)")
-				} else {
-					v, err := strconv.ParseInt(p.Text, 10, 64)
-					if err != nil {
-						c.errorAt(p.S, "invalid integer literal in pattern")
-					} else if v < -2147483648 || v > 2147483647 {
-						c.errorAt(p.S, "integer pattern out of range for i32")
+				case *ast.IntPat:
+					if !isI32 && !isI64 {
+						c.errorAt(p.S, "integer pattern only allowed when scrutinee is i32/i64 (stage0)")
+					} else {
+						v, err := strconv.ParseInt(p.Text, 10, 64)
+						if err != nil {
+							c.errorAt(p.S, "invalid integer literal in pattern")
+						} else if isI32 && (v < -2147483648 || v > 2147483647) {
+							c.errorAt(p.S, "integer pattern out of range for i32")
+						}
 					}
-				}
 			case *ast.StrPat:
 				if !isStr {
 					c.errorAt(p.S, "string pattern only allowed when scrutinee is String (stage0)")
