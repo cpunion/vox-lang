@@ -202,15 +202,40 @@ fn is_enum_unit_value(ctx: Ctx, mod_path: String, imps: Imports, exprs: ast.Expr
 }
 
 fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, op: ast.BinaryOp, l: i32, r: i32, expected: i32) -> ExprTyResult {
-  let lr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, l, -1);
-  if !lr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, r, lr.ty);
-  if !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-
   // bool results
   let is_cmp: bool = match op { ast.BinaryOp.Lt => true, ast.BinaryOp.Le => true, ast.BinaryOp.Gt => true, ast.BinaryOp.Ge => true, _ => false };
   let is_eq: bool = match op { ast.BinaryOp.Eq => true, ast.BinaryOp.Ne => true, _ => false };
   let is_logic: bool = match op { ast.BinaryOp.AndAnd => true, ast.BinaryOp.OrOr => true, _ => false };
+
+  // Use the result expected type as a hint for operand typing when it is an int type.
+  // This matters for cases like `0 - some_i64` where `0` would otherwise default to i32.
+  let mut want_int: i32 = -1;
+  if expected != -1 {
+    let et: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
+    let is_int: bool = match et.kind { ir.TyKind.I32 => true, ir.TyKind.I64 => true, _ => false };
+    if is_int { want_int = expected; }
+  }
+  let l_expected: i32 = if is_logic { ctx.ty_bool } else { want_int };
+  let r_expected0: i32 = if is_logic { ctx.ty_bool } else { want_int };
+
+  let mut lr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, l, l_expected);
+  if !lr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  let mut rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, r, r_expected0);
+  if !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+
+  // If one side is an `i64` and the other is an int literal that defaulted to `i32`,
+  // re-typecheck the literal with an `i64` expected type.
+  if (is_cmp || is_eq || !is_logic) && lr.ty != rr.ty {
+    let l_is_lit: bool = match ast.expr_pool_get(exprs, l) { ast.ExprNode.Int(_s) => true, _ => false };
+    let r_is_lit: bool = match ast.expr_pool_get(exprs, r) { ast.ExprNode.Int(_s) => true, _ => false };
+
+    if l_is_lit && rr.ty == ctx.ty_i64 {
+      lr = tc_expr(ctx, w, mod_path, imps, exprs, l0, l, ctx.ty_i64);
+    } else if r_is_lit && lr.ty == ctx.ty_i64 {
+      rr = tc_expr(ctx, w, mod_path, imps, exprs, l0, r, ctx.ty_i64);
+    }
+    if !lr.ok || !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  }
 
   if is_logic {
     if lr.ty != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
@@ -220,11 +245,13 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
 
   if is_cmp {
     if !is_int_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     return ExprTyResult { ok: true, ty: ctx.ty_bool };
   }
 
   if is_eq {
+    if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
     // v0: primitive equality only (keep Stage1 aligned with Stage0 subset).
     let ok_prim: bool = lr.ty == ctx.ty_bool || lr.ty == ctx.ty_i32 || lr.ty == ctx.ty_i64 || lr.ty == ctx.ty_string;
     if !ok_prim {
@@ -242,6 +269,7 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
 
   // arithmetic
   if !is_int_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   if expected != -1 && expected != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
   return ExprTyResult { ok: true, ty: lr.ty };
 }
