@@ -33,8 +33,12 @@ src/main.vox:3:5: lex error: unexpected char
 
 Stage1 v0 的 typecheck/irgen 错误目前以字符串为主，通常包含文件路径，但可能缺少精确 `line/col`。
 
+在 AST/Span 尚未完整接入之前，**仍然要求输出遵循本章基本格式**；当无法确定精确位置时：
+
+- `line/col` 统一使用 `1:1` 作为兜底
+- `file` 必须尽可能准确（例如函数所属的源文件、import 所在文件）
+
 后续计划（Stage1 诊断升级）：
 
 - AST 节点携带最小 `Span { file, start, end }`
 - typecheck/irgen 错误携带 span，并按本章格式渲染
-

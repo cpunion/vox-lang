@@ -60,12 +60,12 @@ fn ok_aliases(xs: Vec[ImportAlias]) -> ImportAliasesResult {
   return ImportAliasesResult { ok: true, err: TcError.None, aliases: xs };
 }
 
-fn err_aliases(msg: String) -> ImportAliasesResult {
-  return ImportAliasesResult { ok: false, err: TcError.Msg(msg), aliases: Vec() };
+fn err_aliases(file: String, msg: String) -> ImportAliasesResult {
+  return ImportAliasesResult { ok: false, err: import_error(file, msg), aliases: Vec() };
 }
 
 fn ok_path(p: String) -> ResolveImportResult { return ResolveImportResult { ok: true, err: TcError.None, path: p }; }
-fn err_path(msg: String) -> ResolveImportResult { return ResolveImportResult { ok: false, err: TcError.Msg(msg), path: "" }; }
+fn err_path(file: String, msg: String) -> ResolveImportResult { return ResolveImportResult { ok: false, err: import_error(file, msg), path: "" }; }
 
 fn last_path_seg(path: String) -> String {
   let n: i32 = path.len();
@@ -158,7 +158,7 @@ fn resolve_import_path(w: World, file: String, path: String) -> ResolveImportRes
   let has_local: bool = find_mod(w, local).found;
   let has_pkg: bool = find_mod(w, pkg).found;
   if has_local && has_pkg {
-    return err_path("ambiguous import: ".concat(path).concat(" (use pkg: or mod:)"));
+    return err_path(file, "ambiguous import: ".concat(path).concat(" (use pkg: or mod:)"));
   }
   if has_local { return ok_path(local); }
   if has_pkg { return ok_path(pkg); }
@@ -185,7 +185,7 @@ pub fn build_import_aliases(w: World, imps: Vec[ast.ImportDecl], file: String) -
     if imp.names.len() != 0 { i = i + 1; continue; } // named imports don't introduce module aliases
     let alias: String = default_import_alias(imp.path, imp.alias);
     if contains_str(seen, alias) {
-      return err_aliases("duplicate import alias: ".concat(alias));
+      return err_aliases(file, "duplicate import alias: ".concat(alias));
     }
     seen.push(alias);
     let rr: ResolveImportResult = resolve_import_path(w, imp.file, imp.path);
@@ -244,8 +244,8 @@ fn ok_imps(imps: Imports) -> ImportsResult {
   return ImportsResult { ok: true, err: TcError.None, imps: imps };
 }
 
-fn err_imps(msg: String) -> ImportsResult {
-  return ImportsResult { ok: false, err: TcError.Msg(msg), imps: Imports { aliases: Vec(), named_funcs: Vec(), named_types: Vec() } };
+fn err_imps(file: String, msg: String) -> ImportsResult {
+  return ImportsResult { ok: false, err: import_error(file, msg), imps: Imports { aliases: Vec(), named_funcs: Vec(), named_types: Vec() } };
 }
 
 fn find_decl_pub_fn(w: World, mod_path: String, name: String) -> bool {
@@ -364,17 +364,17 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
     if !rr.ok { return ImportsResult { ok: false, err: rr.err, imps: Imports { aliases: Vec(), named_funcs: Vec(), named_types: Vec() } }; }
     let target_mod: String = rr.path;
     let fm: FindModResult = find_mod(w, target_mod);
-    if !fm.found { return err_imps("unknown module import: ".concat(imp.path).concat(" (in ").concat(file).concat(")")); }
+    if !fm.found { return err_imps(file, "unknown module import: ".concat(imp.path)); }
 
     let mut ni: i32 = 0;
     while ni < imp.names.len() {
       let nm: ast.ImportName = imp.names.get(ni);
       let local: String = if nm.alias != "" { nm.alias } else { nm.name };
-      if local == "" { return err_imps("invalid imported name"); }
+      if local == "" { return err_imps(file, "invalid imported name"); }
 
-      if contains_str(seen, local) { return err_imps("duplicate imported name: ".concat(local)); }
-      if contains_alias(aliases, local) { return err_imps("import name conflicts with module alias: ".concat(local)); }
-      if local_decl_conflicts(w, cur_mod, local) { return err_imps("import name conflicts with local definition: ".concat(local)); }
+      if contains_str(seen, local) { return err_imps(file, "duplicate imported name: ".concat(local)); }
+      if contains_alias(aliases, local) { return err_imps(file, "import name conflicts with module alias: ".concat(local)); }
+      if local_decl_conflicts(w, cur_mod, local) { return err_imps(file, "import name conflicts with local definition: ".concat(local)); }
 
       let target: String = qname(target_mod, nm.name);
       let has_fn: bool = has_decl_fn_any(w, target_mod, nm.name);
@@ -385,17 +385,17 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
       if has_struct { found = found + 1; }
       if has_enum { found = found + 1; }
 
-      if found == 0 { return err_imps("unknown imported name: ".concat(target)); }
-      if found > 1 { return err_imps("ambiguous imported name: ".concat(target)); }
+      if found == 0 { return err_imps(file, "unknown imported name: ".concat(target)); }
+      if found > 1 { return err_imps(file, "ambiguous imported name: ".concat(target)); }
 
       if has_fn {
-        if target_mod != cur_mod && !find_decl_pub_fn(w, target_mod, nm.name) { return err_imps("function is private: ".concat(target)); }
+        if target_mod != cur_mod && !find_decl_pub_fn(w, target_mod, nm.name) { return err_imps(file, "function is private: ".concat(target)); }
         named_funcs.push(NamedFuncImport { local: local, mod_path: target_mod, name: nm.name });
       } else if has_struct {
-        if target_mod != cur_mod && !find_decl_pub_struct(w, target_mod, nm.name) { return err_imps("type is private: ".concat(target)); }
+        if target_mod != cur_mod && !find_decl_pub_struct(w, target_mod, nm.name) { return err_imps(file, "type is private: ".concat(target)); }
         named_types.push(NamedTypeImport { local: local, mod_path: target_mod, name: nm.name, kind: named_type_kind_struct() });
       } else {
-        if target_mod != cur_mod && !find_decl_pub_enum(w, target_mod, nm.name) { return err_imps("type is private: ".concat(target)); }
+        if target_mod != cur_mod && !find_decl_pub_enum(w, target_mod, nm.name) { return err_imps(file, "type is private: ".concat(target)); }
         named_types.push(NamedTypeImport { local: local, mod_path: target_mod, name: nm.name, kind: named_type_kind_enum() });
       }
 
