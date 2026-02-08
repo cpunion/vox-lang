@@ -101,6 +101,7 @@ struct ParseTypeResult { p: Parser, ty: ast.TypeName }
 	struct ParseProgramResult { p: Parser, prog: ast.Program }
 	struct ParseImportResult { p: Parser, imp: ast.ImportDecl }
 	struct ParseStringResult { p: Parser, s: String }
+struct ParseImportNameResult { p: Parser, nm: ast.ImportName }
 struct ParseParamsResult { p: Parser, params: Vec[ast.Param] }
 struct ParseFieldResult { p: Parser, f: ast.FieldDecl }
 struct ParseVariantResult { p: Parser, v: ast.EnumVariantDecl }
@@ -281,8 +282,50 @@ fn parse_string_inner(p: Parser) -> ParseStringResult {
   return ParseStringResult { p: ar.p, s: s };
 }
 
+fn parse_import_name(p: Parser) -> ParseImportNameResult {
+  let r0: ParseIdentResult = parse_ident(p);
+  let mut q: Parser = r0.p;
+  let mut alias: String = "";
+  if kind_is(peek_kind(q), lex.TokenKind.KwAs) {
+    let ar1: AdvanceResult = advance(q);
+    let r2: ParseIdentResult = parse_ident(ar1.p);
+    q = r2.p;
+    alias = r2.name;
+  }
+  return ParseImportNameResult { p: q, nm: ast.ImportName { name: r0.name, alias: alias } };
+}
+
 fn parse_import_decl(p: Parser) -> ParseImportResult {
   let ar1: AdvanceResult = expect(p, lex.TokenKind.KwImport);
+
+  // Named imports: `import { a, b as c } from "path"`
+  if kind_is(peek_kind(ar1.p), lex.TokenKind.LBrace) {
+    let ar2: AdvanceResult = advance(ar1.p);
+    let mut q: Parser = ar2.p;
+    let mut names: Vec[ast.ImportName] = Vec();
+    if !kind_is(peek_kind(q), lex.TokenKind.RBrace) {
+      while !q.has_err {
+        let nr: ParseImportNameResult = parse_import_name(q);
+        q = nr.p;
+        names.push(nr.nm);
+        if kind_is(peek_kind(q), lex.TokenKind.Comma) {
+          let ar3: AdvanceResult = advance(q);
+          q = ar3.p;
+          if kind_is(peek_kind(q), lex.TokenKind.RBrace) {
+            break;
+          }
+          continue;
+        }
+        break;
+      }
+    }
+    let ar4: AdvanceResult = expect(q, lex.TokenKind.RBrace);
+    let ar5: AdvanceResult = expect(ar4.p, lex.TokenKind.KwFrom);
+    let r6: ParseStringResult = parse_string_inner(ar5.p);
+    return ParseImportResult { p: r6.p, imp: ast.ImportDecl { file: p.file, path: r6.s, alias: "", names: names } };
+  }
+
+  // Module import: `import "path" as alias`
   let r2: ParseStringResult = parse_string_inner(ar1.p);
   let mut q: Parser = r2.p;
   let path: String = r2.s;
@@ -293,7 +336,7 @@ fn parse_import_decl(p: Parser) -> ParseImportResult {
     q = r4.p;
     alias = r4.name;
   }
-  return ParseImportResult { p: q, imp: ast.ImportDecl { file: p.file, path: path, alias: alias } };
+  return ParseImportResult { p: q, imp: ast.ImportDecl { file: p.file, path: path, alias: alias, names: Vec() } };
 }
 
 fn parse_braced_expr(p: Parser) -> ParseBracedExprResult {
