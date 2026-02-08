@@ -69,6 +69,13 @@ func cloneExpr(e ast.Expr) ast.Expr {
 		return cp
 	case *ast.IfExpr:
 		return &ast.IfExpr{Cond: cloneExpr(x.Cond), Then: cloneExpr(x.Then), Else: cloneExpr(x.Else), S: x.S}
+	case *ast.BlockExpr:
+		cp := &ast.BlockExpr{S: x.S}
+		for _, st := range x.Stmts {
+			cp.Stmts = append(cp.Stmts, cloneStmt(st))
+		}
+		cp.Tail = cloneExpr(x.Tail)
+		return cp
 	default:
 		return x
 	}

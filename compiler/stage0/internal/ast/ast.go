@@ -285,7 +285,7 @@ func (e *MatchExpr) Span() source.Span { return e.S }
 //
 //	if cond { thenExpr } else { elseExpr }
 //
-// Stage0 minimal: branch bodies are single expressions (not statement blocks).
+// Branch bodies are expressions; they may be block expressions.
 type IfExpr struct {
 	Cond Expr
 	Then Expr
@@ -295,6 +295,20 @@ type IfExpr struct {
 
 func (*IfExpr) exprNode()           {}
 func (e *IfExpr) Span() source.Span { return e.S }
+
+// BlockExpr is an expression-form block:
+//
+//	{ stmt*; tailExpr }
+//
+// The tail expression is optional; when omitted the block's value is unit.
+type BlockExpr struct {
+	Stmts []Stmt
+	Tail  Expr // optional
+	S     source.Span
+}
+
+func (*BlockExpr) exprNode()           {}
+func (e *BlockExpr) Span() source.Span { return e.S }
 
 type StructLitExpr struct {
 	TypeParts []string

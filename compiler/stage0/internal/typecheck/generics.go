@@ -277,6 +277,11 @@ func substAstTypesInExpr(ex ast.Expr, subs map[string]Type) {
 		substAstTypesInExpr(e.Cond, subs)
 		substAstTypesInExpr(e.Then, subs)
 		substAstTypesInExpr(e.Else, subs)
+	case *ast.BlockExpr:
+		for _, st := range e.Stmts {
+			substAstTypesInStmt(st, subs)
+		}
+		substAstTypesInExpr(e.Tail, subs)
 	}
 }
 

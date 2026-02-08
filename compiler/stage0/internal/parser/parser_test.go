@@ -173,6 +173,46 @@ fn main() -> i32 {
 	}
 }
 
+func TestParseIfExprWithBlockBranches(t *testing.T) {
+	f := source.NewFile("test.vox", `fn main() -> i32 {
+  let x: i32 = if true {
+    let a: i32 = 40;
+    a + 2
+  } else {
+    0
+  };
+  return x;
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Funcs) != 1 {
+		t.Fatalf("expected 1 func, got %d", len(prog.Funcs))
+	}
+}
+
+func TestParseMatchArmWithBlockExpr(t *testing.T) {
+	f := source.NewFile("test.vox", `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = E.A(1);
+  return match x {
+    E.A(v) => {
+      let y: i32 = v + 1;
+      y
+    },
+    E.None => 0,
+  };
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Funcs) != 1 {
+		t.Fatalf("expected 1 func, got %d", len(prog.Funcs))
+	}
+}
+
 func TestParsePubDecls(t *testing.T) {
 	f := source.NewFile("test.vox", `pub struct S { pub x: i32, y: i32 }
 pub enum E { A(i32), None }

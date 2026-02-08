@@ -243,6 +243,21 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			return rt.evalExpr(e.Then)
 		}
 		return rt.evalExpr(e.Else)
+	case *ast.BlockExpr:
+		rt.pushFrame()
+		for _, st := range e.Stmts {
+			if _, err := rt.evalStmt(st); err != nil {
+				rt.popFrame()
+				return unit(), err
+			}
+		}
+		if e.Tail == nil {
+			rt.popFrame()
+			return unit(), nil
+		}
+		v, err := rt.evalExpr(e.Tail)
+		rt.popFrame()
+		return v, err
 	case *ast.CallExpr:
 		if vc, ok := rt.prog.VecCalls[e]; ok {
 			switch vc.Kind {

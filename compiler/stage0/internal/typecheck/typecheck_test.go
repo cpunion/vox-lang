@@ -190,6 +190,18 @@ func TestIfExprTypechecks(t *testing.T) {
 }`,
 		},
 		{
+			name: "ok_block_branches",
+			src: `fn main() -> i32 {
+  let x: i32 = if true {
+    let a: i32 = 40;
+    a + 2
+  } else {
+    0
+  };
+  return x;
+}`,
+		},
+		{
 			name:    "mismatch",
 			wantErr: "if branch type mismatch",
 			src: `fn main() -> i32 {
@@ -323,6 +335,32 @@ fn main() -> i32 {
   return match y {
     E.A(v) => v + 1,
     E.B(s) => 0,
+    E.None => 0,
+  };
+}`)
+	stdFiles, err := stdlib.Files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, pdiags := parser.ParseFiles(append(stdFiles, f))
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestMatchArmBlockExprTypechecks(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = E.A(1);
+  return match x {
+    E.A(v) => {
+      let y: i32 = v + 1;
+      y
+    },
     E.None => 0,
   };
 }`)

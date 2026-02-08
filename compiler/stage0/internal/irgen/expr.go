@@ -5,6 +5,7 @@ import (
 
 	"voxlang/internal/ast"
 	"voxlang/internal/ir"
+	"voxlang/internal/names"
 	"voxlang/internal/typecheck"
 )
 
@@ -504,6 +505,8 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 		}
 		g.emit(&ir.StructInit{Dst: tmp, Ty: irty, Fields: fields})
 		return tmp, nil
+	case *ast.BlockExpr:
+		return g.genBlockExpr(e)
 	case *ast.IfExpr:
 		return g.genIfExpr(e)
 	case *ast.MatchExpr:
@@ -511,4 +514,39 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 	default:
 		return nil, fmt.Errorf("unsupported expr in IR gen")
 	}
+}
+
+func (g *gen) curFnRetIRType() (ir.Type, error) {
+	if g.curFn == nil || g.curFn.Span.File == nil {
+		return ir.Type{K: ir.TUnit}, nil
+	}
+	qname := names.QualifyFunc(g.curFn.Span.File.Name, g.curFn.Name)
+	sig := g.funcSigs[qname]
+	return g.irTypeFromChecked(sig.Ret)
+}
+
+func (g *gen) genBlockExpr(b *ast.BlockExpr) (ir.Value, error) {
+	g.pushScope()
+	retTy, err := g.curFnRetIRType()
+	if err != nil {
+		g.popScope()
+		return nil, err
+	}
+	for _, st := range b.Stmts {
+		if err := g.genStmt(st, retTy); err != nil {
+			g.popScope()
+			return nil, err
+		}
+		if g.curBlock.Term != nil {
+			g.popScope()
+			return nil, fmt.Errorf("terminator in expression block is not supported (stage0)")
+		}
+	}
+	if b.Tail == nil {
+		g.popScope()
+		return nil, nil
+	}
+	v, err := g.genExpr(b.Tail)
+	g.popScope()
+	return v, err
 }

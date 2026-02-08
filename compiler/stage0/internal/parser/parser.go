@@ -567,11 +567,53 @@ func (p *Parser) parsePrefixWith(allowStructLit bool) ast.Expr {
 	case lexer.TokenIf:
 		p.advance()
 		return p.parsePostfix(p.parseIfExpr(tok), allowStructLit)
+	case lexer.TokenLBrace:
+		// Block expression: `{ stmt*; expr }` in expression position.
+		p.advance()
+		return p.parsePostfix(p.parseBlockExpr(tok), allowStructLit)
 	default:
 		p.errorHere("expected expression")
 		p.advance()
 		return &ast.IntLit{Text: "0", S: tok.Span}
 	}
+}
+
+func (p *Parser) parseBlockExpr(lbrace lexer.Token) ast.Expr {
+	stmts := []ast.Stmt{}
+	var tail ast.Expr
+
+	for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
+		// Statement forms inside expression blocks.
+		switch p.peek().Kind {
+		case lexer.TokenLet, lexer.TokenIf, lexer.TokenWhile, lexer.TokenLBrace:
+			st := p.parseStmt()
+			if st != nil {
+				stmts = append(stmts, st)
+			} else {
+				p.advance()
+			}
+			continue
+		case lexer.TokenReturn, lexer.TokenBreak, lexer.TokenContinue:
+			// These are legal statements generally, but block expressions are used as subexpressions.
+			// Keep stage0 IR gen simple by rejecting top-level terminators here.
+			p.errorHere("`return`/`break`/`continue` are not allowed in expression blocks (stage0)")
+			p.advance()
+			continue
+		}
+
+		// Expression: either an expr-stmt (`expr;`) or the tail (`expr` before `}`).
+		ex := p.parseExprWith(0, true)
+		if p.match(lexer.TokenSemicolon) {
+			semi := p.prev()
+			stmts = append(stmts, &ast.ExprStmt{Expr: ex, S: joinSpan(ex.Span(), semi.Span)})
+			continue
+		}
+		tail = ex
+		break
+	}
+
+	rb := p.expect(lexer.TokenRBrace, "expected `}` to end block expression")
+	return &ast.BlockExpr{Stmts: stmts, Tail: tail, S: joinSpan(lbrace.Span, rb.Span)}
 }
 
 func (p *Parser) parseMatchExpr(matchTok lexer.Token) ast.Expr {
@@ -633,9 +675,9 @@ func (p *Parser) parseBracedExpr(errMsg string) (ast.Expr, source.Span) {
 		rb := p.advance()
 		return &ast.IntLit{Text: "0", S: joinSpan(lb.Span, rb.Span)}, joinSpan(lb.Span, rb.Span)
 	}
-	ex := p.parseExprWith(0, true)
-	rb := p.expect(lexer.TokenRBrace, "expected `}`")
-	return ex, joinSpan(lb.Span, rb.Span)
+	// Reuse block-expression parser for braced expression bodies.
+	ex := p.parseBlockExpr(lb)
+	return ex, ex.Span()
 }
 
 func (p *Parser) parsePattern() ast.Pattern {

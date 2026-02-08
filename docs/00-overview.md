@@ -54,6 +54,32 @@ Vox 允许在编译期解释执行一段受限的程序，目标包括：
 
 细节见 `docs/04-generics-comptime.md` 与 `docs/05-comptime-detailed.md`。
 
+### 4) 表达式块（Block Expression）
+
+在表达式位置允许使用“块表达式”，用于在一个表达式里写多条语句并以最后一个表达式作为结果：
+
+```vox
+let x: i32 = {
+  let a: i32 = 40;
+  a + 2
+};
+
+let y: i32 = if cond {
+  let t: i32 = 1;
+  t + 1
+} else {
+  0
+};
+
+let z: i32 = match v {
+  E.A(n) => {
+    let m: i32 = n + 1;
+    m
+  },
+  E.None => 0,
+};
+```
+
 ## 文档结构
 
 规范拆分按编号组织，参考 `docs/README.md`。

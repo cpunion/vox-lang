@@ -179,6 +179,34 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		return c.setExprType(ex, Type{K: TyString})
 	case *ast.BoolLit:
 		return c.setExprType(ex, Type{K: TyBool})
+	case *ast.BlockExpr:
+		// Block expression introduces a new scope. Tail expression (if any) is the value.
+		//
+		// Stage0 restriction: disallow top-level terminators inside expression blocks to
+		// keep IR generation simple (otherwise later expression code could emit after a Ret).
+		c.pushScope()
+		retTy := c.curFnRetType()
+		for _, st := range e.Stmts {
+			switch st.(type) {
+			case *ast.ReturnStmt:
+				c.errorAt(st.Span(), "return is not allowed in expression blocks (stage0)")
+			}
+			c.checkStmt(st, retTy)
+		}
+		var out Type
+		if e.Tail == nil {
+			out = Type{K: TyUnit}
+		} else {
+			out = c.checkExpr(e.Tail, expected)
+			if out.K == TyUntypedInt && expected.K == TyBad {
+				out = Type{K: TyI64}
+			}
+		}
+		if expected.K != TyBad && out.K != TyBad && !sameType(expected, out) {
+			c.errorAt(e.S, fmt.Sprintf("type mismatch: expected %s, got %s", expected.String(), out.String()))
+		}
+		c.popScope()
+		return c.setExprType(ex, out)
 	case *ast.IdentExpr:
 		if vi, ok := c.lookupVar(e.Name); ok {
 			return c.setExprType(ex, vi.ty)
@@ -798,6 +826,17 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		c.errorAt(ex.Span(), "unsupported expression")
 		return c.setExprType(ex, Type{K: TyBad})
 	}
+}
+
+func (c *checker) curFnRetType() Type {
+	if c.curFn == nil || c.curFn.Span.File == nil {
+		return Type{K: TyBad}
+	}
+	qname := names.QualifyFunc(c.curFn.Span.File.Name, c.curFn.Name)
+	if sig, ok := c.funcSigs[qname]; ok {
+		return sig.Ret
+	}
+	return Type{K: TyBad}
 }
 
 func rootIdentName(ex ast.Expr) (string, bool) {
