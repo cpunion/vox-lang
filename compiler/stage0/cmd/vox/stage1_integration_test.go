@@ -269,3 +269,40 @@ edition = "2026"
 		t.Fatalf("expected stage1 build-pkg to fail with non-zero exit code")
 	}
 }
+
+func TestStage1BuildPkgIsQuietOnSuccess(t *testing.T) {
+	// Build stage1 compiler (vox_stage1) using stage0.
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1Bin, err := compile(stage1Dir)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	// Create a tiny package that successfully builds; stage1 CLI should not
+	// print a trailing "0" (driver return value) on success.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("fn main() -> i32 { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage1 build-pkg failed: %v\n%s", err, string(b))
+	}
+	if got := strings.TrimSpace(string(b)); got != "" {
+		t.Fatalf("expected no output on success, got:\n%s", got)
+	}
+}
