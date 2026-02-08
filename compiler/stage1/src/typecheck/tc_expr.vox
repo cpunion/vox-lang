@@ -11,7 +11,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
 
   let r: ExprTyResult = match n {
-    ast.ExprNode.Int(_) => tc_expr_int(ctx, expected),
+    ast.ExprNode.Int(text) => tc_expr_int(ctx, ast.expr_pool_span(exprs, id), text, expected),
     ast.ExprNode.Str(_) => tc_expr_str(ctx, expected),
     ast.ExprNode.Bool(_) => tc_expr_bool(ctx, expected),
     ast.ExprNode.Ident(name) => tc_expr_ident(ctx, mod_path, imps, l0, name, expected),
@@ -20,6 +20,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
 
     ast.ExprNode.If(c, t, e) => tc_expr_if(ctx, w, mod_path, imps, exprs, l0, c, t, e, expected),
     ast.ExprNode.Unary(op, a) => tc_expr_unary(ctx, w, mod_path, imps, exprs, l0, op, a, expected),
+    ast.ExprNode.As(a, tn) => tc_expr_as(ctx, w, mod_path, imps, exprs, l0, a, tn, expected),
     ast.ExprNode.Binary(op, l, r) => tc_expr_binary(ctx, w, mod_path, imps, exprs, l0, op, l, r, expected),
 
     ast.ExprNode.Member(recv, name) => tc_expr_member(ctx, w, mod_path, imps, exprs, l0, recv, name, expected),
@@ -33,6 +34,27 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
   // If a helper didn't attach a reason, fall back to a generic error at the expr span.
   let sp: ast.Span = ast.expr_pool_span(exprs, id);
   return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "typecheck failed") };
+}
+
+fn tc_expr_as(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, a: i32, tn: ast.TypeName, expected: i32) -> ExprTyResult {
+  let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, -1);
+  if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+  let tr: ResolveTyResult = resolve_type(ctx, w, mod_path, imps, Vec(), tn);
+  let c2: Ctx = tr.ctx;
+  if !tr.ok { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
+
+  let from_ty: i32 = ar.ty;
+  let to_ty: i32 = tr.idx;
+  let ok_from: bool = from_ty == c2.ty_i32 || from_ty == c2.ty_i64;
+  let ok_to: bool = to_ty == c2.ty_i32 || to_ty == c2.ty_i64;
+  if !ok_from || !ok_to { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
+
+  let ok_cast: bool = from_ty == to_ty || (from_ty == c2.ty_i32 && to_ty == c2.ty_i64) || (from_ty == c2.ty_i64 && to_ty == c2.ty_i32);
+  if !ok_cast { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
+
+  if expected != -1 && expected != to_ty { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: to_ty, err: TcError.None };
 }
 
 fn tc_expr_block(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, b: ast.ExprBlock, expected: i32) -> ExprTyResult {
@@ -88,11 +110,29 @@ fn tc_expr_dot_ident(ctx: Ctx, mod_path: String, name: String, expected: i32) ->
   return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
 }
 
-fn tc_expr_int(ctx: Ctx, expected: i32) -> ExprTyResult {
-  if expected == -1 { return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None }; }
-  if expected == ctx.ty_i32 { return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None }; }
-  if expected == ctx.ty_i64 { return ExprTyResult { ok: true, ty: ctx.ty_i64, err: TcError.None }; }
-  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+fn tc_expr_int(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyResult {
+  // Infer integer literal type:
+  // - if expected is i32/i64, constrain to that type with range check
+  // - otherwise, pick i32 if it fits, else i64 if it fits.
+  if expected == ctx.ty_i32 {
+    let pr: ParseI32DecResult = parse_i32_dec(text);
+    if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i32 literal out of range") }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
+  }
+  if expected == ctx.ty_i64 {
+    let pr2: ParseI64DecResult = parse_i64_dec(text);
+    if !pr2.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i64 literal out of range") }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_i64, err: TcError.None };
+  }
+  if expected != -1 {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal requires expected i32 or i64") };
+  }
+
+  let pr3: ParseI32DecResult = parse_i32_dec(text);
+  if pr3.ok { return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None }; }
+  let pr4: ParseI64DecResult = parse_i64_dec(text);
+  if pr4.ok { return ExprTyResult { ok: true, ty: ctx.ty_i64, err: TcError.None }; }
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal out of range") };
 }
 
 fn tc_expr_str(ctx: Ctx, expected: i32) -> ExprTyResult {

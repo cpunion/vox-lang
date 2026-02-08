@@ -20,27 +20,38 @@ pub fn parse_error_to_string(e: ParseError) -> String {
 
 struct LineCol { line: i32, col: i32 }
 
-fn pos_to_line_col(text: String, at0: i32) -> LineCol {
+fn build_line_starts(text: String) -> Vec[i32] {
+  // line_starts[i] is the byte offset of the first character of line (i+1).
+  // Always contains 0 for line 1.
+  let mut out: Vec[i32] = Vec();
+  out.push(0);
+  let mut i: i32 = 0;
+  while i < text.len() {
+    if text.byte_at(i) == 10 { out.push(i + 1); } // '\n'
+    i = i + 1;
+  }
+  return out;
+}
+
+fn pos_to_line_col(text: String, line_starts: Vec[i32], at0: i32) -> LineCol {
   let mut at: i32 = at0;
   if at < 0 { at = 0; }
   if at > text.len() { at = text.len(); }
-  let mut line: i32 = 1;
-  let mut col: i32 = 1;
-  let mut i: i32 = 0;
-  while i < at {
-    if text.byte_at(i) == 10 { // '\n'
-      line = line + 1;
-      col = 1;
-    } else {
-      col = col + 1;
-    }
-    i = i + 1;
+
+  // Binary search for the last line start <= at.
+  let mut lo: i32 = 0;
+  let mut hi: i32 = line_starts.len();
+  while lo + 1 < hi {
+    let mid: i32 = (lo + hi) / 2;
+    if line_starts.get(mid) <= at { lo = mid; } else { hi = mid; }
   }
+  let line: i32 = lo + 1;
+  let col: i32 = (at - line_starts.get(lo)) + 1;
   return LineCol { line: line, col: col };
 }
 
 fn span_at(p: Parser, at: i32) -> ast.Span {
-  let lc: LineCol = pos_to_line_col(p.text, at);
+  let lc: LineCol = pos_to_line_col(p.text, p.line_starts, at);
   return ast.Span { file: p.file, line: lc.line, col: lc.col };
 }
 
@@ -57,7 +68,7 @@ pub fn parse_error_to_string_with_source(file: String, text: String, e: ParseErr
 }
 
 fn format_unexpected_token(file: String, text: String, exp: lex.TokenKind, got: lex.TokenKind, at: i32) -> String {
-  let lc: LineCol = pos_to_line_col(text, at);
+  let lc: LineCol = pos_to_line_col(text, build_line_starts(text), at);
   return file.concat(":").concat(lc.line.to_string()).concat(":").concat(lc.col.to_string())
     .concat(": parse error: unexpected token: expected ").concat(lex.token_kind_name(exp))
     .concat(", got ").concat(lex.token_kind_name(got));
@@ -72,13 +83,13 @@ fn format_lex_error(file: String, text: String, le: lex.LexError) -> String {
 }
 
 fn format_lex_unexpected_char(file: String, text: String, at: i32) -> String {
-  let lc: LineCol = pos_to_line_col(text, at);
+  let lc: LineCol = pos_to_line_col(text, build_line_starts(text), at);
   return file.concat(":").concat(lc.line.to_string()).concat(":").concat(lc.col.to_string())
     .concat(": lex error: unexpected char");
 }
 
 fn format_lex_unterminated_string(file: String, text: String, at: i32) -> String {
-  let lc: LineCol = pos_to_line_col(text, at);
+  let lc: LineCol = pos_to_line_col(text, build_line_starts(text), at);
   return file.concat(":").concat(lc.line.to_string()).concat(":").concat(lc.col.to_string())
     .concat(": lex error: unterminated string");
 }
@@ -91,6 +102,7 @@ pub struct ParseResult {
 struct Parser {
   file: String,
   text: String,
+  line_starts: Vec[i32],
   toks: Vec[lex.Token],
   pos: i32,
   has_err: bool,
@@ -598,6 +610,22 @@ fn parse_if_expr(p: Parser) -> ParseExprResult {
 		      let r3: ParseExprResult = add_expr(r2.p, sp0, ast.ExprNode.Member(cur, r2.name));
 	      q = r3.p;
 	      cur = r3.id;
+	      continue;
+	    }
+	    if kind_is(peek_kind(q), lex.TokenKind.KwAs) {
+	      if pending_targs.len() != 0 {
+	        let mut qq: Parser = q;
+	        let at: i32 = peek(q).start;
+	        qq.has_err = true;
+	        qq.err = ParseError.UnexpectedToken(lex.TokenKind.LParen, lex.TokenKind.KwAs, at);
+	        return ParseExprResult { p: qq, id: cur };
+	      }
+	      let sp0: ast.Span = span_expr(q.exprs, cur);
+	      let ar1: AdvanceResult = advance(q);
+	      let tr: ParseTypeResult = parse_type_name(ar1.p);
+	      let r2: ParseExprResult = add_expr(tr.p, sp0, ast.ExprNode.As(cur, tr.ty));
+	      q = r2.p;
+	      cur = r2.id;
 	      continue;
 	    }
 	    if kind_is(peek_kind(q), lex.TokenKind.LBracket) {
@@ -1314,7 +1342,7 @@ fn parse_params(p: Parser) -> ParseParamsResult {
 	  if !lex_err_none(lr.err) {
 	    return ParseResult { prog: ast.Program { imports: Vec(), types: Vec(), consts: Vec(), structs: Vec(), enums: Vec(), funcs: Vec(), exprs: ast.expr_pool() }, err: ParseError.Lex(lr.err) };
 	  }
-	  let p: Parser = Parser { file: path, text: text, toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None, exprs: ast.expr_pool() };
+	  let p: Parser = Parser { file: path, text: text, line_starts: build_line_starts(text), toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None, exprs: ast.expr_pool() };
 	  let r: ParseProgramResult = parse_program(p);
 	  return ParseResult { prog: r.prog, err: r.p.err };
 	}
