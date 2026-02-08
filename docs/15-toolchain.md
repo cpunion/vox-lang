@@ -57,3 +57,23 @@ stage0 的 `vox build` 会在包根目录的 `target/debug/` 下产出：
 - `<pkg>.ir`：IR v0 文本（见 `docs/19-ir-spec.md`）
 - `<pkg>.c`：后端生成的 C（阶段性后端）
 - `<pkg>`：可执行文件
+
+## Stage1 编译器 CLI（自举目标）
+
+Stage1 编译器是用 Vox 写的编译器（位于 `compiler/stage1`），其二进制通常由 Stage0 产出：
+
+- `compiler/stage1/target/debug/vox_stage1`
+
+当前 Stage1 CLI（以代码为准，见 `compiler/stage1/src/main.vox`）：
+
+```text
+vox_stage1 emit-c   <out.c>   <src...>
+vox_stage1 build    <out.bin> <src...>
+vox_stage1 build-pkg <out.bin>   # 从当前目录 ./src 自动发现源码
+vox_stage1 test-pkg  <out.bin>   # 从 ./src 与 ./tests 发现并运行 test_*
+```
+
+说明（当前实现）：
+
+- `build-pkg/test-pkg` 会读取当前目录的 `vox.toml`，加载其中声明的 path 依赖（依赖只加载其 `src/**`，不加载 tests）。
+- Stage1 会按可执行文件路径推导 Stage1 根目录，并从其 `src/std/**` 注入标准库源码（用于自举期最小 std）。

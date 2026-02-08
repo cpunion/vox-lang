@@ -34,6 +34,39 @@
 - stage1 CLI（最小）：`compiler/stage1/src/main.vox` 提供 `emit-c/build/build-pkg`，使用 `std/fs` 与 `std/process` 完成读写与调用系统 `cc`（用于自举前的工具链验证）。CLI 会自动注入 stage1 自带的 `src/std/**` 作为被编译包的本地 `src/std/**`；`build-pkg` 还会读取当前目录 `vox.toml` 的 path 依赖并加载其 `src/**`。
 - stage1 CLI（测试）：`compiler/stage1/src/main.vox` 还提供 `test-pkg`，发现并运行 `src/**/*_test.vox` 与 `tests/**/*.vox` 中的 `test_*`（行为对齐 stage0 的 `vox test`：单一测试二进制 + 每个测试单独进程运行）。
 
+## 与自举相关的实现细节（当前实现）
+
+### 1) 字符串转义与生成 C
+
+- Stage1 lexer 仅负责识别 token 边界；parser 会对字符串字面量做最小的反转义（至少支持 `\\ \" \n \r \t`）。
+- codegen 输出到 C 字符串字面量时，会对内容做 C 级别转义（例如把换行字符输出为 `\\n`），避免生成的 `.c` 文件被“字面量换行”破坏。
+
+### 2) enum 相等（Stage0/Stage1 v0 约束）
+
+为保持范围可控，Stage0/Stage1 对 `==/!=` 的支持与 lowering 有明确限制（详见 `docs/14-syntax-details.md`）：
+
+- `bool/i32/i64/String`：正常相等比较
+- `enum`：仅允许与 unit variant（无 payload）比较；该比较会降低为 `EnumTag(x) == tag(Variant)`
+
+### 3) TyPool 在 lowering 期间的“可变性”
+
+Stage1 的类型池（`TyPool`）在 typecheck 阶段会 intern 已知类型，但 lowering 期间仍可能因为泛型实例化/容器类型构造等引入新类型。
+
+当前实现策略：
+
+- IRGen 生成函数体时允许对 `Ctx.pool` 追加 intern 的类型
+- `ir.Program.pool` 在 IRGen 完成后与最终的 `Ctx.pool` 同步，保证 codegen 阶段访问的类型池完整
+
+### 4) `Vec[T]` 的值语义与运行时实现（临时方案）
+
+Stage0/Stage1 v0 的 `Vec[T]` 在 C 后端中被表示为一个 by-value 的小结构体（含 `data/len/cap/elem_size`）。由于语言子集里大量值按位复制，`Vec` 也会被浅拷贝。
+
+为避免浅拷贝 + `realloc/free` 触发悬垂指针/双重释放，本阶段采用了一个自举期的折中：
+
+- `Vec` 扩容使用 `malloc + memcpy`，旧 buffer 不释放（故意泄漏）
+
+这保证“复制后的 header”仍然指向有效 buffer，从而让 stage1 自举稳定。后续可用 move-only 语义、共享 buffer（RC）或真正的所有权/借用模型替换。
+
 下一步（按依赖顺序）：
 
 1. 工具链：把 Stage1 产出的 C 源码接入实际编译/链接，产出可执行文件（先 `main` 模块 + 最小 std）。
