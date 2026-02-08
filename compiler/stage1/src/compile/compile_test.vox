@@ -59,3 +59,32 @@ fn test_compile_external_tests_cannot_call_private() -> () {
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
   t.assert(!r.ok);
 }
+
+fn test_compile_rejects_user_call_to_reserved_intrinsic() -> () {
+  // `__*` intrinsics are reserved for std/** modules only.
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile { path: "src/main.vox", text: "fn main() -> i32 { __read_file(\"x\"); return 0; }" });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+}
+
+fn test_compile_rejects_user_defines_reserved_name() -> () {
+  // Users must not define `__*` names.
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile { path: "src/main.vox", text: "fn __x() -> i32 { return 0; }\nfn main() -> i32 { return __x(); }" });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+}
+
+fn test_codegen_no_symbol_collision_between_pkg_and_plain_names() -> () {
+  // Ensure C backend name mangling stays collision-free:
+  // local: dep__one (unqualified)
+  // dep package: dep::one
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile { path: "src/main.vox", text: "import \"dep\" as dep\nfn dep__one() -> i32 { return 1; }\nfn main() -> i32 { return dep__one() + dep.one(); }" });
+  fs.push(ld.SourceFile { path: "dep/src/dep.vox", text: "pub fn one() -> i32 { return 2; }" });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(r.ok);
+  t.assert(contains(r.c, cg.c_fn_name("dep__one")));
+  t.assert(contains(r.c, cg.c_fn_name("dep::one")));
+}
