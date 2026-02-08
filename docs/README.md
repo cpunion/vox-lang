@@ -23,6 +23,7 @@ Documents:
 - `docs/15-toolchain.md`
 - `docs/17-ffi-interop.md`
 - `docs/16-platform-support.md`
+- `docs/18-diagnostics.md`
 - `docs/11-package-management.md`
 - `docs/12-testing-framework.md`
 - `docs/13-standard-library.md`
