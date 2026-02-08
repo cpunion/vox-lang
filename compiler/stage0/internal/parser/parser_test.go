@@ -211,6 +211,18 @@ fn main() -> i32 {
 	}
 }
 
+func TestParseBlockExprTailIfExpr(t *testing.T) {
+	// `{ if ... else ... }` should be a valid block expression tail without extra parentheses.
+	f := source.NewFile("test.vox", `fn main() -> i32 {
+  let x: i32 = { if true { 1 } else { 2 } };
+  return x;
+}`)
+	_, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+}
+
 func TestParseEnumCtorAndMatchShorthand(t *testing.T) {
 	f := source.NewFile("test.vox", `enum E { A(i32), None }
 fn main() -> i32 {

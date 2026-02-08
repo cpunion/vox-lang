@@ -696,8 +696,15 @@ func (p *Parser) parseBlockExpr(lbrace lexer.Token) ast.Expr {
 
 	for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
 		// Statement forms inside expression blocks.
-		switch p.peek().Kind {
-		case lexer.TokenLet, lexer.TokenIf, lexer.TokenWhile, lexer.TokenLBrace:
+		// Special-case: `if` is both a statement and an expression in Vox.
+		// Inside expression blocks we prefer parsing `if ... else ...` as an expression
+		// so it can serve as the tail value (`{ if cond { a } else { b } }`).
+		// But we must still allow statement `if` without `else`, which stage1 code uses.
+		if p.peek().Kind == lexer.TokenIf && p.ifExprHasElseAhead() {
+			// fallthrough to expression parsing below
+		} else {
+			switch p.peek().Kind {
+			case lexer.TokenLet, lexer.TokenIf, lexer.TokenWhile, lexer.TokenLBrace:
 			st := p.parseStmt()
 			if st != nil {
 				stmts = append(stmts, st)
@@ -705,12 +712,13 @@ func (p *Parser) parseBlockExpr(lbrace lexer.Token) ast.Expr {
 				p.advance()
 			}
 			continue
-		case lexer.TokenReturn, lexer.TokenBreak, lexer.TokenContinue:
+			case lexer.TokenReturn, lexer.TokenBreak, lexer.TokenContinue:
 			// These are legal statements generally, but block expressions are used as subexpressions.
 			// Keep stage0 IR gen simple by rejecting top-level terminators here.
 			p.errorHere("`return`/`break`/`continue` are not allowed in expression blocks (stage0)")
 			p.advance()
 			continue
+			}
 		}
 
 		// Expression: either an expr-stmt (`expr;`) or the tail (`expr` before `}`).
@@ -726,6 +734,78 @@ func (p *Parser) parseBlockExpr(lbrace lexer.Token) ast.Expr {
 
 	rb := p.expect(lexer.TokenRBrace, "expected `}` to end block expression")
 	return &ast.BlockExpr{Stmts: stmts, Tail: tail, S: joinSpan(lbrace.Span, rb.Span)}
+}
+
+func (p *Parser) ifExprHasElseAhead() bool {
+	// Look ahead to see if this `if` is syntactically an if-expression (has an `else`
+	// immediately after its then-branch). This is used to disambiguate `if` inside
+	// expression blocks without emitting spurious errors.
+	//
+	// Heuristic: find the then-branch `{ ... }` that starts at nesting depth 0 (for
+	// (), [], {} while scanning the condition), then check whether the next token is `else`.
+	if p.peek().Kind != lexer.TokenIf {
+		return false
+	}
+	i := p.pos + 1
+	dp, db, dc := 0, 0, 0
+	for i < len(p.toks) {
+		k := p.toks[i].Kind
+		if k == lexer.TokenEOF {
+			return false
+		}
+		switch k {
+		case lexer.TokenLParen:
+			dp++
+		case lexer.TokenRParen:
+			if dp > 0 {
+				dp--
+			}
+		case lexer.TokenLBracket:
+			db++
+		case lexer.TokenRBracket:
+			if db > 0 {
+				db--
+			}
+		case lexer.TokenLBrace:
+			if dp == 0 && db == 0 && dc == 0 {
+				goto foundThen
+			}
+			dc++
+		case lexer.TokenRBrace:
+			if dc > 0 {
+				dc--
+			}
+		}
+		i++
+	}
+	return false
+
+foundThen:
+	if i >= len(p.toks) || p.toks[i].Kind != lexer.TokenLBrace {
+		return false
+	}
+	brace := 1
+	i++
+	for i < len(p.toks) {
+		k := p.toks[i].Kind
+		if k == lexer.TokenEOF {
+			return false
+		}
+		if k == lexer.TokenLBrace {
+			brace++
+		} else if k == lexer.TokenRBrace {
+			brace--
+			if brace == 0 {
+				i++
+				break
+			}
+		}
+		i++
+	}
+	if brace != 0 {
+		return false
+	}
+	return i < len(p.toks) && p.toks[i].Kind == lexer.TokenElse
 }
 
 func (p *Parser) parseMatchExpr(matchTok lexer.Token) ast.Expr {
