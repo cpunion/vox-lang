@@ -340,10 +340,57 @@ fn parse_import_decl(p: Parser) -> ParseImportResult {
 }
 
 fn parse_braced_expr(p: Parser) -> ParseBracedExprResult {
+  // Back-compat helper used by if-expr parsing; now parses a full block expression.
+  let r: ParseExprResult = parse_expr_block(p);
+  return ParseBracedExprResult { p: r.p, id: r.id };
+}
+
+fn parse_expr_block(p: Parser) -> ParseExprResult {
+  // `{ stmt*; tailExpr }` where tailExpr is optional (missing => unit).
   let ar1: AdvanceResult = expect(p, lex.TokenKind.LBrace);
-  let r2: ParseExprResult = parse_expr(ar1.p, 0);
-  let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.RBrace);
-  return ParseBracedExprResult { p: ar3.p, id: r2.id };
+  let mut q: Parser = ar1.p;
+  let mut stmts: Vec[ast.Stmt] = Vec();
+  let mut has_tail: bool = false;
+  let mut tail: i32 = -1;
+
+  while !q.has_err && !kind_is(peek_kind(q), lex.TokenKind.RBrace) && !kind_is(peek_kind(q), lex.TokenKind.Eof) {
+    let k: lex.TokenKind = peek_kind(q);
+
+    let is_stmt: bool =
+      kind_is(k, lex.TokenKind.KwLet) ||
+      kind_is(k, lex.TokenKind.KwIf) ||
+      kind_is(k, lex.TokenKind.KwWhile) ||
+      kind_is(k, lex.TokenKind.KwBreak) ||
+      kind_is(k, lex.TokenKind.KwContinue) ||
+      kind_is(k, lex.TokenKind.KwReturn) ||
+      // assignment: ident = ...
+      (kind_is(k, lex.TokenKind.Ident) && kind_is(peek2_kind(q), lex.TokenKind.Eq)) ||
+      // field assignment: ident . ident = ...
+      (kind_is(k, lex.TokenKind.Ident) && kind_is(peek2_kind(q), lex.TokenKind.Dot) && kind_is(peek3_kind(q), lex.TokenKind.Ident) && kind_is(peek4_kind(q), lex.TokenKind.Eq));
+
+    if is_stmt {
+      let sr: ParseStmtResult = parse_stmt(q);
+      q = sr.p;
+      stmts.push(sr.st);
+      continue;
+    }
+
+    let er: ParseExprResult = parse_expr(q, 0);
+    q = er.p;
+    if kind_is(peek_kind(q), lex.TokenKind.Semicolon) {
+      let ar2: AdvanceResult = advance(q);
+      q = ar2.p;
+      stmts.push(ast.Stmt.Expr(er.id));
+      continue;
+    }
+    has_tail = true;
+    tail = er.id;
+    break;
+  }
+
+  let ar3: AdvanceResult = expect(q, lex.TokenKind.RBrace);
+  let b: ast.ExprBlock = ast.ExprBlock { stmts: stmts, has_tail: has_tail, tail: tail };
+  return add_expr(ar3.p, ast.ExprNode.Block(b));
 }
 
 fn parse_if_expr(p: Parser) -> ParseExprResult {
@@ -408,7 +455,7 @@ fn parse_if_expr(p: Parser) -> ParseExprResult {
 		    return add_expr(r.p, ast.ExprNode.Str(r.s));
 		  }
 
-  if kind_is(k, lex.TokenKind.KwMatch) {
+	if kind_is(k, lex.TokenKind.KwMatch) {
     let ar1: AdvanceResult = advance(p);
     let r2: ParseExprResult = parse_expr(ar1.p, 0);
     let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.LBrace);
@@ -433,6 +480,10 @@ fn parse_if_expr(p: Parser) -> ParseExprResult {
 
   if kind_is(k, lex.TokenKind.KwIf) {
     return parse_if_expr(p);
+  }
+
+  if kind_is(k, lex.TokenKind.LBrace) {
+    return parse_expr_block(p);
   }
 
   let mut q: Parser = p;

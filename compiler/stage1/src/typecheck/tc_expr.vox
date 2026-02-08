@@ -16,6 +16,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
     ast.ExprNode.Bool(_) => tc_expr_bool(ctx, expected),
     ast.ExprNode.Ident(name) => tc_expr_ident(ctx, l0, name, expected),
     ast.ExprNode.DotIdent(name) => tc_expr_dot_ident(ctx, mod_path, name, expected),
+    ast.ExprNode.Block(b) => tc_expr_block(ctx, w, mod_path, imps, exprs, l0, b, expected),
 
     ast.ExprNode.If(c, t, e) => tc_expr_if(ctx, w, mod_path, imps, exprs, l0, c, t, e, expected),
     ast.ExprNode.Unary(op, a) => tc_expr_unary(ctx, w, mod_path, imps, exprs, l0, op, a, expected),
@@ -26,6 +27,38 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
     ast.ExprNode.StructLit(ty_expr, fields) => tc_expr_struct_lit(ctx, w, mod_path, imps, exprs, l0, ty_expr, fields, expected),
     ast.ExprNode.Match(scrut, arms) => tc_expr_match(ctx, w, mod_path, imps, exprs, l0, scrut, arms, expected),
   };
+}
+
+fn tc_expr_block(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, b: ast.ExprBlock, expected: i32) -> ExprTyResult {
+  // Expression block: `{ stmt*; tailExpr }`. Tail is optional (missing => unit).
+  //
+  // v0 restriction (stage0 parity): terminators are not allowed in expression blocks.
+  let mut c: Ctx = ctx;
+  let mut l: Locals = locals_enter(l0);
+
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    let st: ast.Stmt = b.stmts.get(i);
+    let is_term: bool = match st { ast.Stmt.Return(_, _) => true, ast.Stmt.Break => true, ast.Stmt.Continue => true, _ => false };
+    if is_term { return ExprTyResult { ok: false, ty: c.ty_bad }; }
+
+    let r: TcStmtResult = tc_stmt(c, w, mod_path, imps, exprs, l, c.ty_unit, st);
+    if !r.ok { return ExprTyResult { ok: false, ty: c.ty_bad }; }
+    c = r.ctx;
+    l = r.locals;
+    i = i + 1;
+  }
+
+  if !b.has_tail {
+    if expected != -1 && expected != c.ty_unit { return ExprTyResult { ok: false, ty: c.ty_bad }; }
+    return ExprTyResult { ok: true, ty: c.ty_unit };
+  }
+
+  let er: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l, b.tail, expected);
+  if !er.ok { return ExprTyResult { ok: false, ty: c.ty_bad }; }
+  let out_ty: i32 = if expected != -1 { expected } else { er.ty };
+  if expected != -1 && er.ty != expected { return ExprTyResult { ok: false, ty: c.ty_bad }; }
+  return ExprTyResult { ok: true, ty: out_ty };
 }
 
 fn tc_expr_dot_ident(ctx: Ctx, mod_path: String, name: String, expected: i32) -> ExprTyResult {

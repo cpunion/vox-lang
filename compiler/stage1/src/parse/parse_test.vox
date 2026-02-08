@@ -359,6 +359,83 @@ fn test_parse_if_expr() -> () {
   t.assert(ok(r.err));
 }
 
+fn test_parse_if_expr_branches_are_block_exprs() -> () {
+  let src: String = "fn main(x: i32) -> i32 {\n  let y: i32 = if x < 3 { let z: i32 = 1; z } else { 2 };\n  return y;\n}";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  t.assert_eq(f.body.stmts.len(), 2);
+  let st0: ast.Stmt = f.body.stmts.get(0);
+  let init: i32 = match st0 { ast.Stmt.Let(_m, _n, _ha, _ann, id) => id, _ => -1 };
+  let exprs: ast.ExprPool = r.prog.exprs;
+
+  let ok0: bool = match ast.expr_pool_get(exprs, init) {
+    ast.ExprNode.If(_c, t_id, e_id) =>
+      match ast.expr_pool_get(exprs, t_id) {
+        ast.ExprNode.Block(b) =>
+          b.stmts.len() == 1 &&
+          match b.stmts.get(0) {
+            ast.Stmt.Let(_m, name, _ha, _ann, init2) =>
+              name == "z" && match ast.expr_pool_get(exprs, init2) { ast.ExprNode.Int(v) => v == 1, _ => false },
+            _ => false,
+          } &&
+          b.has_tail && match ast.expr_pool_get(exprs, b.tail) { ast.ExprNode.Ident(s) => s == "z", _ => false },
+        _ => false,
+      } &&
+      match ast.expr_pool_get(exprs, e_id) {
+        ast.ExprNode.Block(b2) =>
+          b2.stmts.len() == 0 && b2.has_tail && match ast.expr_pool_get(exprs, b2.tail) { ast.ExprNode.Int(v) => v == 2, _ => false },
+        _ => false,
+      },
+    _ => false,
+  };
+  t.assert(ok0);
+}
+
+fn test_parse_match_arm_block_expr() -> () {
+  let src: String = "fn main(x: i32) -> i32 { return match x { 0 => { let y: i32 = 1; y }, _ => { 2 } }; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  t.assert_eq(f.body.stmts.len(), 1);
+  let st0: ast.Stmt = f.body.stmts.get(0);
+  let rid: i32 = match st0 { ast.Stmt.Return(_has, id) => id, _ => -1 };
+  let exprs: ast.ExprPool = r.prog.exprs;
+
+  let ok0: bool = match ast.expr_pool_get(exprs, rid) {
+    ast.ExprNode.Match(_scr, arms) =>
+      {
+        let mut ok: bool = arms.len() == 2;
+        if ok {
+          let a0: ast.MatchArm = arms.get(0);
+          let a1: ast.MatchArm = arms.get(1);
+          let ok0: bool = match ast.expr_pool_get(exprs, a0.expr) {
+            ast.ExprNode.Block(b) =>
+              b.stmts.len() == 1 &&
+              match b.stmts.get(0) {
+                ast.Stmt.Let(_m, name, _ha, _ann, init2) =>
+                  name == "y" && match ast.expr_pool_get(exprs, init2) { ast.ExprNode.Int(v) => v == 1, _ => false },
+                _ => false,
+              } &&
+              b.has_tail && match ast.expr_pool_get(exprs, b.tail) { ast.ExprNode.Ident(s) => s == "y", _ => false },
+            _ => false,
+          };
+          let ok1: bool = match ast.expr_pool_get(exprs, a1.expr) {
+            ast.ExprNode.Block(b2) =>
+              b2.stmts.len() == 0 && b2.has_tail && match ast.expr_pool_get(exprs, b2.tail) { ast.ExprNode.Int(v) => v == 2, _ => false },
+            _ => false,
+          };
+          ok = ok0 && ok1;
+        }
+        ok
+      },
+    _ => false,
+  };
+  t.assert(ok0);
+}
+
 fn test_parse_reports_lex_error() -> () {
   let r: p.ParseResult = p.parse_text("@");
   t.assert(match r.err { p.ParseError.Lex(_) => true, _ => false });

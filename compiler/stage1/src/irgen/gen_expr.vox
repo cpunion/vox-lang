@@ -14,6 +14,7 @@ fn gen_expr(g0: Gen, id: i32, expected: i32) -> GenExprResult {
       ast.ExprNode.Str(_v) => "Str",
       ast.ExprNode.Ident(_s) => "Ident",
       ast.ExprNode.DotIdent(_s) => "DotIdent",
+      ast.ExprNode.Block(_b) => "Block",
       ast.ExprNode.Unary(_op, _a) => "Unary",
       ast.ExprNode.Binary(_op, _l, _r) => "Binary",
       ast.ExprNode.If(_c, _t, _e) => "If",
@@ -32,6 +33,7 @@ fn gen_expr(g0: Gen, id: i32, expected: i32) -> GenExprResult {
     ast.ExprNode.Str(s) => gen_expr_str(g0, s, tr.ty),
     ast.ExprNode.Ident(name) => gen_expr_ident(g0, name, tr.ty),
     ast.ExprNode.DotIdent(name) => gen_expr_dot_ident(g0, name, tr.ty),
+    ast.ExprNode.Block(b) => gen_expr_block(g0, b, tr.ty),
     ast.ExprNode.Unary(op, a) => gen_expr_unary(g0, op, a, tr.ty),
     ast.ExprNode.Binary(op, l, r) => gen_expr_binary(g0, op, l, r, tr.ty),
     ast.ExprNode.If(c, t, e) => gen_expr_if(g0, c, t, e, tr.ty),
@@ -40,6 +42,36 @@ fn gen_expr(g0: Gen, id: i32, expected: i32) -> GenExprResult {
     ast.ExprNode.StructLit(ty_expr, fields) => gen_expr_struct_lit(g0, ty_expr, fields, tr.ty),
     ast.ExprNode.Match(scrut, arms) => gen_expr_match(g0, scrut, arms, tr.ty),
   };
+}
+
+fn gen_expr_block(g0: Gen, b: ast.ExprBlock, out_ty: i32) -> GenExprResult {
+  let mut g: Gen = g0;
+  g.slots = slots_enter(g.slots);
+  g.locals = tc.locals_enter(g.locals);
+
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    let r: GenStmtResult = gen_stmt(g, b.stmts.get(i));
+    if !r.ok { return GenExprResult { ok: false, err: r.err, g: r.g, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+    g = r.g;
+    let blk: ir.Block = g.blocks.get(g.cur);
+    if blk.has_term {
+      return GenExprResult { ok: false, err: "terminator not allowed in expr block", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+    i = i + 1;
+  }
+
+  let mut val: ir.Value = ir.v_int(0);
+  if b.has_tail {
+    let er: GenExprResult = gen_expr(g, b.tail, out_ty);
+    if !er.ok { return er; }
+    g = er.g;
+    val = er.val;
+  }
+
+  g.locals = tc.locals_exit(g.locals);
+  g.slots = slots_exit(g.slots);
+  return GenExprResult { ok: true, err: "", g: g, val: val, ty: out_ty };
 }
 
 fn gen_expr_int(g0: Gen, v: i32, ty: i32, expected: i32) -> GenExprResult {
