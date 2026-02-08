@@ -69,7 +69,7 @@ fn find_generic_func(m: tc.WorldModule, name: String) -> FindFuncDeclResult {
     if fd.name == name && fd.type_params.len() != 0 { return FindFuncDeclResult { found: true, fd: fd }; }
     i = i + 1;
   }
-  return FindFuncDeclResult { found: false, fd: ast.FuncDecl { is_pub: false, name: "", type_params: Vec(), params: Vec(), ret: ast.TypeName { parts: Vec(), args: Vec() }, body: ast.Block { stmts: Vec() } } };
+  return FindFuncDeclResult { found: false, fd: ast.FuncDecl { file: "", is_pub: false, name: "", type_params: Vec(), params: Vec(), ret: ast.TypeName { parts: Vec(), args: Vec() }, body: ast.Block { stmts: Vec() } } };
 }
 
 pub fn generate_world(w: tc.World) -> GenResult {
@@ -131,25 +131,29 @@ pub fn generate_world(w: tc.World) -> GenResult {
     let mr: FindModResult = find_mod(w, t.mod_path);
     if !mr.found { return err0(p, "missing module for task"); }
     let m2: tc.WorldModule = mr.m;
-    let aliases: Vec[tc.ImportAlias] = tc.build_import_aliases(m2.prog.imports);
-
     let mut want_name: String = "";
-    if t.kind == TaskKind.Normal {
-      let fd0: ast.FuncDecl = m2.prog.funcs.get(t.func_idx);
-      want_name = qname(t.mod_path, fd0.name);
-    } else {
-      want_name = qname(t.mod_path, t.inst_name);
-    }
-
-    if has_str(emitted, want_name) { ti = ti + 1; continue; }
-
+    let mut aliases: Vec[tc.ImportAlias] = Vec();
     let mut r: GenFuncResult = GenFuncResult { ok: false, err: "", ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, pending: Vec() };
-    if t.kind == TaskKind.Normal {
+    // Vox match arms only support single expressions (no block arms yet),
+    // so branch on a structural invariant instead of matching on TaskKind.
+    if t.func_idx != -1 {
+      // Normal task.
       let fd: ast.FuncDecl = m2.prog.funcs.get(t.func_idx);
+      let ar: tc.ImportAliasesResult = tc.build_import_aliases(m2.prog.imports, fd.file);
+      if !ar.ok { return err0(p, "import alias build failed"); }
+      aliases = ar.aliases;
+      want_name = qname(t.mod_path, fd.name);
+      if has_str(emitted, want_name) { ti = ti + 1; continue; }
       r = gen_func(ctx, w, t.mod_path, aliases, m2.prog.exprs, fd);
     } else {
+      // Generic instantiation task.
       let fr: FindFuncDeclResult = find_generic_func(m2, t.base_name);
       if !fr.found { return err0(p, "missing generic fn for instantiation"); }
+      let ar: tc.ImportAliasesResult = tc.build_import_aliases(m2.prog.imports, fr.fd.file);
+      if !ar.ok { return err0(p, "import alias build failed"); }
+      aliases = ar.aliases;
+      want_name = qname(t.mod_path, t.inst_name);
+      if has_str(emitted, want_name) { ti = ti + 1; continue; }
       r = gen_func_inst(ctx, w, t.mod_path, aliases, m2.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs);
     }
 
