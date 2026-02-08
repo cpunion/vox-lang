@@ -11,12 +11,26 @@ import (
 type EmitOptions struct {
 	// When true, emit a C entrypoint main() that calls vox main and prints its return value.
 	EmitDriverMain bool
+	// DriverMainKind controls the semantics of the generated C entrypoint when
+	// EmitDriverMain is true.
+	//
+	// Default (zero) is DriverMainUser.
+	DriverMainKind DriverMainKind
 	// When true, emit a C entrypoint main(argc, argv) that dispatches to vox test_* functions.
 	EmitTestMain bool
 	// TestFuncs is the ordered list of test function qualified names (e.g. "pkg::mod::test_x").
 	// Each test must have signature `fn() -> ()`.
 	TestFuncs []TestFunc
 }
+
+type DriverMainKind int
+
+const (
+	// DriverMainUser prints the return value of vox `main()` (for user programs).
+	DriverMainUser DriverMainKind = iota
+	// DriverMainTool is quiet and uses the return value of vox `main()` as the process exit code.
+	DriverMainTool
+)
 
 type TestFunc struct {
 	// Name is the IR function name (qualified).
@@ -377,36 +391,57 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 		out.WriteString("int main(int argc, char** argv) {\n")
 		out.WriteString("  vox__argc = argc;\n")
 		out.WriteString("  vox__argv = argv;\n")
-		switch mainFn.Ret.K {
-		case ir.TUnit:
-			out.WriteString("  ")
-			out.WriteString(cFnName("main"))
-			out.WriteString("();\n")
-		case ir.TBool:
-			out.WriteString("  bool v = ")
-			out.WriteString(cFnName("main"))
-			out.WriteString("();\n")
-			out.WriteString("  printf(\"%s\\n\", v ? \"true\" : \"false\");\n")
-		case ir.TI32:
-			out.WriteString("  int32_t v = ")
-			out.WriteString(cFnName("main"))
-			out.WriteString("();\n")
-			out.WriteString("  printf(\"%\" PRId32 \"\\n\", v);\n")
-		case ir.TI64:
-			out.WriteString("  int64_t v = ")
-			out.WriteString(cFnName("main"))
-			out.WriteString("();\n")
-			out.WriteString("  printf(\"%\" PRId64 \"\\n\", v);\n")
-		case ir.TString:
-			out.WriteString("  const char* v = ")
-			out.WriteString(cFnName("main"))
-			out.WriteString("();\n")
-			out.WriteString("  printf(\"%s\\n\", v ? v : \"\");\n")
+		switch opts.DriverMainKind {
+		case DriverMainUser:
+			switch mainFn.Ret.K {
+			case ir.TUnit:
+				out.WriteString("  ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+			case ir.TBool:
+				out.WriteString("  bool v = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  printf(\"%s\\n\", v ? \"true\" : \"false\");\n")
+			case ir.TI32:
+				out.WriteString("  int32_t v = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  printf(\"%\" PRId32 \"\\n\", v);\n")
+			case ir.TI64:
+				out.WriteString("  int64_t v = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  printf(\"%\" PRId64 \"\\n\", v);\n")
+			case ir.TString:
+				out.WriteString("  const char* v = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  printf(\"%s\\n\", v ? v : \"\");\n")
+			default:
+				return "", fmt.Errorf("unsupported main return type in driver")
+			}
+			out.WriteString("  return 0;\n")
+			out.WriteString("}\n")
+		case DriverMainTool:
+			switch mainFn.Ret.K {
+			case ir.TUnit:
+				out.WriteString("  ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  return 0;\n")
+			case ir.TI32:
+				out.WriteString("  int32_t rc = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  return (int)rc;\n")
+			default:
+				return "", fmt.Errorf("unsupported main return type in tool driver (expected () or i32)")
+			}
+			out.WriteString("}\n")
 		default:
-			return "", fmt.Errorf("unsupported main return type in driver")
+			return "", fmt.Errorf("unknown driver main kind: %d", opts.DriverMainKind)
 		}
-		out.WriteString("  return 0;\n")
-		out.WriteString("}\n")
 	}
 
 	if opts.EmitTestMain {
