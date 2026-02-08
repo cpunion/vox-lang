@@ -44,6 +44,8 @@ func cloneExpr(e ast.Expr) ast.Expr {
 		return &cp
 	case *ast.UnaryExpr:
 		return &ast.UnaryExpr{Op: x.Op, Expr: cloneExpr(x.Expr), S: x.S}
+	case *ast.AsExpr:
+		return &ast.AsExpr{Expr: cloneExpr(x.Expr), Ty: cloneType(x.Ty), S: x.S}
 	case *ast.BinaryExpr:
 		return &ast.BinaryExpr{Op: x.Op, Left: cloneExpr(x.Left), Right: cloneExpr(x.Right), S: x.S}
 	case *ast.CallExpr:

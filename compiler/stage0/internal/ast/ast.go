@@ -263,6 +263,20 @@ type UnaryExpr struct {
 func (*UnaryExpr) exprNode()           {}
 func (e *UnaryExpr) Span() source.Span { return e.S }
 
+// AsExpr is a type cast:
+//
+//   expr as Type
+//
+// Stage0 v0 only supports numeric casts between i32 and i64 (with checked downcast).
+type AsExpr struct {
+	Expr Expr
+	Ty   Type
+	S    source.Span
+}
+
+func (*AsExpr) exprNode()           {}
+func (e *AsExpr) Span() source.Span { return e.S }
+
 type BinaryExpr struct {
 	Op    string
 	Left  Expr

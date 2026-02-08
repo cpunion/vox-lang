@@ -179,6 +179,28 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		default:
 			return unit(), fmt.Errorf("unknown unary op: %s", e.Op)
 		}
+	case *ast.AsExpr:
+		v, err := rt.evalExpr(e.Expr)
+		if err != nil {
+			return unit(), err
+		}
+		from := rt.prog.ExprTypes[e.Expr]
+		to := rt.prog.ExprTypes[ex]
+		// Stage0 v0: i32 <-> i64.
+		if (from.K != typecheck.TyI32 && from.K != typecheck.TyI64) || (to.K != typecheck.TyI32 && to.K != typecheck.TyI64) {
+			return unit(), fmt.Errorf("unsupported cast")
+		}
+		if from.K == to.K {
+			return v, nil
+		}
+		if to.K == typecheck.TyI64 {
+			return Value{K: VInt, I: v.I}, nil
+		}
+		// to i32: bounds check then keep as int
+		if v.I < -2147483648 || v.I > 2147483647 {
+			return unit(), fmt.Errorf("i64 to i32 overflow")
+		}
+		return Value{K: VInt, I: v.I}, nil
 	case *ast.BinaryExpr:
 		l, err := rt.evalExpr(e.Left)
 		if err != nil {

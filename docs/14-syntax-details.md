@@ -44,6 +44,7 @@
    - 成员访问：`a.b`
    - 调用：`f(x)` / `a.b(x)`
    - 调用的显式类型实参：`f[T](x)`（`[T]` 绑定到紧随其后的 `(...)`）
+   - 显式转换（cast）：`expr as Type`
 2. unary：`-x`、`!x`
 3. 乘法：`* / %`
 4. 加法：`+ -`
@@ -214,6 +215,7 @@ pub const NAME: String = "vox";
   - 字面量：`123` / `true` / `"txt"`
   - 其他常量引用（含跨模块的 `import` 访问）
   - `-x` / `!x`
+  - `expr as i32/i64`（显式数值转换；`i64 as i32` 在编译期可确定溢出时会报错）
   - `+ - * / %`、比较、`== !=`、`&& ||`
   - `if cond { a } else { b }`（cond 必须为常量 bool）
 - 不支持在 const 初始化中调用函数、构造 struct/enum、`match` 等（后续由 `comptime` 统一解决）。

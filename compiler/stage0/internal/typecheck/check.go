@@ -245,6 +245,37 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			c.errorAt(e.S, "unknown unary operator: "+e.Op)
 			return c.setExprType(ex, Type{K: TyBad})
 		}
+	case *ast.AsExpr:
+		// Stage0 v0: numeric casts between i32 and i64.
+		file := e.S.File
+		if file == nil && c.curFn != nil && c.curFn.Span.File != nil {
+			file = c.curFn.Span.File
+		}
+		wantTy := c.typeFromAstInFile(e.Ty, file)
+		gotTy := c.checkExpr(e.Expr, Type{K: TyBad})
+		// Allow casts on integer literals: treat untyped ints as i64 to make
+		// narrowing explicit (i64 -> i32 uses a checked cast).
+		if gotTy.K == TyUntypedInt {
+			gotTy = c.forceIntType(e.Expr, gotTy, Type{K: TyI64})
+			_ = c.setExprType(e.Expr, gotTy)
+		}
+
+		ok := false
+		if sameType(wantTy, gotTy) {
+			ok = true
+		} else if gotTy.K == TyI32 && wantTy.K == TyI64 {
+			ok = true
+		} else if gotTy.K == TyI64 && wantTy.K == TyI32 {
+			ok = true
+		}
+		if !ok {
+			c.errorAt(e.S, fmt.Sprintf("unsupported cast: %s as %s", gotTy.String(), wantTy.String()))
+			wantTy = Type{K: TyBad}
+		}
+		if expected.K != TyBad && wantTy.K != TyBad && !sameType(expected, wantTy) {
+			c.errorAt(e.S, fmt.Sprintf("type mismatch: expected %s, got %s", expected.String(), wantTy.String()))
+		}
+		return c.setExprType(ex, wantTy)
 	case *ast.BinaryExpr:
 		switch e.Op {
 		case "+", "-", "*", "/", "%":

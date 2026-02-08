@@ -251,6 +251,9 @@ func substAstTypesInExpr(ex ast.Expr, subs map[string]Type) {
 		return
 	case *ast.UnaryExpr:
 		substAstTypesInExpr(e.Expr, subs)
+	case *ast.AsExpr:
+		substAstTypesInExpr(e.Expr, subs)
+		e.Ty = substAstType(e.Ty, subs)
 	case *ast.BinaryExpr:
 		substAstTypesInExpr(e.Left, subs)
 		substAstTypesInExpr(e.Right, subs)

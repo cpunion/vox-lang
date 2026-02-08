@@ -252,6 +252,38 @@ fn main() -> i32 {
 	}
 }
 
+func TestAsCastI64ToI32Checked(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+  let x: i64 = 41;
+  let y: i32 = x as i32;
+  return y + 1;
+}`)
+	if out != "42" {
+		t.Fatalf("expected 42, got %q", out)
+	}
+}
+
+func TestAsCastI64ToI32OverflowPanics(t *testing.T) {
+	_, err := runMainErr(t, `fn main() -> i32 {
+  let x: i64 = 3000000000;
+  let y: i32 = x as i32;
+  return y;
+}`)
+	if err == "" || err != "i64 to i32 overflow" {
+		t.Fatalf("expected overflow error, got %q", err)
+	}
+}
+
+func TestAsCastIntLiteralOverflowPanics(t *testing.T) {
+	_, err := runMainErr(t, `fn main() -> i32 {
+  let y: i32 = 3000000000 as i32;
+  return y;
+}`)
+	if err == "" || err != "i64 to i32 overflow" {
+		t.Fatalf("expected overflow error, got %q", err)
+	}
+}
+
 func runMain(t *testing.T, src string) string {
 	t.Helper()
 	f := source.NewFile("src/main.vox", src)
@@ -272,4 +304,26 @@ func runMain(t *testing.T, src string) string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+func runMainErr(t *testing.T, src string) (string, string) {
+	t.Helper()
+	f := source.NewFile("src/main.vox", src)
+	stdFiles, err := stdlib.Files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, pdiags := parser.ParseFiles(append(stdFiles, f))
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	out, e := RunMain(checked)
+	if e == nil {
+		return out, ""
+	}
+	return out, e.Error()
 }

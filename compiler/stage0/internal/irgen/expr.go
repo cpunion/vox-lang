@@ -89,6 +89,35 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			return tmp, nil
 		}
 		return nil, fmt.Errorf("unsupported unary op: %s", e.Op)
+	case *ast.AsExpr:
+		// Stage0 v0: numeric casts between i32 and i64.
+		v, err := g.genExpr(e.Expr)
+		if err != nil {
+			return nil, err
+		}
+		fromTy := g.p.ExprTypes[e.Expr]
+		toTy := g.p.ExprTypes[ex]
+		irFrom, err := g.irTypeFromChecked(fromTy)
+		if err != nil {
+			return nil, err
+		}
+		irTo, err := g.irTypeFromChecked(toTy)
+		if err != nil {
+			return nil, err
+		}
+		if irFrom.K == irTo.K {
+			return v, nil
+		}
+		tmp := g.newTemp()
+		if irFrom.K == ir.TI32 && irTo.K == ir.TI64 {
+			g.emit(&ir.I32ToI64{Dst: tmp, V: v})
+			return tmp, nil
+		}
+		if irFrom.K == ir.TI64 && irTo.K == ir.TI32 {
+			g.emit(&ir.I64ToI32Checked{Dst: tmp, V: v})
+			return tmp, nil
+		}
+		return nil, fmt.Errorf("unsupported cast in IR gen")
 	case *ast.BinaryExpr:
 		// Special-case: enum equality against unit variants lowers to tag comparison.
 		if (e.Op == "==" || e.Op == "!=") && g.isEnumUnitEq(e) {

@@ -979,6 +979,11 @@ func (p *Parser) parsePostfix(ex ast.Expr, allowStructLit bool) ast.Expr {
 			ex = &ast.MemberExpr{Recv: ex, Name: id.Lexeme, S: joinSpan(ex.Span(), id.Span)}
 			continue
 		}
+		if p.match(lexer.TokenAs) {
+			ty := p.parseType()
+			ex = &ast.AsExpr{Expr: ex, Ty: ty, S: joinSpan(ex.Span(), ty.Span())}
+			continue
+		}
 		if p.match(lexer.TokenLBracket) {
 			if len(pendingTypeArgs) != 0 {
 				p.errorHere("unexpected nested type argument list")

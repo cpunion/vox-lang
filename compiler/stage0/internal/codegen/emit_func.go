@@ -29,6 +29,10 @@ func emitFunc(out *bytes.Buffer, p *ir.Program, f *ir.Func) error {
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TBool}
 			case *ir.Not:
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TBool}
+			case *ir.I64ToI32Checked:
+				tempTypes[i.Dst.ID] = ir.Type{K: ir.TI32}
+			case *ir.I32ToI64:
+				tempTypes[i.Dst.ID] = ir.Type{K: ir.TI64}
 			case *ir.Load:
 				tempTypes[i.Dst.ID] = i.Ty
 			case *ir.StructInit:
@@ -220,6 +224,24 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		out.WriteString(" = (!")
 		out.WriteString(cValue(i.A))
 		out.WriteString(");\n")
+		return nil
+	case *ir.I64ToI32Checked:
+		out.WriteString("  {\n")
+		out.WriteString("    int64_t _v = ")
+		out.WriteString(cValue(i.V))
+		out.WriteString(";\n")
+		out.WriteString("    if (_v < (int64_t)INT32_MIN || _v > (int64_t)INT32_MAX) { vox_builtin_panic(\"i64 to i32 overflow\"); }\n")
+		out.WriteString("    ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = (int32_t)_v;\n")
+		out.WriteString("  }\n")
+		return nil
+	case *ir.I32ToI64:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = (int64_t)")
+		out.WriteString(cValue(i.V))
+		out.WriteString(";\n")
 		return nil
 	case *ir.Store:
 		out.WriteString("  ")

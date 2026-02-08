@@ -393,6 +393,37 @@ func TestParseIfExpr(t *testing.T) {
 	}
 }
 
+func TestParseAsExprBindsTighterThanPlus(t *testing.T) {
+	f := source.NewFile("test.vox", `fn main() -> i32 { return 1 + 2 as i64; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Funcs) != 1 {
+		t.Fatalf("expected 1 func, got %d", len(prog.Funcs))
+	}
+	ret, ok := prog.Funcs[0].Body.Stmts[0].(*ast.ReturnStmt)
+	if !ok || ret.Expr == nil {
+		t.Fatalf("expected return stmt with expr")
+	}
+	be, ok := ret.Expr.(*ast.BinaryExpr)
+	if !ok || be.Op != "+" {
+		t.Fatalf("expected binary +, got %T", ret.Expr)
+	}
+	ae, ok := be.Right.(*ast.AsExpr)
+	if !ok {
+		t.Fatalf("expected right to be as-expr, got %T", be.Right)
+	}
+	lit, ok := ae.Expr.(*ast.IntLit)
+	if !ok || lit.Text != "2" {
+		t.Fatalf("expected cast expr to be int lit 2, got %T", ae.Expr)
+	}
+	nt, ok := ae.Ty.(*ast.NamedType)
+	if !ok || len(nt.Parts) != 1 || nt.Parts[0] != "i64" {
+		t.Fatalf("expected cast target i64, got %T %#v", ae.Ty, ae.Ty)
+	}
+}
+
 func TestParseGenericFuncAndExplicitTypeArgsCall(t *testing.T) {
 	f := source.NewFile("test.vox", `fn id[T](x: T) -> T { return x; }
 fn main() -> i32 { return id[i32](1); }`)

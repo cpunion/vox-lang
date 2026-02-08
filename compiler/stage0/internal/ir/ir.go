@@ -268,6 +268,29 @@ func (i *Not) fmtString() string {
 	return fmt.Sprintf("%s = not %s", i.Dst.fmtString(), i.A.fmtString())
 }
 
+// I64ToI32Checked converts an i64 to i32 with a runtime bounds check.
+// On overflow it must panic.
+type I64ToI32Checked struct {
+	Dst *Temp
+	V   Value
+}
+
+func (*I64ToI32Checked) instrNode() {}
+func (i *I64ToI32Checked) fmtString() string {
+	return fmt.Sprintf("%s = i32_from_i64_checked %s", i.Dst.fmtString(), i.V.fmtString())
+}
+
+// I32ToI64 converts an i32 to i64 (always safe).
+type I32ToI64 struct {
+	Dst *Temp
+	V   Value
+}
+
+func (*I32ToI64) instrNode() {}
+func (i *I32ToI64) fmtString() string {
+	return fmt.Sprintf("%s = i64_from_i32 %s", i.Dst.fmtString(), i.V.fmtString())
+}
+
 type SlotDecl struct {
 	Slot *Slot
 	Ty   Type
