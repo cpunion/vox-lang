@@ -170,6 +170,86 @@ dep = { path = "dep_pkg" }
 	}
 }
 
+func TestStage1BuildPkgFailsOnInvalidManifest(t *testing.T) {
+	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Invalid manifest line.
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = { path = "../dep" }
+this is not valid
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("fn main() -> i32 { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	b, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected stage1 build-pkg to fail on invalid vox.toml")
+	}
+	if !strings.Contains(string(b), "invalid vox.toml") {
+		t.Fatalf("expected invalid vox.toml output, got:\n%s", string(b))
+	}
+}
+
+func TestStage1BuildPkgFailsOnDuplicateDependencyName(t *testing.T) {
+	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Duplicate dependency name (stage1 manifest parser is line-based).
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = { path = "dep1" }
+dep = { path = "dep2" }
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("fn main() -> i32 { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	b, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected stage1 build-pkg to fail on duplicate deps")
+	}
+	if !strings.Contains(string(b), "duplicate dependency") {
+		t.Fatalf("expected duplicate dependency output, got:\n%s", string(b))
+	}
+}
+
 func TestStage1ToolchainTestPkgRunsTests(t *testing.T) {
 	// 1) Build the stage1 compiler (vox_stage1) using stage0.
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
