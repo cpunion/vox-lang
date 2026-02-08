@@ -82,6 +82,94 @@ dep = { path = "dep_pkg" }
 	}
 }
 
+func TestStage1ToolchainBuildsWithTransitivePathDeps(t *testing.T) {
+	// 1) Build the stage1 compiler (vox_stage1) using stage0 (tool driver).
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	// 2) Create a package with transitive path dependencies:
+	// app -> dep -> b
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// b package.
+	bRoot := filepath.Join(root, "b_pkg")
+	if err := os.MkdirAll(filepath.Join(bRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir b: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bRoot, "vox.toml"), []byte(`[package]
+name = "b"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write b vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bRoot, "src", "b.vox"), []byte("pub fn one() -> i32 { return 1; }\n"), 0o644); err != nil {
+		t.Fatalf("write b src: %v", err)
+	}
+
+	// dep package depends on b.
+	depRoot := filepath.Join(root, "dep_pkg")
+	if err := os.MkdirAll(filepath.Join(depRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir dep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "vox.toml"), []byte(`[package]
+name = "dep"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+b = { path = "../b_pkg" }
+`), 0o644); err != nil {
+		t.Fatalf("write dep vox.toml: %v", err)
+	}
+	depSrc := "import \"b\" as b\npub fn two() -> i32 { return 1 + b.one(); }\n"
+	if err := os.WriteFile(filepath.Join(depRoot, "src", "dep.vox"), []byte(depSrc), 0o644); err != nil {
+		t.Fatalf("write dep src: %v", err)
+	}
+
+	// Root package depends on dep.
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = { path = "dep_pkg" }
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+	mainSrc := "import \"dep\" as dep\nfn main() -> i32 { return dep.two(); }\n"
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte(mainSrc), 0o644); err != nil {
+		t.Fatalf("write main: %v", err)
+	}
+
+	// 3) Use stage1 compiler to build it; transitive deps must be loadable.
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage1 build-pkg failed: %v\n%s", err, string(b))
+	}
+
+	// 4) Run the produced binary and check output (driver prints main return).
+	run := exec.Command(outBin)
+	run.Dir = root
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run built program failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "2" {
+		t.Fatalf("unexpected output: %q", got)
+	}
+}
+
 func TestStage1ToolchainTestPkgRunsTests(t *testing.T) {
 	// 1) Build the stage1 compiler (vox_stage1) using stage0.
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
