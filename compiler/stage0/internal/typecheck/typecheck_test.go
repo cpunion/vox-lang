@@ -153,6 +153,29 @@ func TestReservedToolingBuiltinsAreNotCallableFromUserCode(t *testing.T) {
 	}
 }
 
+func TestReservedNamesStartingWithDoubleUnderscoreCannotBeDefined(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn __x() -> i32 { return 0; }
+fn main() -> i32 { return 0; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "reserved function name: __x" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected reserved name diagnostic, got: %+v", tdiags.Items)
+	}
+}
+
 func TestIfExprTypechecks(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

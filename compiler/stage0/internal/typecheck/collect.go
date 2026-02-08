@@ -1,6 +1,8 @@
 package typecheck
 
 import (
+	"strings"
+
 	"voxlang/internal/names"
 )
 
@@ -116,6 +118,10 @@ func (c *checker) collectFuncSigs() {
 	c.funcSigs["__exe_path"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyString}}
 
 	for _, fn := range c.prog.Funcs {
+		if strings.HasPrefix(fn.Name, "__") {
+			c.errorAt(fn.Span, "reserved function name: "+fn.Name)
+			continue
+		}
 		qname := names.QualifyFunc(fn.Span.File.Name, fn.Name)
 		c.funcDecls[qname] = fn
 		if _, exists := c.funcSigs[qname]; exists {
