@@ -13,10 +13,21 @@ func cType(t ir.Type) string {
 		return "void"
 	case ir.TBool:
 		return "bool"
+	case ir.TI8:
+		return "int8_t"
+	case ir.TU8:
+		return "uint8_t"
 	case ir.TI32:
 		return "int32_t"
+	case ir.TU32:
+		return "uint32_t"
 	case ir.TI64:
 		return "int64_t"
+	case ir.TU64:
+		return "uint64_t"
+	case ir.TUSize:
+		// Stage0 v0: usize is fixed to 64-bit.
+		return "uint64_t"
 	case ir.TString:
 		return "const char*"
 	case ir.TStruct:

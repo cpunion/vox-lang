@@ -140,11 +140,12 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 	switch e := ex.(type) {
 	case *ast.IntLit:
 		// typechecker guaranteed parseability
-		var n int64
+		var n uint64
 		for i := 0; i < len(e.Text); i++ {
-			n = n*10 + int64(e.Text[i]-'0')
+			n = n*10 + uint64(e.Text[i]-'0')
 		}
-		return Value{K: VInt, I: n}, nil
+		ty := stripRange(rt.prog.ExprTypes[ex])
+		return Value{K: VInt, I: truncInt(n, ty)}, nil
 	case *ast.StringLit:
 		// Keep runtime semantics aligned with IR generation (Go-like unquoting).
 		s, err := strconv.Unquote(e.Text)
@@ -170,7 +171,13 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			if v.K != VInt {
 				return unit(), fmt.Errorf("unary - expects int")
 			}
-			return Value{K: VInt, I: -v.I}, nil
+			ty := stripRange(rt.prog.ExprTypes[ex])
+			if !isIntType(ty) || !isSignedIntType(ty) {
+				return unit(), fmt.Errorf("unary - expects signed int")
+			}
+			w := intBitWidth(ty)
+			x := intSigned(v.I, ty)
+			return Value{K: VInt, I: truncBits(uint64(-x), w)}, nil
 		case "!":
 			if v.K != VBool {
 				return unit(), fmt.Errorf("unary ! expects bool")
@@ -186,33 +193,19 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		}
 		from := rt.prog.ExprTypes[e.Expr]
 		to := rt.prog.ExprTypes[ex]
-		// Stage0 v0: i32/i64 and @range(lo..=hi) i32/i64.
-		fromBase := from
-		if fromBase.K == typecheck.TyRange && fromBase.Base != nil {
-			fromBase = *fromBase.Base
-		}
-		toBase := to
-		if toBase.K == typecheck.TyRange && toBase.Base != nil {
-			toBase = *toBase.Base
-		}
-		if (fromBase.K != typecheck.TyI32 && fromBase.K != typecheck.TyI64) || (toBase.K != typecheck.TyI32 && toBase.K != typecheck.TyI64) {
+		fromBase := stripRange(from)
+		toBase := stripRange(to)
+		if v.K != VInt || !isIntType(fromBase) || !isIntType(toBase) {
 			return unit(), fmt.Errorf("unsupported cast")
 		}
-
-		// base cast (checked for i64->i32)
-		if toBase.K == typecheck.TyI32 && fromBase.K == typecheck.TyI64 {
-			if v.I < -2147483648 || v.I > 2147483647 {
-				return unit(), fmt.Errorf("i64 to i32 overflow")
-			}
+		out, err := castIntChecked(v.I, fromBase, toBase)
+		if err != nil {
+			return unit(), err
 		}
-
-		// range check (if any)
-		if to.K == typecheck.TyRange {
-			if v.I < to.Lo || v.I > to.Hi {
-				return unit(), fmt.Errorf("range check failed")
-			}
+		if to.K == typecheck.TyRange && !rangeContainsBits(out, to) {
+			return unit(), fmt.Errorf("range check failed")
 		}
-		return Value{K: VInt, I: v.I}, nil
+		return Value{K: VInt, I: out}, nil
 	case *ast.BinaryExpr:
 		l, err := rt.evalExpr(e.Left)
 		if err != nil {
@@ -261,25 +254,66 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			if l.K != VInt || r.K != VInt {
 				return unit(), fmt.Errorf("binary op %s expects ints", e.Op)
 			}
+			ty := stripRange(rt.prog.ExprTypes[e.Left])
+			if !isIntType(ty) {
+				return unit(), fmt.Errorf("binary op %s expects ints", e.Op)
+			}
+			w := intBitWidth(ty)
+			ua := truncBits(l.I, w)
+			ub := truncBits(r.I, w)
 			switch e.Op {
 			case "+":
-				return Value{K: VInt, I: l.I + r.I}, nil
+				return Value{K: VInt, I: truncBits(ua+ub, w)}, nil
 			case "-":
-				return Value{K: VInt, I: l.I - r.I}, nil
+				return Value{K: VInt, I: truncBits(ua-ub, w)}, nil
 			case "*":
-				return Value{K: VInt, I: l.I * r.I}, nil
+				return Value{K: VInt, I: truncBits(ua*ub, w)}, nil
 			case "/":
-				return Value{K: VInt, I: l.I / r.I}, nil
+				if ub == 0 {
+					return unit(), fmt.Errorf("division by zero")
+				}
+				if isSignedIntType(ty) {
+					a := intSigned(ua, ty)
+					b := intSigned(ub, ty)
+					if b == -1 && a == intMinSigned(ty) {
+						return unit(), fmt.Errorf("division overflow")
+					}
+					return Value{K: VInt, I: truncBits(uint64(a/b), w)}, nil
+				}
+				return Value{K: VInt, I: truncBits(ua/ub, w)}, nil
 			case "%":
-				return Value{K: VInt, I: l.I % r.I}, nil
+				if ub == 0 {
+					return unit(), fmt.Errorf("division by zero")
+				}
+				if isSignedIntType(ty) {
+					a := intSigned(ua, ty)
+					b := intSigned(ub, ty)
+					if b == -1 && a == intMinSigned(ty) {
+						return unit(), fmt.Errorf("division overflow")
+					}
+					return Value{K: VInt, I: truncBits(uint64(a%b), w)}, nil
+				}
+				return Value{K: VInt, I: truncBits(ua%ub, w)}, nil
 			case "<":
-				return Value{K: VBool, B: l.I < r.I}, nil
+				if isSignedIntType(ty) {
+					return Value{K: VBool, B: intSigned(ua, ty) < intSigned(ub, ty)}, nil
+				}
+				return Value{K: VBool, B: ua < ub}, nil
 			case "<=":
-				return Value{K: VBool, B: l.I <= r.I}, nil
+				if isSignedIntType(ty) {
+					return Value{K: VBool, B: intSigned(ua, ty) <= intSigned(ub, ty)}, nil
+				}
+				return Value{K: VBool, B: ua <= ub}, nil
 			case ">":
-				return Value{K: VBool, B: l.I > r.I}, nil
+				if isSignedIntType(ty) {
+					return Value{K: VBool, B: intSigned(ua, ty) > intSigned(ub, ty)}, nil
+				}
+				return Value{K: VBool, B: ua > ub}, nil
 			case ">=":
-				return Value{K: VBool, B: l.I >= r.I}, nil
+				if isSignedIntType(ty) {
+					return Value{K: VBool, B: intSigned(ua, ty) >= intSigned(ub, ty)}, nil
+				}
+				return Value{K: VBool, B: ua >= ub}, nil
 			}
 		case "==", "!=":
 			eq := valueEq(l, r)
@@ -391,7 +425,7 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 				if recv.K != VVec {
 					return unit(), fmt.Errorf("Vec.len requires vec receiver")
 				}
-				return Value{K: VInt, I: int64(len(recv.A))}, nil
+				return Value{K: VInt, I: uint64(len(recv.A))}, nil
 			case typecheck.VecCallGet:
 				if len(e.Args) != 1 {
 					return unit(), fmt.Errorf("Vec.get expects 1 arg")
@@ -403,7 +437,7 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 				if idxV.K != VInt {
 					return unit(), fmt.Errorf("Vec.get index must be int")
 				}
-				idx := int(idxV.I)
+				idx := int(int32(idxV.I))
 				var recv Value
 				if vc.Recv != nil {
 					rv, err := rt.evalExpr(vc.Recv)
@@ -490,7 +524,7 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			}
 			switch sc.Kind {
 			case typecheck.StrCallLen:
-				return Value{K: VInt, I: int64(len(recv.S))}, nil
+				return Value{K: VInt, I: uint64(len(recv.S))}, nil
 			case typecheck.StrCallByteAt:
 				if len(e.Args) != 1 {
 					return unit(), fmt.Errorf("String.byte_at expects 1 arg")
@@ -502,11 +536,11 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 				if idxV.K != VInt {
 					return unit(), fmt.Errorf("String.byte_at index must be int")
 				}
-				idx := int(idxV.I)
+				idx := int(int32(idxV.I))
 				if idx < 0 || idx >= len(recv.S) {
 					return unit(), fmt.Errorf("String.byte_at index out of bounds")
 				}
-				return Value{K: VInt, I: int64(recv.S[idx])}, nil
+				return Value{K: VInt, I: uint64(recv.S[idx])}, nil
 			case typecheck.StrCallSlice:
 				if len(e.Args) != 2 {
 					return unit(), fmt.Errorf("String.slice expects 2 args")
@@ -522,8 +556,8 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 				if sv.K != VInt || ev.K != VInt {
 					return unit(), fmt.Errorf("String.slice indices must be int")
 				}
-				start := int(sv.I)
-				end := int(ev.I)
+				start := int(int32(sv.I))
+				end := int(int32(ev.I))
 				if start < 0 || end < start || end > len(recv.S) {
 					return unit(), fmt.Errorf("String.slice index out of bounds")
 				}
@@ -566,11 +600,16 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 				recv = fr[ts.RecvName]
 			}
 			switch ts.Kind {
-			case typecheck.ToStrI32, typecheck.ToStrI64:
+			case typecheck.ToStrI32:
 				if recv.K != VInt {
 					return unit(), fmt.Errorf("to_string expects int receiver")
 				}
-				return Value{K: VString, S: strconv.FormatInt(recv.I, 10)}, nil
+				return Value{K: VString, S: strconv.FormatInt(int64(int32(recv.I)), 10)}, nil
+			case typecheck.ToStrI64:
+				if recv.K != VInt {
+					return unit(), fmt.Errorf("to_string expects int receiver")
+				}
+				return Value{K: VString, S: strconv.FormatInt(int64(recv.I), 10)}, nil
 			case typecheck.ToStrBool:
 				if recv.K != VBool {
 					return unit(), fmt.Errorf("to_string expects bool receiver")
@@ -632,11 +671,11 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			args = append(args, v)
 		}
 		return rt.call(target, args)
-		case *ast.MemberExpr:
-			// Unit enum variant value: `Enum.Variant`.
-			if cu, ok := rt.prog.EnumUnitVariants[e]; ok {
-				return Value{K: VEnum, E: cu.Enum.Name, T: cu.Tag}, nil
-			}
+	case *ast.MemberExpr:
+		// Unit enum variant value: `Enum.Variant`.
+		if cu, ok := rt.prog.EnumUnitVariants[e]; ok {
+			return Value{K: VEnum, E: cu.Enum.Name, T: cu.Tag}, nil
+		}
 
 		recv, err := rt.evalExpr(e.Recv)
 		if err != nil {
@@ -649,15 +688,15 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		if !ok {
 			return unit(), fmt.Errorf("unknown field: %s", e.Name)
 		}
-			return v, nil
-		case *ast.DotExpr:
-			// Unit enum variant shorthand: `.Variant`.
-			if cu, ok := rt.prog.EnumUnitVariants[e]; ok {
-				return Value{K: VEnum, E: cu.Enum.Name, T: cu.Tag}, nil
-			}
-			return unit(), fmt.Errorf("unresolved unit enum variant shorthand")
-		case *ast.StructLitExpr:
-			m := map[string]Value{}
+		return v, nil
+	case *ast.DotExpr:
+		// Unit enum variant shorthand: `.Variant`.
+		if cu, ok := rt.prog.EnumUnitVariants[e]; ok {
+			return Value{K: VEnum, E: cu.Enum.Name, T: cu.Tag}, nil
+		}
+		return unit(), fmt.Errorf("unresolved unit enum variant shorthand")
+	case *ast.StructLitExpr:
+		m := map[string]Value{}
 		for _, init := range e.Inits {
 			v, err := rt.evalExpr(init.Expr)
 			if err != nil {
@@ -686,6 +725,7 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			es = sig
 			hasEnumSig = true
 		}
+		scrutTy := stripRange(rt.prog.ExprTypes[e.Scrutinee])
 		for _, arm := range e.Arms {
 			switch p := arm.Pat.(type) {
 			case *ast.WildPat:
@@ -698,15 +738,18 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 				rt.popFrame()
 				return v, err
 			case *ast.IntPat:
-				if sv.K != VInt {
+				if sv.K != VInt || !isIntType(scrutTy) {
 					continue
 				}
-				// typechecker guaranteed parseability
-				var n int64
+				var n uint64
 				for i := 0; i < len(p.Text); i++ {
-					n = n*10 + int64(p.Text[i]-'0')
+					n = n*10 + uint64(p.Text[i]-'0')
 				}
-				if sv.I != n {
+				patBits, err := castIntChecked(n, typecheck.Type{K: typecheck.TyI64}, scrutTy)
+				if err != nil {
+					continue
+				}
+				if truncBits(sv.I, intBitWidth(scrutTy)) != patBits {
 					continue
 				}
 				return rt.evalExpr(arm.Expr)

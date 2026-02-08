@@ -2,10 +2,10 @@ package irgen
 
 import "strconv"
 
-func parseInt64(text string) int64 {
-	var n int64
+func parseUint64(text string) uint64 {
+	var n uint64
 	for i := 0; i < len(text); i++ {
-		n = n*10 + int64(text[i]-'0')
+		n = n*10 + uint64(text[i]-'0')
 	}
 	return n
 }

@@ -163,10 +163,20 @@ func (g *gen) irTypeFromChecked(t typecheck.Type) (ir.Type, error) {
 		return ir.Type{K: ir.TUnit}, nil
 	case typecheck.TyBool:
 		return ir.Type{K: ir.TBool}, nil
+	case typecheck.TyI8:
+		return ir.Type{K: ir.TI8}, nil
+	case typecheck.TyU8:
+		return ir.Type{K: ir.TU8}, nil
 	case typecheck.TyI32:
 		return ir.Type{K: ir.TI32}, nil
+	case typecheck.TyU32:
+		return ir.Type{K: ir.TU32}, nil
 	case typecheck.TyI64:
 		return ir.Type{K: ir.TI64}, nil
+	case typecheck.TyU64:
+		return ir.Type{K: ir.TU64}, nil
+	case typecheck.TyUSize:
+		return ir.Type{K: ir.TUSize}, nil
 	case typecheck.TyString:
 		return ir.Type{K: ir.TString}, nil
 	case typecheck.TyRange:
@@ -199,8 +209,8 @@ func (g *gen) zeroValue(t ir.Type) (ir.Value, error) {
 		return nil, nil
 	case ir.TBool:
 		return &ir.ConstBool{V: false}, nil
-	case ir.TI32, ir.TI64:
-		return &ir.ConstInt{Ty: t, V: 0}, nil
+	case ir.TI8, ir.TU8, ir.TI32, ir.TU32, ir.TI64, ir.TU64, ir.TUSize:
+		return &ir.ConstInt{Ty: t, Bits: 0}, nil
 	case ir.TString:
 		return &ir.ConstStr{S: ""}, nil
 	case ir.TStruct:
@@ -248,7 +258,7 @@ func (g *gen) zeroValue(t ir.Type) (ir.Value, error) {
 		g.emit(&ir.VecNew{Dst: tmp, Ty: t, Elem: *t.Elem})
 		return tmp, nil
 	default:
-		return &ir.ConstInt{Ty: t, V: 0}, nil
+		return &ir.ConstInt{Ty: t, Bits: 0}, nil
 	}
 }
 

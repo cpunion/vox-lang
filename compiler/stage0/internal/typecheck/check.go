@@ -158,21 +158,36 @@ func (c *checker) checkStmt(st ast.Stmt, expectedRet Type) {
 func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 	switch e := ex.(type) {
 	case *ast.IntLit:
-		v, err := strconv.ParseInt(e.Text, 10, 64)
+		u, err := strconv.ParseUint(e.Text, 10, 64)
 		if err != nil {
 			c.errorAt(e.S, "invalid integer literal")
 			return c.setExprType(ex, Type{K: TyBad})
 		}
-		// Constrain by expected type if it's an int.
-		if expected.K == TyI32 {
-			if v < -2147483648 || v > 2147483647 {
-				c.errorAt(e.S, "integer literal out of range for i32")
+
+		// Constrain by expected type if it's an int (note: integer literals are non-negative).
+		want := expected
+		if want.K == TyRange && want.Base != nil {
+			// Still keep it as untyped here; entering a range type requires an explicit cast.
+			want = Type{K: TyBad}
+		}
+		if isIntType(want) {
+			_, max, ok := intMinMax(want)
+			if !ok || u > max {
+				c.errorAt(e.S, "integer literal out of range for "+want.String())
 				return c.setExprType(ex, Type{K: TyBad})
 			}
-			return c.setExprType(ex, expected)
+			// Signed types are also bounded by int64 for literal parse.
+			if isSignedIntType(want) && u > uint64(9223372036854775807) {
+				c.errorAt(e.S, "integer literal out of range for "+want.String())
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+			return c.setExprType(ex, want)
 		}
-		if expected.K == TyI64 {
-			return c.setExprType(ex, expected)
+
+		// Untyped int literals must fit in i64.
+		if u > uint64(9223372036854775807) {
+			c.errorAt(e.S, "integer literal out of range")
+			return c.setExprType(ex, Type{K: TyBad})
 		}
 		return c.setExprType(ex, Type{K: TyUntypedInt})
 	case *ast.StringLit:
@@ -229,11 +244,18 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		switch e.Op {
 		case "-":
 			want := expected
-			if want.K != TyI32 && want.K != TyI64 {
+			// Unary - only makes sense for signed integers (or untyped ints which default to i64).
+			wantBase := stripRange(want)
+			if wantBase.K != TyI8 && wantBase.K != TyI32 && wantBase.K != TyI64 {
 				want = Type{K: TyI64}
 			}
 			ty := c.checkExpr(e.Expr, want)
 			ty = c.forceIntType(e.Expr, ty, expected)
+			base := stripRange(ty)
+			if base.K != TyI8 && base.K != TyI32 && base.K != TyI64 && base.K != TyUntypedInt {
+				c.errorAt(e.S, "operator - expects signed int")
+				return c.setExprType(ex, Type{K: TyBad})
+			}
 			return c.setExprType(ex, ty)
 		case "!":
 			ty := c.checkExpr(e.Expr, Type{K: TyBool})
@@ -246,7 +268,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 	case *ast.AsExpr:
-		// Stage0 v0: numeric casts between i32/i64 and @range(lo..=hi) i32/i64.
+		// Stage0 v0: numeric casts between integer types, plus @range(lo..=hi) T.
 		file := e.S.File
 		if file == nil && c.curFn != nil && c.curFn.Span.File != nil {
 			file = c.curFn.Span.File
@@ -263,21 +285,8 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		fromBase := stripRange(gotTy)
 		toBase := stripRange(wantTy)
 
-		ok := false
-		if sameType(wantTy, gotTy) {
-			ok = true
-		} else if fromBase.K == TyI32 && toBase.K == TyI64 {
-			ok = true
-		} else if fromBase.K == TyI64 && toBase.K == TyI32 {
-			ok = true
-		} else if wantTy.K == TyRange && toBase.K == fromBase.K && (toBase.K == TyI32 || toBase.K == TyI64) {
-			// base -> range, or range(base) -> range (runtime check in IR/interp if needed)
-			ok = true
-		} else if gotTy.K == TyRange && (wantTy.K == TyI32 || wantTy.K == TyI64) && fromBase.K == wantTy.K {
-			// range -> base (widening)
-			ok = true
-		}
-		if !ok {
+		// Allow any integer-to-integer cast; runtime/const checks are handled in lowering.
+		if !isIntLikeType(fromBase) || !isIntType(toBase) {
 			c.errorAt(e.S, fmt.Sprintf("unsupported cast: %s as %s", gotTy.String(), wantTy.String()))
 			wantTy = Type{K: TyBad}
 		}
@@ -288,25 +297,29 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 	case *ast.BinaryExpr:
 		switch e.Op {
 		case "+", "-", "*", "/", "%":
-			want := expected
-			if want.K == TyRange {
-				want = stripRange(want)
+			want := stripRange(expected)
+			if !isIntType(want) {
+				want = Type{K: TyI64}
 			}
 			l0 := c.checkExpr(e.Left, want)
 			l := stripRange(c.forceIntType(e.Left, l0, want))
 			r0 := c.checkExpr(e.Right, l)
 			r := stripRange(c.forceIntType(e.Right, r0, l))
-			if !sameType(l, r) {
+			if !isIntType(l) || !isIntType(r) || !sameType(l, r) {
 				c.errorAt(e.S, "binary integer ops require same type")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
 			return c.setExprType(ex, l)
 		case "<", "<=", ">", ">=":
-			l0 := c.checkExpr(e.Left, Type{K: TyI64})
-			l := stripRange(c.forceIntType(e.Left, l0, Type{K: TyI64}))
+			want := stripRange(expected)
+			if !isIntType(want) {
+				want = Type{K: TyI64}
+			}
+			l0 := c.checkExpr(e.Left, want)
+			l := stripRange(c.forceIntType(e.Left, l0, want))
 			r0 := c.checkExpr(e.Right, l)
 			r := stripRange(c.forceIntType(e.Right, r0, l))
-			if !sameType(l, r) {
+			if !isIntType(l) || !isIntType(r) || !sameType(l, r) {
 				c.errorAt(e.S, "comparison requires same integer type")
 			}
 			return c.setExprType(ex, Type{K: TyBool})
@@ -335,14 +348,14 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			// Enum equality is only supported when comparing against a unit variant value
 			// (e.g. `x == E.None`), which lowers to a tag comparison.
 			switch l.K {
-			case TyBad, TyBool, TyI32, TyI64, TyString:
+			case TyBad, TyBool, TyI8, TyU8, TyI32, TyU32, TyI64, TyU64, TyUSize, TyString:
 				// ok
 			case TyEnum:
 				if !c.isEnumUnitValue(e.Left) && !c.isEnumUnitValue(e.Right) {
 					c.errorAt(e.S, "enum equality is only supported against unit variants in stage0")
 				}
 			default:
-				c.errorAt(e.S, "equality is only supported for bool/i32/i64/String in stage0")
+				c.errorAt(e.S, "equality is only supported for bool/int/String in stage0")
 			}
 			return c.setExprType(ex, Type{K: TyBool})
 		case "&&", "||":
@@ -533,12 +546,12 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 					c.errorAt(e.S, fmt.Sprintf("wrong number of arguments: expected %d, got %d", len(vs.Fields), len(e.Args)))
 					return c.setExprType(ex, Type{K: TyBad})
 				}
-					for i, a := range e.Args {
-						at := c.checkExpr(a, vs.Fields[i])
-						if !assignableTo(vs.Fields[i], at) {
-							c.errorAt(a.Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", vs.Fields[i].String(), at.String()))
-						}
+				for i, a := range e.Args {
+					at := c.checkExpr(a, vs.Fields[i])
+					if !assignableTo(vs.Fields[i], at) {
+						c.errorAt(a.Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", vs.Fields[i].String(), at.String()))
 					}
+				}
 				fields := make([]Type, 0, len(vs.Fields))
 				fields = append(fields, vs.Fields...)
 				c.enumCtors[e] = EnumCtorTarget{Enum: ety, Variant: varName, Tag: vidx, Fields: fields}
@@ -807,17 +820,17 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		}
 
 		// Minimal untyped-int unification.
-		if thenTy.K == TyUntypedInt && (elseTy.K == TyI32 || elseTy.K == TyI64) {
-			thenTy = elseTy
+		if thenTy.K == TyUntypedInt && isIntLikeType(stripRange(elseTy)) {
+			thenTy = stripRange(elseTy)
 		}
-		if elseTy.K == TyUntypedInt && (thenTy.K == TyI32 || thenTy.K == TyI64) {
-			elseTy = thenTy
+		if elseTy.K == TyUntypedInt && isIntLikeType(stripRange(thenTy)) {
+			elseTy = stripRange(thenTy)
 		}
 		// Range values can be used where the base type is expected.
-		if thenTy.K == TyRange && (elseTy.K == TyI32 || elseTy.K == TyI64) && stripRange(thenTy).K == elseTy.K {
+		if thenTy.K == TyRange && isIntType(elseTy) && sameType(stripRange(thenTy), elseTy) {
 			thenTy = elseTy
 		}
-		if elseTy.K == TyRange && (thenTy.K == TyI32 || thenTy.K == TyI64) && stripRange(elseTy).K == thenTy.K {
+		if elseTy.K == TyRange && isIntType(thenTy) && sameType(stripRange(elseTy), thenTy) {
 			elseTy = thenTy
 		}
 		if thenTy.K == TyUntypedInt && elseTy.K == TyUntypedInt {
@@ -829,17 +842,16 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 		return c.setExprType(ex, thenTy)
-		case *ast.MatchExpr:
-			scrutTy := c.checkExpr(e.Scrutinee, Type{K: TyBad})
-			scrutBase := stripRange(scrutTy)
-			isEnum := scrutBase.K == TyEnum
-			isI32 := scrutBase.K == TyI32
-			isI64 := scrutBase.K == TyI64
-			isStr := scrutBase.K == TyString
-			if !isEnum && !isI32 && !isI64 && !isStr {
-				c.errorAt(e.S, "match scrutinee must be enum/i32/i64/String (stage0)")
-				return c.setExprType(ex, Type{K: TyBad})
-			}
+	case *ast.MatchExpr:
+		scrutTy := c.checkExpr(e.Scrutinee, Type{K: TyBad})
+		scrutBase := stripRange(scrutTy)
+		isEnum := scrutBase.K == TyEnum
+		isInt := isIntType(scrutBase) || scrutBase.K == TyUntypedInt
+		isStr := scrutBase.K == TyString
+		if !isEnum && !isInt && !isStr {
+			c.errorAt(e.S, "match scrutinee must be enum/int/String (stage0)")
+			return c.setExprType(ex, Type{K: TyBad})
+		}
 		var esig EnumSig
 		if isEnum {
 			var ok bool
@@ -865,17 +877,24 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				if p.Name != "" {
 					c.scopeTop()[p.Name] = varInfo{ty: scrutTy, mutable: false}
 				}
-				case *ast.IntPat:
-					if !isI32 && !isI64 {
-						c.errorAt(p.S, "integer pattern only allowed when scrutinee is i32/i64 (stage0)")
+			case *ast.IntPat:
+				if !isInt {
+					c.errorAt(p.S, "integer pattern only allowed when scrutinee is int (stage0)")
+				} else {
+					u, err := strconv.ParseUint(p.Text, 10, 64)
+					if err != nil {
+						c.errorAt(p.S, "invalid integer literal in pattern")
 					} else {
-						v, err := strconv.ParseInt(p.Text, 10, 64)
-						if err != nil {
-							c.errorAt(p.S, "invalid integer literal in pattern")
-						} else if isI32 && (v < -2147483648 || v > 2147483647) {
-							c.errorAt(p.S, "integer pattern out of range for i32")
+						base := scrutBase
+						if base.K == TyUntypedInt {
+							base = Type{K: TyI64}
+						}
+						_, max, ok := intMinMax(base)
+						if ok && u > max {
+							c.errorAt(p.S, "integer pattern out of range for "+base.String())
 						}
 					}
+				}
 			case *ast.StrPat:
 				if !isStr {
 					c.errorAt(p.S, "string pattern only allowed when scrutinee is String (stage0)")
@@ -919,25 +938,25 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 
 			armTy := c.checkExpr(arm.Expr, resultTy)
-				if resultTy.K == TyBad {
-					if armTy.K == TyUntypedInt {
-						resultTy = Type{K: TyI64}
-					} else {
-						resultTy = armTy
-					}
+			if resultTy.K == TyBad {
+				if armTy.K == TyUntypedInt {
+					resultTy = Type{K: TyI64}
 				} else {
-					// Range values can be used where the base type is expected; unify match result
-					// to the base type when arms disagree only by range-ness.
-					if resultTy.K == TyRange && (armTy.K == TyI32 || armTy.K == TyI64) && stripRange(resultTy).K == armTy.K {
-						resultTy = armTy
-					} else if (resultTy.K == TyI32 || resultTy.K == TyI64) && armTy.K == TyRange && stripRange(armTy).K == resultTy.K {
-						// keep resultTy as base
-					} else if !assignableTo(resultTy, armTy) {
-						c.errorAt(arm.S, fmt.Sprintf("match arm type mismatch: expected %s, got %s", resultTy.String(), armTy.String()))
-					}
+					resultTy = armTy
 				}
-				c.popScope()
+			} else {
+				// Range values can be used where the base type is expected; unify match result
+				// to the base type when arms disagree only by range-ness.
+				if resultTy.K == TyRange && isIntType(armTy) && sameType(stripRange(resultTy), armTy) {
+					resultTy = armTy
+				} else if isIntType(resultTy) && armTy.K == TyRange && sameType(stripRange(armTy), resultTy) {
+					// keep resultTy as base
+				} else if !assignableTo(resultTy, armTy) {
+					c.errorAt(arm.S, fmt.Sprintf("match arm type mismatch: expected %s, got %s", resultTy.String(), armTy.String()))
+				}
 			}
+			c.popScope()
+		}
 
 		if isEnum {
 			if !hasWild {
@@ -1204,12 +1223,15 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 func (c *checker) forceIntType(ex ast.Expr, got Type, want Type) Type {
 	if got.K == TyUntypedInt {
 		// untyped int defaults to "want" if want is concrete int, else i64.
-		if want.K == TyI32 || want.K == TyI64 {
+		if want.K == TyRange && want.Base != nil && isIntType(*want.Base) {
+			return want
+		}
+		if isIntType(want) {
 			return want
 		}
 		return Type{K: TyI64}
 	}
-	if got.K == TyI32 || got.K == TyI64 {
+	if isIntType(got) || got.K == TyRange {
 		return got
 	}
 	return got

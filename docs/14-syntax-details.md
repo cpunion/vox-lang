@@ -156,7 +156,7 @@ type Tiny = @range(0..=3) i32;
 
 Stage0/Stage1 v0 当前实现限制：
 
-- `T` 仅支持 `i32` / `i64`。
+- `T` 仅支持整数类型（当前 stage0 实现：`i8/u8/i32/u32/i64/u64/usize`）。
 - `lo/hi` 仅支持十进制整数字面量。
 
 ## 枚举构造子点前缀简写（已定）
@@ -181,7 +181,7 @@ Stage0/Stage1 目前支持的 `match` pattern 形态：
 
 - `_`：wildcard
 - `name`：绑定模式（bind），总是匹配，并把 scrutinee 绑定到 `name`
-- `123`：整数字面量（仅当 scrutinee 是 `i32` 或 `i64`）
+- `123`：整数字面量（仅当 scrutinee 是整数类型）
 - `"txt"`：字符串字面量（仅当 scrutinee 是 `String`）
 - `Enum.Variant(...)`：枚举 variant pattern
 - `.Variant(...)`：枚举 variant pattern（点前缀简写；当枚举类型可由上下文确定时）
@@ -220,7 +220,7 @@ pub const NAME: String = "vox";
   - 字面量：`123` / `true` / `"txt"`
   - 其他常量引用（含跨模块的 `import` 访问）
   - `-x` / `!x`
-  - `expr as i32/i64`（显式数值转换；`i64 as i32` 在编译期可确定溢出时会报错）
+  - `expr as <int>`（显式整数转换；例如 `i64 as i32` 在编译期可确定溢出时会报错，否则运行时检查并在失败时 panic）
   - `+ - * / %`、比较、`== !=`、`&& ||`
   - `if cond { a } else { b }`（cond 必须为常量 bool）
 - 不支持在 const 初始化中调用函数、构造 struct/enum、`match` 等（后续由 `comptime` 统一解决）。

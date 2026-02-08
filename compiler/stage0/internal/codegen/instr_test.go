@@ -28,8 +28,8 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 				t1 := &ir.Temp{ID: 1}
 				t2 := &ir.Temp{ID: 2}
 				b.Instr = append(b.Instr,
-					&ir.Const{Dst: t0, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 40}},
-					&ir.Const{Dst: t1, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 2}},
+					&ir.Const{Dst: t0, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 40}},
+					&ir.Const{Dst: t1, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 2}},
 					&ir.BinOp{Dst: t2, Op: ir.OpAdd, Ty: ir.Type{K: ir.TI32}, A: t0, B: t1},
 				)
 				b.Term = &ir.Ret{Val: t2}
@@ -44,21 +44,21 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 				t1 := &ir.Temp{ID: 1}
 				b.Instr = append(b.Instr,
 					&ir.SlotDecl{Slot: s0, Ty: ir.Type{K: ir.TI64}},
-					&ir.Const{Dst: t0, Ty: ir.Type{K: ir.TI64}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI64}, V: 7}},
+					&ir.Const{Dst: t0, Ty: ir.Type{K: ir.TI64}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI64}, Bits: 7}},
 					&ir.Store{Slot: s0, Val: t0},
 					&ir.Load{Dst: t1, Ty: ir.Type{K: ir.TI64}, Slot: s0},
 				)
 				// return i32; cast isn't in IR, so compare then choose with branches:
 				// if (t1 == 7) return 1 else return 0
 				cond := &ir.Temp{ID: 2}
-				b.Instr = append(b.Instr, &ir.Cmp{Dst: cond, Op: ir.CmpEq, Ty: ir.Type{K: ir.TI64}, A: t1, B: &ir.ConstInt{Ty: ir.Type{K: ir.TI64}, V: 7}})
+				b.Instr = append(b.Instr, &ir.Cmp{Dst: cond, Op: ir.CmpEq, Ty: ir.Type{K: ir.TI64}, A: t1, B: &ir.ConstInt{Ty: ir.Type{K: ir.TI64}, Bits: 7}})
 				b.Term = &ir.CondBr{Cond: cond, Then: "then", Else: "else"}
 			}, func(fn *ir.Func) {
 				thenBlk := &ir.Block{Name: "then"}
 				elseBlk := &ir.Block{Name: "else"}
-				thenBlk.Instr = append(thenBlk.Instr, &ir.Const{Dst: &ir.Temp{ID: 3}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 1}})
+				thenBlk.Instr = append(thenBlk.Instr, &ir.Const{Dst: &ir.Temp{ID: 3}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 1}})
 				thenBlk.Term = &ir.Ret{Val: &ir.Temp{ID: 3}}
-				elseBlk.Instr = append(elseBlk.Instr, &ir.Const{Dst: &ir.Temp{ID: 4}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 0}})
+				elseBlk.Instr = append(elseBlk.Instr, &ir.Const{Dst: &ir.Temp{ID: 4}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 0}})
 				elseBlk.Term = &ir.Ret{Val: &ir.Temp{ID: 4}}
 				fn.Blocks = append(fn.Blocks, thenBlk, elseBlk)
 			}),
@@ -117,21 +117,21 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 				t1 := &ir.Temp{ID: 1}
 				t2 := &ir.Temp{ID: 2}
 				b.Instr = append(b.Instr,
-					&ir.Const{Dst: t0, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 7}},
-					&ir.I32ToI64{Dst: t1, V: t0},
-					&ir.I64ToI32Checked{Dst: t2, V: t1},
+					&ir.Const{Dst: t0, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 7}},
+					&ir.IntCastChecked{Dst: t1, From: ir.Type{K: ir.TI32}, To: ir.Type{K: ir.TI64}, V: t0},
+					&ir.IntCastChecked{Dst: t2, From: ir.Type{K: ir.TI64}, To: ir.Type{K: ir.TI32}, V: t1},
 				)
 				b.Term = &ir.Ret{Val: t2}
 			}),
 			want: "7",
 		},
 		{
-			name: "range_check_i32",
+			name: "range_check",
 			prog: progMainI32(func(b *ir.Block) {
 				t0 := &ir.Temp{ID: 0}
 				b.Instr = append(b.Instr,
-					&ir.Const{Dst: t0, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 2}},
-					&ir.RangeCheckI32{V: t0, Lo: 0, Hi: 3},
+					&ir.Const{Dst: t0, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 2}},
+					&ir.RangeCheckInt{Ty: ir.Type{K: ir.TI32}, V: t0, Lo: 0, Hi: 3},
 				)
 				b.Term = &ir.Ret{Val: t0}
 			}),
@@ -162,7 +162,7 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 						{
 							Name: "entry",
 							Instr: []ir.Instr{
-								&ir.Const{Dst: &ir.Temp{ID: 0}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 7}},
+								&ir.Const{Dst: &ir.Temp{ID: 0}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 7}},
 							},
 							Term: &ir.Ret{Val: &ir.Temp{ID: 0}},
 						},
@@ -197,7 +197,7 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 							Instr: []ir.Instr{
 								&ir.Const{Dst: &ir.Temp{ID: 2}, Ty: ir.Type{K: ir.TString}, Val: &ir.ConstStr{S: "boom"}},
 								&ir.Call{Ret: ir.Type{K: ir.TUnit}, Name: "panic", Args: []ir.Value{&ir.Temp{ID: 2}}},
-								&ir.Const{Dst: &ir.Temp{ID: 3}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 0}},
+								&ir.Const{Dst: &ir.Temp{ID: 3}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 0}},
 							},
 							Term: &ir.Ret{Val: &ir.Temp{ID: 3}},
 						},
@@ -210,7 +210,7 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 						{
 							Name: "entry",
 							Instr: []ir.Instr{
-								&ir.Const{Dst: &ir.Temp{ID: 0}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 9}},
+								&ir.Const{Dst: &ir.Temp{ID: 0}, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 9}},
 							},
 							Term: &ir.Ret{Val: &ir.Temp{ID: 0}},
 						},

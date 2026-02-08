@@ -18,7 +18,7 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			return nil, err
 		}
 		tmp := g.newTemp()
-		g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstInt{Ty: irty, V: parseInt64(e.Text)}})
+		g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstInt{Ty: irty, Bits: parseUint64(e.Text)}})
 		return tmp, nil
 	case *ast.BoolLit:
 		tmp := g.newTemp()
@@ -43,7 +43,7 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			tmp := g.newTemp()
 			switch cv.K {
 			case typecheck.ConstInt:
-				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstInt{Ty: irty, V: cv.I64}})
+				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstInt{Ty: irty, Bits: uint64(cv.I64)}})
 			case typecheck.ConstBool:
 				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstBool{V: cv.B}})
 			case typecheck.ConstStr:
@@ -83,14 +83,14 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 				return nil, err
 			}
 			z := g.newTemp()
-			g.emit(&ir.Const{Dst: z, Ty: irty, Val: &ir.ConstInt{Ty: irty, V: 0}})
+			g.emit(&ir.Const{Dst: z, Ty: irty, Val: &ir.ConstInt{Ty: irty, Bits: 0}})
 			tmp := g.newTemp()
 			g.emit(&ir.BinOp{Dst: tmp, Op: ir.OpSub, Ty: irty, A: z, B: a})
 			return tmp, nil
 		}
 		return nil, fmt.Errorf("unsupported unary op: %s", e.Op)
 	case *ast.AsExpr:
-		// Stage0 v0: numeric casts between i32/i64 and @range(lo..=hi) i32/i64.
+		// Stage0 v0: numeric casts between integer types (checked by default) and @range(..) T.
 		v, err := g.genExpr(e.Expr)
 		if err != nil {
 			return nil, err
@@ -108,31 +108,16 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 		if irFrom.K == irTo.K {
 			// Still may need a range check if the surface type is @range(..).
 			if toTy.K == typecheck.TyRange && toTy.Base != nil {
-				switch toTy.Base.K {
-				case typecheck.TyI32:
-					g.emit(&ir.RangeCheckI32{V: v, Lo: int32(toTy.Lo), Hi: int32(toTy.Hi)})
-				case typecheck.TyI64:
-					g.emit(&ir.RangeCheckI64{V: v, Lo: toTy.Lo, Hi: toTy.Hi})
-				}
+				g.emit(&ir.RangeCheckInt{Ty: irTo, V: v, Lo: toTy.Lo, Hi: toTy.Hi})
 			}
 			return v, nil
 		}
 		tmp := g.newTemp()
-		if irFrom.K == ir.TI32 && irTo.K == ir.TI64 {
-			g.emit(&ir.I32ToI64{Dst: tmp, V: v})
-			if toTy.K == typecheck.TyRange && toTy.Base != nil && toTy.Base.K == typecheck.TyI64 {
-				g.emit(&ir.RangeCheckI64{V: tmp, Lo: toTy.Lo, Hi: toTy.Hi})
-			}
-			return tmp, nil
+		g.emit(&ir.IntCastChecked{Dst: tmp, From: irFrom, To: irTo, V: v})
+		if toTy.K == typecheck.TyRange && toTy.Base != nil {
+			g.emit(&ir.RangeCheckInt{Ty: irTo, V: tmp, Lo: toTy.Lo, Hi: toTy.Hi})
 		}
-		if irFrom.K == ir.TI64 && irTo.K == ir.TI32 {
-			g.emit(&ir.I64ToI32Checked{Dst: tmp, V: v})
-			if toTy.K == typecheck.TyRange && toTy.Base != nil && toTy.Base.K == typecheck.TyI32 {
-				g.emit(&ir.RangeCheckI32{V: tmp, Lo: int32(toTy.Lo), Hi: int32(toTy.Hi)})
-			}
-			return tmp, nil
-		}
-		return nil, fmt.Errorf("unsupported cast in IR gen")
+		return tmp, nil
 	case *ast.BinaryExpr:
 		// Special-case: enum equality against unit variants lowers to tag comparison.
 		if (e.Op == "==" || e.Op == "!=") && g.isEnumUnitEq(e) {
@@ -544,7 +529,7 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			tmp := g.newTemp()
 			switch cv.K {
 			case typecheck.ConstInt:
-				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstInt{Ty: irty, V: cv.I64}})
+				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstInt{Ty: irty, Bits: uint64(cv.I64)}})
 			case typecheck.ConstBool:
 				g.emit(&ir.Const{Dst: tmp, Ty: irty, Val: &ir.ConstBool{V: cv.B}})
 			case typecheck.ConstStr:

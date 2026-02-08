@@ -13,10 +13,20 @@ func (t Type) String() string {
 		return "()"
 	case TyBool:
 		return "bool"
+	case TyI8:
+		return "i8"
+	case TyU8:
+		return "u8"
 	case TyI32:
 		return "i32"
+	case TyU32:
+		return "u32"
 	case TyI64:
 		return "i64"
+	case TyU64:
+		return "u64"
+	case TyUSize:
+		return "usize"
 	case TyString:
 		return "String"
 	case TyUntypedInt:
@@ -95,7 +105,7 @@ func assignableTo(want, got Type) bool {
 		return true
 	}
 	// Allow range -> base (widening).
-	if (want.K == TyI32 || want.K == TyI64) && got.K == TyRange && got.Base != nil && got.Base.K == want.K {
+	if isIntType(want) && got.K == TyRange && got.Base != nil && sameType(want, *got.Base) {
 		return true
 	}
 	return false
@@ -111,6 +121,69 @@ func stripRange(t Type) Type {
 
 func isRangeOf(t Type, base Kind) bool {
 	return t.K == TyRange && t.Base != nil && t.Base.K == base
+}
+
+func isIntType(t Type) bool {
+	switch t.K {
+	case TyI8, TyU8, TyI32, TyU32, TyI64, TyU64, TyUSize:
+		return true
+	default:
+		return false
+	}
+}
+
+func isIntLikeType(t Type) bool {
+	if t.K == TyUntypedInt {
+		return true
+	}
+	if t.K == TyRange {
+		return t.Base != nil && isIntType(*t.Base)
+	}
+	return isIntType(t)
+}
+
+func isSignedIntType(t Type) bool { return t.K == TyI8 || t.K == TyI32 || t.K == TyI64 }
+
+func isUnsignedIntType(t Type) bool {
+	return t.K == TyU8 || t.K == TyU32 || t.K == TyU64 || t.K == TyUSize
+}
+
+func intBitWidth(t Type) int {
+	switch t.K {
+	case TyI8, TyU8:
+		return 8
+	case TyI32, TyU32:
+		return 32
+	case TyI64, TyU64:
+		return 64
+	case TyUSize:
+		return 64 // stage0 v0: usize is fixed to 64-bit
+	default:
+		return 0
+	}
+}
+
+// intMinMax returns inclusive min/max bounds for an integer type.
+// max is returned as unsigned to cover u64.
+func intMinMax(t Type) (min int64, max uint64, ok bool) {
+	switch t.K {
+	case TyI8:
+		return -128, 127, true
+	case TyU8:
+		return 0, 255, true
+	case TyI32:
+		return -2147483648, 2147483647, true
+	case TyU32:
+		return 0, 4294967295, true
+	case TyI64:
+		return -9223372036854775808, 9223372036854775807, true
+	case TyU64:
+		return 0, 18446744073709551615, true
+	case TyUSize:
+		return 0, 18446744073709551615, true
+	default:
+		return 0, 0, false
+	}
 }
 
 func chooseType(ann, init Type) Type {

@@ -14,7 +14,7 @@ const (
 
 type Value struct {
 	K ValueKind
-	I int64
+	I uint64 // integer raw bits (interpreted by static type at use site)
 	B bool
 	S string
 	M map[string]Value // VStruct fields

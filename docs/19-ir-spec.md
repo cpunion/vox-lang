@@ -32,7 +32,7 @@ block entry:
 
 IR v0 只定义 stage0 必需类型：
 
-- `i32`、`i64`
+- `i8/u8/i32/u32/i64/u64/usize`（stage0 v0 目前实现的整数类型）
 - `bool`
 - `unit`
 - `str`（当前用于 stage0 的 `String` 字面量与最小字符串比较/返回；后续会替换为真正的字符串/切片模型）
@@ -98,17 +98,17 @@ IR v0 只定义 stage0 必需类型：
 
 ### 5.4.1 数值转换（cast）
 
-Stage0/Stage1 v0 目前只定义 `i32 <-> i64` 的显式转换：
+Stage0 IR v0 定义“整数到整数”的显式转换：
 
 ```
-%t0 = i64_from_i32 %t1
-%t2 = i32_from_i64_checked %t3
+%t0 = int_cast i32 i64 %t1
+%t2 = int_cast_checked i64 i32 %t3
 ```
 
 约束：
 
-- `i64_from_i32`：无条件安全转换。
-- `i32_from_i64_checked`：必须进行运行时范围检查；越界必须 `panic`。
+- `int_cast`：转换不 panic（截断/按位转换语义，细节后续细化；stage0 目前很少生成）。
+- `int_cast_checked`：必须进行运行时范围检查；越界必须 `panic`。
 
 ### 5.4.2 范围检查（`@range`）
 
@@ -117,13 +117,13 @@ Stage0/Stage1 v0 目前只定义 `i32 <-> i64` 的显式转换：
 进入范围类型（例如 `x as Tiny`，其中 `type Tiny = @range(0..=3) i32`）时，lowering 需插入范围检查指令：
 
 ```
-range_check_i32 0 3 %t0
-range_check_i64 0 3 %t0
+range_check i32 0 3 %t0
+range_check i64 0 3 %t0
 ```
 
 约束：
 
-- `range_check_*` 没有结果值，只做检查。
+- `range_check` 没有结果值，只做检查。
 - 若值不在 `[lo, hi]`（包含端点）内，必须 `panic("range check failed")`。
 
 ### 5.5 局部槽位（可变变量）

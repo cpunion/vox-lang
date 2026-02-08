@@ -30,10 +30,10 @@ func emitFunc(out *bytes.Buffer, p *ir.Program, f *ir.Func) error {
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TBool}
 			case *ir.Not:
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TBool}
-			case *ir.I64ToI32Checked:
-				tempTypes[i.Dst.ID] = ir.Type{K: ir.TI32}
-			case *ir.I32ToI64:
-				tempTypes[i.Dst.ID] = ir.Type{K: ir.TI64}
+			case *ir.IntCastChecked:
+				tempTypes[i.Dst.ID] = i.To
+			case *ir.IntCast:
+				tempTypes[i.Dst.ID] = i.To
 			case *ir.Load:
 				tempTypes[i.Dst.ID] = i.Ty
 			case *ir.StructInit:
@@ -226,48 +226,12 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		out.WriteString(cValue(i.A))
 		out.WriteString(");\n")
 		return nil
-	case *ir.I64ToI32Checked:
-		out.WriteString("  {\n")
-		out.WriteString("    int64_t _v = ")
-		out.WriteString(cValue(i.V))
-		out.WriteString(";\n")
-		out.WriteString("    if (_v < (int64_t)INT32_MIN || _v > (int64_t)INT32_MAX) { vox_builtin_panic(\"i64 to i32 overflow\"); }\n")
-		out.WriteString("    ")
-		out.WriteString(cTempName(i.Dst.ID))
-		out.WriteString(" = (int32_t)_v;\n")
-		out.WriteString("  }\n")
-		return nil
-	case *ir.I32ToI64:
-		out.WriteString("  ")
-		out.WriteString(cTempName(i.Dst.ID))
-		out.WriteString(" = (int64_t)")
-		out.WriteString(cValue(i.V))
-		out.WriteString(";\n")
-		return nil
-	case *ir.RangeCheckI32:
-		out.WriteString("  {\n")
-		out.WriteString("    int32_t _v = ")
-		out.WriteString(cValue(i.V))
-		out.WriteString(";\n")
-		out.WriteString("    if (_v < (int32_t)")
-		out.WriteString(strconv.FormatInt(int64(i.Lo), 10))
-		out.WriteString(" || _v > (int32_t)")
-		out.WriteString(strconv.FormatInt(int64(i.Hi), 10))
-		out.WriteString(") { vox_builtin_panic(\"range check failed\"); }\n")
-		out.WriteString("  }\n")
-		return nil
-	case *ir.RangeCheckI64:
-		out.WriteString("  {\n")
-		out.WriteString("    int64_t _v = ")
-		out.WriteString(cValue(i.V))
-		out.WriteString(";\n")
-		out.WriteString("    if (_v < (int64_t)")
-		out.WriteString(strconv.FormatInt(i.Lo, 10))
-		out.WriteString(" || _v > (int64_t)")
-		out.WriteString(strconv.FormatInt(i.Hi, 10))
-		out.WriteString(") { vox_builtin_panic(\"range check failed\"); }\n")
-		out.WriteString("  }\n")
-		return nil
+	case *ir.IntCastChecked:
+		return emitIntCastChecked(out, i)
+	case *ir.IntCast:
+		return emitIntCast(out, i)
+	case *ir.RangeCheckInt:
+		return emitRangeCheckInt(out, i)
 	case *ir.Store:
 		out.WriteString("  ")
 		out.WriteString(cSlotName(i.Slot.ID))
@@ -604,6 +568,242 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 	default:
 		return fmt.Errorf("unsupported instr in codegen")
 	}
+}
+
+func isIntType(t ir.Type) bool {
+	switch t.K {
+	case ir.TI8, ir.TU8, ir.TI32, ir.TU32, ir.TI64, ir.TU64, ir.TUSize:
+		return true
+	default:
+		return false
+	}
+}
+
+func intBits(k ir.TypeKind) int {
+	switch k {
+	case ir.TI8, ir.TU8:
+		return 8
+	case ir.TI32, ir.TU32:
+		return 32
+	case ir.TI64, ir.TU64, ir.TUSize:
+		return 64
+	default:
+		return 0
+	}
+}
+
+func intSigned(k ir.TypeKind) bool {
+	switch k {
+	case ir.TI8, ir.TI32, ir.TI64:
+		return true
+	default:
+		return false
+	}
+}
+
+func intMinMacro(k ir.TypeKind) string {
+	switch k {
+	case ir.TI8:
+		return "INT8_MIN"
+	case ir.TI32:
+		return "INT32_MIN"
+	case ir.TI64:
+		return "INT64_MIN"
+	default:
+		return "INT64_MIN"
+	}
+}
+
+func intMaxMacro(k ir.TypeKind) string {
+	switch k {
+	case ir.TI8:
+		return "INT8_MAX"
+	case ir.TI32:
+		return "INT32_MAX"
+	case ir.TI64:
+		return "INT64_MAX"
+	default:
+		return "INT64_MAX"
+	}
+}
+
+func uintMaxMacro(k ir.TypeKind) string {
+	switch k {
+	case ir.TU8:
+		return "UINT8_MAX"
+	case ir.TU32:
+		return "UINT32_MAX"
+	case ir.TU64, ir.TUSize:
+		return "UINT64_MAX"
+	default:
+		return "UINT64_MAX"
+	}
+}
+
+func intSignedMin(bits int) int64 {
+	switch bits {
+	case 8:
+		return -128
+	case 32:
+		return -2147483648
+	case 64:
+		return -9223372036854775808
+	default:
+		return 0
+	}
+}
+
+func intSignedMax(bits int) int64 {
+	switch bits {
+	case 8:
+		return 127
+	case 32:
+		return 2147483647
+	case 64:
+		return 9223372036854775807
+	default:
+		return 0
+	}
+}
+
+func intUnsignedMax(bits int) uint64 {
+	switch bits {
+	case 8:
+		return 255
+	case 32:
+		return 4294967295
+	case 64:
+		return 18446744073709551615
+	default:
+		return 0
+	}
+}
+
+func emitIntCastChecked(out *bytes.Buffer, i *ir.IntCastChecked) error {
+	if i == nil {
+		return fmt.Errorf("nil cast")
+	}
+	if !isIntType(i.From) || !isIntType(i.To) {
+		return fmt.Errorf("int_cast_checked requires integer types")
+	}
+	fromBits := intBits(i.From.K)
+	toBits := intBits(i.To.K)
+	if fromBits == 0 || toBits == 0 {
+		return fmt.Errorf("unsupported int type in cast")
+	}
+
+	msg := "int cast overflow"
+	if i.From.K == ir.TI64 && i.To.K == ir.TI32 {
+		msg = "i64 to i32 overflow"
+	}
+
+	out.WriteString("  {\n")
+	if intSigned(i.From.K) {
+		out.WriteString("    int64_t _x = (int64_t)")
+		out.WriteString(cValue(i.V))
+		out.WriteString(";\n")
+		if intSigned(i.To.K) {
+			// signed -> signed: only narrowing can overflow.
+			if fromBits > toBits {
+				out.WriteString("    if (_x < (int64_t)")
+				out.WriteString(intMinMacro(i.To.K))
+				out.WriteString(" || _x > (int64_t)")
+				out.WriteString(intMaxMacro(i.To.K))
+				out.WriteString(") { vox_builtin_panic(\"")
+				out.WriteString(msg)
+				out.WriteString("\"); }\n")
+			}
+		} else {
+			// signed -> unsigned: always reject negative; upper bound only matters when narrowing.
+			out.WriteString("    if (_x < 0")
+			if toBits < 64 {
+				out.WriteString(" || (uint64_t)_x > (uint64_t)")
+				out.WriteString(uintMaxMacro(i.To.K))
+			}
+			out.WriteString(") { vox_builtin_panic(\"")
+			out.WriteString(msg)
+			out.WriteString("\"); }\n")
+		}
+	} else {
+		out.WriteString("    uint64_t _x = (uint64_t)")
+		out.WriteString(cValue(i.V))
+		out.WriteString(";\n")
+		if intSigned(i.To.K) {
+			// unsigned -> signed: always need an upper bound check.
+			out.WriteString("    if (_x > (uint64_t)")
+			out.WriteString(intMaxMacro(i.To.K))
+			out.WriteString(") { vox_builtin_panic(\"")
+			out.WriteString(msg)
+			out.WriteString("\"); }\n")
+		} else {
+			// unsigned -> unsigned: only narrowing can overflow.
+			if fromBits > toBits {
+				out.WriteString("    if (_x > (uint64_t)")
+				out.WriteString(uintMaxMacro(i.To.K))
+				out.WriteString(") { vox_builtin_panic(\"")
+				out.WriteString(msg)
+				out.WriteString("\"); }\n")
+			}
+		}
+	}
+	out.WriteString("    ")
+	out.WriteString(cTempName(i.Dst.ID))
+	out.WriteString(" = (")
+	out.WriteString(cType(i.To))
+	out.WriteString(")")
+	out.WriteString("_x")
+	out.WriteString(";\n")
+	out.WriteString("  }\n")
+	return nil
+}
+
+func emitIntCast(out *bytes.Buffer, i *ir.IntCast) error {
+	if i == nil {
+		return fmt.Errorf("nil cast")
+	}
+	if !isIntType(i.From) || !isIntType(i.To) {
+		return fmt.Errorf("int_cast requires integer types")
+	}
+	// Stage0 currently does not generate wrapping casts in IR; keep this as a plain cast for now.
+	out.WriteString("  ")
+	out.WriteString(cTempName(i.Dst.ID))
+	out.WriteString(" = (")
+	out.WriteString(cType(i.To))
+	out.WriteString(")")
+	out.WriteString(cValue(i.V))
+	out.WriteString(";\n")
+	return nil
+}
+
+func emitRangeCheckInt(out *bytes.Buffer, i *ir.RangeCheckInt) error {
+	if i == nil {
+		return fmt.Errorf("nil range check")
+	}
+	if !isIntType(i.Ty) {
+		return fmt.Errorf("range_check requires integer type")
+	}
+	out.WriteString("  {\n")
+	if intSigned(i.Ty.K) {
+		out.WriteString("    int64_t _x = (int64_t)")
+		out.WriteString(cValue(i.V))
+		out.WriteString(";\n")
+		out.WriteString("    if (_x < (int64_t)")
+		out.WriteString(strconv.FormatInt(i.Lo, 10))
+		out.WriteString(" || _x > (int64_t)")
+		out.WriteString(strconv.FormatInt(i.Hi, 10))
+		out.WriteString(") { vox_builtin_panic(\"range check failed\"); }\n")
+	} else {
+		out.WriteString("    uint64_t _x = (uint64_t)")
+		out.WriteString(cValue(i.V))
+		out.WriteString(";\n")
+		out.WriteString("    if (_x < (uint64_t)")
+		out.WriteString(strconv.FormatInt(i.Lo, 10))
+		out.WriteString(" || _x > (uint64_t)")
+		out.WriteString(strconv.FormatInt(i.Hi, 10))
+		out.WriteString(") { vox_builtin_panic(\"range check failed\"); }\n")
+	}
+	out.WriteString("  }\n")
+	return nil
 }
 
 func emitTerm(out *bytes.Buffer, t ir.Term) error {

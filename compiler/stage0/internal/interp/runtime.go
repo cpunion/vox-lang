@@ -39,11 +39,15 @@ func RunMainWithArgs(p *typecheck.CheckedProgram, args []string) (string, error)
 	if err != nil {
 		return "", err
 	}
+	mainSig, ok := p.FuncSigs["main"]
+	if !ok {
+		return "", fmt.Errorf("missing main signature")
+	}
 	switch v.K {
 	case VUnit:
 		return "", nil
 	case VInt:
-		return fmt.Sprintf("%d", v.I), nil
+		return formatInt(v.I, mainSig.Ret), nil
 	case VBool:
 		if v.B {
 			return "true", nil
@@ -53,6 +57,25 @@ func RunMainWithArgs(p *typecheck.CheckedProgram, args []string) (string, error)
 		return v.S, nil
 	default:
 		return "", nil
+	}
+}
+
+func formatInt(bits uint64, ty typecheck.Type) string {
+	base := ty
+	if base.K == typecheck.TyRange && base.Base != nil {
+		base = *base.Base
+	}
+	switch base.K {
+	case typecheck.TyU8, typecheck.TyU32, typecheck.TyU64, typecheck.TyUSize:
+		return fmt.Sprintf("%d", bits)
+	case typecheck.TyI8:
+		return fmt.Sprintf("%d", int64(int8(bits)))
+	case typecheck.TyI32:
+		return fmt.Sprintf("%d", int64(int32(bits)))
+	case typecheck.TyI64, typecheck.TyUntypedInt:
+		return fmt.Sprintf("%d", int64(bits))
+	default:
+		return fmt.Sprintf("%d", int64(bits))
 	}
 }
 

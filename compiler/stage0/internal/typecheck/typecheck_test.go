@@ -467,6 +467,55 @@ fn main() -> i32 { return N; }`)
 	}
 }
 
+func TestConstDeclU8TypechecksAndInlines(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const N: u8 = 7
+fn main() -> i32 { return N as i32; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestConstDeclI8NegativeTypechecks(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const N: i8 = -1
+fn main() -> i32 { return N as i32; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestConstDeclU8OutOfRangeRejected(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const N: u8 = 256
+fn main() -> i32 { return N as i32; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "const integer out of range") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected out of range const error, got: %+v", tdiags.Items)
+	}
+}
+
 func TestConstImportAliasAccessRequiresPub(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "dep" as d

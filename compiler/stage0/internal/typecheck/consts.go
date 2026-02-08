@@ -65,10 +65,23 @@ func (c *checker) evalConst(qname string, at *source.File) ConstValue {
 	}
 
 	// Coerce untyped int to declared int type.
-	if vty.K == TyUntypedInt && (declTy.K == TyI32 || declTy.K == TyI64) {
-		if declTy.K == TyI32 && (v.I64 < -2147483648 || v.I64 > 2147483647) {
-			c.errorAt(cd.Span, "const integer out of range for i32")
+	if vty.K == TyUntypedInt && isIntType(declTy) {
+		min, max, ok := intMinMax(declTy)
+		if !ok {
+			c.errorAt(cd.Span, "internal error: bad int type for const coercion")
 			v = ConstValue{K: ConstBad}
+			vty = Type{K: TyBad}
+		}
+		if isUnsignedIntType(declTy) {
+			if v.I64 < 0 || uint64(v.I64) > max {
+				c.errorAt(cd.Span, "const integer out of range for "+declTy.String())
+				v = ConstValue{K: ConstBad}
+			}
+		} else {
+			if v.I64 < min || v.I64 > int64(max) {
+				c.errorAt(cd.Span, "const integer out of range for "+declTy.String())
+				v = ConstValue{K: ConstBad}
+			}
 		}
 		vty = declTy
 	}
@@ -140,12 +153,12 @@ func (c *checker) lookupConstByParts(file *source.File, parts []string, s source
 func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Type) {
 	switch e := ex.(type) {
 	case *ast.IntLit:
-		v, err := strconv.ParseInt(e.Text, 10, 64)
-		if err != nil {
+		u, err := strconv.ParseUint(e.Text, 10, 64)
+		if err != nil || u > uint64(^uint64(0)>>1) {
 			c.errorAt(e.S, "invalid integer literal")
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
-		return ConstValue{K: ConstInt, I64: v}, Type{K: TyUntypedInt}
+		return ConstValue{K: ConstInt, I64: int64(u)}, Type{K: TyUntypedInt}
 	case *ast.BoolLit:
 		return ConstValue{K: ConstBool, B: e.Value}, Type{K: TyBool}
 	case *ast.StringLit:
@@ -188,7 +201,8 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 		}
 		switch e.Op {
 		case "-":
-			if ty.K != TyUntypedInt && ty.K != TyI32 && ty.K != TyI64 {
+			base := stripRange(ty)
+			if base.K != TyUntypedInt && (!isIntType(base) || !isSignedIntType(base)) {
 				c.errorAt(e.S, "const expression: unary - expects int")
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
 			}
@@ -204,46 +218,85 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 	case *ast.AsExpr:
-		// const casts (stage0 v0): i32 <-> i64.
+		// const casts (stage0 v0): int <-> int, and `@range(..) T`.
 		v, ty := c.evalConstExpr(e.Expr, file)
 		if v.K == ConstBad || ty.K == TyBad {
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 		to := c.typeFromAstInFile(e.Ty, file)
 		toBase := stripRange(to)
-		if toBase.K != TyI32 && toBase.K != TyI64 {
-			c.errorAt(e.S, "const expression: cast target must be i32/i64 or @range(..) i32/i64")
+		if !isIntType(toBase) {
+			c.errorAt(e.S, "const expression: cast target must be int or @range(..) int")
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 		// Only integer consts are supported.
-		if ty.K != TyUntypedInt && ty.K != TyI32 && ty.K != TyI64 {
+		fromBase := stripRange(ty)
+		if fromBase.K != TyUntypedInt && !isIntType(fromBase) {
 			c.errorAt(e.S, "const expression: cast expects int")
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
-		// Current const int payload always lives in I64.
-		if toBase.K == TyI32 {
-			if v.I64 < -2147483648 || v.I64 > 2147483647 {
-				c.errorAt(e.S, "const expression: i64 to i32 overflow")
+
+		// Current const int payload always lives in I64; treat untyped as i64.
+		if fromBase.K == TyUntypedInt {
+			fromBase = Type{K: TyI64}
+		}
+
+		min, max, ok := intMinMax(toBase)
+		if !ok {
+			c.errorAt(e.S, "const expression: bad int type in cast")
+			return ConstValue{K: ConstBad}, Type{K: TyBad}
+		}
+		msg := "const expression: int cast overflow"
+		if fromBase.K == TyI64 && toBase.K == TyI32 {
+			msg = "const expression: i64 to i32 overflow"
+		}
+
+		out := v.I64
+		if isUnsignedIntType(fromBase) {
+			if v.I64 < 0 {
+				c.errorAt(e.S, msg)
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
 			}
-			// Range bounds check (if any).
-			if to.K == TyRange {
-				if v.I64 < to.Lo || v.I64 > to.Hi {
-					c.errorAt(e.S, "const expression: range check failed")
+			u := uint64(v.I64)
+			if isUnsignedIntType(toBase) {
+				if u > max {
+					c.errorAt(e.S, msg)
 					return ConstValue{K: ConstBad}, Type{K: TyBad}
 				}
-				return ConstValue{K: ConstInt, I64: v.I64}, to
+				out = int64(u)
+			} else {
+				if u > max {
+					c.errorAt(e.S, msg)
+					return ConstValue{K: ConstBad}, Type{K: TyBad}
+				}
+				out = int64(u)
 			}
-			return ConstValue{K: ConstInt, I64: v.I64}, Type{K: TyI32}
+		} else {
+			// from signed
+			if isUnsignedIntType(toBase) {
+				if v.I64 < 0 || uint64(v.I64) > max {
+					c.errorAt(e.S, msg)
+					return ConstValue{K: ConstBad}, Type{K: TyBad}
+				}
+				out = int64(uint64(v.I64))
+			} else {
+				if v.I64 < min || v.I64 > int64(max) {
+					c.errorAt(e.S, msg)
+					return ConstValue{K: ConstBad}, Type{K: TyBad}
+				}
+				out = v.I64
+			}
 		}
+
+		// Range bounds check (if any).
 		if to.K == TyRange {
-			if v.I64 < to.Lo || v.I64 > to.Hi {
+			if out < to.Lo || out > to.Hi {
 				c.errorAt(e.S, "const expression: range check failed")
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
 			}
-			return ConstValue{K: ConstInt, I64: v.I64}, to
+			return ConstValue{K: ConstInt, I64: out}, to
 		}
-		return ConstValue{K: ConstInt, I64: v.I64}, Type{K: TyI64}
+		return ConstValue{K: ConstInt, I64: out}, toBase
 	case *ast.BinaryExpr:
 		// Short-circuit for && and ||.
 		if e.Op == "&&" || e.Op == "||" {
@@ -276,7 +329,7 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 		}
 
 		// int ops
-		isInt := func(t Type) bool { return t.K == TyUntypedInt || t.K == TyI32 || t.K == TyI64 }
+		isInt := func(t Type) bool { bt := stripRange(t); return bt.K == TyUntypedInt || isIntType(bt) }
 		if e.Op == "+" || e.Op == "-" || e.Op == "*" || e.Op == "/" || e.Op == "%" {
 			if !isInt(lty) || !isInt(rty) {
 				c.errorAt(e.S, "const expression: arithmetic expects ints")

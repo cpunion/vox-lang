@@ -82,7 +82,7 @@ func (g *gen) genEnumUnitEq(e *ast.BinaryExpr) (ir.Value, error) {
 		Op:  op,
 		Ty:  ir.Type{K: ir.TI32},
 		A:   tagTmp,
-		B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: int64(unitTag)},
+		B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: uint64(unitTag)},
 	})
 	return cmpTmp, nil
 }

@@ -12,8 +12,8 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 		return Type{K: TyUnit}
 	case *ast.RangeType:
 		base := c.typeFromAstInFile(tt.Base, file)
-		if base.K != TyI32 && base.K != TyI64 {
-			c.errorAt(tt.S, "range base type must be i32 or i64 (stage0)")
+		if !isIntType(base) {
+			c.errorAt(tt.S, "range base type must be an integer type (stage0)")
 			return Type{K: TyBad}
 		}
 		if tt.Lo > tt.Hi {
@@ -21,11 +21,19 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 			return Type{K: TyBad}
 		}
 		// Bounds must fit the base integer type.
-		if base.K == TyI32 {
-			if tt.Lo < -2147483648 || tt.Hi > 2147483647 {
-				c.errorAt(tt.S, "range bounds out of i32")
-				return Type{K: TyBad}
-			}
+		min, max, ok := intMinMax(base)
+		if !ok {
+			c.errorAt(tt.S, "invalid range base type")
+			return Type{K: TyBad}
+		}
+		// Stage0 v0: range bounds are i64 syntax, so unsigned ranges are limited to i64 bounds.
+		if isUnsignedIntType(base) && tt.Lo < 0 {
+			c.errorAt(tt.S, "range bounds out of base type")
+			return Type{K: TyBad}
+		}
+		if tt.Lo < min || uint64(tt.Hi) > max {
+			c.errorAt(tt.S, "range bounds out of base type")
+			return Type{K: TyBad}
 		}
 		return Type{K: TyRange, Base: &base, Lo: tt.Lo, Hi: tt.Hi}
 	case *ast.NamedType:
@@ -78,10 +86,20 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 			return Type{K: TyParam, Name: name}
 		}
 		switch name {
+		case "i8":
+			return Type{K: TyI8}
+		case "u8":
+			return Type{K: TyU8}
 		case "i32":
 			return Type{K: TyI32}
+		case "u32":
+			return Type{K: TyU32}
 		case "i64":
 			return Type{K: TyI64}
+		case "u64":
+			return Type{K: TyU64}
+		case "usize":
+			return Type{K: TyUSize}
 		case "bool":
 			return Type{K: TyBool}
 		case "String":

@@ -12,8 +12,13 @@ const (
 	TyBad Kind = iota
 	TyUnit
 	TyBool
+	TyI8
+	TyU8
 	TyI32
+	TyU32
 	TyI64
+	TyU64
+	TyUSize
 	TyString
 	TyUntypedInt
 	TyRange // refined integer type: @range(lo..=hi) Base
@@ -294,7 +299,7 @@ type checker struct {
 	namedTypes map[*source.File]map[string]Type
 	// Named const imports: file -> localName -> qualified const target.
 	namedConsts map[*source.File]map[string]string
-	pending    []pendingNamedImport
+	pending     []pendingNamedImport
 
 	// Generic monomorphization (stage0 minimal).
 	funcDecls     map[string]*ast.FuncDecl // qualified name -> decl (includes generic defs)

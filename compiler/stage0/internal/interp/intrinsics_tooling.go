@@ -65,7 +65,7 @@ func (rt *Runtime) callToolIntrinsic(name string, args []Value) (Value, bool, er
 			return Value{K: VInt, I: 0}, true, nil
 		}
 		if ee, ok := err.(*exec.ExitError); ok {
-			return Value{K: VInt, I: int64(ee.ExitCode())}, true, nil
+			return Value{K: VInt, I: uint64(ee.ExitCode())}, true, nil
 		}
 		return unit(), true, err
 	case "__walk_vox_files":
@@ -109,4 +109,3 @@ func (rt *Runtime) callToolIntrinsic(name string, args []Value) (Value, bool, er
 		return unit(), false, nil
 	}
 }
-

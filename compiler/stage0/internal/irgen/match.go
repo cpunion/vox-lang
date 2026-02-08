@@ -16,12 +16,21 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	}
 
 	scrutTy := g.p.ExprTypes[m.Scrutinee]
+	scrutBase := scrutTy
+	if scrutBase.K == typecheck.TyRange && scrutBase.Base != nil {
+		scrutBase = *scrutBase.Base
+	}
 	isEnum := scrutTy.K == typecheck.TyEnum
-	isI32 := scrutTy.K == typecheck.TyI32
-	isI64 := scrutTy.K == typecheck.TyI64
+	isInt := scrutBase.K == typecheck.TyI8 ||
+		scrutBase.K == typecheck.TyU8 ||
+		scrutBase.K == typecheck.TyI32 ||
+		scrutBase.K == typecheck.TyU32 ||
+		scrutBase.K == typecheck.TyI64 ||
+		scrutBase.K == typecheck.TyU64 ||
+		scrutBase.K == typecheck.TyUSize
 	isStr := scrutTy.K == typecheck.TyString
-	if !isEnum && !isI32 && !isI64 && !isStr {
-		return nil, fmt.Errorf("match scrutinee must be enum/i32/i64/String")
+	if !isEnum && !isInt && !isStr {
+		return nil, fmt.Errorf("match scrutinee must be enum/int/String")
 	}
 	var es typecheck.EnumSig
 	var tagTmp *ir.Temp
@@ -61,7 +70,7 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 		variant   string
 		tag       *int
 		bindScrut string
-		intPat    *int64
+		intPat    *uint64
 		strPat    *string
 		binds     []string
 		bindTys   []typecheck.Type
@@ -69,20 +78,20 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	var arms []armInfo
 	var wildBlk *ir.Block
 
-		for _, a := range m.Arms {
-			info := armInfo{arm: a, blk: g.newBlock(fmt.Sprintf("match_arm_%d", len(g.blocks)))}
-			switch p := a.Pat.(type) {
+	for _, a := range m.Arms {
+		info := armInfo{arm: a, blk: g.newBlock(fmt.Sprintf("match_arm_%d", len(g.blocks)))}
+		switch p := a.Pat.(type) {
 		case *ast.WildPat:
 			wildBlk = info.blk
 		case *ast.BindPat:
 			wildBlk = info.blk
 			info.bindScrut = p.Name
-			case *ast.IntPat:
-				if !isI32 && !isI64 {
-					return nil, fmt.Errorf("int pattern requires i32/i64 scrutinee")
-				}
-				v := parseInt64(p.Text)
-				info.intPat = &v
+		case *ast.IntPat:
+			if !isInt {
+				return nil, fmt.Errorf("int pattern requires int scrutinee")
+			}
+			v := parseUint64(p.Text)
+			info.intPat = &v
 		case *ast.StrPat:
 			if !isStr {
 				return nil, fmt.Errorf("string pattern requires String scrutinee")
@@ -130,23 +139,23 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 				Op:  ir.CmpEq,
 				Ty:  ir.Type{K: ir.TI32},
 				A:   tagTmp,
-				B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: int64(*info.tag)},
+				B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: uint64(*info.tag)},
 			})
 			g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
-			} else if info.intPat != nil {
-				cmpTy := ir.Type{K: ir.TI32}
-				if isI64 {
-					cmpTy = ir.Type{K: ir.TI64}
-				}
-				g.emit(&ir.Cmp{
-					Dst: cmpTmp,
-					Op:  ir.CmpEq,
-					Ty:  cmpTy,
-					A:   scrut,
-					B:   &ir.ConstInt{Ty: cmpTy, V: *info.intPat},
-				})
-				g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
-			} else {
+		} else if info.intPat != nil {
+			cmpTy, err := g.irTypeFromChecked(scrutBase)
+			if err != nil {
+				return nil, err
+			}
+			g.emit(&ir.Cmp{
+				Dst: cmpTmp,
+				Op:  ir.CmpEq,
+				Ty:  cmpTy,
+				A:   scrut,
+				B:   &ir.ConstInt{Ty: cmpTy, Bits: *info.intPat},
+			})
+			g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
+		} else {
 			g.emit(&ir.Cmp{
 				Dst: cmpTmp,
 				Op:  ir.CmpEq,

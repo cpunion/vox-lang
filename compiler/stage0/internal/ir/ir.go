@@ -13,8 +13,13 @@ const (
 	TBad TypeKind = iota
 	TUnit
 	TBool
+	TI8
+	TU8
 	TI32
+	TU32
 	TI64
+	TU64
+	TUSize
 	TString
 	TStruct
 	TEnum
@@ -35,10 +40,20 @@ func (t Type) String() string {
 		return "unit"
 	case TBool:
 		return "bool"
+	case TI8:
+		return "i8"
+	case TU8:
+		return "u8"
 	case TI32:
 		return "i32"
+	case TU32:
+		return "u32"
 	case TI64:
 		return "i64"
+	case TU64:
+		return "u64"
+	case TUSize:
+		return "usize"
 	case TString:
 		return "str"
 	case TStruct:
@@ -146,13 +161,25 @@ func (s *Slot) fmtString() string {
 }
 
 type ConstInt struct {
-	Ty Type
-	V  int64
+	Ty   Type
+	Bits uint64 // raw bits (truncated to Ty width by producer)
 }
 
 func (*ConstInt) valueNode() {}
 func (c *ConstInt) fmtString() string {
-	return fmt.Sprintf("%d", c.V)
+	switch c.Ty.K {
+	case TI8:
+		return fmt.Sprintf("%d", int64(int8(c.Bits)))
+	case TI32:
+		return fmt.Sprintf("%d", int64(int32(c.Bits)))
+	case TI64:
+		return fmt.Sprintf("%d", int64(c.Bits))
+	case TU8, TU32, TU64, TUSize:
+		return strconv.FormatUint(c.Bits, 10)
+	default:
+		// Keep formatting stable even if type info is missing.
+		return strconv.FormatUint(c.Bits, 10)
+	}
 }
 
 type ConstBool struct {
@@ -268,53 +295,46 @@ func (i *Not) fmtString() string {
 	return fmt.Sprintf("%s = not %s", i.Dst.fmtString(), i.A.fmtString())
 }
 
-// I64ToI32Checked converts an i64 to i32 with a runtime bounds check.
+// IntCastChecked converts between integer types with a runtime bounds check.
 // On overflow it must panic.
-type I64ToI32Checked struct {
-	Dst *Temp
-	V   Value
+type IntCastChecked struct {
+	Dst  *Temp
+	From Type
+	To   Type
+	V    Value
 }
 
-func (*I64ToI32Checked) instrNode() {}
-func (i *I64ToI32Checked) fmtString() string {
-	return fmt.Sprintf("%s = i32_from_i64_checked %s", i.Dst.fmtString(), i.V.fmtString())
+func (*IntCastChecked) instrNode() {}
+func (i *IntCastChecked) fmtString() string {
+	return fmt.Sprintf("%s = int_cast_checked %s %s %s", i.Dst.fmtString(), i.From.String(), i.To.String(), i.V.fmtString())
 }
 
-// I32ToI64 converts an i32 to i64 (always safe).
-type I32ToI64 struct {
-	Dst *Temp
-	V   Value
+// IntCast converts between integer types with wrapping/truncation semantics.
+// It must not panic.
+type IntCast struct {
+	Dst  *Temp
+	From Type
+	To   Type
+	V    Value
 }
 
-func (*I32ToI64) instrNode() {}
-func (i *I32ToI64) fmtString() string {
-	return fmt.Sprintf("%s = i64_from_i32 %s", i.Dst.fmtString(), i.V.fmtString())
+func (*IntCast) instrNode() {}
+func (i *IntCast) fmtString() string {
+	return fmt.Sprintf("%s = int_cast %s %s %s", i.Dst.fmtString(), i.From.String(), i.To.String(), i.V.fmtString())
 }
 
-// RangeCheckI32 checks that an i32 value is within [Lo, Hi] (inclusive).
+// RangeCheckInt checks that an integer value is within [Lo, Hi] (inclusive).
 // On failure it must panic.
-type RangeCheckI32 struct {
-	V  Value
-	Lo int32
-	Hi int32
-}
-
-func (*RangeCheckI32) instrNode() {}
-func (i *RangeCheckI32) fmtString() string {
-	return fmt.Sprintf("range_check_i32 %d %d %s", i.Lo, i.Hi, i.V.fmtString())
-}
-
-// RangeCheckI64 checks that an i64 value is within [Lo, Hi] (inclusive).
-// On failure it must panic.
-type RangeCheckI64 struct {
+type RangeCheckInt struct {
+	Ty Type
 	V  Value
 	Lo int64
 	Hi int64
 }
 
-func (*RangeCheckI64) instrNode() {}
-func (i *RangeCheckI64) fmtString() string {
-	return fmt.Sprintf("range_check_i64 %d %d %s", i.Lo, i.Hi, i.V.fmtString())
+func (*RangeCheckInt) instrNode() {}
+func (i *RangeCheckInt) fmtString() string {
+	return fmt.Sprintf("range_check %s %d %d %s", i.Ty.String(), i.Lo, i.Hi, i.V.fmtString())
 }
 
 type SlotDecl struct {
@@ -404,8 +424,8 @@ func (i *StoreField) fmtString() string {
 
 type EnumInit struct {
 	Dst     *Temp
-	Ty      Type   // enum type
-	Variant string // variant name
+	Ty      Type    // enum type
+	Variant string  // variant name
 	Payload []Value // empty for unit variants
 }
 

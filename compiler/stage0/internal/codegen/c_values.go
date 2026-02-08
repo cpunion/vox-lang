@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"voxlang/internal/ir"
@@ -16,7 +17,7 @@ func cValue(v ir.Value) string {
 	case *ir.Slot:
 		return cSlotName(x.ID)
 	case *ir.ConstInt:
-		return fmt.Sprintf("%d", x.V)
+		return cIntConst(x)
 	case *ir.ConstBool:
 		if x.V {
 			return "true"
@@ -26,6 +27,41 @@ func cValue(v ir.Value) string {
 		return cStringLit(x.S)
 	default:
 		return "0"
+	}
+}
+
+func cIntConst(x *ir.ConstInt) string {
+	if x == nil {
+		return "0"
+	}
+	// Use *C(n) macros to keep constants well-typed across platforms.
+	// (Even though stage0 currently restricts literals to i64 range.)
+	var s string
+	switch x.Ty.K {
+	case ir.TI8:
+		s = strconv.FormatInt(int64(int8(x.Bits)), 10)
+	case ir.TI32:
+		s = strconv.FormatInt(int64(int32(x.Bits)), 10)
+	case ir.TI64:
+		s = strconv.FormatInt(int64(x.Bits), 10)
+	default:
+		s = strconv.FormatUint(x.Bits, 10)
+	}
+	switch x.Ty.K {
+	case ir.TI8:
+		return "INT8_C(" + s + ")"
+	case ir.TU8:
+		return "UINT8_C(" + s + ")"
+	case ir.TI32:
+		return "INT32_C(" + s + ")"
+	case ir.TU32:
+		return "UINT32_C(" + s + ")"
+	case ir.TI64:
+		return "INT64_C(" + s + ")"
+	case ir.TU64, ir.TUSize:
+		return "UINT64_C(" + s + ")"
+	default:
+		return s
 	}
 }
 
