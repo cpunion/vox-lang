@@ -10,6 +10,24 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 	switch tt := t.(type) {
 	case *ast.UnitType:
 		return Type{K: TyUnit}
+	case *ast.RangeType:
+		base := c.typeFromAstInFile(tt.Base, file)
+		if base.K != TyI32 && base.K != TyI64 {
+			c.errorAt(tt.S, "range base type must be i32 or i64 (stage0)")
+			return Type{K: TyBad}
+		}
+		if tt.Lo > tt.Hi {
+			c.errorAt(tt.S, "invalid range: lo > hi")
+			return Type{K: TyBad}
+		}
+		// Bounds must fit the base integer type.
+		if base.K == TyI32 {
+			if tt.Lo < -2147483648 || tt.Hi > 2147483647 {
+				c.errorAt(tt.S, "range bounds out of i32")
+				return Type{K: TyBad}
+			}
+		}
+		return Type{K: TyRange, Base: &base, Lo: tt.Lo, Hi: tt.Hi}
 	case *ast.NamedType:
 		if len(tt.Parts) == 0 {
 			c.errorAt(tt.S, "missing type name")

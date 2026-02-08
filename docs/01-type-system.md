@@ -122,31 +122,35 @@ let v: Value = .I32(42);
 Vox 支持对标量类型附加“值域约束”，用于表达与优化。
 
 ```vox
-type Tiny = @range(0..=3) i8;
-type Lower = @range('a'..='z') u8;
+type Tiny = @range(0..=3) i32;
 ```
 
 规则（已定，草案表述）：
 
-- `@range(lo..=hi) T` 只能用于整数/字符等离散标量类型（细分范围待定）。
+- `@range(lo..=hi) T` 只能用于离散标量类型（细分范围待定）。
 - 范围类型的运行时表示与底层标量 `T` 相同（零额外存储）。
-- **检查发生在编译期与类型转换边界**：
+- **检查发生在编译期与类型转换边界**（“进入范围类型”时检查）：
   - 若被转换值在编译期可确定：越界为编译错误。
   - 否则在转换点插入检查；失败时 **panic**。
 - 在普通算术/赋值中不强制维持不变量；仅在“进入范围类型”时检查。
+
+Stage0/Stage1 v0 当前实现限制：
+
+- `T` 仅支持 `i32` / `i64`。
+- `lo/hi` 仅支持十进制整数字面量（更多标量与字面量形式后续再扩展）。
 
 建议提供的转换 API（草案）：
 
 ```vox
 impl Tiny {
   // 失败时 panic（用于显式窄化/类型转换）
-  fn from(x: i8) -> Tiny;
+  fn from(x: i32) -> Tiny;
 
   // 显式可恢复：返回 Option/Result
-  fn try_from(x: i8) -> Option[Tiny];
-  fn try_from_result(x: i8) -> Result[Tiny, RangeError];
+  fn try_from(x: i32) -> Option[Tiny];
+  fn try_from_result(x: i32) -> Result[Tiny, RangeError];
 
-  unsafe fn from_unchecked(x: i8) -> Tiny;
+  unsafe fn from_unchecked(x: i32) -> Tiny;
 }
 ```
 

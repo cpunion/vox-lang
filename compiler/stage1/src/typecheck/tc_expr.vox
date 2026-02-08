@@ -46,14 +46,17 @@ fn tc_expr_as(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.Ex
 
   let from_ty: i32 = ar.ty;
   let to_ty: i32 = tr.idx;
-  let ok_from: bool = from_ty == c2.ty_i32 || from_ty == c2.ty_i64;
-  let ok_to: bool = to_ty == c2.ty_i32 || to_ty == c2.ty_i64;
-  if !ok_from || !ok_to { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
-
-  let ok_cast: bool = from_ty == to_ty || (from_ty == c2.ty_i32 && to_ty == c2.ty_i64) || (from_ty == c2.ty_i64 && to_ty == c2.ty_i32);
+  // Stage1 v0: numeric casts between i32/i64 and @range(lo..=hi) i32/i64.
+  if !is_int_like_ty(c2, from_ty) || !is_int_like_ty(c2, to_ty) { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
+  let from_base: i32 = strip_range(c2, from_ty);
+  let to_base: i32 = strip_range(c2, to_ty);
+  let ok_cast: bool =
+    from_base == to_base ||
+    (from_base == c2.ty_i32 && to_base == c2.ty_i64) ||
+    (from_base == c2.ty_i64 && to_base == c2.ty_i32);
   if !ok_cast { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
 
-  if expected != -1 && expected != to_ty { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
+  if expected != -1 && !assignable_to(c2, expected, to_ty) { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: to_ty, err: TcError.None };
 }
 
@@ -85,7 +88,7 @@ fn tc_expr_block(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   let er: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l, b.tail, expected);
   if !er.ok { return ExprTyResult { ok: false, ty: c.ty_bad, err: TcError.None }; }
   let out_ty: i32 = if expected != -1 { expected } else { er.ty };
-  if expected != -1 && er.ty != expected { return ExprTyResult { ok: false, ty: c.ty_bad, err: TcError.None }; }
+  if expected != -1 && !assignable_to(c, expected, er.ty) { return ExprTyResult { ok: false, ty: c.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
 }
 
@@ -148,7 +151,7 @@ fn tc_expr_bool(ctx: Ctx, expected: i32) -> ExprTyResult {
 fn tc_expr_ident(ctx: Ctx, mod_path: String, imps: Imports, l0: Locals, name: String, expected: i32) -> ExprTyResult {
   let vr: LookupVarResult = locals_lookup(l0, name);
   if vr.found {
-    if expected != -1 && vr.ty != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && !assignable_to(ctx, expected, vr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     return ExprTyResult { ok: true, ty: vr.ty, err: TcError.None };
   }
 
@@ -159,7 +162,7 @@ fn tc_expr_ident(ctx: Ctx, mod_path: String, imps: Imports, l0: Locals, name: St
   let cs: ConstSig = find_const(ctx, want_mod, want_name);
   if cs.name == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   if want_mod != mod_path && !cs.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  if expected != -1 && cs.ty != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if expected != -1 && !assignable_to(ctx, expected, cs.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: cs.ty, err: TcError.None };
 }
 
@@ -171,11 +174,12 @@ fn tc_expr_unary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
     if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
   }
-  if expected != -1 && expected != ar.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  return ExprTyResult { ok: true, ty: ar.ty, err: TcError.None };
+  // Negation: `-x` is an integer op; ranges widen to base.
+  let out: i32 = strip_range(ctx, ar.ty);
+  if out != ctx.ty_i32 && out != ctx.ty_i64 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if expected != -1 && !assignable_to(ctx, expected, out) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: out, err: TcError.None };
 }
-
-fn is_int_ty(ctx: Ctx, ty: i32) -> bool { return ty == ctx.ty_i32 || ty == ctx.ty_i64; }
 
 fn enum_unit_tag_in_enum(ctx: Ctx, enum_ty: i32, var_name: String) -> i32 {
   let et: ir.Ty = ir.ty_pool_get(ctx.pool, enum_ty);
@@ -258,8 +262,8 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   let mut want_int: i32 = -1;
   if expected != -1 {
     let et: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
-    let is_int: bool = match et.kind { ir.TyKind.I32 => true, ir.TyKind.I64 => true, _ => false };
-    if is_int { want_int = expected; }
+    let is_int: bool = match et.kind { ir.TyKind.I32 => true, ir.TyKind.I64 => true, ir.TyKind.Range => true, _ => false };
+    if is_int { want_int = strip_range(ctx, expected); }
   }
   let l_expected: i32 = if is_logic { ctx.ty_bool } else { want_int };
   let r_expected0: i32 = if is_logic { ctx.ty_bool } else { want_int };
@@ -271,13 +275,13 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
 
   // If one side is an `i64` and the other is an int literal that defaulted to `i32`,
   // re-typecheck the literal with an `i64` expected type.
-  if (is_cmp || is_eq || !is_logic) && lr.ty != rr.ty {
+  if (is_cmp || is_eq || !is_logic) && strip_range(ctx, lr.ty) != strip_range(ctx, rr.ty) {
     let l_is_lit: bool = match ast.expr_pool_get(exprs, l) { ast.ExprNode.Int(_s) => true, _ => false };
     let r_is_lit: bool = match ast.expr_pool_get(exprs, r) { ast.ExprNode.Int(_s) => true, _ => false };
 
-    if l_is_lit && rr.ty == ctx.ty_i64 {
+    if l_is_lit && is_i64_like(ctx, rr.ty) {
       lr = tc_expr(ctx, w, mod_path, imps, exprs, l0, l, ctx.ty_i64);
-    } else if r_is_lit && lr.ty == ctx.ty_i64 {
+    } else if r_is_lit && is_i64_like(ctx, lr.ty) {
       rr = tc_expr(ctx, w, mod_path, imps, exprs, l0, r, ctx.ty_i64);
     }
     if !lr.ok || !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
@@ -290,20 +294,22 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   }
 
   if is_cmp {
-    if !is_int_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if !is_int_like_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if strip_range(ctx, rr.ty) != strip_range(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
   }
 
   if is_eq {
-    if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    // Allow equality between a range and its base (compare by base value).
+    if strip_range(ctx, rr.ty) != strip_range(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     // v0: primitive equality only (keep Stage1 aligned with Stage0 subset).
-    let ok_prim: bool = lr.ty == ctx.ty_bool || lr.ty == ctx.ty_i32 || lr.ty == ctx.ty_i64 || lr.ty == ctx.ty_string;
+    let lbase: i32 = strip_range(ctx, lr.ty);
+    let ok_prim: bool = lbase == ctx.ty_bool || lbase == ctx.ty_i32 || lbase == ctx.ty_i64 || lbase == ctx.ty_string;
     if !ok_prim {
       // Stage0 parity: enum equality is only allowed against unit variant values (lowers to tag compare).
-      if is_enum_ty(ctx, lr.ty) {
-        let ok_unit: bool = is_enum_unit_value(ctx, mod_path, imps, exprs, l, lr.ty) || is_enum_unit_value(ctx, mod_path, imps, exprs, r, lr.ty);
+      if is_enum_ty(ctx, lbase) {
+        let ok_unit: bool = is_enum_unit_value(ctx, mod_path, imps, exprs, l, lbase) || is_enum_unit_value(ctx, mod_path, imps, exprs, r, lbase);
         if !ok_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       } else {
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
@@ -314,10 +320,11 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   }
 
   // arithmetic
-  if !is_int_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  if expected != -1 && expected != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  return ExprTyResult { ok: true, ty: lr.ty, err: TcError.None };
+  if !is_int_like_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  let out: i32 = strip_range(ctx, lr.ty);
+  if strip_range(ctx, rr.ty) != out { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if expected != -1 && !assignable_to(ctx, expected, out) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: out, err: TcError.None };
 }
 
 fn tc_expr_if(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, c: i32, t: i32, e: i32, expected: i32) -> ExprTyResult {
@@ -331,7 +338,18 @@ fn tc_expr_if(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.Ex
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, e, want);
   if !er.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
-  let out_ty: i32 = if expected != -1 { expected } else { tr.ty };
-  if expected == -1 && tr.ty != er.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
+  if expected != -1 {
+    // Branches already checked under `expected`; accept.
+    return ExprTyResult { ok: true, ty: expected, err: TcError.None };
+  }
+
+  if tr.ty == er.ty { return ExprTyResult { ok: true, ty: tr.ty, err: TcError.None }; }
+
+  // Unify `@range(..) i32` with `i32` to `i32` (same for i64).
+  let tbase: i32 = strip_range(ctx, tr.ty);
+  let ebase: i32 = strip_range(ctx, er.ty);
+  if tbase == ebase && (tbase == ctx.ty_i32 || tbase == ctx.ty_i64) {
+    return ExprTyResult { ok: true, ty: tbase, err: TcError.None };
+  }
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
 }

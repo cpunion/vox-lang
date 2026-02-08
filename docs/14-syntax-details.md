@@ -144,7 +144,7 @@ type Value = I32: i32 | Str: String;
 类型位置允许 `@range(lo..=hi) T`：
 
 ```vox
-type Tiny = @range(0..=3) i8;
+type Tiny = @range(0..=3) i32;
 ```
 
 范围类型在运行时的检查语义（已定）：
@@ -153,6 +153,11 @@ type Tiny = @range(0..=3) i8;
   - 编译期可确定越界：编译错误
   - 否则：运行时检查，失败 **panic**
 - 若需要可恢复错误，请使用返回 `Option/Result` 的转换函数（例如 `Tiny::try_from(...)`）。
+
+Stage0/Stage1 v0 当前实现限制：
+
+- `T` 仅支持 `i32` / `i64`。
+- `lo/hi` 仅支持十进制整数字面量。
 
 ## 枚举构造子点前缀简写（已定）
 

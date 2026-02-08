@@ -6,11 +6,12 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   if !sr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
   // v0: match on enums/ints/strings only (enough for stage1 tests).
-  let scrut_t: ir.Ty = ir.ty_pool_get(ctx.pool, sr.ty);
+  let scrut_base: i32 = strip_range(ctx, sr.ty);
+  let scrut_t: ir.Ty = ir.ty_pool_get(ctx.pool, scrut_base);
   let is_enum: bool = match scrut_t.kind { ir.TyKind.Enum => true, _ => false };
-  let is_i32: bool = sr.ty == ctx.ty_i32;
-  let is_i64: bool = sr.ty == ctx.ty_i64;
-  let is_str: bool = sr.ty == ctx.ty_string;
+  let is_i32: bool = scrut_base == ctx.ty_i32;
+  let is_i64: bool = scrut_base == ctx.ty_i64;
+  let is_str: bool = scrut_base == ctx.ty_string;
   if !is_enum && !is_i32 && !is_i64 && !is_str { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
   if arms.len() == 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
@@ -30,14 +31,22 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
     if out_ty == -1 {
       out_ty = er.ty;
     } else {
-      if er.ty != out_ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      if er.ty != out_ty {
+        let ob: i32 = strip_range(ctx, out_ty);
+        let eb: i32 = strip_range(ctx, er.ty);
+        if ob == eb && (ob == ctx.ty_i32 || ob == ctx.ty_i64) {
+          out_ty = ob; // unify to base
+        } else {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+        }
+      }
     }
 
     ai = ai + 1;
   }
 
   if out_ty == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  if expected != -1 && expected != out_ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if expected != -1 && !assignable_to(ctx, expected, out_ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
 }
 
@@ -47,8 +56,8 @@ fn tc_pat(ctx: Ctx, mod_path: String, imps: Imports, scrut_ty: i32, scrut_t: ir.
   return match pat {
     ast.Pat.Wild(_sp) => PatLocalsResult { ok: true, locals: l0 },
     ast.Pat.Bind(_sp, name) => PatLocalsResult { ok: true, locals: locals_decl(l0, name, scrut_ty, false) },
-    ast.Pat.Int(_sp, _) => if scrut_ty == ctx.ty_i32 || scrut_ty == ctx.ty_i64 { PatLocalsResult { ok: true, locals: l0 } } else { PatLocalsResult { ok: false, locals: l0 } },
-    ast.Pat.Str(_sp, _) => if scrut_ty == ctx.ty_string { PatLocalsResult { ok: true, locals: l0 } } else { PatLocalsResult { ok: false, locals: l0 } },
+    ast.Pat.Int(_sp, _) => if is_i32_like(ctx, scrut_ty) || is_i64_like(ctx, scrut_ty) { PatLocalsResult { ok: true, locals: l0 } } else { PatLocalsResult { ok: false, locals: l0 } },
+    ast.Pat.Str(_sp, _) => if strip_range(ctx, scrut_ty) == ctx.ty_string { PatLocalsResult { ok: true, locals: l0 } } else { PatLocalsResult { ok: false, locals: l0 } },
     ast.Pat.EnumVariant(_sp, enum_parts, var_name, binders) => tc_pat_enum(ctx, mod_path, imps, scrut_t, enum_parts, var_name, binders, l0),
   };
 }

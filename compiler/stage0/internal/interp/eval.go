@@ -186,19 +186,31 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		}
 		from := rt.prog.ExprTypes[e.Expr]
 		to := rt.prog.ExprTypes[ex]
-		// Stage0 v0: i32 <-> i64.
-		if (from.K != typecheck.TyI32 && from.K != typecheck.TyI64) || (to.K != typecheck.TyI32 && to.K != typecheck.TyI64) {
+		// Stage0 v0: i32/i64 and @range(lo..=hi) i32/i64.
+		fromBase := from
+		if fromBase.K == typecheck.TyRange && fromBase.Base != nil {
+			fromBase = *fromBase.Base
+		}
+		toBase := to
+		if toBase.K == typecheck.TyRange && toBase.Base != nil {
+			toBase = *toBase.Base
+		}
+		if (fromBase.K != typecheck.TyI32 && fromBase.K != typecheck.TyI64) || (toBase.K != typecheck.TyI32 && toBase.K != typecheck.TyI64) {
 			return unit(), fmt.Errorf("unsupported cast")
 		}
-		if from.K == to.K {
-			return v, nil
+
+		// base cast (checked for i64->i32)
+		if toBase.K == typecheck.TyI32 && fromBase.K == typecheck.TyI64 {
+			if v.I < -2147483648 || v.I > 2147483647 {
+				return unit(), fmt.Errorf("i64 to i32 overflow")
+			}
 		}
-		if to.K == typecheck.TyI64 {
-			return Value{K: VInt, I: v.I}, nil
-		}
-		// to i32: bounds check then keep as int
-		if v.I < -2147483648 || v.I > 2147483647 {
-			return unit(), fmt.Errorf("i64 to i32 overflow")
+
+		// range check (if any)
+		if to.K == typecheck.TyRange {
+			if v.I < to.Lo || v.I > to.Hi {
+				return unit(), fmt.Errorf("range check failed")
+			}
 		}
 		return Value{K: VInt, I: v.I}, nil
 	case *ast.BinaryExpr:

@@ -48,6 +48,9 @@ const (
 	TokenColon
 	TokenColonColon
 	TokenDot
+	TokenDotDot   // ..
+	TokenDotDotEq // ..=
+	TokenAt       // @
 
 	// Operators
 	TokenPlus

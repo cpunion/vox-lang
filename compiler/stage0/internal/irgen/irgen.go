@@ -169,6 +169,12 @@ func (g *gen) irTypeFromChecked(t typecheck.Type) (ir.Type, error) {
 		return ir.Type{K: ir.TI64}, nil
 	case typecheck.TyString:
 		return ir.Type{K: ir.TString}, nil
+	case typecheck.TyRange:
+		// Range types are represented as their base integer type in IR v0.
+		if t.Base == nil {
+			return ir.Type{}, fmt.Errorf("range missing base")
+		}
+		return g.irTypeFromChecked(*t.Base)
 	case typecheck.TyStruct:
 		return ir.Type{K: ir.TStruct, Name: t.Name}, nil
 	case typecheck.TyEnum:

@@ -126,6 +126,18 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 			want: "7",
 		},
 		{
+			name: "range_check_i32",
+			prog: progMainI32(func(b *ir.Block) {
+				t0 := &ir.Temp{ID: 0}
+				b.Instr = append(b.Instr,
+					&ir.Const{Dst: t0, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: 2}},
+					&ir.RangeCheckI32{V: t0, Lo: 0, Hi: 3},
+				)
+				b.Term = &ir.Ret{Val: t0}
+			}),
+			want: "2",
+		},
+		{
 			name: "call_and_print",
 			prog: &ir.Program{Funcs: map[string]*ir.Func{
 				"main": {

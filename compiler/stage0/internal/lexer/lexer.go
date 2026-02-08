@@ -179,7 +179,20 @@ func (lx *lexer) lexPunct() {
 			lx.emit(TokenColon, ":", start, lx.pos)
 		}
 	case '.':
-		lx.emit(TokenDot, ".", start, lx.pos)
+		// .. or ..=
+		if lx.pos < len(lx.input) && lx.input[lx.pos] == '.' {
+			lx.pos++
+			if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
+				lx.pos++
+				lx.emit(TokenDotDotEq, "..=", start, lx.pos)
+			} else {
+				lx.emit(TokenDotDot, "..", start, lx.pos)
+			}
+		} else {
+			lx.emit(TokenDot, ".", start, lx.pos)
+		}
+	case '@':
+		lx.emit(TokenAt, "@", start, lx.pos)
 	case '+':
 		lx.emit(TokenPlus, "+", start, lx.pos)
 	case '-':

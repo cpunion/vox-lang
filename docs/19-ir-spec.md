@@ -110,6 +110,22 @@ Stage0/Stage1 v0 目前只定义 `i32 <-> i64` 的显式转换：
 - `i64_from_i32`：无条件安全转换。
 - `i32_from_i64_checked`：必须进行运行时范围检查；越界必须 `panic`。
 
+### 5.4.2 范围检查（`@range`）
+
+`@range(lo..=hi) T` 在 IR v0 中**不新增类型表示**：其运行时表示与底层标量 `T` 相同。
+
+进入范围类型（例如 `x as Tiny`，其中 `type Tiny = @range(0..=3) i32`）时，lowering 需插入范围检查指令：
+
+```
+range_check_i32 0 3 %t0
+range_check_i64 0 3 %t0
+```
+
+约束：
+
+- `range_check_*` 没有结果值，只做检查。
+- 若值不在 `[lo, hi]`（包含端点）内，必须 `panic("range check failed")`。
+
 ### 5.5 局部槽位（可变变量）
 
 槽位用于降低 `let mut` 与赋值：

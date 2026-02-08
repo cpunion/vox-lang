@@ -1,6 +1,7 @@
 package typecheck
 
 import (
+	"strconv"
 	"strings"
 
 	"voxlang/internal/ast"
@@ -20,6 +21,11 @@ func (t Type) String() string {
 		return "String"
 	case TyUntypedInt:
 		return "untyped-int"
+	case TyRange:
+		if t.Base == nil {
+			return "@range(<bad>)"
+		}
+		return "@range(" + strconv.FormatInt(t.Lo, 10) + "..=" + strconv.FormatInt(t.Hi, 10) + ") " + t.Base.String()
 	case TyStruct:
 		return t.Name
 	case TyEnum:
@@ -59,6 +65,12 @@ func sameType(a, b Type) bool {
 	if a.K != b.K {
 		return false
 	}
+	if a.K == TyRange {
+		if a.Base == nil || b.Base == nil {
+			return false
+		}
+		return a.Lo == b.Lo && a.Hi == b.Hi && sameType(*a.Base, *b.Base)
+	}
 	if a.K == TyStruct || a.K == TyEnum {
 		return a.Name == b.Name
 	}
@@ -72,6 +84,33 @@ func sameType(a, b Type) bool {
 		return a.Name == b.Name
 	}
 	return true
+}
+
+// assignableTo reports whether a value of type got can be used in a context
+// that expects want.
+//
+// Stage0 v0 rule: @range(lo..=hi) Base is a subtype of Base (widening only).
+func assignableTo(want, got Type) bool {
+	if sameType(want, got) {
+		return true
+	}
+	// Allow range -> base (widening).
+	if (want.K == TyI32 || want.K == TyI64) && got.K == TyRange && got.Base != nil && got.Base.K == want.K {
+		return true
+	}
+	return false
+}
+
+// stripRange returns the underlying integer type when t is a range type.
+func stripRange(t Type) Type {
+	if t.K != TyRange || t.Base == nil {
+		return t
+	}
+	return *t.Base
+}
+
+func isRangeOf(t Type, base Kind) bool {
+	return t.K == TyRange && t.Base != nil && t.Base.K == base
 }
 
 func chooseType(ann, init Type) Type {

@@ -291,6 +291,32 @@ func (i *I32ToI64) fmtString() string {
 	return fmt.Sprintf("%s = i64_from_i32 %s", i.Dst.fmtString(), i.V.fmtString())
 }
 
+// RangeCheckI32 checks that an i32 value is within [Lo, Hi] (inclusive).
+// On failure it must panic.
+type RangeCheckI32 struct {
+	V  Value
+	Lo int32
+	Hi int32
+}
+
+func (*RangeCheckI32) instrNode() {}
+func (i *RangeCheckI32) fmtString() string {
+	return fmt.Sprintf("range_check_i32 %d %d %s", i.Lo, i.Hi, i.V.fmtString())
+}
+
+// RangeCheckI64 checks that an i64 value is within [Lo, Hi] (inclusive).
+// On failure it must panic.
+type RangeCheckI64 struct {
+	V  Value
+	Lo int64
+	Hi int64
+}
+
+func (*RangeCheckI64) instrNode() {}
+func (i *RangeCheckI64) fmtString() string {
+	return fmt.Sprintf("range_check_i64 %d %d %s", i.Lo, i.Hi, i.V.fmtString())
+}
+
 type SlotDecl struct {
 	Slot *Slot
 	Ty   Type

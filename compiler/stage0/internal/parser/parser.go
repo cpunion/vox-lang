@@ -575,6 +575,30 @@ func (p *Parser) parseType() ast.Type {
 		rp := p.expect(lexer.TokenRParen, "expected `)`")
 		return &ast.UnitType{S: joinSpan(lp.Span, rp.Span)}
 	}
+
+	// range: @range(lo..=hi) Base
+	if p.match(lexer.TokenAt) {
+		atTok := p.prev()
+		kw := p.expect(lexer.TokenIdent, "expected `range` after `@`")
+		if kw.Kind == lexer.TokenIdent && kw.Lexeme != "range" {
+			p.errorAt(kw.Span, "unknown type directive: @"+kw.Lexeme)
+		}
+		p.expect(lexer.TokenLParen, "expected `(` after `@range`")
+		loTok := p.expect(lexer.TokenInt, "expected integer lower bound in @range")
+		p.expect(lexer.TokenDotDotEq, "expected `..=` in @range bounds")
+		hiTok := p.expect(lexer.TokenInt, "expected integer upper bound in @range")
+		rp := p.expect(lexer.TokenRParen, "expected `)` after @range bounds")
+
+		lo, _ := strconv.ParseInt(loTok.Lexeme, 10, 64)
+		hi, _ := strconv.ParseInt(hiTok.Lexeme, 10, 64)
+		base := p.parseType()
+		end := rp.Span
+		if base != nil {
+			end = base.Span()
+		}
+		return &ast.RangeType{Lo: lo, Hi: hi, Base: base, S: joinSpan(atTok.Span, end)}
+	}
+
 	nameTok := p.expect(lexer.TokenIdent, "expected type name")
 	parts := []string{}
 	endSpan := nameTok.Span

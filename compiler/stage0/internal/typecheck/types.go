@@ -16,6 +16,7 @@ const (
 	TyI64
 	TyString
 	TyUntypedInt
+	TyRange // refined integer type: @range(lo..=hi) Base
 	TyStruct
 	TyEnum
 	TyVec
@@ -29,6 +30,10 @@ type Type struct {
 	Name string
 	// Elem is set when K == TyVec.
 	Elem *Type
+	// Base/Lo/Hi are set when K == TyRange.
+	Base *Type
+	Lo   int64
+	Hi   int64
 }
 
 type CheckedProgram struct {

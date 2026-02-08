@@ -284,6 +284,30 @@ func TestAsCastIntLiteralOverflowPanics(t *testing.T) {
 	}
 }
 
+func TestRangeCastI32Ok(t *testing.T) {
+	out := runMain(t, `type Tiny = @range(0..=3) i32
+fn main() -> i32 {
+  let x: i32 = 2;
+  let y: Tiny = x as Tiny;
+  return y;
+}`)
+	if out != "2" {
+		t.Fatalf("expected 2, got %q", out)
+	}
+}
+
+func TestRangeCastI32Panics(t *testing.T) {
+	_, err := runMainErr(t, `type Tiny = @range(0..=3) i32
+fn main() -> i32 {
+  let x: i32 = 5;
+  let y: Tiny = x as Tiny;
+  return y;
+}`)
+	if err == "" || err != "range check failed" {
+		t.Fatalf("expected range check error, got %q", err)
+	}
+}
+
 func runMain(t *testing.T, src string) string {
 	t.Helper()
 	f := source.NewFile("src/main.vox", src)

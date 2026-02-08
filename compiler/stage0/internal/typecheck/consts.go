@@ -210,8 +210,9 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 		to := c.typeFromAstInFile(e.Ty, file)
-		if to.K != TyI32 && to.K != TyI64 {
-			c.errorAt(e.S, "const expression: cast target must be i32 or i64")
+		toBase := stripRange(to)
+		if toBase.K != TyI32 && toBase.K != TyI64 {
+			c.errorAt(e.S, "const expression: cast target must be i32/i64 or @range(..) i32/i64")
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 		// Only integer consts are supported.
@@ -220,12 +221,27 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 		// Current const int payload always lives in I64.
-		if to.K == TyI32 {
+		if toBase.K == TyI32 {
 			if v.I64 < -2147483648 || v.I64 > 2147483647 {
 				c.errorAt(e.S, "const expression: i64 to i32 overflow")
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
 			}
+			// Range bounds check (if any).
+			if to.K == TyRange {
+				if v.I64 < to.Lo || v.I64 > to.Hi {
+					c.errorAt(e.S, "const expression: range check failed")
+					return ConstValue{K: ConstBad}, Type{K: TyBad}
+				}
+				return ConstValue{K: ConstInt, I64: v.I64}, to
+			}
 			return ConstValue{K: ConstInt, I64: v.I64}, Type{K: TyI32}
+		}
+		if to.K == TyRange {
+			if v.I64 < to.Lo || v.I64 > to.Hi {
+				c.errorAt(e.S, "const expression: range check failed")
+				return ConstValue{K: ConstBad}, Type{K: TyBad}
+			}
+			return ConstValue{K: ConstInt, I64: v.I64}, to
 		}
 		return ConstValue{K: ConstInt, I64: v.I64}, Type{K: TyI64}
 	case *ast.BinaryExpr:

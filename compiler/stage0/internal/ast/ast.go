@@ -104,6 +104,19 @@ type UnitType struct {
 func (*UnitType) typeNode()           {}
 func (t *UnitType) Span() source.Span { return t.S }
 
+// RangeType is a refined integer type: `@range(lo..=hi) Base`.
+//
+// Stage0 v0 restriction: Base must be i32 or i64; bounds are non-negative integer literals.
+type RangeType struct {
+	Lo   int64
+	Hi   int64
+	Base Type
+	S    source.Span
+}
+
+func (*RangeType) typeNode()           {}
+func (t *RangeType) Span() source.Span { return t.S }
+
 // Stmt
 type Stmt interface {
 	stmtNode()

@@ -23,7 +23,7 @@ func TestLexKeywordsAndPunct(t *testing.T) {
 // keywords
 fn let mut return if else true false type const static import pub match as from while break continue
 // punct/op
-(){}[] , ; : :: . + - * / % ! = == != < <= > >= && | || ->
+(){}[] , ; : :: . .. ..= @ + - * / % ! = == != < <= > >= && | || ->
 // string
 "a\nb\t\"c\"\\"
 `)

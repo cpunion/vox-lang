@@ -15,6 +15,8 @@ func cloneType(t ast.Type) ast.Type {
 			cp.Args = append(cp.Args, cloneType(a))
 		}
 		return cp
+	case *ast.RangeType:
+		return &ast.RangeType{Lo: tt.Lo, Hi: tt.Hi, Base: cloneType(tt.Base), S: tt.S}
 	default:
 		// stage0: keep it conservative; unknown types will be rejected by parser/typechecker anyway.
 		return tt

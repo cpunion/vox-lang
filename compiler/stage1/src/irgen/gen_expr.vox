@@ -35,23 +35,38 @@ fn gen_expr_as(g0: Gen, a: i32, _tn: ast.TypeName, out_ty: i32) -> GenExprResult
   if !ar.ok { return ar; }
   g = ar.g;
 
-  if ar.ty == out_ty {
-    return GenExprResult { ok: true, err: "", g: g, val: ar.val, ty: out_ty };
+  let from_base: i32 = tc.strip_range(g.ctx, ar.ty);
+  let to_base: i32 = tc.strip_range(g.ctx, out_ty);
+
+  // 1) Base cast (i32<->i64). Range types are represented as their base in IR.
+  let mut v: ir.Value = ar.val;
+  if from_base != to_base {
+    let rt: GenNewIdResult = gen_new_temp(g);
+    g = rt.g;
+    let tid: i32 = rt.id;
+
+    if from_base == g.ctx.ty_i32 && to_base == g.ctx.ty_i64 {
+      g = gen_emit(g, ir.Instr.I32ToI64(tid, ar.val));
+      v = ir.v_temp(tid);
+    } else if from_base == g.ctx.ty_i64 && to_base == g.ctx.ty_i32 {
+      g = gen_emit(g, ir.Instr.I64ToI32Checked(tid, ar.val));
+      v = ir.v_temp(tid);
+    } else {
+      return GenExprResult { ok: false, err: "unsupported cast in irgen", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
   }
 
-  let rt: GenNewIdResult = gen_new_temp(g);
-  g = rt.g;
-  let tid: i32 = rt.id;
+  // 2) Refined cast: add a runtime range check for `@range(..)` targets.
+  if tc.is_range_ty(g.ctx, out_ty) {
+    let rt2: ir.Ty = ir.ty_pool_get(g.ctx.pool, out_ty);
+    if to_base == g.ctx.ty_i32 {
+      g = gen_emit(g, ir.Instr.RangeCheckI32(v, rt2.lo, rt2.hi));
+    } else {
+      g = gen_emit(g, ir.Instr.RangeCheckI64(v, rt2.lo, rt2.hi));
+    }
+  }
 
-  if ar.ty == g.ctx.ty_i32 && out_ty == g.ctx.ty_i64 {
-    g = gen_emit(g, ir.Instr.I32ToI64(tid, ar.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-  if ar.ty == g.ctx.ty_i64 && out_ty == g.ctx.ty_i32 {
-    g = gen_emit(g, ir.Instr.I64ToI32Checked(tid, ar.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-  return GenExprResult { ok: false, err: "unsupported cast in irgen", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+  return GenExprResult { ok: true, err: "", g: g, val: v, ty: out_ty };
 }
 
 fn gen_expr_block(g0: Gen, b: ast.ExprBlock, out_ty: i32) -> GenExprResult {

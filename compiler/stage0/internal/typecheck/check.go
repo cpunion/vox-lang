@@ -57,7 +57,7 @@ func (c *checker) checkStmt(st ast.Stmt, expectedRet Type) {
 			if initTy.K == TyUntypedInt && ann.K == TyBad {
 				initTy = Type{K: TyI64}
 			}
-			if ann.K != TyBad && !sameType(ann, initTy) {
+			if ann.K != TyBad && !assignableTo(ann, initTy) {
 				c.errorAt(s.S, fmt.Sprintf("type mismatch: expected %s, got %s", ann.String(), initTy.String()))
 			}
 		} else {
@@ -81,7 +81,7 @@ func (c *checker) checkStmt(st ast.Stmt, expectedRet Type) {
 			return
 		}
 		rhs := c.checkExpr(s.Expr, vi.ty)
-		if !sameType(vi.ty, rhs) {
+		if !assignableTo(vi.ty, rhs) {
 			c.errorAt(s.S, fmt.Sprintf("type mismatch: expected %s, got %s", vi.ty.String(), rhs.String()))
 		}
 	case *ast.FieldAssignStmt:
@@ -110,7 +110,7 @@ func (c *checker) checkStmt(st ast.Stmt, expectedRet Type) {
 		}
 		want := ss.Fields[idx].Ty
 		got := c.checkExpr(s.Expr, want)
-		if !sameType(want, got) {
+		if !assignableTo(want, got) {
 			c.errorAt(s.S, fmt.Sprintf("type mismatch: expected %s, got %s", want.String(), got.String()))
 		}
 	case *ast.ReturnStmt:
@@ -120,7 +120,7 @@ func (c *checker) checkStmt(st ast.Stmt, expectedRet Type) {
 		} else {
 			ty = c.checkExpr(s.Expr, expectedRet)
 		}
-		if !sameType(expectedRet, ty) {
+		if !assignableTo(expectedRet, ty) {
 			c.errorAt(s.S, fmt.Sprintf("return type mismatch: expected %s, got %s", expectedRet.String(), ty.String()))
 		}
 	case *ast.IfStmt:
@@ -202,7 +202,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				out = Type{K: TyI64}
 			}
 		}
-		if expected.K != TyBad && out.K != TyBad && !sameType(expected, out) {
+		if expected.K != TyBad && out.K != TyBad && !assignableTo(expected, out) {
 			c.errorAt(e.S, fmt.Sprintf("type mismatch: expected %s, got %s", expected.String(), out.String()))
 		}
 		c.popScope()
@@ -246,7 +246,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 	case *ast.AsExpr:
-		// Stage0 v0: numeric casts between i32 and i64.
+		// Stage0 v0: numeric casts between i32/i64 and @range(lo..=hi) i32/i64.
 		file := e.S.File
 		if file == nil && c.curFn != nil && c.curFn.Span.File != nil {
 			file = c.curFn.Span.File
@@ -260,51 +260,73 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			_ = c.setExprType(e.Expr, gotTy)
 		}
 
+		fromBase := stripRange(gotTy)
+		toBase := stripRange(wantTy)
+
 		ok := false
 		if sameType(wantTy, gotTy) {
 			ok = true
-		} else if gotTy.K == TyI32 && wantTy.K == TyI64 {
+		} else if fromBase.K == TyI32 && toBase.K == TyI64 {
 			ok = true
-		} else if gotTy.K == TyI64 && wantTy.K == TyI32 {
+		} else if fromBase.K == TyI64 && toBase.K == TyI32 {
+			ok = true
+		} else if wantTy.K == TyRange && toBase.K == fromBase.K && (toBase.K == TyI32 || toBase.K == TyI64) {
+			// base -> range, or range(base) -> range (runtime check in IR/interp if needed)
+			ok = true
+		} else if gotTy.K == TyRange && (wantTy.K == TyI32 || wantTy.K == TyI64) && fromBase.K == wantTy.K {
+			// range -> base (widening)
 			ok = true
 		}
 		if !ok {
 			c.errorAt(e.S, fmt.Sprintf("unsupported cast: %s as %s", gotTy.String(), wantTy.String()))
 			wantTy = Type{K: TyBad}
 		}
-		if expected.K != TyBad && wantTy.K != TyBad && !sameType(expected, wantTy) {
+		if expected.K != TyBad && wantTy.K != TyBad && !assignableTo(expected, wantTy) {
 			c.errorAt(e.S, fmt.Sprintf("type mismatch: expected %s, got %s", expected.String(), wantTy.String()))
 		}
 		return c.setExprType(ex, wantTy)
 	case *ast.BinaryExpr:
 		switch e.Op {
 		case "+", "-", "*", "/", "%":
-			l := c.checkExpr(e.Left, expected)
-			r := c.checkExpr(e.Right, l)
-			l = c.forceIntType(e.Left, l, expected)
-			r = c.forceIntType(e.Right, r, l)
+			want := expected
+			if want.K == TyRange {
+				want = stripRange(want)
+			}
+			l0 := c.checkExpr(e.Left, want)
+			l := stripRange(c.forceIntType(e.Left, l0, want))
+			r0 := c.checkExpr(e.Right, l)
+			r := stripRange(c.forceIntType(e.Right, r0, l))
 			if !sameType(l, r) {
 				c.errorAt(e.S, "binary integer ops require same type")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
 			return c.setExprType(ex, l)
 		case "<", "<=", ">", ">=":
-			l := c.checkExpr(e.Left, Type{K: TyI64})
-			r := c.checkExpr(e.Right, l)
-			l = c.forceIntType(e.Left, l, Type{K: TyI64})
-			r = c.forceIntType(e.Right, r, l)
+			l0 := c.checkExpr(e.Left, Type{K: TyI64})
+			l := stripRange(c.forceIntType(e.Left, l0, Type{K: TyI64}))
+			r0 := c.checkExpr(e.Right, l)
+			r := stripRange(c.forceIntType(e.Right, r0, l))
 			if !sameType(l, r) {
 				c.errorAt(e.S, "comparison requires same integer type")
 			}
 			return c.setExprType(ex, Type{K: TyBool})
 		case "==", "!=":
-			l := c.checkExpr(e.Left, Type{K: TyBad})
-			r := c.checkExpr(e.Right, l)
+			l0 := c.checkExpr(e.Left, Type{K: TyBad})
+			r0 := c.checkExpr(e.Right, stripRange(l0))
+			// If the left is an untyped int and the right is a range type, re-check
+			// the left under the right's base type to avoid spurious mismatches.
+			if l0.K == TyUntypedInt && r0.K == TyRange {
+				l0 = c.checkExpr(e.Left, stripRange(r0))
+			}
+			l := l0
+			r := r0
 			if l.K == TyUntypedInt || r.K == TyUntypedInt {
 				// default to i64
 				l = c.forceIntType(e.Left, l, Type{K: TyI64})
 				r = c.forceIntType(e.Right, r, l)
 			}
+			l = stripRange(l)
+			r = stripRange(r)
 			if !sameType(l, r) {
 				c.errorAt(e.S, "equality requires same type")
 			}
@@ -383,7 +405,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 			for i, a := range e.Args {
 				at := c.checkExpr(a, vs.Fields[i])
-				if !sameType(vs.Fields[i], at) {
+				if !assignableTo(vs.Fields[i], at) {
 					c.errorAt(a.Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", vs.Fields[i].String(), at.String()))
 				}
 			}
@@ -417,7 +439,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 							return c.setExprType(ex, Type{K: TyBad})
 						}
 						at := c.checkExpr(e.Args[0], *vi.ty.Elem)
-						if !sameType(*vi.ty.Elem, at) {
+						if !assignableTo(*vi.ty.Elem, at) {
 							c.errorAt(e.Args[0].Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", vi.ty.Elem.String(), at.String()))
 						}
 						c.vecCalls[e] = VecCallTarget{Kind: VecCallPush, RecvName: alias, Elem: *vi.ty.Elem}
@@ -511,12 +533,12 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 					c.errorAt(e.S, fmt.Sprintf("wrong number of arguments: expected %d, got %d", len(vs.Fields), len(e.Args)))
 					return c.setExprType(ex, Type{K: TyBad})
 				}
-				for i, a := range e.Args {
-					at := c.checkExpr(a, vs.Fields[i])
-					if !sameType(vs.Fields[i], at) {
-						c.errorAt(a.Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", vs.Fields[i].String(), at.String()))
+					for i, a := range e.Args {
+						at := c.checkExpr(a, vs.Fields[i])
+						if !assignableTo(vs.Fields[i], at) {
+							c.errorAt(a.Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", vs.Fields[i].String(), at.String()))
+						}
 					}
-				}
 				fields := make([]Type, 0, len(vs.Fields))
 				fields = append(fields, vs.Fields...)
 				c.enumCtors[e] = EnumCtorTarget{Enum: ety, Variant: varName, Tag: vidx, Fields: fields}
@@ -628,7 +650,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		}
 		for i, a := range e.Args {
 			at := c.checkExpr(a, sig.Params[i])
-			if !sameType(sig.Params[i], at) {
+			if !assignableTo(sig.Params[i], at) {
 				c.errorAt(a.Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", sig.Params[i].String(), at.String()))
 			}
 		}
@@ -749,7 +771,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 			want := ss.Fields[idx].Ty
 			got := c.checkExpr(init.Expr, want)
-			if !sameType(want, got) {
+			if !assignableTo(want, got) {
 				c.errorAt(init.Expr.Span(), fmt.Sprintf("field %s type mismatch: expected %s, got %s", init.Name, want.String(), got.String()))
 			}
 		}
@@ -775,10 +797,10 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 
 		// If expected was specified, enforce.
 		if expected.K != TyBad {
-			if !sameType(expected, thenTy) {
+			if !assignableTo(expected, thenTy) {
 				c.errorAt(e.Then.Span(), fmt.Sprintf("if branch type mismatch: expected %s, got %s", expected.String(), thenTy.String()))
 			}
-			if !sameType(expected, elseTy) {
+			if !assignableTo(expected, elseTy) {
 				c.errorAt(e.Else.Span(), fmt.Sprintf("if branch type mismatch: expected %s, got %s", expected.String(), elseTy.String()))
 			}
 			return c.setExprType(ex, expected)
@@ -789,6 +811,13 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			thenTy = elseTy
 		}
 		if elseTy.K == TyUntypedInt && (thenTy.K == TyI32 || thenTy.K == TyI64) {
+			elseTy = thenTy
+		}
+		// Range values can be used where the base type is expected.
+		if thenTy.K == TyRange && (elseTy.K == TyI32 || elseTy.K == TyI64) && stripRange(thenTy).K == elseTy.K {
+			thenTy = elseTy
+		}
+		if elseTy.K == TyRange && (thenTy.K == TyI32 || thenTy.K == TyI64) && stripRange(elseTy).K == thenTy.K {
 			elseTy = thenTy
 		}
 		if thenTy.K == TyUntypedInt && elseTy.K == TyUntypedInt {
@@ -802,10 +831,11 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		return c.setExprType(ex, thenTy)
 		case *ast.MatchExpr:
 			scrutTy := c.checkExpr(e.Scrutinee, Type{K: TyBad})
-			isEnum := scrutTy.K == TyEnum
-			isI32 := scrutTy.K == TyI32
-			isI64 := scrutTy.K == TyI64
-			isStr := scrutTy.K == TyString
+			scrutBase := stripRange(scrutTy)
+			isEnum := scrutBase.K == TyEnum
+			isI32 := scrutBase.K == TyI32
+			isI64 := scrutBase.K == TyI64
+			isStr := scrutBase.K == TyString
 			if !isEnum && !isI32 && !isI64 && !isStr {
 				c.errorAt(e.S, "match scrutinee must be enum/i32/i64/String (stage0)")
 				return c.setExprType(ex, Type{K: TyBad})
@@ -813,9 +843,9 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		var esig EnumSig
 		if isEnum {
 			var ok bool
-			esig, ok = c.enumSigs[scrutTy.Name]
+			esig, ok = c.enumSigs[scrutBase.Name]
 			if !ok {
-				c.errorAt(e.S, "unknown enum type: "+scrutTy.Name)
+				c.errorAt(e.S, "unknown enum type: "+scrutBase.Name)
 				return c.setExprType(ex, Type{K: TyBad})
 			}
 		}
@@ -889,17 +919,25 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 
 			armTy := c.checkExpr(arm.Expr, resultTy)
-			if resultTy.K == TyBad {
-				if armTy.K == TyUntypedInt {
-					resultTy = Type{K: TyI64}
+				if resultTy.K == TyBad {
+					if armTy.K == TyUntypedInt {
+						resultTy = Type{K: TyI64}
+					} else {
+						resultTy = armTy
+					}
 				} else {
-					resultTy = armTy
+					// Range values can be used where the base type is expected; unify match result
+					// to the base type when arms disagree only by range-ness.
+					if resultTy.K == TyRange && (armTy.K == TyI32 || armTy.K == TyI64) && stripRange(resultTy).K == armTy.K {
+						resultTy = armTy
+					} else if (resultTy.K == TyI32 || resultTy.K == TyI64) && armTy.K == TyRange && stripRange(armTy).K == resultTy.K {
+						// keep resultTy as base
+					} else if !assignableTo(resultTy, armTy) {
+						c.errorAt(arm.S, fmt.Sprintf("match arm type mismatch: expected %s, got %s", resultTy.String(), armTy.String()))
+					}
 				}
-			} else if !sameType(resultTy, armTy) {
-				c.errorAt(arm.S, fmt.Sprintf("match arm type mismatch: expected %s, got %s", resultTy.String(), armTy.String()))
+				c.popScope()
 			}
-			c.popScope()
-		}
 
 		if isEnum {
 			if !hasWild {
@@ -1005,7 +1043,7 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 					return c.setExprType(ex, Type{K: TyBad}), true
 				}
 				at := c.checkExpr(call.Args[0], *recvTy.Elem)
-				if !sameType(*recvTy.Elem, at) {
+				if !assignableTo(*recvTy.Elem, at) {
 					c.errorAt(call.Args[0].Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", recvTy.Elem.String(), at.String()))
 				}
 				c.vecCalls[call] = VecCallTarget{Kind: VecCallPush, RecvName: recvName, Recv: me.Recv, Elem: *recvTy.Elem}
@@ -1025,7 +1063,7 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 						return c.setExprType(ex, Type{K: TyBad}), true
 					}
 					at := c.checkExpr(call.Args[0], *recvTy.Elem)
-					if !sameType(*recvTy.Elem, at) {
+					if !assignableTo(*recvTy.Elem, at) {
 						c.errorAt(call.Args[0].Span(), fmt.Sprintf("argument type mismatch: expected %s, got %s", recvTy.Elem.String(), at.String()))
 					}
 					c.vecCalls[call] = VecCallTarget{Kind: VecCallPush, Recv: me.Recv, Elem: *recvTy.Elem}
@@ -1134,7 +1172,8 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 	}
 
 	// Primitive to_string.
-	if recvTy.K == TyI32 || recvTy.K == TyI64 || recvTy.K == TyBool {
+	baseTy := stripRange(recvTy)
+	if baseTy.K == TyI32 || baseTy.K == TyI64 || baseTy.K == TyBool {
 		if method != "to_string" {
 			return Type{K: TyBad}, false
 		}
@@ -1147,7 +1186,7 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 			recvName = id.Name
 		}
 		kind := ToStrBad
-		switch recvTy.K {
+		switch baseTy.K {
 		case TyI32:
 			kind = ToStrI32
 		case TyI64:

@@ -112,6 +112,12 @@ func substType(t Type, subs map[string]Type) Type {
 		}
 		e := substType(*t.Elem, subs)
 		return Type{K: TyVec, Elem: &e}
+	case TyRange:
+		if t.Base == nil {
+			return t
+		}
+		b := substType(*t.Base, subs)
+		return Type{K: TyRange, Base: &b, Lo: t.Lo, Hi: t.Hi}
 	default:
 		return t
 	}
@@ -133,6 +139,14 @@ func unifyType(pattern Type, got Type, subs map[string]Type) bool {
 			return false
 		}
 		return unifyType(*pattern.Elem, *got.Elem, subs)
+	case TyRange:
+		if got.K != TyRange || pattern.Base == nil || got.Base == nil {
+			return false
+		}
+		if pattern.Lo != got.Lo || pattern.Hi != got.Hi {
+			return false
+		}
+		return unifyType(*pattern.Base, *got.Base, subs)
 	default:
 		return sameType(pattern, got)
 	}

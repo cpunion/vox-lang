@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strconv"
 
 	"voxlang/internal/ir"
 )
@@ -242,6 +243,30 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		out.WriteString(" = (int64_t)")
 		out.WriteString(cValue(i.V))
 		out.WriteString(";\n")
+		return nil
+	case *ir.RangeCheckI32:
+		out.WriteString("  {\n")
+		out.WriteString("    int32_t _v = ")
+		out.WriteString(cValue(i.V))
+		out.WriteString(";\n")
+		out.WriteString("    if (_v < (int32_t)")
+		out.WriteString(strconv.FormatInt(int64(i.Lo), 10))
+		out.WriteString(" || _v > (int32_t)")
+		out.WriteString(strconv.FormatInt(int64(i.Hi), 10))
+		out.WriteString(") { vox_builtin_panic(\"range check failed\"); }\n")
+		out.WriteString("  }\n")
+		return nil
+	case *ir.RangeCheckI64:
+		out.WriteString("  {\n")
+		out.WriteString("    int64_t _v = ")
+		out.WriteString(cValue(i.V))
+		out.WriteString(";\n")
+		out.WriteString("    if (_v < (int64_t)")
+		out.WriteString(strconv.FormatInt(i.Lo, 10))
+		out.WriteString(" || _v > (int64_t)")
+		out.WriteString(strconv.FormatInt(i.Hi, 10))
+		out.WriteString(") { vox_builtin_panic(\"range check failed\"); }\n")
+		out.WriteString("  }\n")
 		return nil
 	case *ir.Store:
 		out.WriteString("  ")

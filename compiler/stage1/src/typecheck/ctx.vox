@@ -52,6 +52,7 @@ fn ty_eq(a: ir.Ty, b: ir.Ty) -> bool {
     ir.TyKind.Struct => match b.kind { ir.TyKind.Struct => a.mod_path == b.mod_path && a.name == b.name, _ => false },
     ir.TyKind.Enum => match b.kind { ir.TyKind.Enum => a.mod_path == b.mod_path && a.name == b.name, _ => false },
     ir.TyKind.Vec => match b.kind { ir.TyKind.Vec => a.elem == b.elem, _ => false },
+    ir.TyKind.Range => match b.kind { ir.TyKind.Range => a.elem == b.elem && a.lo == b.lo && a.hi == b.hi, _ => false },
     _ => false,
   };
 }
@@ -140,6 +141,28 @@ pub fn resolve_type(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_par
   if typename_is0(tn, "i32") { return ResolveTyResult { ctx: c, ok: true, idx: c.ty_i32 }; }
   if typename_is0(tn, "i64") { return ResolveTyResult { ctx: c, ok: true, idx: c.ty_i64 }; }
   if typename_is0(tn, "String") { return ResolveTyResult { ctx: c, ok: true, idx: c.ty_string }; }
+
+  // @range(lo..=hi) Base
+  if tn.parts.len() == 3 && tn.parts.get(0) == "@range" && tn.args.len() == 1 {
+    let pr_lo: ParseI64DecResult = parse_i64_dec(tn.parts.get(1));
+    if !pr_lo.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let pr_hi: ParseI64DecResult = parse_i64_dec(tn.parts.get(2));
+    if !pr_hi.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let lo: i64 = pr_lo.val;
+    let hi: i64 = pr_hi.val;
+    if lo > hi { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+
+    let br: ResolveTyResult = resolve_type(c, w, cur_mod, imps, type_params, tn.args.get(0));
+    c = br.ctx;
+    if !br.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let bt: ir.Ty = ir.ty_pool_get(c.pool, br.idx);
+    if bt.kind != ir.TyKind.I32 && bt.kind != ir.TyKind.I64 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    if bt.kind == ir.TyKind.I32 && hi > 2147483647 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+
+    let ir0: InternResult = intern_ty(c, ir.ty_range(br.idx, lo, hi));
+    c = ir0.ctx;
+    return ResolveTyResult { ctx: c, ok: true, idx: ir0.idx };
+  }
 
   // Vec[T]
   if tn.parts.len() == 1 && tn.parts.get(0) == "Vec" && tn.args.len() == 1 {
