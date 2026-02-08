@@ -44,7 +44,7 @@ fn join_mod_path(base: String, segs: Vec[String]) -> String {
   return out;
 }
 
-struct EvalConstExprResult { ok: bool, err: TcError, kind: i32, ty: i32, iv: i32, bv: bool, sv: String, sigs: Vec[ConstSig], states: Vec[i32] }
+struct EvalConstExprResult { ok: bool, err: TcError, kind: i32, ty: i32, iv_i32: i32, iv_i64: i64, bv: bool, sv: String, sigs: Vec[ConstSig], states: Vec[i32] }
 struct ResolveConstResult { ok: bool, err: TcError, sigs: Vec[ConstSig], states: Vec[i32] }
 
 // Evaluate in a specific module's expr pool (const init expr ids are module-local).
@@ -53,19 +53,26 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
 
   // literals
   if match n { ast.ExprNode.Int(_v) => true, _ => false } {
-    if expected != ctx.ty_i32 && expected != ctx.ty_i64 { return EvalConstExprResult { ok: false, err: type_error(file, "const int requires expected i32/i64"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
-    let v: i32 = match n { ast.ExprNode.Int(x) => x, _ => 0 };
-    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: expected, iv: v, bv: false, sv: "", sigs: sigs0, states: states0 };
+    if expected != ctx.ty_i32 && expected != ctx.ty_i64 { return EvalConstExprResult { ok: false, err: type_error(file, "const int requires expected i32/i64"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    let s: String = match n { ast.ExprNode.Int(x) => x, _ => "" };
+    if expected == ctx.ty_i32 {
+      let pr: ParseI32DecResult = parse_i32_dec(s);
+      if !pr.ok { return EvalConstExprResult { ok: false, err: type_error(file, "i32 literal out of range"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: expected, iv_i32: pr.val, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    let pr2: ParseI64DecResult = parse_i64_dec(s);
+    if !pr2.ok { return EvalConstExprResult { ok: false, err: type_error(file, "i64 literal out of range"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: expected, iv_i32: 0, iv_i64: pr2.val, bv: false, sv: "", sigs: sigs0, states: states0 };
   }
   if match n { ast.ExprNode.Bool(_v) => true, _ => false } {
-    if expected != ctx.ty_bool { return EvalConstExprResult { ok: false, err: type_error(file, "const bool requires expected bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if expected != ctx.ty_bool { return EvalConstExprResult { ok: false, err: type_error(file, "const bool requires expected bool"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let b: bool = match n { ast.ExprNode.Bool(x) => x, _ => false };
-    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: b, sv: "", sigs: sigs0, states: states0 };
+    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv_i32: 0, iv_i64: 0, bv: b, sv: "", sigs: sigs0, states: states0 };
   }
   if match n { ast.ExprNode.Str(_v) => true, _ => false } {
-    if expected != ctx.ty_string { return EvalConstExprResult { ok: false, err: type_error(file, "const string requires expected String"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if expected != ctx.ty_string { return EvalConstExprResult { ok: false, err: type_error(file, "const string requires expected String"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let s: String = match n { ast.ExprNode.Str(x) => x, _ => "" };
-    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_str(), ty: ctx.ty_string, iv: 0, bv: false, sv: s, sigs: sigs0, states: states0 };
+    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_str(), ty: ctx.ty_string, iv_i32: 0, iv_i64: 0, bv: false, sv: s, sigs: sigs0, states: states0 };
   }
 
   // identifier: must resolve to a const
@@ -75,14 +82,14 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     let want_mod: String = if ni.local != "" { ni.mod_path } else { cur_mod };
     let want_name: String = if ni.local != "" { ni.name } else { name };
     let idx: i32 = const_find_item(items, want_mod, want_name);
-    if idx == -1 { return EvalConstExprResult { ok: false, err: type_error(file, "unknown const: ".concat(const_qname(want_mod, want_name))), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if idx == -1 { return EvalConstExprResult { ok: false, err: type_error(file, "unknown const: ".concat(const_qname(want_mod, want_name))), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     // ensure referenced const is resolved
     let rr: ResolveConstResult = resolve_const(ctx, w, items, sigs0, states0, idx);
-    if !rr.ok { return EvalConstExprResult { ok: false, err: rr.err, kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr.sigs, states: rr.states }; }
+    if !rr.ok { return EvalConstExprResult { ok: false, err: rr.err, kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: rr.sigs, states: rr.states }; }
     let cs: ConstSig = rr.sigs.get(idx);
-    if want_mod != cur_mod && !cs.is_pub { return EvalConstExprResult { ok: false, err: type_error(file, "const is private: ".concat(const_qname(want_mod, want_name))), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr.sigs, states: rr.states }; }
-    if expected != -1 && cs.ty != expected { return EvalConstExprResult { ok: false, err: type_error(file, "const type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr.sigs, states: rr.states }; }
-    return EvalConstExprResult { ok: true, err: TcError.None, kind: cs.kind, ty: cs.ty, iv: cs.iv, bv: cs.bv, sv: cs.sv, sigs: rr.sigs, states: rr.states };
+    if want_mod != cur_mod && !cs.is_pub { return EvalConstExprResult { ok: false, err: type_error(file, "const is private: ".concat(const_qname(want_mod, want_name))), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: rr.sigs, states: rr.states }; }
+    if expected != -1 && cs.ty != expected { return EvalConstExprResult { ok: false, err: type_error(file, "const type mismatch"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: rr.sigs, states: rr.states }; }
+    return EvalConstExprResult { ok: true, err: TcError.None, kind: cs.kind, ty: cs.ty, iv_i32: cs.iv_i32, iv_i64: cs.iv_i64, bv: cs.bv, sv: cs.sv, sigs: rr.sigs, states: rr.states };
   }
 
   // module-qualified const: `alias.NAME` / `alias.mod.NAME`
@@ -90,22 +97,22 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     let recv: i32 = match n { ast.ExprNode.Member(r, _name) => r, _ => -1 };
     let mname: String = match n { ast.ExprNode.Member(_r, x) => x, _ => "" };
     let pr: ExprPartsResult = expr_parts_member(exprs, recv, mname);
-    if !pr.ok { return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const member path"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !pr.ok { return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const member path"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let parts: Vec[String] = pr.parts;
-    if parts.len() < 2 { return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const member path"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if parts.len() < 2 { return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const member path"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let base: String = find_alias(imps.aliases, parts.get(0));
-    if base == "" { return EvalConstExprResult { ok: false, err: type_error(file, "unknown module qualifier"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if base == "" { return EvalConstExprResult { ok: false, err: type_error(file, "unknown module qualifier"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let extra: Vec[String] = slice_parts(parts, 1, parts.len() - 1);
     let want_mod: String = if extra.len() == 0 { base } else { join_mod_path(base, extra) };
     let want_name: String = parts.get(parts.len() - 1);
     let idx2: i32 = const_find_item(items, want_mod, want_name);
-    if idx2 == -1 { return EvalConstExprResult { ok: false, err: type_error(file, "unknown const: ".concat(const_qname(want_mod, want_name))), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if idx2 == -1 { return EvalConstExprResult { ok: false, err: type_error(file, "unknown const: ".concat(const_qname(want_mod, want_name))), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let rr2: ResolveConstResult = resolve_const(ctx, w, items, sigs0, states0, idx2);
-    if !rr2.ok { return EvalConstExprResult { ok: false, err: rr2.err, kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
+    if !rr2.ok { return EvalConstExprResult { ok: false, err: rr2.err, kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
     let cs2: ConstSig = rr2.sigs.get(idx2);
-    if want_mod != cur_mod && !cs2.is_pub { return EvalConstExprResult { ok: false, err: type_error(file, "const is private: ".concat(const_qname(want_mod, want_name))), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
-    if expected != -1 && cs2.ty != expected { return EvalConstExprResult { ok: false, err: type_error(file, "const type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
-    return EvalConstExprResult { ok: true, err: TcError.None, kind: cs2.kind, ty: cs2.ty, iv: cs2.iv, bv: cs2.bv, sv: cs2.sv, sigs: rr2.sigs, states: rr2.states };
+    if want_mod != cur_mod && !cs2.is_pub { return EvalConstExprResult { ok: false, err: type_error(file, "const is private: ".concat(const_qname(want_mod, want_name))), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
+    if expected != -1 && cs2.ty != expected { return EvalConstExprResult { ok: false, err: type_error(file, "const type mismatch"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
+    return EvalConstExprResult { ok: true, err: TcError.None, kind: cs2.kind, ty: cs2.ty, iv_i32: cs2.iv_i32, iv_i64: cs2.iv_i64, bv: cs2.bv, sv: cs2.sv, sigs: rr2.sigs, states: rr2.states };
   }
 
   // unary
@@ -115,14 +122,17 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     if match op { ast.UnaryOp.Not => true, _ => false } {
       let ar: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, ctx.ty_bool);
       if !ar.ok { return ar; }
-      if ar.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const ! expects bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
-      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: !ar.bv, sv: "", sigs: ar.sigs, states: ar.states };
+      if ar.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const ! expects bool"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
+      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv_i32: 0, iv_i64: 0, bv: !ar.bv, sv: "", sigs: ar.sigs, states: ar.states };
     }
     // neg
     let ar2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, expected);
     if !ar2.ok { return ar2; }
-    if ar2.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const - expects int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: ar2.sigs, states: ar2.states }; }
-    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: expected, iv: 0 - ar2.iv, bv: false, sv: "", sigs: ar2.sigs, states: ar2.states };
+    if ar2.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const - expects int"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: ar2.sigs, states: ar2.states }; }
+    if expected == ctx.ty_i32 {
+      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: expected, iv_i32: 0 - ar2.iv_i32, iv_i64: 0, bv: false, sv: "", sigs: ar2.sigs, states: ar2.states };
+    }
+    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: expected, iv_i32: 0, iv_i64: 0 - ar2.iv_i64, bv: false, sv: "", sigs: ar2.sigs, states: ar2.states };
   }
 
   // if expr
@@ -132,7 +142,7 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     let els: i32 = match n { ast.ExprNode.If(_c, _t, e2) => e2, _ => -1 };
     let cr: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, cnd, ctx.ty_bool);
     if !cr.ok { return cr; }
-    if cr.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const if cond must be bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: cr.sigs, states: cr.states }; }
+    if cr.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const if cond must be bool"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: cr.sigs, states: cr.states }; }
     if cr.bv {
       return eval_const_expr_in_mod(ctx, w, items, cr.sigs, cr.states, cur_mod, imps, exprs, file, thn, expected);
     }
@@ -149,18 +159,18 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     if is_logic {
       let lr: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, ctx.ty_bool);
       if !lr.ok { return lr; }
-      if lr.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const &&/|| expects bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: lr.sigs, states: lr.states }; }
+      if lr.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const &&/|| expects bool"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: lr.sigs, states: lr.states }; }
       if match op { ast.BinaryOp.AndAnd => true, _ => false } && !lr.bv {
-        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: false, sv: "", sigs: lr.sigs, states: lr.states };
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: lr.sigs, states: lr.states };
       }
       if match op { ast.BinaryOp.OrOr => true, _ => false } && lr.bv {
-        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: true, sv: "", sigs: lr.sigs, states: lr.states };
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv_i32: 0, iv_i64: 0, bv: true, sv: "", sigs: lr.sigs, states: lr.states };
       }
       let rr: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, lr.sigs, lr.states, cur_mod, imps, exprs, file, r, ctx.ty_bool);
       if !rr.ok { return rr; }
-      if rr.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const &&/|| expects bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr.sigs, states: rr.states }; }
+      if rr.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const &&/|| expects bool"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: rr.sigs, states: rr.states }; }
       let out: bool = if match op { ast.BinaryOp.AndAnd => true, _ => false } { lr.bv && rr.bv } else { lr.bv || rr.bv };
-      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: out, sv: "", sigs: rr.sigs, states: rr.states };
+      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv_i32: 0, iv_i64: 0, bv: out, sv: "", sigs: rr.sigs, states: rr.states };
     }
 
     let is_cmp: bool = match op { ast.BinaryOp.Lt => true, ast.BinaryOp.Le => true, ast.BinaryOp.Gt => true, ast.BinaryOp.Ge => true, _ => false };
@@ -172,28 +182,50 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
       if !lr2.ok { return lr2; }
       let rr2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, lr2.sigs, lr2.states, cur_mod, imps, exprs, file, r, expected);
       if !rr2.ok { return rr2; }
-      if lr2.kind != const_kind_int() || rr2.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const int op expects ints"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
+      if lr2.kind != const_kind_int() || rr2.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const int op expects ints"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
       if is_cmp {
-        let outb: bool = match op {
-          ast.BinaryOp.Lt => lr2.iv < rr2.iv,
-          ast.BinaryOp.Le => lr2.iv <= rr2.iv,
-          ast.BinaryOp.Gt => lr2.iv > rr2.iv,
-          _ => lr2.iv >= rr2.iv,
+        if expected == ctx.ty_i32 {
+          let outb: bool = match op {
+            ast.BinaryOp.Lt => lr2.iv_i32 < rr2.iv_i32,
+            ast.BinaryOp.Le => lr2.iv_i32 <= rr2.iv_i32,
+            ast.BinaryOp.Gt => lr2.iv_i32 > rr2.iv_i32,
+            _ => lr2.iv_i32 >= rr2.iv_i32,
+          };
+          return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv_i32: 0, iv_i64: 0, bv: outb, sv: "", sigs: rr2.sigs, states: rr2.states };
+        }
+        let outb2: bool = match op {
+          ast.BinaryOp.Lt => lr2.iv_i64 < rr2.iv_i64,
+          ast.BinaryOp.Le => lr2.iv_i64 <= rr2.iv_i64,
+          ast.BinaryOp.Gt => lr2.iv_i64 > rr2.iv_i64,
+          _ => lr2.iv_i64 >= rr2.iv_i64,
         };
-        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: outb, sv: "", sigs: rr2.sigs, states: rr2.states };
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv_i32: 0, iv_i64: 0, bv: outb2, sv: "", sigs: rr2.sigs, states: rr2.states };
       }
       // arithmetic
-      let outi: i32 = match op {
-        ast.BinaryOp.Add => lr2.iv + rr2.iv,
-        ast.BinaryOp.Sub => lr2.iv - rr2.iv,
-        ast.BinaryOp.Mul => lr2.iv * rr2.iv,
-        ast.BinaryOp.Div => if rr2.iv == 0 { 0 } else { lr2.iv / rr2.iv },
-        _ => if rr2.iv == 0 { 0 } else { lr2.iv % rr2.iv },
-      };
-      if match op { ast.BinaryOp.Div => true, ast.BinaryOp.Mod => true, _ => false } && rr2.iv == 0 {
-        return EvalConstExprResult { ok: false, err: type_error(file, "const division by zero"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+      if expected == ctx.ty_i32 {
+        let outi: i32 = match op {
+          ast.BinaryOp.Add => lr2.iv_i32 + rr2.iv_i32,
+          ast.BinaryOp.Sub => lr2.iv_i32 - rr2.iv_i32,
+          ast.BinaryOp.Mul => lr2.iv_i32 * rr2.iv_i32,
+          ast.BinaryOp.Div => if rr2.iv_i32 == 0 { 0 } else { lr2.iv_i32 / rr2.iv_i32 },
+          _ => if rr2.iv_i32 == 0 { 0 } else { lr2.iv_i32 % rr2.iv_i32 },
+        };
+        if match op { ast.BinaryOp.Div => true, ast.BinaryOp.Mod => true, _ => false } && rr2.iv_i32 == 0 {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const division by zero"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+        }
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: expected, iv_i32: outi, iv_i64: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
       }
-      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: expected, iv: outi, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+      let outi2: i64 = match op {
+        ast.BinaryOp.Add => lr2.iv_i64 + rr2.iv_i64,
+        ast.BinaryOp.Sub => lr2.iv_i64 - rr2.iv_i64,
+        ast.BinaryOp.Mul => lr2.iv_i64 * rr2.iv_i64,
+        ast.BinaryOp.Div => if rr2.iv_i64 == 0 { 0 } else { lr2.iv_i64 / rr2.iv_i64 },
+        _ => if rr2.iv_i64 == 0 { 0 } else { lr2.iv_i64 % rr2.iv_i64 },
+      };
+      if match op { ast.BinaryOp.Div => true, ast.BinaryOp.Mod => true, _ => false } && rr2.iv_i64 == 0 {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const division by zero"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+      }
+      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: expected, iv_i32: 0, iv_i64: outi2, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
     }
 
     if is_eq {
@@ -204,9 +236,9 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
         if !lr3.ok { return lr3; }
         let rr3: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, lr3.sigs, lr3.states, cur_mod, imps, exprs, file, r, expected);
         if !rr3.ok { return rr3; }
-        let mut b: bool = lr3.iv == rr3.iv;
+        let mut b: bool = if expected == ctx.ty_i32 { lr3.iv_i32 == rr3.iv_i32 } else { lr3.iv_i64 == rr3.iv_i64 };
         if match op { ast.BinaryOp.Ne => true, _ => false } { b = !b; }
-        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: b, sv: "", sigs: rr3.sigs, states: rr3.states };
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv_i32: 0, iv_i64: 0, bv: b, sv: "", sigs: rr3.sigs, states: rr3.states };
       }
       if expected == ctx.ty_bool {
         let lr4: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, ctx.ty_bool);
@@ -215,7 +247,7 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
         if !rr4.ok { return rr4; }
         let mut b2: bool = lr4.bv == rr4.bv;
         if match op { ast.BinaryOp.Ne => true, _ => false } { b2 = !b2; }
-        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: b2, sv: "", sigs: rr4.sigs, states: rr4.states };
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv_i32: 0, iv_i64: 0, bv: b2, sv: "", sigs: rr4.sigs, states: rr4.states };
       }
       if expected == ctx.ty_string {
         let lr5: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, ctx.ty_string);
@@ -224,15 +256,15 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
         if !rr5.ok { return rr5; }
         let mut b3: bool = lr5.sv == rr5.sv;
         if match op { ast.BinaryOp.Ne => true, _ => false } { b3 = !b3; }
-        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: b3, sv: "", sigs: rr5.sigs, states: rr5.states };
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv_i32: 0, iv_i64: 0, bv: b3, sv: "", sigs: rr5.sigs, states: rr5.states };
       }
-      return EvalConstExprResult { ok: false, err: type_error(file, "const ==/!= expects primitive"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: type_error(file, "const ==/!= expects primitive"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
 
-    return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const binary op"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const binary op"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
   }
 
-  return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+  return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const expression"), kind: 0, ty: ctx.ty_bad, iv_i32: 0, iv_i64: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
 }
 
 fn slice_parts(xs: Vec[String], lo: i32, hi: i32) -> Vec[String] {
@@ -281,12 +313,17 @@ fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig]
   sigs = ev.sigs;
   states = ev.states;
 
-  // Range check i32.
-  if ty == ctx.ty_i32 {
-    // Int literal already fits i32.
-  }
-
-  let cs: ConstSig = ConstSig { mod_path: it.mod_path, name: it.decl.name, is_pub: it.decl.is_pub, ty: ty, kind: ev.kind, iv: ev.iv, bv: ev.bv, sv: ev.sv };
+  let cs: ConstSig = ConstSig {
+    mod_path: it.mod_path,
+    name: it.decl.name,
+    is_pub: it.decl.is_pub,
+    ty: ty,
+    kind: ev.kind,
+    iv_i32: ev.iv_i32,
+    iv_i64: ev.iv_i64,
+    bv: ev.bv,
+    sv: ev.sv,
+  };
   sigs = const_set_sig_at(sigs, idx, cs);
   states = const_set_i32_at(states, idx, 2);
   return ResolveConstResult { ok: true, err: TcError.None, sigs: sigs, states: states };
@@ -303,7 +340,7 @@ fn const_set_i32_at(xs0: Vec[i32], idx: i32, val: i32) -> Vec[i32] {
 }
 
 fn const_placeholder() -> ConstSig {
-  return ConstSig { mod_path: "", name: "", is_pub: false, ty: -1, kind: 0, iv: 0, bv: false, sv: "" };
+  return ConstSig { mod_path: "", name: "", is_pub: false, ty: -1, kind: 0, iv_i32: 0, iv_i64: 0, bv: false, sv: "" };
 }
 
 fn collect_consts(ctx: Ctx, w: World) -> TcCtxResult {

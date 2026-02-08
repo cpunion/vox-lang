@@ -150,7 +150,7 @@ Stage0/Stage1 目前支持的 `match` pattern 形态：
 
 - `_`：wildcard
 - `name`：绑定模式（bind），总是匹配，并把 scrutinee 绑定到 `name`
-- `123`：整数字面量（仅当 scrutinee 是 `i32`）
+- `123`：整数字面量（仅当 scrutinee 是 `i32` 或 `i64`）
 - `"txt"`：字符串字面量（仅当 scrutinee 是 `String`）
 - `Enum.Variant(...)`：枚举 variant pattern
 - `.Variant(...)`：枚举 variant pattern（点前缀简写；当枚举类型可由上下文确定时）
