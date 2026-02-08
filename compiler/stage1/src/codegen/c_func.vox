@@ -34,7 +34,6 @@ fn c_value(v: ir.Value) -> String {
     ir.Value.Temp(i) => c_temp_name(i),
     ir.Value.Slot(i) => c_slot_name(i),
     ir.Value.Int(n) => n.to_string(),
-    ir.Value.I64(n) => n.to_string(),
     ir.Value.Bool(b) => if b { "true" } else { "false" },
     ir.Value.Str(s) => "\"".concat(s.escape_c()).concat("\""),
   };
@@ -59,6 +58,10 @@ fn c_cmpop(op: ir.CmpKind) -> String {
     ir.CmpKind.Eq => "==",
     ir.CmpKind.Ne => "!=",
   };
+}
+
+fn c_str_lit(s: String) -> String {
+  return "\"".concat(s.escape_c()).concat("\"");
 }
 
 struct LocalsResult { slots: Vec[IdTy], temps: Vec[IdTy], max_slot: i32, max_temp: i32 }
@@ -89,8 +92,8 @@ fn locals_add_instr(pool: ir.TyPool, l0: LocalsResult, ins: ir.Instr) -> LocalsR
     ir.Instr.And(tid, _a, _b) => locals_add_temp(l0, tid, "bool"),
     ir.Instr.Or(tid, _a, _b) => locals_add_temp(l0, tid, "bool"),
     ir.Instr.Not(tid, _a) => locals_add_temp(l0, tid, "bool"),
-    ir.Instr.I64ToI32Checked(tid, _v) => locals_add_temp(l0, tid, "int32_t"),
-    ir.Instr.I32ToI64(tid, _v) => locals_add_temp(l0, tid, "int64_t"),
+    ir.Instr.IntCast(tid, dst_ty, _src_ty, _v) => locals_add_temp(l0, tid, c_type(pool, dst_ty)),
+    ir.Instr.IntCastChecked(tid, dst_ty, _src_ty, _v) => locals_add_temp(l0, tid, c_type(pool, dst_ty)),
     ir.Instr.Load(tid, ty, _sid) => locals_add_temp(l0, tid, c_type(pool, ty)),
     ir.Instr.StructInit(tid, ty, _fs) => locals_add_temp(l0, tid, c_type(pool, ty)),
     ir.Instr.FieldGet(tid, ty, _r, _f) => locals_add_temp(l0, tid, c_type(pool, ty)),
@@ -140,6 +143,75 @@ fn emit_instr_cmp(pool: ir.TyPool, tid: i32, op: ir.CmpKind, oty: i32, a: ir.Val
     return vec1("  ".concat(c_temp_name(tid)).concat(" = (strcmp(").concat(c_value(a)).concat(", ").concat(c_value(b)).concat(") ").concat(cmpop).concat(" 0);"));
   }
   return vec1("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_value(a)).concat(" ").concat(c_cmpop(op)).concat(" ").concat(c_value(b)).concat(");"));
+}
+
+fn emit_instr_int_cast_checked(pool: ir.TyPool, tid: i32, dst_ty: i32, src_ty: i32, v: ir.Value) -> Vec[String] {
+  let dst: ir.Ty = ir.ty_pool_get(pool, dst_ty);
+  let src: ir.Ty = ir.ty_pool_get(pool, src_ty);
+
+  let src_name: String = match src.kind {
+    ir.TyKind.I8 => "i8",
+    ir.TyKind.U8 => "u8",
+    ir.TyKind.I32 => "i32",
+    ir.TyKind.U32 => "u32",
+    ir.TyKind.I64 => "i64",
+    ir.TyKind.U64 => "u64",
+    ir.TyKind.USize => "usize",
+    _ => "?",
+  };
+  let dst_name: String = match dst.kind {
+    ir.TyKind.I8 => "i8",
+    ir.TyKind.U8 => "u8",
+    ir.TyKind.I32 => "i32",
+    ir.TyKind.U32 => "u32",
+    ir.TyKind.I64 => "i64",
+    ir.TyKind.U64 => "u64",
+    ir.TyKind.USize => "usize",
+    _ => "?",
+  };
+  let msg: String = src_name.concat(" to ").concat(dst_name).concat(" overflow");
+
+  let dst_max: String =
+    match dst.kind {
+      ir.TyKind.I8 => "INT8_MAX",
+      ir.TyKind.U8 => "UINT8_MAX",
+      ir.TyKind.I32 => "INT32_MAX",
+      ir.TyKind.U32 => "UINT32_MAX",
+      ir.TyKind.I64 => "INT64_MAX",
+      ir.TyKind.U64 => "UINT64_MAX",
+      ir.TyKind.USize => "UINT64_MAX",
+      _ => "",
+    };
+  if dst_max.len() == 0 { panic("int_cast_checked dst must be int"); }
+  let dst_min: String =
+    match dst.kind {
+      ir.TyKind.I8 => "INT8_MIN",
+      ir.TyKind.I32 => "INT32_MIN",
+      ir.TyKind.I64 => "INT64_MIN",
+      _ => "0",
+    };
+
+  let dst_is_unsigned: bool =
+    dst.kind == ir.TyKind.U8 || dst.kind == ir.TyKind.U32 || dst.kind == ir.TyKind.U64 || dst.kind == ir.TyKind.USize;
+  let src_is_unsigned: bool =
+    src.kind == ir.TyKind.U8 || src.kind == ir.TyKind.U32 || src.kind == ir.TyKind.U64 || src.kind == ir.TyKind.USize;
+
+  let mut out: Vec[String] = Vec();
+  if dst_is_unsigned {
+    if src_is_unsigned {
+      out.push("  if ((uint64_t)".concat(c_value(v)).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_builtin_panic(").concat(c_str_lit(msg)).concat("); }"));
+    } else {
+      out.push("  if (".concat(c_value(v)).concat(" < 0 || (uint64_t)").concat(c_value(v)).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_builtin_panic(").concat(c_str_lit(msg)).concat("); }"));
+    }
+  } else {
+    if src_is_unsigned {
+      out.push("  if ((uint64_t)".concat(c_value(v)).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_builtin_panic(").concat(c_str_lit(msg)).concat("); }"));
+    } else {
+      out.push("  if (".concat(c_value(v)).concat(" < ").concat(dst_min).concat(" || ").concat(c_value(v)).concat(" > ").concat(dst_max).concat(") { vox_builtin_panic(").concat(c_str_lit(msg)).concat("); }"));
+    }
+  }
+  out.push("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, dst_ty)).concat(")").concat(c_value(v)).concat(";"));
+  return out;
 }
 
 fn emit_instr_struct_init(pool: ir.TyPool, tid: i32, ty: i32, fs: Vec[ir.StructInitField]) -> Vec[String] {
@@ -234,21 +306,12 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr) -> Vec[String] {
     ir.Instr.Or(tid, a, b) => vec1("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_value(a)).concat(" || ").concat(c_value(b)).concat(");")),
     ir.Instr.Not(tid, a) => vec1("  ".concat(c_temp_name(tid)).concat(" = (!").concat(c_value(a)).concat(");")),
 
-    ir.Instr.I32ToI64(tid, v) => vec1("  ".concat(c_temp_name(tid)).concat(" = (int64_t)").concat(c_value(v)).concat(";")),
-    ir.Instr.I64ToI32Checked(tid, v) => {
-      let mut out: Vec[String] = Vec();
-      out.push("  if (".concat(c_value(v)).concat(" < INT32_MIN || ").concat(c_value(v)).concat(" > INT32_MAX) { vox_builtin_panic(\"i64 to i32 overflow\"); }"));
-      out.push("  ".concat(c_temp_name(tid)).concat(" = (int32_t)").concat(c_value(v)).concat(";"));
-      out
-    },
-    ir.Instr.RangeCheckI32(v, lo, hi) => vec1(
-      "  if (".concat(c_value(v)).concat(" < (int32_t)").concat(lo.to_string())
-        .concat(" || ").concat(c_value(v)).concat(" > (int32_t)").concat(hi.to_string())
-        .concat(") { vox_builtin_panic(\"range check failed\"); }")
-    ),
-    ir.Instr.RangeCheckI64(v, lo, hi) => vec1(
-      "  if (".concat(c_value(v)).concat(" < (int64_t)").concat(lo.to_string())
-        .concat(" || ").concat(c_value(v)).concat(" > (int64_t)").concat(hi.to_string())
+    ir.Instr.IntCast(tid, dst_ty, _src_ty, v) =>
+      vec1("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, dst_ty)).concat(")").concat(c_value(v)).concat(";")),
+    ir.Instr.IntCastChecked(tid, dst_ty, src_ty, v) => emit_instr_int_cast_checked(pool, tid, dst_ty, src_ty, v),
+    ir.Instr.RangeCheck(ty, v, lo, hi) => vec1(
+      "  if (".concat(c_value(v)).concat(" < (").concat(c_type(pool, ty)).concat(")").concat(lo.to_string())
+        .concat(" || ").concat(c_value(v)).concat(" > (").concat(c_type(pool, ty)).concat(")").concat(hi.to_string())
         .concat(") { vox_builtin_panic(\"range check failed\"); }")
     ),
 
