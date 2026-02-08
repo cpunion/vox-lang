@@ -10,6 +10,9 @@ struct MatchArmInfo {
   variant: String,
   bind_scrut: String,
   bind_scrut_ty: i32,
+  lit_kind: i32, // 0 none, 1 int, 2 str
+  lit_i32: i32,
+  lit_str: String,
   binds: Vec[String],
   bind_tys: Vec[i32],
   is_wild: bool,
@@ -17,16 +20,16 @@ struct MatchArmInfo {
 }
 
 fn match_arm_info_wild(blk: i32, expr: i32) -> MatchArmInfo {
-  return MatchArmInfo { blk: blk, has_tag: false, tag: 0, variant: "", bind_scrut: "", bind_scrut_ty: 0, binds: Vec(), bind_tys: Vec(), is_wild: true, expr: expr };
+  return MatchArmInfo { blk: blk, has_tag: false, tag: 0, variant: "", bind_scrut: "", bind_scrut_ty: 0, lit_kind: 0, lit_i32: 0, lit_str: "", binds: Vec(), bind_tys: Vec(), is_wild: true, expr: expr };
 }
 
 fn match_arm_info_other(blk: i32, expr: i32) -> MatchArmInfo {
-  return MatchArmInfo { blk: blk, has_tag: false, tag: 0, variant: "", bind_scrut: "", bind_scrut_ty: 0, binds: Vec(), bind_tys: Vec(), is_wild: false, expr: expr };
+  return MatchArmInfo { blk: blk, has_tag: false, tag: 0, variant: "", bind_scrut: "", bind_scrut_ty: 0, lit_kind: 0, lit_i32: 0, lit_str: "", binds: Vec(), bind_tys: Vec(), is_wild: false, expr: expr };
 }
 
 fn match_arm_info_bind(blk: i32, expr: i32, name: String, scrut_ty: i32) -> MatchArmInfo {
   // Bind pattern: `name => ...` always matches and binds the scrutinee.
-  return MatchArmInfo { blk: blk, has_tag: false, tag: 0, variant: "", bind_scrut: name, bind_scrut_ty: scrut_ty, binds: Vec(), bind_tys: Vec(), is_wild: true, expr: expr };
+  return MatchArmInfo { blk: blk, has_tag: false, tag: 0, variant: "", bind_scrut: name, bind_scrut_ty: scrut_ty, lit_kind: 0, lit_i32: 0, lit_str: "", binds: Vec(), bind_tys: Vec(), is_wild: true, expr: expr };
 }
 
 fn match_arm_info_enum(blk: i32, expr: i32, es: tc.EnumSig, vname: String, binders: Vec[String]) -> MatchArmInfo {
@@ -42,7 +45,15 @@ fn match_arm_info_enum(blk: i32, expr: i32, es: tc.EnumSig, vname: String, binde
     let mut bi: i32 = 0;
     while bi < binders.len() && bi < vsig.fields.len() { tys.push(vsig.fields.get(bi)); bi = bi + 1; }
   }
-  return MatchArmInfo { blk: blk, has_tag: true, tag: tag, variant: vname, bind_scrut: "", bind_scrut_ty: 0, binds: binders, bind_tys: tys, is_wild: false, expr: expr };
+  return MatchArmInfo { blk: blk, has_tag: true, tag: tag, variant: vname, bind_scrut: "", bind_scrut_ty: 0, lit_kind: 0, lit_i32: 0, lit_str: "", binds: binders, bind_tys: tys, is_wild: false, expr: expr };
+}
+
+fn match_arm_info_int(blk: i32, expr: i32, v: i32) -> MatchArmInfo {
+  return MatchArmInfo { blk: blk, has_tag: false, tag: 0, variant: "", bind_scrut: "", bind_scrut_ty: 0, lit_kind: 1, lit_i32: v, lit_str: "", binds: Vec(), bind_tys: Vec(), is_wild: false, expr: expr };
+}
+
+fn match_arm_info_str(blk: i32, expr: i32, s: String) -> MatchArmInfo {
+  return MatchArmInfo { blk: blk, has_tag: false, tag: 0, variant: "", bind_scrut: "", bind_scrut_ty: 0, lit_kind: 2, lit_i32: 0, lit_str: s, binds: Vec(), bind_tys: Vec(), is_wild: false, expr: expr };
 }
 
 fn find_named_func_import(named: Vec[tc.NamedFuncImport], local: String) -> tc.NamedFuncImport {
@@ -537,17 +548,26 @@ fn gen_expr_match(g0: Gen, scrut: i32, arms: Vec[ast.MatchArm], out_ty: i32) -> 
   g = sr.g;
 
   let sty: tc.ExprTyResult = tc.tc_expr(g.ctx, g.w, g.mod_path, g.imps, g.exprs, g.locals, scrut, -1);
-  if !sty.ok || !tc.is_enum_ty(g.ctx, sty.ty) { return GenExprResult { ok: false, err: "match scrut must be enum", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-  let et: ir.Ty = ir.ty_pool_get(g.ctx.pool, sty.ty);
-  let fe: tc.FindEnumResult = tc.find_enum(g.ctx, tc.ty_mod(et), tc.ty_name(et));
-  if !fe.found { return GenExprResult { ok: false, err: "unknown enum", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-  let es: tc.EnumSig = fe.sig;
+  if !sty.ok { return GenExprResult { ok: false, err: "bad match scrut", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
 
-  // tag temp
-  let ttag: GenNewIdResult = gen_new_temp(g);
-  g = ttag.g;
-  let tag_id: i32 = ttag.id;
-  g = gen_emit(g, ir.Instr.EnumTag(tag_id, sr.val));
+  let is_enum: bool = tc.is_enum_ty(g.ctx, sty.ty);
+  let is_i32: bool = sty.ty == g.ctx.ty_i32;
+  let is_str: bool = sty.ty == g.ctx.ty_string;
+  if !is_enum && !is_i32 && !is_str { return GenExprResult { ok: false, err: "match scrut must be enum/i32/String", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+  let mut es: tc.EnumSig = tc.EnumSig { mod_path: "", name: "", is_pub: false, vars: Vec() };
+  let mut tag_id: i32 = -1;
+  if is_enum {
+    let et: ir.Ty = ir.ty_pool_get(g.ctx.pool, sty.ty);
+    let fe: tc.FindEnumResult = tc.find_enum(g.ctx, tc.ty_mod(et), tc.ty_name(et));
+    if !fe.found { return GenExprResult { ok: false, err: "unknown enum", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    es = fe.sig;
+    // tag temp
+    let ttag: GenNewIdResult = gen_new_temp(g);
+    g = ttag.g;
+    tag_id = ttag.id;
+    g = gen_emit(g, ir.Instr.EnumTag(tag_id, sr.val));
+  }
 
   let mut res_slot: i32 = -1;
   if out_ty != g.ctx.ty_unit {
@@ -577,6 +597,8 @@ fn gen_expr_match(g0: Gen, scrut: i32, arms: Vec[ast.MatchArm], out_ty: i32) -> 
     let info: MatchArmInfo = match a.pat {
       ast.Pat.Wild => match_arm_info_wild(blk, a.expr),
       ast.Pat.Bind(name) => match_arm_info_bind(blk, a.expr, name, sty.ty),
+      ast.Pat.Int(v) => match_arm_info_int(blk, a.expr, v),
+      ast.Pat.Str(s) => match_arm_info_str(blk, a.expr, s),
       ast.Pat.EnumVariant(_ep, vname, binders) => match_arm_info_enum(blk, a.expr, es, vname, binders),
       _ => match_arm_info_other(blk, a.expr),
     };
@@ -589,15 +611,25 @@ fn gen_expr_match(g0: Gen, scrut: i32, arms: Vec[ast.MatchArm], out_ty: i32) -> 
   let mut di: i32 = 0;
   while di < infos.len() {
     let info: MatchArmInfo = infos.get(di);
-    if !info.has_tag { di = di + 1; continue; }
+    let has_test: bool = info.has_tag || info.lit_kind != 0;
+    if !has_test { di = di + 1; continue; }
     let nextb: GenNewIdResult = gen_new_block(g, "match_decide_".concat((base + di).to_string()));
     g = nextb.g;
     let next_idx: i32 = nextb.id;
     let cmp: GenNewIdResult = gen_new_temp(g);
     g = cmp.g;
     let cmp_id: i32 = cmp.id;
-    g = gen_emit(g, ir.Instr.Cmp(cmp_id, ir.CmpKind.Eq, g.ctx.ty_i32, ir.v_temp(tag_id), ir.v_int(info.tag)));
-    g = gen_term(g, ir.Term.CondBr(ir.v_temp(cmp_id), g.blocks.get(info.blk).name, g.blocks.get(next_idx).name));
+    if info.has_tag {
+      if tag_id == -1 { return GenExprResult { ok: false, err: "internal: missing tag temp", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+      g = gen_emit(g, ir.Instr.Cmp(cmp_id, ir.CmpKind.Eq, g.ctx.ty_i32, ir.v_temp(tag_id), ir.v_int(info.tag)));
+      g = gen_term(g, ir.Term.CondBr(ir.v_temp(cmp_id), g.blocks.get(info.blk).name, g.blocks.get(next_idx).name));
+    } else if info.lit_kind == 1 {
+      g = gen_emit(g, ir.Instr.Cmp(cmp_id, ir.CmpKind.Eq, g.ctx.ty_i32, sr.val, ir.v_int(info.lit_i32)));
+      g = gen_term(g, ir.Term.CondBr(ir.v_temp(cmp_id), g.blocks.get(info.blk).name, g.blocks.get(next_idx).name));
+    } else {
+      g = gen_emit(g, ir.Instr.Cmp(cmp_id, ir.CmpKind.Eq, g.ctx.ty_string, sr.val, ir.v_str(info.lit_str)));
+      g = gen_term(g, ir.Term.CondBr(ir.v_temp(cmp_id), g.blocks.get(info.blk).name, g.blocks.get(next_idx).name));
+    }
     g = gen_set_block(g, next_idx);
     di = di + 1;
   }
@@ -629,6 +661,7 @@ fn gen_expr_match(g0: Gen, scrut: i32, arms: Vec[ast.MatchArm], out_ty: i32) -> 
       let nt: GenNewIdResult = gen_new_temp(g);
       g = nt.g;
       let tid: i32 = nt.id;
+      if !is_enum { return GenExprResult { ok: false, err: "enum payload on non-enum match", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
       g = gen_emit(g, ir.Instr.EnumPayload(tid, info.bind_tys.get(bi), sr.val, info.variant, bi));
       let ns: GenNewIdResult = gen_new_slot(g);
       g = ns.g;
