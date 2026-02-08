@@ -5,12 +5,12 @@ import "ir" as ir
 // This module intentionally stays small; we will expand it with TDD when typecheck
 // becomes part of Stage1's critical path.
 
-pub struct ExprTyResult { pub ok: bool, pub ty: i32 }
+pub struct ExprTyResult { pub ok: bool, pub ty: i32, pub err: TcError }
 
 pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, id: i32, expected: i32) -> ExprTyResult {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
 
-  return match n {
+  let r: ExprTyResult = match n {
     ast.ExprNode.Int(_) => tc_expr_int(ctx, expected),
     ast.ExprNode.Str(_) => tc_expr_str(ctx, expected),
     ast.ExprNode.Bool(_) => tc_expr_bool(ctx, expected),
@@ -23,10 +23,16 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
     ast.ExprNode.Binary(op, l, r) => tc_expr_binary(ctx, w, mod_path, imps, exprs, l0, op, l, r, expected),
 
     ast.ExprNode.Member(recv, name) => tc_expr_member(ctx, w, mod_path, imps, exprs, l0, recv, name, expected),
-    ast.ExprNode.Call(callee, type_args, args) => tc_expr_call(ctx, w, mod_path, imps, exprs, l0, callee, type_args, args, expected),
+    ast.ExprNode.Call(callee, type_args, args) => tc_expr_call(ctx, w, mod_path, imps, exprs, l0, ast.expr_pool_span(exprs, id), callee, type_args, args, expected),
     ast.ExprNode.StructLit(ty_expr, fields) => tc_expr_struct_lit(ctx, w, mod_path, imps, exprs, l0, ty_expr, fields, expected),
     ast.ExprNode.Match(scrut, arms) => tc_expr_match(ctx, w, mod_path, imps, exprs, l0, scrut, arms, expected),
   };
+
+  if r.ok { return r; }
+  if r.err != TcError.None { return r; }
+  // If a helper didn't attach a reason, fall back to a generic error at the expr span.
+  let sp: ast.Span = ast.expr_pool_span(exprs, id);
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "typecheck failed") };
 }
 
 fn tc_expr_block(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, b: ast.ExprBlock, expected: i32) -> ExprTyResult {
@@ -40,70 +46,70 @@ fn tc_expr_block(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   while i < b.stmts.len() {
     let st: ast.Stmt = b.stmts.get(i);
     let is_term: bool = match st { ast.Stmt.Return(_, _, _) => true, ast.Stmt.Break(_) => true, ast.Stmt.Continue(_) => true, _ => false };
-    if is_term { return ExprTyResult { ok: false, ty: c.ty_bad }; }
+    if is_term { return ExprTyResult { ok: false, ty: c.ty_bad, err: TcError.None }; }
 
     let r: TcStmtResult = tc_stmt(c, w, mod_path, imps, exprs, l, c.ty_unit, st);
-    if !r.ok { return ExprTyResult { ok: false, ty: c.ty_bad }; }
+    if !r.ok { return ExprTyResult { ok: false, ty: c.ty_bad, err: TcError.None }; }
     c = r.ctx;
     l = r.locals;
     i = i + 1;
   }
 
   if !b.has_tail {
-    if expected != -1 && expected != c.ty_unit { return ExprTyResult { ok: false, ty: c.ty_bad }; }
-    return ExprTyResult { ok: true, ty: c.ty_unit };
+    if expected != -1 && expected != c.ty_unit { return ExprTyResult { ok: false, ty: c.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: c.ty_unit, err: TcError.None };
   }
 
   let er: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l, b.tail, expected);
-  if !er.ok { return ExprTyResult { ok: false, ty: c.ty_bad }; }
+  if !er.ok { return ExprTyResult { ok: false, ty: c.ty_bad, err: TcError.None }; }
   let out_ty: i32 = if expected != -1 { expected } else { er.ty };
-  if expected != -1 && er.ty != expected { return ExprTyResult { ok: false, ty: c.ty_bad }; }
-  return ExprTyResult { ok: true, ty: out_ty };
+  if expected != -1 && er.ty != expected { return ExprTyResult { ok: false, ty: c.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
 }
 
 fn tc_expr_dot_ident(ctx: Ctx, mod_path: String, name: String, expected: i32) -> ExprTyResult {
   // `.Variant` needs an expected enum type.
-  if expected == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if expected == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let et: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
-  if et.kind != ir.TyKind.Enum { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if et.kind != ir.TyKind.Enum { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let fe: FindEnumResult = find_enum(ctx, ty_mod(et), ty_name(et));
-  if !fe.found { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if !fe.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let es: EnumSig = fe.sig;
   // Unit variant only.
   let mut vi: i32 = 0;
   while vi < es.vars.len() {
     let v: EnumVariantSig = es.vars.get(vi);
     if v.name == name {
-      if v.fields.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-      return ExprTyResult { ok: true, ty: expected };
+      if v.fields.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      return ExprTyResult { ok: true, ty: expected, err: TcError.None };
     }
     vi = vi + 1;
   }
-  return ExprTyResult { ok: false, ty: ctx.ty_bad };
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
 }
 
 fn tc_expr_int(ctx: Ctx, expected: i32) -> ExprTyResult {
-  if expected == -1 { return ExprTyResult { ok: true, ty: ctx.ty_i32 }; }
-  if expected == ctx.ty_i32 { return ExprTyResult { ok: true, ty: ctx.ty_i32 }; }
-  if expected == ctx.ty_i64 { return ExprTyResult { ok: true, ty: ctx.ty_i64 }; }
-  return ExprTyResult { ok: false, ty: ctx.ty_bad };
+  if expected == -1 { return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None }; }
+  if expected == ctx.ty_i32 { return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None }; }
+  if expected == ctx.ty_i64 { return ExprTyResult { ok: true, ty: ctx.ty_i64, err: TcError.None }; }
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
 }
 
 fn tc_expr_str(ctx: Ctx, expected: i32) -> ExprTyResult {
-  if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  return ExprTyResult { ok: true, ty: ctx.ty_string };
+  if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
 }
 
 fn tc_expr_bool(ctx: Ctx, expected: i32) -> ExprTyResult {
-  if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  return ExprTyResult { ok: true, ty: ctx.ty_bool };
+  if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
 }
 
 fn tc_expr_ident(ctx: Ctx, mod_path: String, imps: Imports, l0: Locals, name: String, expected: i32) -> ExprTyResult {
   let vr: LookupVarResult = locals_lookup(l0, name);
   if vr.found {
-    if expected != -1 && vr.ty != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    return ExprTyResult { ok: true, ty: vr.ty };
+    if expected != -1 && vr.ty != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: vr.ty, err: TcError.None };
   }
 
   // Const reference.
@@ -111,22 +117,22 @@ fn tc_expr_ident(ctx: Ctx, mod_path: String, imps: Imports, l0: Locals, name: St
   let want_mod: String = if ni.local != "" { ni.mod_path } else { mod_path };
   let want_name: String = if ni.local != "" { ni.name } else { name };
   let cs: ConstSig = find_const(ctx, want_mod, want_name);
-  if cs.name == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  if want_mod != mod_path && !cs.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  if expected != -1 && cs.ty != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  return ExprTyResult { ok: true, ty: cs.ty };
+  if cs.name == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if want_mod != mod_path && !cs.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if expected != -1 && cs.ty != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: cs.ty, err: TcError.None };
 }
 
 fn tc_expr_unary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, op: ast.UnaryOp, a: i32, expected: i32) -> ExprTyResult {
   let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, -1);
-  if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let is_not: bool = match op { ast.UnaryOp.Not => true, _ => false };
   if is_not {
-    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_bool };
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
   }
-  if expected != -1 && expected != ar.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  return ExprTyResult { ok: true, ty: ar.ty };
+  if expected != -1 && expected != ar.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: ar.ty, err: TcError.None };
 }
 
 fn is_int_ty(ctx: Ctx, ty: i32) -> bool { return ty == ctx.ty_i32 || ty == ctx.ty_i64; }
@@ -219,9 +225,9 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   let r_expected0: i32 = if is_logic { ctx.ty_bool } else { want_int };
 
   let mut lr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, l, l_expected);
-  if !lr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if !lr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let mut rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, r, r_expected0);
-  if !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
   // If one side is an `i64` and the other is an int literal that defaulted to `i32`,
   // re-typecheck the literal with an `i64` expected type.
@@ -234,58 +240,58 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
     } else if r_is_lit && lr.ty == ctx.ty_i64 {
       rr = tc_expr(ctx, w, mod_path, imps, exprs, l0, r, ctx.ty_i64);
     }
-    if !lr.ok || !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if !lr.ok || !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   }
 
   if is_logic {
-    if lr.ty != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_bool };
+    if lr.ty != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
   }
 
   if is_cmp {
-    if !is_int_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_bool };
+    if !is_int_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
   }
 
   if is_eq {
-    if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+    if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     // v0: primitive equality only (keep Stage1 aligned with Stage0 subset).
     let ok_prim: bool = lr.ty == ctx.ty_bool || lr.ty == ctx.ty_i32 || lr.ty == ctx.ty_i64 || lr.ty == ctx.ty_string;
     if !ok_prim {
       // Stage0 parity: enum equality is only allowed against unit variant values (lowers to tag compare).
       if is_enum_ty(ctx, lr.ty) {
         let ok_unit: bool = is_enum_unit_value(ctx, mod_path, imps, exprs, l, lr.ty) || is_enum_unit_value(ctx, mod_path, imps, exprs, r, lr.ty);
-        if !ok_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+        if !ok_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       } else {
-        return ExprTyResult { ok: false, ty: ctx.ty_bad };
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
       }
     }
-    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_bool };
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
   }
 
   // arithmetic
-  if !is_int_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  if expected != -1 && expected != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  return ExprTyResult { ok: true, ty: lr.ty };
+  if !is_int_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if rr.ty != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if expected != -1 && expected != lr.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: lr.ty, err: TcError.None };
 }
 
 fn tc_expr_if(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, c: i32, t: i32, e: i32, expected: i32) -> ExprTyResult {
   let cr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, c, ctx.ty_bool);
-  if !cr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  if cr.ty != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if !cr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if cr.ty != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
   let want: i32 = expected;
   let tr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, t, want);
-  if !tr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if !tr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, e, want);
-  if !er.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
+  if !er.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
   let out_ty: i32 = if expected != -1 { expected } else { tr.ty };
-  if expected == -1 && tr.ty != er.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad }; }
-  return ExprTyResult { ok: true, ty: out_ty };
+  if expected == -1 && tr.ty != er.ty { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
 }
