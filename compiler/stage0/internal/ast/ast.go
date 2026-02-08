@@ -356,3 +356,19 @@ type BindPat struct {
 
 func (*BindPat) patNode()            {}
 func (p *BindPat) Span() source.Span { return p.S }
+
+type IntPat struct {
+	Text string
+	S    source.Span
+}
+
+func (*IntPat) patNode()            {}
+func (p *IntPat) Span() source.Span { return p.S }
+
+type StrPat struct {
+	Text string
+	S    source.Span
+}
+
+func (*StrPat) patNode()            {}
+func (p *StrPat) Span() source.Span { return p.S }

@@ -93,3 +93,44 @@ fn main() -> i32 {
 		t.Fatal(err)
 	}
 }
+
+func TestLowerMatchIntAndStrPatterns(t *testing.T) {
+	f1 := source.NewFile("src/main.vox", `fn main(x: i32) -> i32 {
+  return match x {
+    0 => 1,
+    1 => 2,
+    _ => 3,
+  };
+}`)
+	prog, pdiags := parser.Parse(f1)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	_, err := Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f2 := source.NewFile("src/main.vox", `fn main(s: String) -> i32 {
+  return match s {
+    "a" => 1,
+    _ => 0,
+  };
+}`)
+	prog, pdiags = parser.Parse(f2)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags = typecheck.Check(prog, typecheck.Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	_, err = Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+}

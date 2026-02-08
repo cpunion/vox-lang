@@ -227,6 +227,31 @@ fn main() -> i32 {
 	}
 }
 
+func TestParseMatchIntAndStrPatterns(t *testing.T) {
+	f1 := source.NewFile("test.vox", `fn main(x: i32) -> i32 {
+  return match x {
+    0 => 1,
+    1 => 2,
+    _ => 3,
+  };
+}`)
+	_, diags := Parse(f1)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+
+	f2 := source.NewFile("test.vox", `fn main(s: String) -> i32 {
+  return match s {
+    "a" => 1,
+    _ => 0,
+  };
+}`)
+	_, diags = Parse(f2)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+}
+
 func TestParsePubDecls(t *testing.T) {
 	f := source.NewFile("test.vox", `pub struct S { pub x: i32, y: i32 }
 pub enum E { A(i32), None }

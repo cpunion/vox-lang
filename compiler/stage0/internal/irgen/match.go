@@ -16,14 +16,20 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	}
 
 	scrutTy := g.p.ExprTypes[m.Scrutinee]
-	if scrutTy.K != typecheck.TyEnum {
-		return nil, fmt.Errorf("match scrutinee must be enum")
+	isEnum := scrutTy.K == typecheck.TyEnum
+	isI32 := scrutTy.K == typecheck.TyI32
+	isStr := scrutTy.K == typecheck.TyString
+	if !isEnum && !isI32 && !isStr {
+		return nil, fmt.Errorf("match scrutinee must be enum/i32/String")
 	}
-	es := g.p.EnumSigs[scrutTy.Name]
-
-	// Extract tag.
-	tagTmp := g.newTemp()
-	g.emit(&ir.EnumTag{Dst: tagTmp, Recv: scrut})
+	var es typecheck.EnumSig
+	var tagTmp *ir.Temp
+	if isEnum {
+		es = g.p.EnumSigs[scrutTy.Name]
+		// Extract tag.
+		tagTmp = g.newTemp()
+		g.emit(&ir.EnumTag{Dst: tagTmp, Recv: scrut})
+	}
 
 	resTyChecked := g.p.ExprTypes[m]
 	resTy, err := g.irTypeFromChecked(resTyChecked)
@@ -54,6 +60,8 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 		variant   string
 		tag       *int
 		bindScrut string
+		intPat    *int64
+		strPat    *string
 		binds     []string
 		bindTys   []typecheck.Type
 	}
@@ -68,7 +76,25 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 		case *ast.BindPat:
 			wildBlk = info.blk
 			info.bindScrut = p.Name
+		case *ast.IntPat:
+			if !isI32 {
+				return nil, fmt.Errorf("int pattern requires i32 scrutinee")
+			}
+			v := parseInt64(p.Text)
+			info.intPat = &v
+		case *ast.StrPat:
+			if !isStr {
+				return nil, fmt.Errorf("string pattern requires String scrutinee")
+			}
+			s, err := unquoteUnescape(p.Text)
+			if err != nil {
+				return nil, err
+			}
+			info.strPat = &s
 		case *ast.VariantPat:
+			if !isEnum {
+				return nil, fmt.Errorf("enum variant pattern requires enum scrutinee")
+			}
 			t := es.VariantIndex[p.Variant]
 			info.variant = p.Variant
 			info.tag = &t
@@ -92,19 +118,39 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	// Decision chain starting from current block.
 	for i := 0; i < len(arms); i++ {
 		info := arms[i]
-		if info.tag == nil {
+		if info.tag == nil && info.intPat == nil && info.strPat == nil {
 			continue
 		}
 		nextDecide := g.newBlock(fmt.Sprintf("match_decide_%d", len(g.blocks)))
 		cmpTmp := g.newTemp()
-		g.emit(&ir.Cmp{
-			Dst: cmpTmp,
-			Op:  ir.CmpEq,
-			Ty:  ir.Type{K: ir.TI32},
-			A:   tagTmp,
-			B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: int64(*info.tag)},
-		})
-		g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
+		if info.tag != nil {
+			g.emit(&ir.Cmp{
+				Dst: cmpTmp,
+				Op:  ir.CmpEq,
+				Ty:  ir.Type{K: ir.TI32},
+				A:   tagTmp,
+				B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: int64(*info.tag)},
+			})
+			g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
+		} else if info.intPat != nil {
+			g.emit(&ir.Cmp{
+				Dst: cmpTmp,
+				Op:  ir.CmpEq,
+				Ty:  ir.Type{K: ir.TI32},
+				A:   scrut,
+				B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, V: *info.intPat},
+			})
+			g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
+		} else {
+			g.emit(&ir.Cmp{
+				Dst: cmpTmp,
+				Op:  ir.CmpEq,
+				Ty:  ir.Type{K: ir.TString},
+				A:   scrut,
+				B:   &ir.ConstStr{S: *info.strPat},
+			})
+			g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
+		}
 		g.setBlock(nextDecide)
 	}
 
@@ -138,6 +184,9 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 				return nil, err
 			}
 			tmp := g.newTemp()
+			if !isEnum {
+				return nil, fmt.Errorf("enum payload only valid for enum scrutinee")
+			}
 			g.emit(&ir.EnumPayload{Dst: tmp, Ty: pty, Recv: scrut, Variant: info.variant, Index: i})
 			slot := g.newSlot()
 			g.slotTypes[slot.ID] = pty

@@ -403,6 +403,38 @@ fn main() -> i32 {
 	}
 }
 
+func TestMatchIntAndStrPatternsTypecheck(t *testing.T) {
+	f1 := source.NewFile("src/main.vox", `fn main(x: i32) -> i32 {
+  return match x {
+    0 => 1,
+    _ => 2,
+  };
+}`)
+	prog, pdiags := parser.Parse(f1)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+
+	f2 := source.NewFile("src/main.vox", `fn main(s: String) -> i32 {
+  return match s {
+    "a" => 1,
+    _ => 0,
+  };
+}`)
+	prog, pdiags = parser.Parse(f2)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags = Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestEnumCtorAndMatchShorthand(t *testing.T) {
 	f := source.NewFile("src/main.vox", `enum E { A(i32), None }
 fn main() -> i32 {

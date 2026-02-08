@@ -685,6 +685,14 @@ func (p *Parser) parsePattern() ast.Pattern {
 		tok := p.advance()
 		return &ast.WildPat{S: tok.Span}
 	}
+	if p.at(lexer.TokenInt) {
+		tok := p.advance()
+		return &ast.IntPat{Text: tok.Lexeme, S: tok.Span}
+	}
+	if p.at(lexer.TokenString) {
+		tok := p.advance()
+		return &ast.StrPat{Text: tok.Lexeme, S: tok.Span}
+	}
 	if p.at(lexer.TokenDot) {
 		start := p.advance()
 		id := p.expect(lexer.TokenIdent, "expected identifier after `.`")

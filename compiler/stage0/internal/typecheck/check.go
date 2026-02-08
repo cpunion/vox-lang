@@ -748,14 +748,21 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		return c.setExprType(ex, thenTy)
 	case *ast.MatchExpr:
 		scrutTy := c.checkExpr(e.Scrutinee, Type{K: TyBad})
-		if scrutTy.K != TyEnum {
-			c.errorAt(e.S, "match scrutinee must be an enum (stage0)")
+		isEnum := scrutTy.K == TyEnum
+		isI32 := scrutTy.K == TyI32
+		isStr := scrutTy.K == TyString
+		if !isEnum && !isI32 && !isStr {
+			c.errorAt(e.S, "match scrutinee must be enum/i32/String (stage0)")
 			return c.setExprType(ex, Type{K: TyBad})
 		}
-		esig, ok := c.enumSigs[scrutTy.Name]
-		if !ok {
-			c.errorAt(e.S, "unknown enum type: "+scrutTy.Name)
-			return c.setExprType(ex, Type{K: TyBad})
+		var esig EnumSig
+		if isEnum {
+			var ok bool
+			esig, ok = c.enumSigs[scrutTy.Name]
+			if !ok {
+				c.errorAt(e.S, "unknown enum type: "+scrutTy.Name)
+				return c.setExprType(ex, Type{K: TyBad})
+			}
 		}
 
 		resultTy := expected
@@ -773,7 +780,26 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				if p.Name != "" {
 					c.scopeTop()[p.Name] = varInfo{ty: scrutTy, mutable: false}
 				}
+			case *ast.IntPat:
+				if !isI32 {
+					c.errorAt(p.S, "integer pattern only allowed when scrutinee is i32 (stage0)")
+				} else {
+					v, err := strconv.ParseInt(p.Text, 10, 64)
+					if err != nil {
+						c.errorAt(p.S, "invalid integer literal in pattern")
+					} else if v < -2147483648 || v > 2147483647 {
+						c.errorAt(p.S, "integer pattern out of range for i32")
+					}
+				}
+			case *ast.StrPat:
+				if !isStr {
+					c.errorAt(p.S, "string pattern only allowed when scrutinee is String (stage0)")
+				}
 			case *ast.VariantPat:
+				if !isEnum {
+					c.errorAt(p.S, "enum variant pattern only allowed when scrutinee is enum (stage0)")
+					break
+				}
 				if c.curFn == nil || c.curFn.Span.File == nil {
 					c.errorAt(arm.S, "internal error: missing file for match")
 					break
@@ -820,11 +846,18 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			c.popScope()
 		}
 
-		if !hasWild {
-			for _, v := range esig.Variants {
-				if !seenVariants[v.Name] {
-					c.errorAt(e.S, "non-exhaustive match, missing variant: "+v.Name)
+		if isEnum {
+			if !hasWild {
+				for _, v := range esig.Variants {
+					if !seenVariants[v.Name] {
+						c.errorAt(e.S, "non-exhaustive match, missing variant: "+v.Name)
+					}
 				}
+			}
+		} else {
+			// Non-enum scrutinee: require a wildcard/bind arm for exhaustiveness.
+			if !hasWild {
+				c.errorAt(e.S, "non-exhaustive match, missing wildcard arm `_`")
 			}
 		}
 		return c.setExprType(ex, resultTy)
