@@ -69,6 +69,8 @@ fn main() -> i32 {
 规则（当前决策）：
 
 - 使用 `pkg.name(...)` 形式访问依赖包符号时，必须在同一文件中先写 `import "pkg"`（或 `import "pkg" as alias` 后用 `alias.name(...)`）。
+- 依赖包名（`vox.toml` 的 `[dependencies]` key）不应与本地模块路径冲突（例如同时存在依赖包 `dep` 与本地目录 `src/dep/**`）。
+  - 当前 Stage1 实现会直接报错，避免把两个来源的源码合并到同一个模块里。
 
 ## 导出
 
