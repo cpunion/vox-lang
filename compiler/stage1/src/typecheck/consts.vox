@@ -414,7 +414,7 @@ fn cast_const_int_checked(ctx: Ctx, file: String, from_ty: i32, to_ty: i32, v: i
   return CastConstResult { ok: true, err: TcError.None, v: wr_to2.v };
 }
 
-struct ConstLocal { name: String, kind: i32, ty: i32, iv: i64, bv: bool, sv: String }
+struct ConstLocal { name: String, mutable: bool, kind: i32, ty: i32, iv: i64, bv: bool, sv: String }
 
 fn const_find_local(locals: Vec[ConstLocal], name: String) -> i32 {
   // Block const evaluation allows shadowing; resolve from innermost binding.
@@ -426,8 +426,22 @@ fn const_find_local(locals: Vec[ConstLocal], name: String) -> i32 {
   return -1;
 }
 
-fn const_local_from_value(name: String, v: EvalConstExprResult) -> ConstLocal {
-  return ConstLocal { name: name, kind: v.kind, ty: v.ty, iv: v.iv, bv: v.bv, sv: v.sv };
+fn const_local_from_value(name: String, mutable: bool, v: EvalConstExprResult) -> ConstLocal {
+  return ConstLocal { name: name, mutable: mutable, kind: v.kind, ty: v.ty, iv: v.iv, bv: v.bv, sv: v.sv };
+}
+
+fn const_local_with_value(l0: ConstLocal, v: EvalConstExprResult) -> ConstLocal {
+  return ConstLocal { name: l0.name, mutable: l0.mutable, kind: v.kind, ty: v.ty, iv: v.iv, bv: v.bv, sv: v.sv };
+}
+
+fn const_set_local_at(xs0: Vec[ConstLocal], idx: i32, val: ConstLocal) -> Vec[ConstLocal] {
+  let mut xs: Vec[ConstLocal] = Vec();
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    xs.push(if i == idx { val } else { xs0.get(i) });
+    i = i + 1;
+  }
+  return xs;
 }
 
 struct ConstExecStmtsResult {
@@ -491,10 +505,6 @@ fn const_exec_stmts(
 
     if match st { ast.Stmt.Let(_sp, _m, _name, _ha, _ann, _init) => true, _ => false } {
       let is_mut: bool = match st { ast.Stmt.Let(_sp, m, _name, _ha, _ann, _init) => m, _ => false };
-      if is_mut {
-        return const_exec_err(type_error(file, "const block does not support let mut"), sigs1, states1, locals1);
-      }
-
       let name: String = match st { ast.Stmt.Let(_sp, _m, x, _ha, _ann, _init) => x, _ => "" };
       let has_ann: bool = match st { ast.Stmt.Let(_sp, _m, _name, ha, _ann, _init) => ha, _ => false };
       let ann: ast.TypeName = match st { ast.Stmt.Let(_sp, _m, _name, _ha, t, _init) => t, _ => ast.TypeName { parts: Vec(), args: Vec() } };
@@ -517,7 +527,33 @@ fn const_exec_stmts(
         return const_exec_err(type_error(file, "const let type mismatch"), sigs1, states1, locals1);
       }
 
-      locals1.push(const_local_from_value(name, vr));
+      locals1.push(const_local_from_value(name, is_mut, vr));
+      si = si + 1;
+      continue;
+    }
+
+    if match st { ast.Stmt.Assign(_sp, _name, _id2) => true, _ => false } {
+      let name: String = match st { ast.Stmt.Assign(_sp, x, _id2) => x, _ => "" };
+      let rhs: i32 = match st { ast.Stmt.Assign(_sp, _x, ex) => ex, _ => -1 };
+      let li: i32 = const_find_local(locals1, name);
+      if li == -1 {
+        return const_exec_err(type_error(file, "const assign unknown local"), sigs1, states1, locals1);
+      }
+
+      let target: ConstLocal = locals1.get(li);
+      if !target.mutable {
+        return const_exec_err(type_error(file, "const assign target is immutable"), sigs1, states1, locals1);
+      }
+
+      let rr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs1, states1, cur_mod, imps, exprs, file, rhs, target.ty, locals1);
+      if !rr.ok { return const_exec_err(rr.err, rr.sigs, rr.states, locals1); }
+      sigs1 = rr.sigs;
+      states1 = rr.states;
+      if !assignable_to(ctx, target.ty, rr.ty) {
+        return const_exec_err(type_error(file, "const assign type mismatch"), sigs1, states1, locals1);
+      }
+
+      locals1 = const_set_local_at(locals1, li, const_local_with_value(target, rr));
       si = si + 1;
       continue;
     }
@@ -662,7 +698,7 @@ fn const_pat_match_no_bind() -> ConstPatEvalResult {
 
 fn const_pat_match_bind(name: String, v: EvalConstExprResult) -> ConstPatEvalResult {
   let mut bs: Vec[ConstLocal] = Vec();
-  bs.push(const_local_from_value(name, v));
+  bs.push(const_local_from_value(name, false, v));
   return ConstPatEvalResult {
     ok: true, matched: true, binds: bs,
     err: "",
