@@ -742,3 +742,19 @@ fn main() -> i32 { return 0; }`)
 		t.Fatalf("unexpected generic func decl: %#v", fn)
 	}
 }
+
+func TestParseGenericWhereClauseSyntax(t *testing.T) {
+	f := source.NewFile("test.vox", `fn eq[T](x: T, y: T) -> bool where T: Eq + Show { return true; }
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Funcs) != 2 {
+		t.Fatalf("expected 2 funcs, got %d", len(prog.Funcs))
+	}
+	fn := prog.Funcs[0]
+	if fn.Name != "eq" || len(fn.TypeParams) != 1 || fn.TypeParams[0] != "T" {
+		t.Fatalf("unexpected generic func decl: %#v", fn)
+	}
+}

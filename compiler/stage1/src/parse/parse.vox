@@ -134,6 +134,7 @@ struct ParseVariantResult { p: Parser, v: ast.EnumVariantDecl }
 struct ParsePatResult { p: Parser, pat: ast.Pat }
 struct ParseArmResult { p: Parser, arm: ast.MatchArm }
 struct ParseTypeParamsResult { p: Parser, tps: Vec[String], tpbs: Vec[ast.TypeParamBoundsDecl] }
+struct ParseWhereBoundsResult { p: Parser, tpbs: Vec[ast.TypeParamBoundsDecl] }
 struct ParseBracedExprResult { p: Parser, id: i32 }
 struct ParseTypeDeclResult { p: Parser, is_union: bool, t: ast.TypeAliasDecl, e: ast.EnumDecl }
 
@@ -1191,9 +1192,20 @@ fn parse_fn_decl(p: Parser, is_pub: bool) -> ParseFnResult {
   let _ar6: AdvanceResult = expect(r5.p, lex.TokenKind.RParen);
   let _ar7: AdvanceResult = expect(_ar6.p, lex.TokenKind.Arrow);
   let r8: ParseTypeResult = parse_type_name(_ar7.p);
+  let mut q2: Parser = r8.p;
+  let mut tpbs2: Vec[ast.TypeParamBoundsDecl] = tpbs;
+  if kind_is(peek_kind(q2), lex.TokenKind.KwWhere) {
+    let wr: ParseWhereBoundsResult = parse_where_bounds(q2);
+    q2 = wr.p;
+    let mut wi: i32 = 0;
+    while wi < wr.tpbs.len() {
+      tpbs2.push(wr.tpbs.get(wi));
+      wi = wi + 1;
+    }
+  }
   let params: Vec[ast.Param] = r5.params;
-  let r9: ParseBlockResult = parse_block(r8.p);
-  return ParseFnResult { p: r9.p, f: ast.FuncDecl { file: p.file, is_pub: is_pub, name: r2.name, type_params: tps, type_param_bounds: tpbs, params: params, ret: r8.ty, body: r9.b } };
+  let r9: ParseBlockResult = parse_block(q2);
+  return ParseFnResult { p: r9.p, f: ast.FuncDecl { file: p.file, is_pub: is_pub, name: r2.name, type_params: tps, type_param_bounds: tpbs2, params: params, ret: r8.ty, body: r9.b } };
 }
 
 fn parse_type_params(p: Parser) -> ParseTypeParamsResult {
@@ -1226,7 +1238,9 @@ fn parse_type_params(p: Parser) -> ParseTypeParamsResult {
         break;
       }
     }
-    tpbs.push(ast.TypeParamBoundsDecl { name: r1.name, bounds: bounds });
+    if bounds.len() != 0 {
+      tpbs.push(ast.TypeParamBoundsDecl { name: r1.name, bounds: bounds });
+    }
 
     if kind_is(peek_kind(q), lex.TokenKind.Comma) {
       let ar4: AdvanceResult = advance(q);
@@ -1240,6 +1254,42 @@ fn parse_type_params(p: Parser) -> ParseTypeParamsResult {
   }
   let ar5: AdvanceResult = expect(q, lex.TokenKind.RBracket);
   return ParseTypeParamsResult { p: ar5.p, tps: tps, tpbs: tpbs };
+}
+
+fn parse_where_bounds(p: Parser) -> ParseWhereBoundsResult {
+  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwWhere);
+  let mut q: Parser = ar1.p;
+  let mut out: Vec[ast.TypeParamBoundsDecl] = Vec();
+  while !q.has_err {
+    let r1: ParseIdentResult = parse_ident(q);
+    q = r1.p;
+    let ar2: AdvanceResult = expect(q, lex.TokenKind.Colon);
+    q = ar2.p;
+
+    let mut bounds: Vec[ast.TypeName] = Vec();
+    while !q.has_err {
+      let tr: ParseTypeResult = parse_type_name(q);
+      q = tr.p;
+      bounds.push(tr.ty);
+      if kind_is(peek_kind(q), lex.TokenKind.Plus) {
+        let ar3: AdvanceResult = advance(q);
+        q = ar3.p;
+        continue;
+      }
+      break;
+    }
+    out.push(ast.TypeParamBoundsDecl { name: r1.name, bounds: bounds });
+
+    if kind_is(peek_kind(q), lex.TokenKind.Comma) {
+      let ar4: AdvanceResult = advance(q);
+      q = ar4.p;
+      // allow trailing comma before block
+      if kind_is(peek_kind(q), lex.TokenKind.LBrace) { break; }
+      continue;
+    }
+    break;
+  }
+  return ParseWhereBoundsResult { p: q, tpbs: out };
 }
 
 fn parse_field_decl(p: Parser) -> ParseFieldResult {

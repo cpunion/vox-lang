@@ -19,6 +19,22 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
     if rr.ok && (rr.ty == ctx.ty_bool || is_int_like_ty(ctx, rr.ty) || is_float_ty(ctx, rr.ty)) {
       return tc_call_prim_method(ctx, w, mod_path, imps, exprs, l0, recv_id, rr.ty, mname, args, expected);
     }
+    if rr.ok {
+      if type_args.len() != 0 {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "member call does not accept type args in v0") };
+      }
+      let dm: FindTraitDispatchMethodResult = find_trait_dispatch_method(ctx, mod_path, strip_range(ctx, rr.ty), mname);
+      if dm.ambiguous {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "ambiguous trait method call: ".concat(mname)) };
+      }
+      if dm.found {
+        let mut all_args: Vec[i32] = Vec();
+        all_args.push(recv_id);
+        let mut ai: i32 = 0;
+        while ai < args.len() { all_args.push(args.get(ai)); ai = ai + 1; }
+        return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, dm.impl_mod_path, dm.m.sig, Vec(), all_args, expected);
+      }
+    }
   }
 
   // Enum variant shorthand: `.Variant(...)` (enum type must be known from context).
@@ -321,7 +337,8 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: a
     if ty0 == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     let fi: FindImplResult = find_impl(ctx, b.trait_mod_path, b.trait_name, strip_range(ctx, ty0));
     if !fi.found {
-      let msg: String = "type argument does not satisfy trait bound: ".concat(b.type_param).concat(": ").concat(b.trait_name);
+      let tname: String = ty_inst_str(ctx, strip_range(ctx, ty0));
+      let msg: String = "type argument ".concat(tname).concat(" does not satisfy trait bound ").concat(b.type_param).concat(": ").concat(b.trait_name);
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
     }
     bi = bi + 1;

@@ -111,6 +111,18 @@ fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i
     if rr.ok && (rr.ty == g0.ctx.ty_bool || tc.is_int_like_ty(g0.ctx, rr.ty) || tc.is_float_ty(g0.ctx, rr.ty)) {
       return gen_call_prim_method(g0, recv_id, rr.ty, mname, out_ty);
     }
+    if rr.ok {
+      if ta.len() != 0 { return GenExprResult { ok: false, err: "member call does not accept type args in v0", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+      let dm: tc.FindTraitDispatchMethodResult = tc.find_trait_dispatch_method(g0.ctx, g0.mod_path, tc.strip_range(g0.ctx, rr.ty), mname);
+      if dm.ambiguous { return GenExprResult { ok: false, err: "ambiguous trait method call", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+      if dm.found {
+        let mut all_args: Vec[i32] = Vec();
+        all_args.push(recv_id);
+        let mut ai: i32 = 0;
+        while ai < args.len() { all_args.push(args.get(ai)); ai = ai + 1; }
+        return gen_call_func(g0, dm.impl_mod_path, dm.m.lowered_name, dm.m.sig, Vec(), all_args, out_ty);
+      }
+    }
   }
 
   // Enum ctor shorthand: `.Variant(...)`
@@ -328,8 +340,12 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
     let b: tc.TypeParamBoundSig = sig.type_param_bounds.get(bi);
     let ty0: i32 = subs_lookup(subs, b.type_param);
     if ty0 == -1 { return GenExprResult { ok: false, err: "unbound type param in trait bound", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-    let fi: tc.FindImplResult = tc.find_impl(g.ctx, b.trait_mod_path, b.trait_name, tc.strip_range(g.ctx, ty0));
-    if !fi.found { return GenExprResult { ok: false, err: "type argument does not satisfy trait bound", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    let ty1: i32 = tc.strip_range(g.ctx, ty0);
+    let fi: tc.FindImplResult = tc.find_impl(g.ctx, b.trait_mod_path, b.trait_name, ty1);
+    if !fi.found {
+      let msg: String = "type argument ".concat(tc.ty_inst_str(g.ctx, ty1)).concat(" does not satisfy trait bound ").concat(b.type_param).concat(": ").concat(b.trait_name);
+      return GenExprResult { ok: false, err: msg, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
     bi = bi + 1;
   }
 

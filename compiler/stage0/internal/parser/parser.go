@@ -522,6 +522,31 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 	if p.match(lexer.TokenArrow) {
 		ret = p.parseType()
 	}
+	// Optional where-clause for generic bounds:
+	// `fn f[T](...) -> R where T: Eq + Show, U: Ord { ... }`
+	// Stage0 parser accepts this syntax for compatibility, while stage0
+	// typechecker/codegen currently ignore generic bounds.
+	if p.at(lexer.TokenIdent) && p.peek().Lexeme == "where" {
+		p.advance() // where
+		for {
+			id := p.expect(lexer.TokenIdent, "expected type parameter name in where clause")
+			if id.Kind != lexer.TokenIdent {
+				break
+			}
+			p.expect(lexer.TokenColon, "expected `:` after type parameter in where clause")
+			_ = p.parseType()
+			for p.match(lexer.TokenPlus) {
+				_ = p.parseType()
+			}
+			if p.match(lexer.TokenComma) {
+				if p.at(lexer.TokenLBrace) {
+					break
+				}
+				continue
+			}
+			break
+		}
+	}
 	body := p.parseBlock()
 	if body == nil {
 		return nil
