@@ -25,11 +25,11 @@
 当前进度（实现状态以代码为准）：
 
 - lexer：已覆盖常用关键字/标点、字符串/整数、注释与错误定位（byte offset）。
-- parser：已支持 `import "pkg" as alias`、`pub struct`/`enum`/`fn`，以及语句 `let`/赋值/`if`/`while`/`break`/`continue`/`return`/表达式语句；表达式包含 member/call、struct literal、`match { pat => expr }` 与常见二元/一元运算（precedence climbing）。类型名已支持 `path`（`a.b.C`）与方括号泛型（`Vec[i32]`）。
-- typecheck：已覆盖 Stage0 子集的主要路径（函数调用、member 调用、struct literal、enum ctor、match、Vec/String 最小内建），并支持泛型函数签名与泛型调用（可显式 `f[T](...)`，也可从参数/返回期望推导）；整数字面量/const/cast 对 `u64/usize` 已支持完整十进制范围 `0..18446744073709551615`（含 match pattern 与 const wrapping 运算），`const` 也已支持 `f32/f64` 的字面量/引用/负号/`f32<->f64` 转换、四则与比较/相等折叠。
+- parser：已支持 `import "pkg" as alias`、`pub struct`/`enum`/`trait`/`impl`/`fn`，以及语句 `let`/赋值/`if`/`while`/`break`/`continue`/`return`/表达式语句；表达式包含 member/call、struct literal、`match { pat => expr }` 与常见二元/一元运算（precedence climbing）。类型名已支持 `path`（`a.b.C`）与方括号泛型（`Vec[i32]`）。
+- typecheck：已覆盖 Stage0 子集的主要路径（函数调用、member 调用、struct literal、enum ctor、match、Vec/String 最小内建），并支持泛型函数签名与泛型调用（可显式 `f[T](...)`，也可从参数/返回期望推导）；整数字面量/const/cast 对 `u64/usize` 已支持完整十进制范围 `0..18446744073709551615`（含 match pattern 与 const wrapping 运算），`const` 也已支持 `f32/f64` 的字面量/引用/负号/`f32<->f64` 转换、四则与比较/相等折叠。Trait MVP 已接入：支持 `trait`/`impl Trait for Type` 声明检查、impl 方法体类型检查、`Trait.method(x, ...)` 与 `alias.Trait.method(x, ...)` 的静态分发（按第一个参数类型选择 impl）。
 - 数值类型：已支持 `f32/f64` 的字面量、四则（`+ - * /`）、比较（`< <= > >=`）、相等（`== !=`）、`to_string()`，并打通到 IR 与 C 后端。
 - IR v0：`compiler/stage1/src/ir/**` 已对齐 `docs/19-ir-spec.md`（TyPool、Value/Instr/Term、Program 结构与 formatter）。
-- IRGen：`compiler/stage1/src/irgen/**` 已跑通 end-to-end（从 AST 生成 IR），并对泛型调用做单态化（worklist 生成可达的实例函数）。
+- IRGen：`compiler/stage1/src/irgen/**` 已跑通 end-to-end（从 AST 生成 IR），并对泛型调用做单态化（worklist 生成可达的实例函数）；Trait MVP 的 impl 方法会被降低为内部函数符号并参与正常调用生成。
 - codegen（C）：`compiler/stage1/src/codegen/**` 已支持 IR v0 -> 单文件 C 源码；并通过 `compiler/stage1/src/compile/**` 提供最小串联管线（用于端到端测试）。
 - loader（in-memory）：`compiler/stage1/src/loader/**` 已支持按 `src/`/`tests/` 目录规则把多文件合并为模块（`src/*.vox -> main`，`src/<dir>/** -> <dir>`，`tests/** -> tests/...`），用于多模块端到端编译测试。
 - stage1 CLI（最小）：`compiler/stage1/src/main.vox` 提供 `emit-c/build/build-pkg`，使用 `std/fs` 与 `std/process` 完成读写与调用系统 `cc`（用于自举前的工具链验证）。CLI 会自动注入 stage1 自带的 `src/std/**` 作为被编译包的本地 `src/std/**`；`build-pkg` 还会读取当前目录 `vox.toml` 的 path 依赖并加载其 `src/**`（包含传递依赖）。另外 `emit-c/build/build-pkg` 支持 `--driver=user|tool`：`tool` 模式下生成的二进制不打印返回值，并把 `main() -> i32` 作为进程退出码返回（用于自举工具）。

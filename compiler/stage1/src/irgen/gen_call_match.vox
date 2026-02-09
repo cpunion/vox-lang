@@ -54,6 +54,25 @@ fn find_named_type_import(named: Vec[tc.NamedTypeImport], local: String) -> tc.N
   return tc.NamedTypeImport { local: "", mod_path: "", name: "", kind: 0 };
 }
 
+fn gen_call_trait_static(g0: Gen, trait_mod: String, trait_name: String, method: String, args: Vec[i32], out_ty: i32) -> GenExprResult {
+  if args.len() == 0 {
+    return GenExprResult { ok: false, err: "trait static call requires receiver arg", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+  }
+  let ar0: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.imps, g0.exprs, g0.locals, args.get(0), -1);
+  if !ar0.ok { return GenExprResult { ok: false, err: tc.tc_error_to_string(ar0.err), g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+  let recv_ty: i32 = tc.strip_range(g0.ctx, ar0.ty);
+
+  let fi: tc.FindImplResult = tc.find_impl(g0.ctx, trait_mod, trait_name, recv_ty);
+  if !fi.found {
+    return GenExprResult { ok: false, err: "no impl for trait call", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+  }
+  let im: tc.FindImplMethodResult = tc.find_impl_method(fi.sig, method);
+  if !im.found {
+    return GenExprResult { ok: false, err: "impl missing trait method", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+  }
+  return gen_call_func(g0, fi.sig.mod_path, im.m.lowered_name, im.m.sig, Vec(), args, out_ty);
+}
+
 fn vec_recv_slot(g0: Gen, recv_id: i32, recv_ty: i32) -> VecRecvSlotResult {
   let n: ast.ExprNode = ast.expr_pool_get(g0.exprs, recv_id);
   if match n { ast.ExprNode.Ident(_x) => true, _ => false } {
@@ -146,19 +165,43 @@ fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i
       if !fr.found { return GenExprResult { ok: false, err: "unknown fn", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
       return gen_call_func(g0, mp, parts.get(1), fr.sig, ta, args, out_ty);
     }
-    // Otherwise: `Enum.Variant(...)` in current module, or via a named imported enum type.
+    // Otherwise: `Trait.method(...)` or `Enum.Variant(...)` in current module,
+    // or via a named imported type.
     let nt: tc.NamedTypeImport = find_named_type_import(g0.imps.named_types, parts.get(0));
     if nt.local != "" {
+      if nt.kind == tc.named_type_kind_trait() {
+        if ta.len() != 0 { return GenExprResult { ok: false, err: "trait static call does not accept type args", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+        return gen_call_trait_static(g0, nt.mod_path, nt.name, parts.get(1), args, out_ty);
+      }
       if nt.kind != tc.named_type_kind_enum() {
         return GenExprResult { ok: false, err: "not an enum type", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
       }
       return gen_call_enum_ctor(g0, nt.mod_path, nt.name, parts.get(1), args, out_ty);
+    }
+
+    let ft: tc.FindTraitResult = tc.find_trait(g0.ctx, g0.mod_path, parts.get(0));
+    let fe: tc.FindEnumResult = tc.find_enum(g0.ctx, g0.mod_path, parts.get(0));
+    if ft.found && fe.found {
+      return GenExprResult { ok: false, err: "ambiguous call target", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+    }
+    if ft.found {
+      if ta.len() != 0 { return GenExprResult { ok: false, err: "trait static call does not accept type args", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+      return gen_call_trait_static(g0, g0.mod_path, parts.get(0), parts.get(1), args, out_ty);
     }
     return gen_call_enum_ctor(g0, g0.mod_path, parts.get(0), parts.get(1), args, out_ty);
   }
   if parts.len() == 3 {
     let mp: String = tc.find_alias(g0.imps.aliases, parts.get(0));
     if mp == "" { return GenExprResult { ok: false, err: "unknown module alias", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+    let ft2: tc.FindTraitResult = tc.find_trait(g0.ctx, mp, parts.get(1));
+    let fe2: tc.FindEnumResult = tc.find_enum(g0.ctx, mp, parts.get(1));
+    if ft2.found && fe2.found {
+      return GenExprResult { ok: false, err: "ambiguous call target", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+    }
+    if ft2.found {
+      if ta.len() != 0 { return GenExprResult { ok: false, err: "trait static call does not accept type args", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+      return gen_call_trait_static(g0, mp, parts.get(1), parts.get(2), args, out_ty);
+    }
     return gen_call_enum_ctor(g0, mp, parts.get(1), parts.get(2), args, out_ty);
   }
 

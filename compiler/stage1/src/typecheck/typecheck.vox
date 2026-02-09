@@ -65,6 +65,24 @@ pub fn world_add(w: World, path: String, prog: ast.Program) -> World {
   return q;
 }
 
+struct FindImplByDeclResult { found: bool, sig: ImplSig }
+
+fn empty_impl_sig() -> ImplSig {
+  return ImplSig { mod_path: "", decl_idx: -1, trait_mod_path: "", trait_name: "", for_ty: -1, methods: Vec() };
+}
+
+fn find_impl_by_decl(ctx: Ctx, mod_path: String, decl_idx: i32) -> FindImplByDeclResult {
+  let mut i: i32 = 0;
+  while i < ctx.impls.len() {
+    let s: ImplSig = ctx.impls.get(i);
+    if s.mod_path == mod_path && s.decl_idx == decl_idx {
+      return FindImplByDeclResult { found: true, sig: s };
+    }
+    i = i + 1;
+  }
+  return FindImplByDeclResult { found: false, sig: empty_impl_sig() };
+}
+
 pub fn typecheck_world(w: World) -> TcResult {
   let br: BuildCtxResult = build_ctx(w);
   if !br.ok { return TcResult { ok: false, err: br.err }; }
@@ -88,6 +106,31 @@ pub fn typecheck_world(w: World) -> TcResult {
       if !fr.ok { return fr; }
       fi2 = fi2 + 1;
     }
+
+    // Typecheck impl method bodies (already lowered into ctx.funcs during collect_impls).
+    let mut ii2: i32 = 0;
+    while ii2 < m2.prog.impls.len() {
+      let id: ast.ImplDecl = m2.prog.impls.get(ii2);
+      let fr0: FindImplByDeclResult = find_impl_by_decl(c, m2.path, ii2);
+      if !fr0.found { return TcResult { ok: false, err: type_error(id.file, "missing impl sig") }; }
+
+      let ir0: ImportsResult = build_imports(w, m2.path, m2.prog.imports, id.file);
+      if !ir0.ok { return TcResult { ok: false, err: ir0.err }; }
+      let imps0: Imports = ir0.imps;
+
+      let mut mdi: i32 = 0;
+      while mdi < id.methods.len() {
+        let md: ast.FuncDecl = id.methods.get(mdi);
+        let mf: FindImplMethodResult = find_impl_method(fr0.sig, md.name);
+        if !mf.found { return TcResult { ok: false, err: type_error(md.file, "missing impl method sig") }; }
+        let tr: TcResult = typecheck_fn_with_sig(c, w, m2.path, imps0, m2.prog.exprs, md, mf.m.sig);
+        if !tr.ok { return tr; }
+        mdi = mdi + 1;
+      }
+
+      ii2 = ii2 + 1;
+    }
+
     mi2 = mi2 + 1;
   }
 
@@ -133,8 +176,14 @@ pub fn build_ctx(w: World) -> BuildCtxResult {
   let r2: TcCtxResult = collect_enums(c, w);
   if !r2.ok { return BuildCtxResult { ok: false, err: r2.err, ctx: r2.ctx }; }
   c = r2.ctx;
+  let r25: TcCtxResult = collect_traits(c, w);
+  if !r25.ok { return BuildCtxResult { ok: false, err: r25.err, ctx: r25.ctx }; }
+  c = r25.ctx;
   let r3: TcCtxResult = collect_funcs(c, w);
   if !r3.ok { return BuildCtxResult { ok: false, err: r3.err, ctx: r3.ctx }; }
   c = r3.ctx;
+  let r35: TcCtxResult = collect_impls(c, w);
+  if !r35.ok { return BuildCtxResult { ok: false, err: r35.err, ctx: r35.ctx }; }
+  c = r35.ctx;
   return BuildCtxResult { ok: true, err: TcError.None, ctx: c };
 }
