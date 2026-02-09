@@ -6,6 +6,8 @@ import "ir" as ir
 // becomes part of Stage1's critical path.
 
 pub struct ExprTyResult { pub ok: bool, pub ty: i32, pub err: TcError }
+struct TryContainerInfo { ok: bool, is_result: bool, ok_ty: i32, residual_ty: i32 }
+struct VariantLookupFieldResult { found: bool, field_count: i32, field0: i32 }
 
 pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, id: i32, expected: i32) -> ExprTyResult {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
@@ -26,6 +28,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
 
     ast.ExprNode.Member(recv, name) => tc_expr_member(ctx, w, mod_path, imps, exprs, l0, recv, name, expected),
     ast.ExprNode.Call(callee, type_args, args) => tc_expr_call(ctx, w, mod_path, imps, exprs, l0, ast.expr_pool_span(exprs, id), callee, type_args, args, expected),
+    ast.ExprNode.Try(a) => tc_expr_try(ctx, w, mod_path, imps, exprs, l0, id, a, expected),
     ast.ExprNode.StructLit(ty_expr, fields) => tc_expr_struct_lit(ctx, w, mod_path, imps, exprs, l0, ty_expr, fields, expected),
     ast.ExprNode.Match(scrut, arms) => tc_expr_match(ctx, w, mod_path, imps, exprs, l0, scrut, arms, expected),
   };
@@ -35,6 +38,78 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
   // If a helper didn't attach a reason, fall back to a generic error at the expr span.
   let sp: ast.Span = ast.expr_pool_span(exprs, id);
   return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "typecheck failed") };
+}
+
+fn find_enum_variant_field(es: EnumSig, name: String) -> VariantLookupFieldResult {
+  let mut i: i32 = 0;
+  while i < es.vars.len() {
+    let v: EnumVariantSig = es.vars.get(i);
+    if v.name == name {
+      let mut t0: i32 = -1;
+      if v.fields.len() == 1 { t0 = v.fields.get(0); }
+      return VariantLookupFieldResult { found: true, field_count: v.fields.len(), field0: t0 };
+    }
+    i = i + 1;
+  }
+  return VariantLookupFieldResult { found: false, field_count: 0, field0: -1 };
+}
+
+fn try_container_info(ctx: Ctx, ty0: i32) -> TryContainerInfo {
+  let ty: i32 = strip_range(ctx, ty0);
+  if ty < 0 || ty >= ctx.pool.tys.len() { return TryContainerInfo { ok: false, is_result: false, ok_ty: ctx.ty_bad, residual_ty: ctx.ty_bad }; }
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind != ir.TyKind.Enum { return TryContainerInfo { ok: false, is_result: false, ok_ty: ctx.ty_bad, residual_ty: ctx.ty_bad }; }
+  let fe: FindEnumResult = find_enum(ctx, ty_mod(t), ty_name(t));
+  if !fe.found { return TryContainerInfo { ok: false, is_result: false, ok_ty: ctx.ty_bad, residual_ty: ctx.ty_bad }; }
+  let es: EnumSig = fe.sig;
+
+  let okv: VariantLookupFieldResult = find_enum_variant_field(es, "Ok");
+  let errv: VariantLookupFieldResult = find_enum_variant_field(es, "Err");
+  if okv.found && errv.found && okv.field_count == 1 && errv.field_count == 1 {
+    return TryContainerInfo { ok: true, is_result: true, ok_ty: okv.field0, residual_ty: errv.field0 };
+  }
+
+  let somev: VariantLookupFieldResult = find_enum_variant_field(es, "Some");
+  let nonev: VariantLookupFieldResult = find_enum_variant_field(es, "None");
+  if somev.found && nonev.found && somev.field_count == 1 && nonev.field_count == 0 {
+    return TryContainerInfo { ok: true, is_result: false, ok_ty: somev.field0, residual_ty: ctx.ty_unit };
+  }
+
+  return TryContainerInfo { ok: false, is_result: false, ok_ty: ctx.ty_bad, residual_ty: ctx.ty_bad };
+}
+
+fn tc_expr_try(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, id: i32, a: i32, expected: i32) -> ExprTyResult {
+  let sp: ast.Span = ast.expr_pool_span(exprs, id);
+  let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, -1);
+  if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+  let src: TryContainerInfo = try_container_info(ctx, ar.ty);
+  if !src.ok {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "`?` requires Result[T, E] or Option[T]") };
+  }
+  if l0.fn_ret_ty == -1 {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "`?` can only be used inside function body") };
+  }
+  let dst: TryContainerInfo = try_container_info(ctx, l0.fn_ret_ty);
+  if !dst.ok {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "function return type must be Result[T, E] or Option[T] when using `?`") };
+  }
+  if src.is_result != dst.is_result {
+    if src.is_result {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "cannot use Result `?` in function returning Option") };
+    }
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "cannot use Option `?` in function returning Result") };
+  }
+
+  if src.is_result {
+    if !assignable_to(ctx, dst.residual_ty, src.residual_ty) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
+    }
+  }
+
+  let out_ty: i32 = src.ok_ty;
+  if expected != -1 && !assignable_to(ctx, expected, out_ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
 }
 
 fn tc_expr_as(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, a: i32, tn: ast.TypeName, expected: i32) -> ExprTyResult {

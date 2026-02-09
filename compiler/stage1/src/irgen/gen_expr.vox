@@ -3,6 +3,7 @@ import "ir" as ir
 import "typecheck" as tc
 
 struct GenExprResult { ok: bool, err: String, g: Gen, val: ir.Value, ty: i32 }
+struct TryEnumInfo { ok: bool, is_result: bool, ok_name: String, ok_idx: i32, ok_ty: i32, residual_name: String, residual_idx: i32, residual_ty: i32 }
 
 fn gen_expr(g0: Gen, id: i32, expected: i32) -> GenExprResult {
   let tr: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.imps, g0.exprs, g0.locals, id, expected);
@@ -25,9 +26,156 @@ fn gen_expr(g0: Gen, id: i32, expected: i32) -> GenExprResult {
     ast.ExprNode.If(c, t, e) => gen_expr_if(g0, c, t, e, tr.ty),
     ast.ExprNode.Member(recv, name) => gen_expr_member(g0, recv, name, tr.ty),
     ast.ExprNode.Call(callee, type_args, args) => gen_expr_call(g0, callee, type_args, args, tr.ty, expected),
+    ast.ExprNode.Try(a) => gen_expr_try(g0, a, tr.ty),
     ast.ExprNode.StructLit(ty_expr, fields) => gen_expr_struct_lit(g0, ty_expr, fields, tr.ty),
     ast.ExprNode.Match(scrut, arms) => gen_expr_match(g0, scrut, arms, tr.ty),
   };
+}
+
+fn find_variant_index(es: tc.EnumSig, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < es.vars.len() {
+    if es.vars.get(i).name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn try_enum_info(g0: Gen, ty0: i32) -> TryEnumInfo {
+  let ty: i32 = tc.strip_range(g0.ctx, ty0);
+  if ty < 0 || ty >= g0.ctx.pool.tys.len() {
+    return TryEnumInfo { ok: false, is_result: false, ok_name: "", ok_idx: -1, ok_ty: g0.ctx.ty_bad, residual_name: "", residual_idx: -1, residual_ty: g0.ctx.ty_bad };
+  }
+  let t: ir.Ty = ir.ty_pool_get(g0.ctx.pool, ty);
+  if t.kind != ir.TyKind.Enum {
+    return TryEnumInfo { ok: false, is_result: false, ok_name: "", ok_idx: -1, ok_ty: g0.ctx.ty_bad, residual_name: "", residual_idx: -1, residual_ty: g0.ctx.ty_bad };
+  }
+  let fe: tc.FindEnumResult = tc.find_enum(g0.ctx, tc.ty_mod(t), tc.ty_name(t));
+  if !fe.found {
+    return TryEnumInfo { ok: false, is_result: false, ok_name: "", ok_idx: -1, ok_ty: g0.ctx.ty_bad, residual_name: "", residual_idx: -1, residual_ty: g0.ctx.ty_bad };
+  }
+  let es: tc.EnumSig = fe.sig;
+
+  let ok_idx: i32 = find_variant_index(es, "Ok");
+  let err_idx: i32 = find_variant_index(es, "Err");
+  if ok_idx != -1 && err_idx != -1 {
+    let okv: tc.EnumVariantSig = es.vars.get(ok_idx);
+    let errv: tc.EnumVariantSig = es.vars.get(err_idx);
+    if okv.fields.len() == 1 && errv.fields.len() == 1 {
+      return TryEnumInfo {
+        ok: true,
+        is_result: true,
+        ok_name: "Ok",
+        ok_idx: ok_idx,
+        ok_ty: okv.fields.get(0),
+        residual_name: "Err",
+        residual_idx: err_idx,
+        residual_ty: errv.fields.get(0),
+      };
+    }
+  }
+
+  let some_idx: i32 = find_variant_index(es, "Some");
+  let none_idx: i32 = find_variant_index(es, "None");
+  if some_idx != -1 && none_idx != -1 {
+    let somev: tc.EnumVariantSig = es.vars.get(some_idx);
+    let nonev: tc.EnumVariantSig = es.vars.get(none_idx);
+    if somev.fields.len() == 1 && nonev.fields.len() == 0 {
+      return TryEnumInfo {
+        ok: true,
+        is_result: false,
+        ok_name: "Some",
+        ok_idx: some_idx,
+        ok_ty: somev.fields.get(0),
+        residual_name: "None",
+        residual_idx: none_idx,
+        residual_ty: g0.ctx.ty_unit,
+      };
+    }
+  }
+
+  return TryEnumInfo { ok: false, is_result: false, ok_name: "", ok_idx: -1, ok_ty: g0.ctx.ty_bad, residual_name: "", residual_idx: -1, residual_ty: g0.ctx.ty_bad };
+}
+
+fn gen_expr_try(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
+  let mut g: Gen = g0;
+  let ar: GenExprResult = gen_expr(g, a, -1);
+  if !ar.ok { return ar; }
+  g = ar.g;
+
+  let src: TryEnumInfo = try_enum_info(g, ar.ty);
+  if !src.ok { return GenExprResult { ok: false, err: "`?` requires Result[T, E] or Option[T]", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  let dst: TryEnumInfo = try_enum_info(g, g.ret_ty);
+  if !dst.ok || src.is_result != dst.is_result {
+    return GenExprResult { ok: false, err: "function return type incompatible with `?`", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+  }
+
+  let rs: GenNewIdResult = gen_new_slot(g);
+  g = rs.g;
+  let out_slot: i32 = rs.id;
+  g = gen_emit(g, ir.Instr.SlotDecl(out_slot, out_ty));
+
+  let base: i32 = g.blocks.len();
+  let bok: GenNewIdResult = gen_new_block(g, "try_ok_".concat(base.to_string()));
+  g = bok.g;
+  let ok_idx_block: i32 = bok.id;
+  let bres: GenNewIdResult = gen_new_block(g, "try_res_".concat(base.to_string()));
+  g = bres.g;
+  let res_idx_block: i32 = bres.id;
+  let bend: GenNewIdResult = gen_new_block(g, "try_end_".concat(base.to_string()));
+  g = bend.g;
+  let end_idx_block: i32 = bend.id;
+
+  let tr0: GenNewIdResult = gen_new_temp(g);
+  g = tr0.g;
+  let tag_tid: i32 = tr0.id;
+  g = gen_emit(g, ir.Instr.EnumTag(tag_tid, ar.val));
+
+  let tr1: GenNewIdResult = gen_new_temp(g);
+  g = tr1.g;
+  let is_ok_tid: i32 = tr1.id;
+  g = gen_emit(g, ir.Instr.Cmp(is_ok_tid, ir.CmpKind.Eq, g.ctx.ty_i32, ir.v_temp(tag_tid), ir.v_int(src.ok_idx)));
+  g = gen_term(g, ir.Term.CondBr(ir.v_temp(is_ok_tid), g.blocks.get(ok_idx_block).name, g.blocks.get(res_idx_block).name));
+
+  g = gen_set_block(g, ok_idx_block);
+  let tr2: GenNewIdResult = gen_new_temp(g);
+  g = tr2.g;
+  let ok_tid: i32 = tr2.id;
+  g = gen_emit(g, ir.Instr.EnumPayload(ok_tid, out_ty, ar.val, src.ok_name, 0));
+  g = gen_emit(g, ir.Instr.Store(out_slot, ir.v_temp(ok_tid)));
+  if !g.blocks.get(g.cur).has_term {
+    g = gen_term(g, ir.Term.Br(g.blocks.get(end_idx_block).name));
+  }
+
+  g = gen_set_block(g, res_idx_block);
+  let mut rv: ir.Value = ir.v_int(0);
+  if src.is_result {
+    let tr3: GenNewIdResult = gen_new_temp(g);
+    g = tr3.g;
+    let err_tid: i32 = tr3.id;
+    g = gen_emit(g, ir.Instr.EnumPayload(err_tid, src.residual_ty, ar.val, src.residual_name, 0));
+    let tr4: GenNewIdResult = gen_new_temp(g);
+    g = tr4.g;
+    let ret_tid: i32 = tr4.id;
+    let mut ps: Vec[ir.Value] = Vec();
+    ps.push(ir.v_temp(err_tid));
+    g = gen_emit(g, ir.Instr.EnumInit(ret_tid, g.ret_ty, dst.residual_name, ps));
+    rv = ir.v_temp(ret_tid);
+  } else {
+    let tr5: GenNewIdResult = gen_new_temp(g);
+    g = tr5.g;
+    let ret_tid2: i32 = tr5.id;
+    g = gen_emit(g, ir.Instr.EnumInit(ret_tid2, g.ret_ty, dst.residual_name, Vec()));
+    rv = ir.v_temp(ret_tid2);
+  }
+  g = gen_term(g, ir.Term.Ret(true, rv));
+
+  g = gen_set_block(g, end_idx_block);
+  let tr6: GenNewIdResult = gen_new_temp(g);
+  g = tr6.g;
+  let out_tid: i32 = tr6.id;
+  g = gen_emit(g, ir.Instr.Load(out_tid, out_ty, out_slot));
+  return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(out_tid), ty: out_ty };
 }
 
 fn gen_expr_as(g0: Gen, a: i32, _tn: ast.TypeName, out_ty: i32) -> GenExprResult {

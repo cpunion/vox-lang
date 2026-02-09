@@ -28,8 +28,13 @@ let f = match File::open(path) {
 
 Stage1 当前实现（v0）：
 
-- `expr?` 已接入，按语义糖降级为 `match` + 提前 `return .Err(e)`。
-- 因此当前约束为：被传播值需要有 `Ok/Err` 变体；所在函数返回类型也需要兼容 `.Err(e)`。
+- `expr?` 已接入，语义上支持两种容器：
+  - `Result[T, E]`：`Ok(v)` 继续，`Err(e)` 提前返回 `Err(e)`。
+  - `Option[T]`：`Some(v)` 继续，`None` 提前返回 `None`。
+- 约束：
+  - `?` 只能用于 `Result/Option`。
+  - 所在函数返回类型也必须是对应容器类型（`Result` 对 `Result`，`Option` 对 `Option`）。
+  - `Result` 情况下，传播的 `Err` 类型需与函数返回的 `Err` 类型兼容（当前 v0 不做 `into()` 自动转换）。
 
 ## `try {}` 块
 

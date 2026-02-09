@@ -10,6 +10,17 @@ fn eh_add_mod(w: tc.World, path: String, src: String) -> tc.World {
   return tc.world_add(w, path, r.prog);
 }
 
+fn eh_contains(hay: String, needle: String) -> bool {
+  if needle.len() == 0 { return true; }
+  if hay.len() < needle.len() { return false; }
+  let mut i: i32 = 0;
+  while i <= hay.len() - needle.len() {
+    if hay.slice(i, i + needle.len()) == needle { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn test_typecheck_question_propagation_smoke() -> () {
   let mut w: tc.World = tc.world();
   let src: String =
@@ -44,6 +55,20 @@ fn test_typecheck_try_block_smoke() -> () {
   t.assert(r.ok);
 }
 
+fn test_typecheck_option_question_propagation_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Option[T] { Some(T), None }\n"
+      .concat("fn get(flag: bool) -> Option[i32] { if flag { return .Some(5); } return .None; }\n")
+      .concat("fn main(flag: bool) -> Option[i32] {\n")
+      .concat("  let v: i32 = get(flag)?;\n")
+      .concat("  return .Some(v + 1);\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(r.ok);
+}
+
 fn test_typecheck_question_requires_result_return_type() -> () {
   let mut w: tc.World = tc.world();
   let src: String =
@@ -56,4 +81,37 @@ fn test_typecheck_question_requires_result_return_type() -> () {
   w = eh_add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
   t.assert(!r.ok);
+}
+
+fn test_typecheck_question_result_option_mismatch_has_reason() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("enum Option[T] { Some(T), None }\n")
+      .concat("fn get() -> Option[i32] { return .Some(1); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let v: i32 = get()?;\n")
+      .concat("  return .Ok(v);\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(eh_contains(msg, "Option `?`"));
+}
+
+fn test_typecheck_question_result_err_mismatch_has_reason() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, i32] { return .Err(1); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let v: i32 = get()?;\n")
+      .concat("  return .Ok(v);\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(eh_contains(msg, "Err type mismatch"));
 }
