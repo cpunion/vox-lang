@@ -3,7 +3,7 @@
 ## 目标
 
 1. 目录即模块（减少声明样板）。
-2. 默认私有，`pub` 显式公开。
+2. 默认私有，支持 `pub` / `pub(crate)` / `pub(super)` 显式公开。
 3. 导入语法直接、可读。
 
 ## 模块模型
@@ -83,10 +83,13 @@ fn main() -> i32 {
 fn internal() {}
 
 pub fn public_api() {}
+pub(crate) fn internal_api() {}
+pub(super) fn parent_api() {}
 
 pub struct Api {
   pub name: String,
-  cache: Cache, // 私有字段
+  pub(crate) cache: Cache,
+  secret: Cache, // 私有字段
 }
 ```
 

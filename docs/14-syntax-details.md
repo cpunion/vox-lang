@@ -357,9 +357,15 @@ pub const NAME: String = "vox";
 - 不支持在 const 初始化中调用普通函数、构造 struct；支持 enum 变体构造（含 payload），例如 `const X: E = .A(1)`。
   - 也支持限定路径写法：`const X: E = E.A(1)`、`const X: dep.E = dep.E.A(1)`。
 
-可见性与导入（Stage0/Stage1 v0）：
+可见性与导入（Stage0/Stage1）：
 
-- 默认私有，跨模块访问需要 `pub const`。
+- 默认私有（仅当前模块可见）。
+- 可见性修饰：
+  - `pub`：对所有模块可见。
+  - `pub(crate)`：对同一包（crate）内模块可见。
+  - `pub(super)`：对父模块作用域可见（父模块及其子模块）。
+- 对于 `src/**` 与 `tests/**`，当前实现把它们视为不同的包边界：`tests/**` 不能访问 `src/**` 的 `pub(crate)` 符号。
+- 跨模块访问常量时需要目标符号对当前模块可见（例如 `pub const` 或受限 `pub(...)` 满足可见性规则）。
 - 支持：
   - 通过模块别名访问：`import "pkg:dep" as d; d.MAX_RETRY`
   - 通过命名导入访问：`import { MAX_RETRY } from "pkg:dep"; MAX_RETRY`

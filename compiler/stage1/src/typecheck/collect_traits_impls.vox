@@ -47,7 +47,7 @@ fn resolve_trait_ref(ctx: Ctx, _w: World, cur_mod: String, imps: Imports, tn: as
     if fl.found { return ResolveTraitRefResult { ok: true, mod_path: cur_mod, name: name0 }; }
     let prelude: String = "std/prelude";
     let fp: FindTraitResult = find_trait(ctx, prelude, name0);
-    if fp.found && fp.sig.is_pub {
+    if fp.found && vis_allows(fp.sig.vis, prelude, cur_mod) {
       return ResolveTraitRefResult { ok: true, mod_path: prelude, name: name0 };
     }
     return ResolveTraitRefResult { ok: true, mod_path: cur_mod, name: name0 };
@@ -202,6 +202,7 @@ fn trait_method_sig_for(ctx: Ctx, ms: TraitMethodSig, for_ty: i32, assocs: Vec[I
   return FuncSig {
     params: ps,
     ret: ret,
+    vis: ast.vis_private(),
     is_pub: false,
     type_params: ms.sig.type_params,
     type_param_bounds: ms.sig.type_param_bounds,
@@ -236,6 +237,7 @@ fn impl_method_emit_sig(head_tps: Vec[String], head_tpbs: Vec[TypeParamBoundSig]
   return FuncSig {
     params: want.params,
     ret: want.ret,
+    vis: ast.vis_private(),
     is_pub: false,
     type_params: concat_strs(head_tps, want.type_params),
     type_param_bounds: concat_bounds(head_tpbs, want.type_param_bounds),
@@ -257,7 +259,7 @@ fn impl_decl_file(w: World, mod_path: String, decl_idx: i32) -> String {
   return m.prog.impls.get(decl_idx).file;
 }
 
-struct FindWorldTraitDeclResult { found: bool, is_pub: bool, file: String }
+struct FindWorldTraitDeclResult { found: bool, vis: i32, is_pub: bool, file: String }
 
 fn find_world_trait_decl(w: World, mod_path: String, name: String) -> FindWorldTraitDeclResult {
   let mut mi: i32 = 0;
@@ -267,13 +269,13 @@ fn find_world_trait_decl(w: World, mod_path: String, name: String) -> FindWorldT
       let mut ti: i32 = 0;
       while ti < m.prog.traits.len() {
         let td: ast.TraitDecl = m.prog.traits.get(ti);
-        if td.name == name { return FindWorldTraitDeclResult { found: true, is_pub: td.is_pub, file: td.file }; }
+        if td.name == name { return FindWorldTraitDeclResult { found: true, vis: td.vis, is_pub: td.is_pub, file: td.file }; }
         ti = ti + 1;
       }
     }
     mi = mi + 1;
   }
-  return FindWorldTraitDeclResult { found: false, is_pub: false, file: "" };
+  return FindWorldTraitDeclResult { found: false, vis: ast.vis_private(), is_pub: false, file: "" };
 }
 
 fn find_trait_idx(ts: Vec[TraitSig], mod_path: String, name: String) -> i32 {
@@ -351,7 +353,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
       if has_trait_name(c, m.path, td.name) {
         return TcCtxResult { ok: false, err: type_error(td.file, "duplicate trait: ".concat(td.name)), ctx: c };
       }
-      c.traits.push(TraitSig { mod_path: m.path, name: td.name, is_pub: td.is_pub, supers: Vec(), assoc_types: Vec(), methods: Vec() });
+      c.traits.push(TraitSig { mod_path: m.path, name: td.name, vis: td.vis, is_pub: td.is_pub, supers: Vec(), assoc_types: Vec(), methods: Vec() });
       ti = ti + 1;
     }
     mi = mi + 1;
@@ -378,7 +380,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         if !sr.ok { return TcCtxResult { ok: false, err: type_error(td.file, "bad supertrait path"), ctx: c }; }
         let sfw: FindWorldTraitDeclResult = find_world_trait_decl(w, sr.mod_path, sr.name);
         if !sfw.found { return TcCtxResult { ok: false, err: type_error(td.file, "unknown supertrait"), ctx: c }; }
-        if sr.mod_path != m.path && !sfw.is_pub {
+        if !vis_allows(sfw.vis, sr.mod_path, m.path) {
           return TcCtxResult { ok: false, err: type_error(td.file, "supertrait is private"), ctx: c };
         }
         if sr.mod_path == m.path && sr.name == td.name {
@@ -406,6 +408,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
       c = set_trait_sig(c, idx, TraitSig {
         mod_path: m.path,
         name: td.name,
+        vis: td.vis,
         is_pub: td.is_pub,
         supers: supers,
         assoc_types: assocs,
@@ -467,7 +470,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
             if !tf2.found {
               return TcCtxResult { ok: false, err: type_error(td.file, "unknown trait in method bound"), ctx: c };
             }
-            if rtr.mod_path != m.path && !tf2.sig.is_pub {
+            if !vis_allows(tf2.sig.vis, rtr.mod_path, m.path) {
               return TcCtxResult { ok: false, err: type_error(td.file, "trait method bound refers to private trait"), ctx: c };
             }
             if !has_bound_sig(tbs, bdecl.name, rtr.mod_path, rtr.name) {
@@ -492,7 +495,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         }
         ms.push(TraitMethodSig {
           name: md.name,
-          sig: FuncSig { params: ps, ret: rr.idx, is_pub: true, type_params: md.type_params, type_param_bounds: tbs },
+          sig: FuncSig { params: ps, ret: rr.idx, vis: ast.vis_pub(), is_pub: true, type_params: md.type_params, type_param_bounds: tbs },
           has_default: md.has_body,
           default_mod_path: m.path,
           default_file: td.file,
@@ -502,7 +505,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         fi = fi + 1;
       }
 
-      c = set_trait_sig(c, idx, TraitSig { mod_path: m.path, name: td.name, is_pub: td.is_pub, supers: supers, assoc_types: assocs, methods: ms });
+      c = set_trait_sig(c, idx, TraitSig { mod_path: m.path, name: td.name, vis: td.vis, is_pub: td.is_pub, supers: supers, assoc_types: assocs, methods: ms });
       ti = ti + 1;
     }
     mi = mi + 1;
@@ -542,7 +545,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
       if !tf.found {
         return TcCtxResult { ok: false, err: type_error(id.file, "unknown trait in impl"), ctx: c };
       }
-      if trr.mod_path != m.path && !tf.sig.is_pub {
+      if !vis_allows(tf.sig.vis, trr.mod_path, m.path) {
         return TcCtxResult { ok: false, err: type_error(id.file, "trait is private"), ctx: c };
       }
 
@@ -559,7 +562,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           if !rtr0.ok { return TcCtxResult { ok: false, err: type_error(id.file, "bad impl type bound"), ctx: c }; }
           let tf0: FindTraitResult = find_trait(c, rtr0.mod_path, rtr0.name);
           if !tf0.found { return TcCtxResult { ok: false, err: type_error(id.file, "unknown trait in impl bound"), ctx: c }; }
-          if rtr0.mod_path != m.path && !tf0.sig.is_pub {
+          if !vis_allows(tf0.sig.vis, rtr0.mod_path, m.path) {
             return TcCtxResult { ok: false, err: type_error(id.file, "impl bound refers to private trait"), ctx: c };
           }
           if !has_bound_sig(head_tpbs, bdecl0.name, rtr0.mod_path, rtr0.name) {
@@ -695,7 +698,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
             if !rtr2.ok { return TcCtxResult { ok: false, err: type_error(md.file, "bad impl method bound"), ctx: c }; }
             let tf3: FindTraitResult = find_trait(c, rtr2.mod_path, rtr2.name);
             if !tf3.found { return TcCtxResult { ok: false, err: type_error(md.file, "unknown trait in impl method bound"), ctx: c }; }
-            if rtr2.mod_path != m.path && !tf3.sig.is_pub {
+            if !vis_allows(tf3.sig.vis, rtr2.mod_path, m.path) {
               return TcCtxResult { ok: false, err: type_error(md.file, "impl method bound refers to private trait"), ctx: c };
             }
             if !has_bound_sig(got_tbs, btp, rtr2.mod_path, rtr2.name) {

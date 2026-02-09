@@ -32,6 +32,7 @@ pub struct Ctx {
 pub struct TypeAliasSig {
   pub mod_path: String,
   pub name: String,
+  pub vis: i32,
   pub is_pub: bool,
   pub ty: i32,
 }
@@ -40,6 +41,7 @@ pub struct TypeAliasSig {
 pub struct ConstSig {
   pub mod_path: String,
   pub name: String,
+  pub vis: i32,
   pub is_pub: bool,
   pub ty: i32,
   pub kind: i32, // 1=int, 2=bool, 3=str, 4=float, 5=enum
@@ -155,7 +157,7 @@ fn find_type_alias(type_aliases: Vec[TypeAliasSig], mod_path: String, name: Stri
     if a.mod_path == mod_path && a.name == name { return a; }
     i = i + 1;
   }
-  return TypeAliasSig { mod_path: "", name: "", is_pub: false, ty: -1 };
+  return TypeAliasSig { mod_path: "", name: "", vis: ast.vis_private(), is_pub: false, ty: -1 };
 }
 
 pub fn intern_vec(ctx: Ctx, elem: i32) -> ResolveTyResult {
@@ -259,7 +261,7 @@ fn find_struct_decl_in_mod(m: WorldModule, name: String) -> FindStructDeclResult
   }
   return FindStructDeclResult {
     found: false,
-    d: ast.StructDecl { file: "", is_pub: false, name: "", type_params: Vec(), fields: Vec() },
+    d: ast.StructDecl { file: "", vis: ast.vis_private(), is_pub: false, name: "", type_params: Vec(), fields: Vec() },
   };
 }
 
@@ -272,7 +274,7 @@ fn find_enum_decl_in_mod(m: WorldModule, name: String) -> FindEnumDeclResult {
   }
   return FindEnumDeclResult {
     found: false,
-    d: ast.EnumDecl { file: "", is_pub: false, name: "", type_params: Vec(), variants: Vec() },
+    d: ast.EnumDecl { file: "", vis: ast.vis_private(), is_pub: false, name: "", type_params: Vec(), variants: Vec() },
   };
 }
 
@@ -301,7 +303,7 @@ fn set_struct_fields(ctx0: Ctx, mod_path: String, name: String, fields: Vec[Stru
   while i < c.structs.len() {
     let s: StructSig = c.structs.get(i);
     if s.mod_path == mod_path && s.name == name {
-      out.push(StructSig { mod_path: s.mod_path, name: s.name, base_name: s.base_name, is_pub: s.is_pub, fields: fields });
+      out.push(StructSig { mod_path: s.mod_path, name: s.name, base_name: s.base_name, vis: s.vis, is_pub: s.is_pub, fields: fields });
     } else {
       out.push(s);
     }
@@ -318,7 +320,7 @@ fn set_enum_vars(ctx0: Ctx, mod_path: String, name: String, vars: Vec[EnumVarian
   while i < c.enums.len() {
     let e: EnumSig = c.enums.get(i);
     if e.mod_path == mod_path && e.name == name {
-      out.push(EnumSig { mod_path: e.mod_path, name: e.name, base_name: e.base_name, is_pub: e.is_pub, vars: vars });
+      out.push(EnumSig { mod_path: e.mod_path, name: e.name, base_name: e.base_name, vis: e.vis, is_pub: e.is_pub, vars: vars });
     } else {
       out.push(e);
     }
@@ -469,7 +471,7 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
   let ta: TypeAliasSig = find_type_alias(c.type_aliases, mod_path, name);
   if ta.name != "" {
     if tn.args.len() != 0 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
-    if mod_path != cur_mod && !ta.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    if !vis_allows(ta.vis, mod_path, cur_mod) { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     return ResolveTyResult { ctx: c, ok: true, idx: ta.ty };
   }
 
@@ -483,7 +485,7 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
   let fsd: FindStructDeclResult = find_struct_decl_in_mod(m, name);
   if fsd.found {
     let sd: ast.StructDecl = fsd.d;
-    if mod_path != cur_mod && !sd.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    if !vis_allows(sd.vis, mod_path, cur_mod) { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     if sd.type_params.len() == 0 {
       if tn.args.len() != 0 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
       return nominal_intern_struct(c, mod_path, sd.name);
@@ -506,7 +508,7 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
     if fs.found { return nominal_intern_struct(c, mod_path, inst); }
 
     // Insert placeholder first so recursive references can resolve.
-    c.structs.push(StructSig { mod_path: mod_path, name: inst, base_name: sd.name, is_pub: sd.is_pub, fields: Vec() });
+    c.structs.push(StructSig { mod_path: mod_path, name: inst, base_name: sd.name, vis: sd.vis, is_pub: sd.is_pub, fields: Vec() });
     let ir_self: ResolveTyResult = nominal_intern_struct(c, mod_path, inst);
     c = ir_self.ctx;
 
@@ -522,7 +524,7 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
       let rr: ResolveTyResult = resolve_type_bound(c, w, mod_path, imps0, sd.type_params, binds0, fd.ty);
       c = rr.ctx;
       if !rr.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
-      fields.push(StructFieldSig { name: fd.name, ty: rr.idx, is_pub: fd.is_pub });
+      fields.push(StructFieldSig { name: fd.name, ty: rr.idx, vis: fd.vis, is_pub: fd.is_pub });
       fi = fi + 1;
     }
     c = set_struct_fields(c, mod_path, inst, fields);
@@ -533,7 +535,7 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
   let fed: FindEnumDeclResult = find_enum_decl_in_mod(m, name);
   if fed.found {
     let ed: ast.EnumDecl = fed.d;
-    if mod_path != cur_mod && !ed.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    if !vis_allows(ed.vis, mod_path, cur_mod) { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     if ed.type_params.len() == 0 {
       if tn.args.len() != 0 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
       return nominal_intern_enum(c, mod_path, ed.name);
@@ -556,7 +558,7 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
     if fe.found { return nominal_intern_enum(c, mod_path, inst); }
 
     // Insert placeholder first so recursive references can resolve.
-    c.enums.push(EnumSig { mod_path: mod_path, name: inst, base_name: ed.name, is_pub: ed.is_pub, vars: Vec() });
+    c.enums.push(EnumSig { mod_path: mod_path, name: inst, base_name: ed.name, vis: ed.vis, is_pub: ed.is_pub, vars: Vec() });
     let ir_self: ResolveTyResult = nominal_intern_enum(c, mod_path, inst);
     c = ir_self.ctx;
 
@@ -628,5 +630,5 @@ pub fn find_const(ctx: Ctx, mod_path: String, name: String) -> ConstSig {
     if c.mod_path == mod_path && c.name == name { return c; }
     i = i + 1;
   }
-  return ConstSig { mod_path: "", name: "", is_pub: false, ty: -1, kind: 0, iv: 0, bv: false, sv: "" };
+  return ConstSig { mod_path: "", name: "", vis: ast.vis_private(), is_pub: false, ty: -1, kind: 0, iv: 0, bv: false, sv: "" };
 }

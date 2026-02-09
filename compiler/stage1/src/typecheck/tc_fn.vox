@@ -66,6 +66,7 @@ fn remap_sig_for_body(ctx: Ctx, sig: FuncSig, src_method_tps: Vec[String]) -> Fu
   return FuncSig {
     params: out_params,
     ret: out_ret,
+    vis: sig.vis,
     is_pub: sig.is_pub,
     type_params: out_tps,
     type_param_bounds: out_bounds,
@@ -171,25 +172,25 @@ fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exp
   if rt.kind != ir.TyKind.Struct { return TcStmtResult { ok: false, err: type_error_at(sp, "field assign recv must be struct"), ctx: ctx, locals: l0 }; }
   let fs: FindStructResult = find_struct(ctx, rt.mod_path, rt.name);
   if !fs.found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown struct type"), ctx: ctx, locals: l0 }; }
-  // Visibility: crossing modules requires both the type and the field to be pub.
-  if fs.sig.mod_path != mod_path && !fs.sig.is_pub { return TcStmtResult { ok: false, err: type_error_at(sp, "type is private"), ctx: ctx, locals: l0 }; }
+  // Visibility: crossing modules requires both the type and the field to be visible.
+  if !vis_allows(fs.sig.vis, fs.sig.mod_path, mod_path) { return TcStmtResult { ok: false, err: type_error_at(sp, "type is private"), ctx: ctx, locals: l0 }; }
 
   let mut found: bool = false;
   let mut fty: i32 = ctx.ty_bad;
-  let mut fpub: bool = false;
+  let mut fvis: i32 = ast.vis_private();
   let mut i: i32 = 0;
   while i < fs.sig.fields.len() {
     let f: StructFieldSig = fs.sig.fields.get(i);
     if f.name == field {
       found = true;
       fty = f.ty;
-      fpub = f.is_pub;
+      fvis = f.vis;
       break;
     }
     i = i + 1;
   }
   if !found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown field"), ctx: ctx, locals: l0 }; }
-  if fs.sig.mod_path != mod_path && !fpub { return TcStmtResult { ok: false, err: type_error_at(sp, "field is private"), ctx: ctx, locals: l0 }; }
+  if !vis_allows(fvis, fs.sig.mod_path, mod_path) { return TcStmtResult { ok: false, err: type_error_at(sp, "field is private"), ctx: ctx, locals: l0 }; }
 
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, rhs, fty);
   if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
