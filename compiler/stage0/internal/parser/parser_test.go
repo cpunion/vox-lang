@@ -384,6 +384,82 @@ fn main() -> i32 {
 	}
 }
 
+func TestParseCompoundAssignAllOps(t *testing.T) {
+	f := source.NewFile("test.vox", `fn main() -> i32 {
+  let mut x: i32 = 0;
+  x += 1;
+  x -= 2;
+  x *= 3;
+  x /= 4;
+  x %= 5;
+  x &= 6;
+  x |= 7;
+  x ^= 8;
+  x <<= 9;
+  x >>= 10;
+  return x;
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	body := prog.Funcs[0].Body
+	wantOps := []string{"+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"}
+	for i, want := range wantOps {
+		st := body.Stmts[1+i]
+		as, ok := st.(*ast.AssignStmt)
+		if !ok {
+			t.Fatalf("stmt %d: expected assign stmt, got %T", i, st)
+		}
+		be, ok := as.Expr.(*ast.BinaryExpr)
+		if !ok || be.Op != want {
+			t.Fatalf("stmt %d: expected binary %q, got %T", i, want, as.Expr)
+		}
+		lhs, ok := be.Left.(*ast.IdentExpr)
+		if !ok || lhs.Name != "x" {
+			t.Fatalf("stmt %d: expected lhs ident x, got %T", i, be.Left)
+		}
+	}
+}
+
+func TestParseCompoundFieldAssignAllOps(t *testing.T) {
+	f := source.NewFile("test.vox", `struct S { x: i32 }
+fn main() -> i32 {
+  let mut s: S = S { x: 0 };
+  s.x += 1;
+  s.x -= 2;
+  s.x *= 3;
+  s.x /= 4;
+  s.x %= 5;
+  s.x &= 6;
+  s.x |= 7;
+  s.x ^= 8;
+  s.x <<= 9;
+  s.x >>= 10;
+  return s.x;
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	body := prog.Funcs[0].Body
+	wantOps := []string{"+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"}
+	for i, want := range wantOps {
+		st := body.Stmts[1+i]
+		as, ok := st.(*ast.FieldAssignStmt)
+		if !ok {
+			t.Fatalf("stmt %d: expected field assign stmt, got %T", i, st)
+		}
+		be, ok := as.Expr.(*ast.BinaryExpr)
+		if !ok || be.Op != want {
+			t.Fatalf("stmt %d: expected binary %q, got %T", i, want, as.Expr)
+		}
+		if _, ok := be.Left.(*ast.MemberExpr); !ok {
+			t.Fatalf("stmt %d: expected lhs member expr, got %T", i, be.Left)
+		}
+	}
+}
+
 func TestParseMatchArmWithBlockExpr(t *testing.T) {
 	f := source.NewFile("test.vox", `enum E { A(i32), None }
 fn main() -> i32 {

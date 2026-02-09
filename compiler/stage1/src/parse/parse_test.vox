@@ -16,6 +16,22 @@ fn ty_is_vec1(tn: ast.TypeName, elem: String) -> bool {
   return tn.parts.len() == 1 && tn.parts.get(0) == "Vec" && tn.args.len() == 1 && ty_is0(tn.args.get(0), elem);
 }
 
+fn op_matches_index(op: ast.BinaryOp, idx: i32) -> bool {
+  return match idx {
+    0 => match op { ast.BinaryOp.Add => true, _ => false },
+    1 => match op { ast.BinaryOp.Sub => true, _ => false },
+    2 => match op { ast.BinaryOp.Mul => true, _ => false },
+    3 => match op { ast.BinaryOp.Div => true, _ => false },
+    4 => match op { ast.BinaryOp.Mod => true, _ => false },
+    5 => match op { ast.BinaryOp.BitAnd => true, _ => false },
+    6 => match op { ast.BinaryOp.BitOr => true, _ => false },
+    7 => match op { ast.BinaryOp.BitXor => true, _ => false },
+    8 => match op { ast.BinaryOp.Shl => true, _ => false },
+    9 => match op { ast.BinaryOp.Shr => true, _ => false },
+    _ => false,
+  };
+}
+
 fn test_parse_single_fn_return_int() -> () {
   let r: p.ParseResult = p.parse_text("fn main() -> i32 { return 0; }");
   t.assert(ok(r.err));
@@ -317,6 +333,66 @@ fn test_parse_compound_field_assign_stmt() -> () {
     _ => false,
   };
   t.assert(ok0);
+}
+
+fn test_parse_compound_assign_all_ops() -> () {
+  let src: String = "fn main() -> i32 {\n  let mut x: i32 = 0;\n  x += 1;\n  x -= 2;\n  x *= 3;\n  x /= 4;\n  x %= 5;\n  x &= 6;\n  x |= 7;\n  x ^= 8;\n  x <<= 9;\n  x >>= 10;\n  return x;\n}";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  let exprs: ast.ExprPool = r.prog.exprs;
+  let mut ok_all: bool = f.body.stmts.len() == 12;
+  let mut i: i32 = 0;
+  while ok_all && i < 10 {
+    let st: ast.Stmt = f.body.stmts.get(1 + i);
+    let ok_i: bool = match st {
+      ast.Stmt.Assign(_sp, name, id) =>
+        name == "x" &&
+        match ast.expr_pool_get(exprs, id) {
+          ast.ExprNode.Binary(op, l, _rhs) =>
+            op_matches_index(op, i) &&
+            match ast.expr_pool_get(exprs, l) { ast.ExprNode.Ident(s) => s == "x", _ => false },
+          _ => false,
+        },
+      _ => false,
+    };
+    ok_all = ok_all && ok_i;
+    i = i + 1;
+  }
+  t.assert(ok_all);
+}
+
+fn test_parse_compound_field_assign_all_ops() -> () {
+  let src: String = "struct S { x: i32 }\nfn main() -> i32 {\n  let mut s: S = S { x: 0 };\n  s.x += 1;\n  s.x -= 2;\n  s.x *= 3;\n  s.x /= 4;\n  s.x %= 5;\n  s.x &= 6;\n  s.x |= 7;\n  s.x ^= 8;\n  s.x <<= 9;\n  s.x >>= 10;\n  return s.x;\n}";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  let exprs: ast.ExprPool = r.prog.exprs;
+  let mut ok_all: bool = f.body.stmts.len() == 12;
+  let mut i: i32 = 0;
+  while ok_all && i < 10 {
+    let st: ast.Stmt = f.body.stmts.get(1 + i);
+    let ok_i: bool = match st {
+      ast.Stmt.AssignField(_sp, recv, field, id) =>
+        recv == "s" && field == "x" &&
+        match ast.expr_pool_get(exprs, id) {
+          ast.ExprNode.Binary(op, l, _rhs) =>
+            op_matches_index(op, i) &&
+            match ast.expr_pool_get(exprs, l) {
+              ast.ExprNode.Member(recv_id, name) =>
+                name == "x" && match ast.expr_pool_get(exprs, recv_id) { ast.ExprNode.Ident(s) => s == "s", _ => false },
+              _ => false,
+            },
+          _ => false,
+        },
+      _ => false,
+    };
+    ok_all = ok_all && ok_i;
+    i = i + 1;
+  }
+  t.assert(ok_all);
 }
 
 fn test_parse_struct_literal_expr() -> () {

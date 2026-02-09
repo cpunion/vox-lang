@@ -101,11 +101,21 @@ func TestTypecheckBitwiseAndShiftSmoke(t *testing.T) {
 func TestTypecheckCompoundAssignSmoke(t *testing.T) {
 	f := source.NewFile("src/main.vox", `struct S { x: i32 }
 fn main() -> i32 {
-  let mut x: i32 = 1;
-  x += 2;
-  x <<= 1;
-  let mut s: S = S { x: 3 };
-  s.x |= 1;
+  let mut x: i32 = 32;
+  x += 10;
+  x -= 2;
+  x *= 3;
+  x /= 5;
+  x %= 7;
+  x <<= 4;
+  x >>= 3;
+  x &= 3;
+  x |= 8;
+  x ^= 15;
+  let mut s: S = S { x: 1 };
+  s.x += 2;
+  s.x *= 4;
+  s.x >>= 2;
   return x + s.x;
 }`)
 	prog, pdiags := parser.Parse(f)

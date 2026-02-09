@@ -308,16 +308,25 @@ func TestBitwiseAndShiftOps(t *testing.T) {
 func TestCompoundAssignOps(t *testing.T) {
 	out := runMain(t, `struct S { x: i32 }
 fn main() -> i32 {
-  let mut x: i32 = 1;
-  x += 2;     // 3
-  x *= 3;     // 9
-  x >>= 1;    // 4
-  let mut s: S = S { x: 6 };
-  s.x &= 3;   // 2
+  let mut x: i32 = 32;
+  x += 10;    // 42
+  x -= 2;     // 40
+  x *= 3;     // 120
+  x /= 5;     // 24
+  x %= 7;     // 3
+  x <<= 4;    // 48
+  x >>= 3;    // 6
+  x &= 3;     // 2
+  x |= 8;     // 10
+  x ^= 15;    // 5
+  let mut s: S = S { x: 1 };
+  s.x += 2;   // 3
+  s.x *= 4;   // 12
+  s.x >>= 2;  // 3
   return x + s.x;
 }`)
-	if out != "6" {
-		t.Fatalf("expected 6, got %q", out)
+	if out != "8" {
+		t.Fatalf("expected 8, got %q", out)
 	}
 }
 
