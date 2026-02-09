@@ -37,6 +37,7 @@
   - 泛型调用（可显式给出类型实参）：`id[i32](1)`
   - 泛型调用（通常可省略类型实参，由实参/返回期望推导）：`id(1)`
 - 其它（Stage0 暂不实现）：`impl[T] ...`、const 泛型等。
+- 其它（当前仍未实现）：const 泛型等。
 
 ## Trait 语法（Stage1 v0）
 
@@ -357,7 +358,7 @@ pub const NAME: String = "vox";
   - 块表达式（最小子集）：`{ let x = ...; ...; tail }`
     - 支持 `let`（不可 `mut`）、表达式语句、`if` 语句
     - `if` 语句按常量条件执行选中分支；分支内绑定不泄漏到外层
-    - 暂不支持 `while`/`break`/`continue`/`return`
+    - 已支持 `while`/`break`/`continue`/`return`（最小子集，语义与运行时一致）
     - 在“需要值”的上下文中必须有 tail 表达式（无 tail 视为不支持）
     - 在 unit 上下文（例如 `if` 表达式分支仅用于语句执行）允许省略 tail
   - `-x` / `!x`
