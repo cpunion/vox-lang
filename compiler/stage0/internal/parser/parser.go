@@ -485,6 +485,15 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 				if id.Kind == lexer.TokenIdent {
 					typeParams = append(typeParams, id.Lexeme)
 				}
+				// Optional trait bounds: `T: Eq + Show`.
+				// Stage0 parser accepts this syntax for compatibility, but
+				// stage0 typechecker/codegen currently ignore generic bounds.
+				if p.match(lexer.TokenColon) {
+					_ = p.parseType()
+					for p.match(lexer.TokenPlus) {
+						_ = p.parseType()
+					}
+				}
 				if p.match(lexer.TokenComma) {
 					continue
 				}

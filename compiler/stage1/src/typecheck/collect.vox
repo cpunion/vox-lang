@@ -270,24 +270,34 @@ fn collect_enums(ctx: Ctx, w: World) -> TcCtxResult {
   return TcCtxResult { ok: true, err: TcError.None, ctx: c };
 }
 
+fn has_bound_sig(bs: Vec[TypeParamBoundSig], tp: String, trait_mod: String, trait_name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < bs.len() {
+    let b: TypeParamBoundSig = bs.get(i);
+    if b.type_param == tp && b.trait_mod_path == trait_mod && b.trait_name == trait_name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
   let mut c: Ctx = ctx;
 
   // Builtins (stage1): keep minimal and stable.
   // Higher-level helpers should live in stdlib Vox sources.
-  c.funcs.push(FuncSym { mod_path: "", name: "panic", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, is_pub: true, type_params: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "print", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, is_pub: true, type_params: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "panic", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "print", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
   // Tooling/stdlib support builtins (stage1): used by std/fs and std/process.
   // Keep these low-level and prefer std wrappers.
   let v1: ResolveTyResult = intern_vec(c, c.ty_string);
   c = v1.ctx;
   let vec_string: i32 = v1.idx;
-  c.funcs.push(FuncSym { mod_path: "", name: "__args", sig: FuncSig { params: Vec(), ret: vec_string, is_pub: true, type_params: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__exe_path", sig: FuncSig { params: Vec(), ret: c.ty_string, is_pub: true, type_params: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__read_file", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_string, is_pub: true, type_params: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__write_file", sig: FuncSig { params: vec2(c.ty_string, c.ty_string), ret: c.ty_unit, is_pub: true, type_params: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__exec", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_i32, is_pub: true, type_params: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__walk_vox_files", sig: FuncSig { params: vec1(c.ty_string), ret: vec_string, is_pub: true, type_params: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__args", sig: FuncSig { params: Vec(), ret: vec_string, is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__exe_path", sig: FuncSig { params: Vec(), ret: c.ty_string, is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__read_file", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_string, is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__write_file", sig: FuncSig { params: vec2(c.ty_string, c.ty_string), ret: c.ty_unit, is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__exec", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_i32, is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__walk_vox_files", sig: FuncSig { params: vec1(c.ty_string), ret: vec_string, is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
 
   let mut mi: i32 = 0;
   while mi < w.mods.len() {
@@ -319,7 +329,36 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       if !rr.ok {
         return TcCtxResult { ok: false, err: type_error(fd.file, "type resolve failed in fn ret"), ctx: c };
       }
-      let sig: FuncSig = FuncSig { params: ps, ret: rr.idx, is_pub: fd.is_pub, type_params: fd.type_params };
+
+      let mut tbs: Vec[TypeParamBoundSig] = Vec();
+      let mut bi: i32 = 0;
+      while bi < fd.type_param_bounds.len() {
+        let bdecl: ast.TypeParamBoundsDecl = fd.type_param_bounds.get(bi);
+        if !contains_str_local(fd.type_params, bdecl.name) {
+          return TcCtxResult { ok: false, err: type_error(fd.file, "unknown type param in bound: ".concat(bdecl.name)), ctx: c };
+        }
+        let mut bj: i32 = 0;
+        while bj < bdecl.bounds.len() {
+          let rtr: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, bdecl.bounds.get(bj));
+          if !rtr.ok {
+            return TcCtxResult { ok: false, err: type_error(fd.file, "bad trait bound"), ctx: c };
+          }
+          let tf: FindTraitResult = find_trait(c, rtr.mod_path, rtr.name);
+          if !tf.found {
+            return TcCtxResult { ok: false, err: type_error(fd.file, "unknown trait in bound"), ctx: c };
+          }
+          if rtr.mod_path != m.path && !tf.sig.is_pub {
+            return TcCtxResult { ok: false, err: type_error(fd.file, "trait bound refers to private trait"), ctx: c };
+          }
+          if !has_bound_sig(tbs, bdecl.name, rtr.mod_path, rtr.name) {
+            tbs.push(TypeParamBoundSig { type_param: bdecl.name, trait_mod_path: rtr.mod_path, trait_name: rtr.name });
+          }
+          bj = bj + 1;
+        }
+        bi = bi + 1;
+      }
+
+      let sig: FuncSig = FuncSig { params: ps, ret: rr.idx, is_pub: fd.is_pub, type_params: fd.type_params, type_param_bounds: tbs };
       c.funcs.push(FuncSym { mod_path: m.path, name: fd.name, sig: sig });
       fi = fi + 1;
     }

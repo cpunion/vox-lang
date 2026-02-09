@@ -726,3 +726,19 @@ fn main() -> i32 { return id[i32](1); }`)
 		t.Fatalf("expected 1 call type arg, got %d", len(call.TypeArgs))
 	}
 }
+
+func TestParseGenericTypeParamBoundsSyntax(t *testing.T) {
+	f := source.NewFile("test.vox", `fn eq[T: Eq + Show](x: T) -> T { return x; }
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Funcs) != 2 {
+		t.Fatalf("expected 2 funcs, got %d", len(prog.Funcs))
+	}
+	fn := prog.Funcs[0]
+	if fn.Name != "eq" || len(fn.TypeParams) != 1 || fn.TypeParams[0] != "T" {
+		t.Fatalf("unexpected generic func decl: %#v", fn)
+	}
+}

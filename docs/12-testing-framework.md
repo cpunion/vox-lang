@@ -38,7 +38,7 @@ print(msg: String);
 
 断言与测试工具由标准库提供（以 `.vox` 源码形式随 stage0 一起注入）：
 
-- `std/prelude`：`assert` / `assert_eq[T]` / `fail`
+- `std/prelude`：`assert` / `assert_eq[T: Eq]` / `fail`
 - `std/testing`：对 `std/prelude` 的薄封装，便于显式使用 `t.assert(...)` 这类风格
 
 ```vox
@@ -55,5 +55,5 @@ fn test_ok() -> () {
 
 说明：
 
-- `assert_eq` 是泛型函数（stage0 支持最小子集的泛型单态化 + 推导）。
+- `assert_eq` 是泛型函数（stage0 支持最小子集的泛型单态化 + 推导，语法支持 `T: Eq`）。
 - 目前 `assert_eq` 依赖 `!=`：因此在 stage0 里只支持 `bool/i32/i64/String` 的比较（其他类型后续再做 lowering/trait 化）。
