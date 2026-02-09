@@ -15,7 +15,7 @@ func stripRange(t typecheck.Type) typecheck.Type {
 
 func isIntType(t typecheck.Type) bool {
 	switch t.K {
-	case typecheck.TyI8, typecheck.TyU8, typecheck.TyI16, typecheck.TyU16, typecheck.TyI32, typecheck.TyU32, typecheck.TyI64, typecheck.TyU64, typecheck.TyUSize, typecheck.TyUntypedInt:
+	case typecheck.TyI8, typecheck.TyU8, typecheck.TyI16, typecheck.TyU16, typecheck.TyI32, typecheck.TyU32, typecheck.TyI64, typecheck.TyU64, typecheck.TyISize, typecheck.TyUSize, typecheck.TyUntypedInt:
 		return true
 	default:
 		return false
@@ -24,7 +24,7 @@ func isIntType(t typecheck.Type) bool {
 
 func isSignedIntType(t typecheck.Type) bool {
 	switch t.K {
-	case typecheck.TyI8, typecheck.TyI16, typecheck.TyI32, typecheck.TyI64, typecheck.TyUntypedInt:
+	case typecheck.TyI8, typecheck.TyI16, typecheck.TyI32, typecheck.TyI64, typecheck.TyISize, typecheck.TyUntypedInt:
 		return true
 	default:
 		return false
@@ -39,7 +39,7 @@ func intBitWidth(t typecheck.Type) int {
 		return 16
 	case typecheck.TyI32, typecheck.TyU32:
 		return 32
-	case typecheck.TyI64, typecheck.TyU64, typecheck.TyUSize, typecheck.TyUntypedInt:
+	case typecheck.TyI64, typecheck.TyU64, typecheck.TyISize, typecheck.TyUSize, typecheck.TyUntypedInt:
 		return 64
 	default:
 		return 0
@@ -130,7 +130,7 @@ func castIntChecked(bits uint64, from typecheck.Type, to typecheck.Type) (uint64
 	xBits := truncBits(bits, fromW)
 
 	msg := "int cast overflow"
-	if from.K == typecheck.TyI64 && to.K == typecheck.TyI32 {
+	if (from.K == typecheck.TyI64 || from.K == typecheck.TyISize) && to.K == typecheck.TyI32 {
 		msg = "i64 to i32 overflow"
 	}
 

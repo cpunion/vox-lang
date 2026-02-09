@@ -423,6 +423,11 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 				out.WriteString(cFnName("main"))
 				out.WriteString("();\n")
 				out.WriteString("  printf(\"%\" PRId64 \"\\n\", v);\n")
+			case ir.TISize:
+				out.WriteString("  int64_t v = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  printf(\"%\" PRId64 \"\\n\", v);\n")
 			case ir.TString:
 				out.WriteString("  const char* v = ")
 				out.WriteString(cFnName("main"))
@@ -445,8 +450,13 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 				out.WriteString(cFnName("main"))
 				out.WriteString("();\n")
 				out.WriteString("  return (int)rc;\n")
+			case ir.TISize:
+				out.WriteString("  int64_t rc = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  return (int)rc;\n")
 			default:
-				return "", fmt.Errorf("unsupported main return type in tool driver (expected () or i32)")
+				return "", fmt.Errorf("unsupported main return type in tool driver (expected () or i32/isize)")
 			}
 			out.WriteString("}\n")
 		default:

@@ -65,6 +65,22 @@ func TestI16LiteralOutOfRangeRejected(t *testing.T) {
 	}
 }
 
+func TestISizeSmoke(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main() -> i32 {
+  let a: isize = -5;
+  let b: i64 = a as i64;
+  return b as i32;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestQualifiedCallRequiresImport(t *testing.T) {
 	f := source.NewFile("src/main.vox", `fn main() -> i32 { return dep.one(); }`)
 	prog, pdiags := parser.Parse(f)

@@ -179,6 +179,8 @@ func (g *gen) irTypeFromChecked(t typecheck.Type) (ir.Type, error) {
 		return ir.Type{K: ir.TI64}, nil
 	case typecheck.TyU64:
 		return ir.Type{K: ir.TU64}, nil
+	case typecheck.TyISize:
+		return ir.Type{K: ir.TISize}, nil
 	case typecheck.TyUSize:
 		return ir.Type{K: ir.TUSize}, nil
 	case typecheck.TyString:
@@ -213,7 +215,7 @@ func (g *gen) zeroValue(t ir.Type) (ir.Value, error) {
 		return nil, nil
 	case ir.TBool:
 		return &ir.ConstBool{V: false}, nil
-	case ir.TI8, ir.TU8, ir.TI16, ir.TU16, ir.TI32, ir.TU32, ir.TI64, ir.TU64, ir.TUSize:
+	case ir.TI8, ir.TU8, ir.TI16, ir.TU16, ir.TI32, ir.TU32, ir.TI64, ir.TU64, ir.TISize, ir.TUSize:
 		return &ir.ConstInt{Ty: t, Bits: 0}, nil
 	case ir.TString:
 		return &ir.ConstStr{S: ""}, nil

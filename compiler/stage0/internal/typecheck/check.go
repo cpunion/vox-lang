@@ -348,7 +348,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			// Enum equality is only supported when comparing against a unit variant value
 			// (e.g. `x == E.None`), which lowers to a tag comparison.
 			switch l.K {
-			case TyBad, TyBool, TyI8, TyU8, TyI16, TyU16, TyI32, TyU32, TyI64, TyU64, TyUSize, TyString:
+			case TyBad, TyBool, TyI8, TyU8, TyI16, TyU16, TyI32, TyU32, TyI64, TyU64, TyISize, TyUSize, TyString:
 				// ok
 			case TyEnum:
 				if !c.isEnumUnitValue(e.Left) && !c.isEnumUnitValue(e.Right) {
@@ -1480,7 +1480,7 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 		switch baseTy.K {
 		case TyI8, TyI16, TyI32:
 			kind = ToStrI32
-		case TyI64:
+		case TyI64, TyISize:
 			kind = ToStrI64
 		case TyU8, TyU16, TyU32, TyU64, TyUSize:
 			kind = ToStrU64

@@ -346,6 +346,8 @@ func astTypeFromType(t Type, at source.Span) ast.Type {
 		return &ast.NamedType{Parts: []string{"i64"}, S: at}
 	case TyU64:
 		return &ast.NamedType{Parts: []string{"u64"}, S: at}
+	case TyISize:
+		return &ast.NamedType{Parts: []string{"isize"}, S: at}
 	case TyUSize:
 		return &ast.NamedType{Parts: []string{"usize"}, S: at}
 	case TyString:

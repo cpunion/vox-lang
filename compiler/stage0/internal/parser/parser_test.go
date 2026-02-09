@@ -144,6 +144,30 @@ fn main() -> i32 { return 0; }`)
 	}
 }
 
+func TestParseRangeTypeAliasDeclISize(t *testing.T) {
+	f := source.NewFile("test.vox", `type Tiny = @range(-3..=3) isize
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Types) != 1 {
+		t.Fatalf("expected 1 type alias, got %d", len(prog.Types))
+	}
+	td := prog.Types[0]
+	rt, ok := td.Type.(*ast.RangeType)
+	if !ok {
+		t.Fatalf("expected RangeType, got %#v", td.Type)
+	}
+	if rt.Lo != -3 || rt.Hi != 3 {
+		t.Fatalf("unexpected bounds: %#v", rt)
+	}
+	bt, ok := rt.Base.(*ast.NamedType)
+	if !ok || len(bt.Parts) != 1 || bt.Parts[0] != "isize" {
+		t.Fatalf("unexpected base type: %#v", rt.Base)
+	}
+}
+
 func TestParseConstDecl(t *testing.T) {
 	f := source.NewFile("test.vox", `const N: i32 = 10
 	pub const M: i64 = 20;

@@ -21,6 +21,7 @@ const (
 	TU32
 	TI64
 	TU64
+	TISize
 	TUSize
 	TString
 	TStruct
@@ -58,6 +59,8 @@ func (t Type) String() string {
 		return "i64"
 	case TU64:
 		return "u64"
+	case TISize:
+		return "isize"
 	case TUSize:
 		return "usize"
 	case TString:
@@ -181,6 +184,8 @@ func (c *ConstInt) fmtString() string {
 	case TI32:
 		return fmt.Sprintf("%d", int64(int32(c.Bits)))
 	case TI64:
+		return fmt.Sprintf("%d", int64(c.Bits))
+	case TISize:
 		return fmt.Sprintf("%d", int64(c.Bits))
 	case TU8, TU16, TU32, TU64, TUSize:
 		return strconv.FormatUint(c.Bits, 10)

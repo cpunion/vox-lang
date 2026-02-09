@@ -584,7 +584,7 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 
 func isIntType(t ir.Type) bool {
 	switch t.K {
-	case ir.TI8, ir.TU8, ir.TI16, ir.TU16, ir.TI32, ir.TU32, ir.TI64, ir.TU64, ir.TUSize:
+	case ir.TI8, ir.TU8, ir.TI16, ir.TU16, ir.TI32, ir.TU32, ir.TI64, ir.TU64, ir.TISize, ir.TUSize:
 		return true
 	default:
 		return false
@@ -599,7 +599,7 @@ func intBits(k ir.TypeKind) int {
 		return 16
 	case ir.TI32, ir.TU32:
 		return 32
-	case ir.TI64, ir.TU64, ir.TUSize:
+	case ir.TI64, ir.TU64, ir.TISize, ir.TUSize:
 		return 64
 	default:
 		return 0
@@ -608,7 +608,7 @@ func intBits(k ir.TypeKind) int {
 
 func intSigned(k ir.TypeKind) bool {
 	switch k {
-	case ir.TI8, ir.TI16, ir.TI32, ir.TI64:
+	case ir.TI8, ir.TI16, ir.TI32, ir.TI64, ir.TISize:
 		return true
 	default:
 		return false
@@ -623,7 +623,7 @@ func intMinMacro(k ir.TypeKind) string {
 		return "INT16_MIN"
 	case ir.TI32:
 		return "INT32_MIN"
-	case ir.TI64:
+	case ir.TI64, ir.TISize:
 		return "INT64_MIN"
 	default:
 		return "INT64_MIN"
@@ -638,7 +638,7 @@ func intMaxMacro(k ir.TypeKind) string {
 		return "INT16_MAX"
 	case ir.TI32:
 		return "INT32_MAX"
-	case ir.TI64:
+	case ir.TI64, ir.TISize:
 		return "INT64_MAX"
 	default:
 		return "INT64_MAX"
@@ -668,7 +668,7 @@ func cUnsignedType(t ir.Type) (string, error) {
 		return "uint16_t", nil
 	case ir.TI32, ir.TU32:
 		return "uint32_t", nil
-	case ir.TI64, ir.TU64, ir.TUSize:
+	case ir.TI64, ir.TU64, ir.TISize, ir.TUSize:
 		return "uint64_t", nil
 	default:
 		return "", fmt.Errorf("not an int type: %s", t.String())

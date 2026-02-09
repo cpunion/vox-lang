@@ -66,13 +66,15 @@ func formatInt(bits uint64, ty typecheck.Type) string {
 		base = *base.Base
 	}
 	switch base.K {
-	case typecheck.TyU8, typecheck.TyU32, typecheck.TyU64, typecheck.TyUSize:
+	case typecheck.TyU8, typecheck.TyU16, typecheck.TyU32, typecheck.TyU64, typecheck.TyUSize:
 		return fmt.Sprintf("%d", bits)
 	case typecheck.TyI8:
 		return fmt.Sprintf("%d", int64(int8(bits)))
+	case typecheck.TyI16:
+		return fmt.Sprintf("%d", int64(int16(bits)))
 	case typecheck.TyI32:
 		return fmt.Sprintf("%d", int64(int32(bits)))
-	case typecheck.TyI64, typecheck.TyUntypedInt:
+	case typecheck.TyI64, typecheck.TyISize, typecheck.TyUntypedInt:
 		return fmt.Sprintf("%d", int64(bits))
 	default:
 		return fmt.Sprintf("%d", int64(bits))

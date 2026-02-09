@@ -102,6 +102,8 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 			return Type{K: TyI64}
 		case "u64":
 			return Type{K: TyU64}
+		case "isize":
+			return Type{K: TyISize}
 		case "usize":
 			return Type{K: TyUSize}
 		case "bool":

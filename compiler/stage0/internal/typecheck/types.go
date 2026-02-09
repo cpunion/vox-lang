@@ -20,6 +20,7 @@ const (
 	TyU32
 	TyI64
 	TyU64
+	TyISize
 	TyUSize
 	TyString
 	TyUntypedInt

@@ -29,6 +29,9 @@ func cType(t ir.Type) string {
 		return "int64_t"
 	case ir.TU64:
 		return "uint64_t"
+	case ir.TISize:
+		// Stage0 v0: isize is fixed to 64-bit.
+		return "int64_t"
 	case ir.TUSize:
 		// Stage0 v0: usize is fixed to 64-bit.
 		return "uint64_t"

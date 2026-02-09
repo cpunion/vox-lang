@@ -18,7 +18,7 @@ func truncBits(u uint64, w int) uint64 {
 
 func isIntType(t typecheck.Type) bool {
 	switch t.K {
-	case typecheck.TyI8, typecheck.TyU8, typecheck.TyI32, typecheck.TyU32, typecheck.TyI64, typecheck.TyU64, typecheck.TyUSize:
+	case typecheck.TyI8, typecheck.TyU8, typecheck.TyI16, typecheck.TyU16, typecheck.TyI32, typecheck.TyU32, typecheck.TyI64, typecheck.TyU64, typecheck.TyISize, typecheck.TyUSize:
 		return true
 	default:
 		return false
@@ -37,7 +37,7 @@ func isIntLikeType(t typecheck.Type) bool {
 
 func isUnsignedIntType(t typecheck.Type) bool {
 	switch t.K {
-	case typecheck.TyU8, typecheck.TyU32, typecheck.TyU64, typecheck.TyUSize:
+	case typecheck.TyU8, typecheck.TyU16, typecheck.TyU32, typecheck.TyU64, typecheck.TyUSize:
 		return true
 	default:
 		return false
@@ -48,9 +48,11 @@ func intBitWidth(t typecheck.Type) int {
 	switch t.K {
 	case typecheck.TyI8, typecheck.TyU8:
 		return 8
+	case typecheck.TyI16, typecheck.TyU16:
+		return 16
 	case typecheck.TyI32, typecheck.TyU32:
 		return 32
-	case typecheck.TyI64, typecheck.TyU64, typecheck.TyUSize, typecheck.TyUntypedInt:
+	case typecheck.TyI64, typecheck.TyU64, typecheck.TyISize, typecheck.TyUSize, typecheck.TyUntypedInt:
 		return 64
 	default:
 		return 0
@@ -263,10 +265,13 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	isEnum := scrutBase.K == typecheck.TyEnum
 	isInt := scrutBase.K == typecheck.TyI8 ||
 		scrutBase.K == typecheck.TyU8 ||
+		scrutBase.K == typecheck.TyI16 ||
+		scrutBase.K == typecheck.TyU16 ||
 		scrutBase.K == typecheck.TyI32 ||
 		scrutBase.K == typecheck.TyU32 ||
 		scrutBase.K == typecheck.TyI64 ||
 		scrutBase.K == typecheck.TyU64 ||
+		scrutBase.K == typecheck.TyISize ||
 		scrutBase.K == typecheck.TyUSize ||
 		scrutBase.K == typecheck.TyUntypedInt
 	isStr := scrutTy.K == typecheck.TyString

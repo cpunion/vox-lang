@@ -44,7 +44,7 @@ func cIntConst(x *ir.ConstInt) string {
 		s = strconv.FormatInt(int64(int16(x.Bits)), 10)
 	case ir.TI32:
 		s = strconv.FormatInt(int64(int32(x.Bits)), 10)
-	case ir.TI64:
+	case ir.TI64, ir.TISize:
 		s = strconv.FormatInt(int64(x.Bits), 10)
 	default:
 		s = strconv.FormatUint(x.Bits, 10)
@@ -62,7 +62,7 @@ func cIntConst(x *ir.ConstInt) string {
 		return "INT32_C(" + s + ")"
 	case ir.TU32:
 		return "UINT32_C(" + s + ")"
-	case ir.TI64:
+	case ir.TI64, ir.TISize:
 		return "INT64_C(" + s + ")"
 	case ir.TU64, ir.TUSize:
 		return "UINT64_C(" + s + ")"
