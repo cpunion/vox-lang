@@ -388,6 +388,14 @@ func (p *Parser) parseTraitDecl() *ast.TraitDecl {
 	if nameTok.Kind != lexer.TokenIdent {
 		return nil
 	}
+	// Compatibility parse: optional supertraits in stage1 syntax.
+	// Example: `trait Child: A + B { ... }`
+	if p.match(lexer.TokenColon) {
+		_ = p.parseType()
+		for p.match(lexer.TokenPlus) {
+			_ = p.parseType()
+		}
+	}
 	lbrace := p.expect(lexer.TokenLBrace, "expected `{` after trait name")
 	if lbrace.Kind != lexer.TokenLBrace {
 		return nil

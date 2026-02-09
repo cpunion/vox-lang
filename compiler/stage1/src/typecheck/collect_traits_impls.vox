@@ -45,6 +45,16 @@ fn has_trait_name(ctx: Ctx, mod_path: String, name: String) -> bool {
   return false;
 }
 
+fn has_super_sig(ss: Vec[TraitSuperSig], mod_path: String, name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < ss.len() {
+    let s: TraitSuperSig = ss.get(i);
+    if s.mod_path == mod_path && s.name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn trait_method_exists(ms: Vec[TraitMethodSig], name: String) -> bool {
   let mut i: i32 = 0;
   while i < ms.len() {
@@ -117,6 +127,14 @@ fn trait_method_sig_for(ctx: Ctx, ms: TraitMethodSig, for_ty: i32) -> FuncSig {
   return FuncSig { params: ps, ret: ret, is_pub: false, type_params: Vec(), type_param_bounds: Vec() };
 }
 
+fn impl_decl_file(w: World, mod_path: String, decl_idx: i32) -> String {
+  let fm: FindModResult = find_mod(w, mod_path);
+  if !fm.found { return ""; }
+  let m: WorldModule = w.mods.get(fm.idx);
+  if decl_idx < 0 || decl_idx >= m.prog.impls.len() { return ""; }
+  return m.prog.impls.get(decl_idx).file;
+}
+
 fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
   let mut c: Ctx = ctx;
   let mut mi: i32 = 0;
@@ -135,6 +153,25 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
       let ir: ImportsResult = build_imports(w, m.path, m.prog.imports, td.file);
       if !ir.ok { return TcCtxResult { ok: false, err: ir.err, ctx: c }; }
       let imps: Imports = ir.imps;
+
+      let mut supers: Vec[TraitSuperSig] = Vec();
+      let mut si: i32 = 0;
+      while si < td.supers.len() {
+        let sr: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, td.supers.get(si));
+        if !sr.ok { return TcCtxResult { ok: false, err: type_error(td.file, "bad supertrait path"), ctx: c }; }
+        let sf: FindTraitResult = find_trait(c, sr.mod_path, sr.name);
+        if !sf.found { return TcCtxResult { ok: false, err: type_error(td.file, "unknown supertrait"), ctx: c }; }
+        if sr.mod_path != m.path && !sf.sig.is_pub {
+          return TcCtxResult { ok: false, err: type_error(td.file, "supertrait is private"), ctx: c };
+        }
+        if sr.mod_path == m.path && sr.name == td.name {
+          return TcCtxResult { ok: false, err: type_error(td.file, "trait cannot inherit from itself"), ctx: c };
+        }
+        if !has_super_sig(supers, sr.mod_path, sr.name) {
+          supers.push(TraitSuperSig { mod_path: sr.mod_path, name: sr.name });
+        }
+        si = si + 1;
+      }
 
       let mut ms: Vec[TraitMethodSig] = Vec();
       let mut fi: i32 = 0;
@@ -172,7 +209,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         fi = fi + 1;
       }
 
-      c.traits.push(TraitSig { mod_path: m.path, name: td.name, is_pub: td.is_pub, methods: ms });
+      c.traits.push(TraitSig { mod_path: m.path, name: td.name, is_pub: td.is_pub, supers: supers, methods: ms });
       ti = ti + 1;
     }
     mi = mi + 1;
@@ -315,5 +352,27 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
     }
     mi = mi + 1;
   }
+
+  // Validate supertrait requirements after all impls are collected (order-independent).
+  let mut ii2: i32 = 0;
+  while ii2 < c.impls.len() {
+    let isg: ImplSig = c.impls.get(ii2);
+    let tf2: FindTraitResult = find_trait(c, isg.trait_mod_path, isg.trait_name);
+    if !tf2.found {
+      return TcCtxResult { ok: false, err: type_error(impl_decl_file(w, isg.mod_path, isg.decl_idx), "unknown trait in impl"), ctx: c };
+    }
+    let mut si2: i32 = 0;
+    while si2 < tf2.sig.supers.len() {
+      let sup: TraitSuperSig = tf2.sig.supers.get(si2);
+      let fi2: FindImplResult = find_impl(c, sup.mod_path, sup.name, isg.for_ty);
+      if !fi2.found {
+        let msg: String = "impl of ".concat(isg.trait_name).concat(" requires supertrait ").concat(sup.name);
+        return TcCtxResult { ok: false, err: type_error(impl_decl_file(w, isg.mod_path, isg.decl_idx), msg), ctx: c };
+      }
+      si2 = si2 + 1;
+    }
+    ii2 = ii2 + 1;
+  }
+
   return TcCtxResult { ok: true, err: TcError.None, ctx: c };
 }

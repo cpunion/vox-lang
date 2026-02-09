@@ -594,6 +594,22 @@ fn main() -> i32 { return 0; }`)
 	}
 }
 
+func TestParseTraitSupertraitsCompat(t *testing.T) {
+	f := source.NewFile("test.vox", `trait Child: A + B {
+  fn go(x: Self) -> i32;
+}
+struct I { v: i32 }
+impl Child for I { fn go(x: I) -> i32 { return 1; } }
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Traits) != 1 {
+		t.Fatalf("expected 1 trait, got %d", len(prog.Traits))
+	}
+}
+
 func TestParseQualifiedTypePath(t *testing.T) {
 	f := source.NewFile("test.vox", `import "a"
 fn id(x: a.S) -> a.S { return x; }
