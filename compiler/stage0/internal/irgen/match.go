@@ -119,6 +119,15 @@ func (g *gen) genPatTest(pat ast.Pattern, v ir.Value, vTy typecheck.Type, succ, 
 		g.emit(&ir.Cmp{Dst: cmpTmp, Op: ir.CmpEq, Ty: cmpTy, A: v, B: &ir.ConstInt{Ty: cmpTy, Bits: bits}})
 		g.term(&ir.CondBr{Cond: cmpTmp, Then: succ.Name, Else: fail.Name})
 		return nil
+	case *ast.BoolPat:
+		if vTy.K != typecheck.TyBool {
+			return fmt.Errorf("bool pattern requires bool scrutinee")
+		}
+		cmpTmp := g.newTemp()
+		var b ir.Value = &ir.ConstBool{V: p.Value}
+		g.emit(&ir.Cmp{Dst: cmpTmp, Op: ir.CmpEq, Ty: ir.Type{K: ir.TBool}, A: v, B: b})
+		g.term(&ir.CondBr{Cond: cmpTmp, Then: succ.Name, Else: fail.Name})
+		return nil
 	case *ast.StrPat:
 		if vTy.K != typecheck.TyString {
 			return fmt.Errorf("string pattern requires String scrutinee")
@@ -202,7 +211,7 @@ func (g *gen) genPatBinds(pat ast.Pattern, v ir.Value, vTy typecheck.Type) error
 	switch p := pat.(type) {
 	case *ast.WildPat:
 		return nil
-	case *ast.IntPat, *ast.StrPat:
+	case *ast.IntPat, *ast.BoolPat, *ast.StrPat:
 		return nil
 	case *ast.BindPat:
 		if p.Name == "" || p.Name == "_" {
@@ -274,9 +283,10 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 		scrutBase.K == typecheck.TyISize ||
 		scrutBase.K == typecheck.TyUSize ||
 		scrutBase.K == typecheck.TyUntypedInt
+	isBool := scrutBase.K == typecheck.TyBool
 	isStr := scrutTy.K == typecheck.TyString
-	if !isEnum && !isInt && !isStr {
-		return nil, fmt.Errorf("match scrutinee must be enum/int/String")
+	if !isEnum && !isInt && !isBool && !isStr {
+		return nil, fmt.Errorf("match scrutinee must be enum/int/bool/String")
 	}
 
 	resTyChecked := g.p.ExprTypes[m]

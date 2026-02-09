@@ -1164,6 +1164,10 @@ func (p *Parser) parsePattern() ast.Pattern {
 		tok := p.advance()
 		return &ast.IntPat{Text: tok.Lexeme, S: tok.Span}
 	}
+	if p.at(lexer.TokenTrue) || p.at(lexer.TokenFalse) {
+		tok := p.advance()
+		return &ast.BoolPat{Value: tok.Kind == lexer.TokenTrue, S: tok.Span}
+	}
 	if p.at(lexer.TokenString) {
 		tok := p.advance()
 		return &ast.StrPat{Text: tok.Lexeme, S: tok.Span}

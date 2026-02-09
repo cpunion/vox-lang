@@ -98,6 +98,9 @@ func clonePat(p ast.Pattern) ast.Pattern {
 	case *ast.IntPat:
 		cp := *x
 		return &cp
+	case *ast.BoolPat:
+		cp := *x
+		return &cp
 	case *ast.StrPat:
 		cp := *x
 		return &cp

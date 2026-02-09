@@ -301,7 +301,7 @@ func (e *UnaryExpr) Span() source.Span { return e.S }
 
 // AsExpr is a type cast:
 //
-//   expr as Type
+//	expr as Type
 //
 // Stage0 v0 only supports numeric casts between i32 and i64 (with checked downcast).
 type AsExpr struct {
@@ -431,6 +431,14 @@ type IntPat struct {
 
 func (*IntPat) patNode()            {}
 func (p *IntPat) Span() source.Span { return p.S }
+
+type BoolPat struct {
+	Value bool
+	S     source.Span
+}
+
+func (*BoolPat) patNode()            {}
+func (p *BoolPat) Span() source.Span { return p.S }
 
 type StrPat struct {
 	Text string

@@ -520,6 +520,19 @@ func TestParseMatchIntAndStrPatterns(t *testing.T) {
 	}
 }
 
+func TestParseMatchBoolPatterns(t *testing.T) {
+	f := source.NewFile("test.vox", `fn main(b: bool) -> i32 {
+  return match b {
+    true => 1,
+    false => 0,
+  };
+}`)
+	_, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+}
+
 func TestParsePubDecls(t *testing.T) {
 	f := source.NewFile("test.vox", `pub struct S { pub x: i32, y: i32 }
 pub enum E { A(i32), None }

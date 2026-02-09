@@ -137,6 +137,28 @@ func TestLowerMatchIntAndStrPatterns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	f3 := source.NewFile("src/main.vox", `fn main(b: bool) -> i32 {
+	  return match b {
+	    true => 1,
+	    false => 0,
+	  };
+	}`)
+	prog, pdiags = parser.Parse(f3)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags = typecheck.Check(prog, typecheck.Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	irp, err = Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(irp.Format(), "cmp_eq") < 1 {
+		t.Fatalf("expected bool match to lower via cmp_eq; got:\n%s", irp.Format())
+	}
 }
 
 func TestLowerMatchNestedVariantPatterns(t *testing.T) {

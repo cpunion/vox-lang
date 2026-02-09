@@ -568,6 +568,76 @@ func TestMatchIntAndStrPatternsTypecheck(t *testing.T) {
 	}
 }
 
+func TestMatchBoolPatternsTypecheck(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main(b: bool) -> i32 {
+  return match b {
+    true => 1,
+    false => 0,
+  };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestMatchBoolPatternsNonExhaustiveRejected(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main(b: bool) -> i32 {
+  return match b {
+    true => 1,
+  };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "missing bool coverage") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected bool exhaustiveness diagnostic, got: %+v", tdiags.Items)
+	}
+}
+
+func TestMatchBoolPatternTypeMismatchRejected(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main(x: i32) -> i32 {
+  return match x {
+    true => 1,
+    _ => 0,
+  };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "bool pattern only allowed when scrutinee is bool") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected bool pattern mismatch diagnostic, got: %+v", tdiags.Items)
+	}
+}
+
 func TestTypeAliasResolves(t *testing.T) {
 	f := source.NewFile("src/main.vox", `type I = i32
 type V = Vec[I]

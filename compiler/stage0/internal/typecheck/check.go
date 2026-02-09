@@ -856,9 +856,10 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		scrutBase := stripRange(scrutTy)
 		isEnum := scrutBase.K == TyEnum
 		isInt := isIntType(scrutBase) || scrutBase.K == TyUntypedInt
+		isBool := scrutBase.K == TyBool
 		isStr := scrutBase.K == TyString
-		if !isEnum && !isInt && !isStr {
-			c.errorAt(e.S, "match scrutinee must be enum/int/String (stage0)")
+		if !isEnum && !isInt && !isBool && !isStr {
+			c.errorAt(e.S, "match scrutinee must be enum/int/bool/String (stage0)")
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 		var esig EnumSig
@@ -884,6 +885,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		seenVariantFull := map[string]bool{} // for multi-payload variants
 		hasWild := false
 		seenInt := map[string]bool{}
+		seenBool := map[bool]bool{}
 		seenStr := map[string]bool{}
 		coveredAll := false
 
@@ -927,6 +929,18 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 						} else {
 							c.errorAt(p.S, "integer pattern out of range for "+base.String())
 						}
+					}
+				}
+			case *ast.BoolPat:
+				if !isBool {
+					c.errorAt(p.S, "bool pattern only allowed when scrutinee is bool (stage0)")
+				} else {
+					if seenBool[p.Value] {
+						c.errorAt(arm.S, "unreachable match arm")
+					}
+					seenBool[p.Value] = true
+					if seenBool[true] && seenBool[false] {
+						coveredAll = true
 					}
 				}
 			case *ast.StrPat:
@@ -1060,9 +1074,15 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				}
 			}
 		} else {
-			// Non-enum scrutinee: require a wildcard/bind arm for exhaustiveness.
-			if !hasWild {
-				c.errorAt(e.S, "non-exhaustive match, missing wildcard arm `_`")
+			if isBool {
+				if !hasWild && !(seenBool[true] && seenBool[false]) {
+					c.errorAt(e.S, "non-exhaustive match, missing bool coverage for `true`/`false` or wildcard `_`")
+				}
+			} else {
+				// Non-enum scrutinee: require a wildcard/bind arm for exhaustiveness.
+				if !hasWild {
+					c.errorAt(e.S, "non-exhaustive match, missing wildcard arm `_`")
+				}
 			}
 		}
 		return c.setExprType(ex, resultTy)
@@ -1100,6 +1120,22 @@ func (c *checker) patsCoverAll(expected Type, pats []ast.Pattern) bool {
 		}
 	}
 	base := stripRange(expected)
+	if base.K == TyBool {
+		seenTrue := false
+		seenFalse := false
+		for _, p := range pats {
+			bp, ok := p.(*ast.BoolPat)
+			if !ok {
+				continue
+			}
+			if bp.Value {
+				seenTrue = true
+			} else {
+				seenFalse = true
+			}
+		}
+		return seenTrue && seenFalse
+	}
 	if base.K != TyEnum {
 		return false
 	}
@@ -1207,6 +1243,11 @@ func (c *checker) checkMatchPat(p ast.Pattern, expected Type) {
 		if i64v >= 0 && uint64(i64v) > max {
 			c.errorAt(x.S, "integer pattern out of range for "+base.String())
 			return
+		}
+		return
+	case *ast.BoolPat:
+		if stripRange(expected).K != TyBool {
+			c.errorAt(x.S, "bool pattern only allowed on bool fields (stage0)")
 		}
 		return
 	case *ast.StrPat:

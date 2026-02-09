@@ -52,6 +52,12 @@ func (rt *Runtime) matchPatInto(p ast.Pattern, v Value, expected typecheck.Type,
 		}
 		return true, nil
 
+	case *ast.BoolPat:
+		if expected.K != typecheck.TyBool || v.K != VBool {
+			return false, nil
+		}
+		return v.B == p.Value, nil
+
 	case *ast.StrPat:
 		if v.K != VString {
 			return false, nil

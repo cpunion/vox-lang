@@ -213,6 +213,19 @@ func TestInterpMatchStringPatterns(t *testing.T) {
 	}
 }
 
+func TestInterpMatchBoolPatterns(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+	  let b: bool = true;
+	  return match b {
+	    true => 1,
+	    false => 0,
+	  };
+	}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
 func TestInterpMatchNestedVariantPatterns(t *testing.T) {
 	out := runMain(t, `enum O { Some(i32), None }
 enum R { Ok(O), Err(i32) }
