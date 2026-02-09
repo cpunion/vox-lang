@@ -139,6 +139,7 @@ struct ParseTypeParamsResult { p: Parser, tps: Vec[String], tpbs: Vec[ast.TypePa
 struct ParseWhereBoundsResult { p: Parser, tpbs: Vec[ast.TypeParamBoundsDecl] }
 struct ParseBracedExprResult { p: Parser, id: i32 }
 struct ParseTypeDeclResult { p: Parser, is_union: bool, t: ast.TypeAliasDecl, e: ast.EnumDecl }
+struct ParsePubResult { p: Parser, is_pub: bool }
 
 fn dummy_token() -> lex.Token {
   return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0 };
@@ -1314,11 +1315,9 @@ fn parse_where_bounds(p: Parser) -> ParseWhereBoundsResult {
 fn parse_field_decl(p: Parser) -> ParseFieldResult {
 	  let mut q: Parser = p;
 	  let mut is_pub: bool = false;
-	  if kind_is(peek_kind(q), lex.TokenKind.KwPub) {
-	    let ar1: AdvanceResult = advance(q);
-	    q = ar1.p;
-	    is_pub = true;
-	  }
+	  let pr: ParsePubResult = parse_pub_marker(q);
+	  q = pr.p;
+	  is_pub = pr.is_pub;
 	  let r2: ParseIdentResult = parse_ident(q);
 	  let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.Colon);
 	  let r4: ParseTypeResult = parse_type_name(ar3.p);
@@ -1725,6 +1724,30 @@ fn parse_params(p: Parser) -> ParseParamsResult {
   return ParseParamsResult { p: q, params: params };
 }
 
+fn parse_pub_marker(p: Parser) -> ParsePubResult {
+  if !kind_is(peek_kind(p), lex.TokenKind.KwPub) {
+    return ParsePubResult { p: p, is_pub: false };
+  }
+  let ar1: AdvanceResult = advance(p);
+  let mut q: Parser = ar1.p;
+  if kind_is(peek_kind(q), lex.TokenKind.LParen) {
+    let ar2: AdvanceResult = advance(q);
+    let r3: ParseIdentResult = parse_ident(ar2.p);
+    q = r3.p;
+    // Stage1 v0: accept syntax `pub(crate)` / `pub(super)`.
+    if r3.name != "crate" && r3.name != "super" {
+      let mut qq: Parser = q;
+      let at: i32 = peek(q).start;
+      qq.has_err = true;
+      qq.err = ParseError.UnexpectedToken(lex.TokenKind.Ident, peek_kind(q), at);
+      q = qq;
+    }
+    let ar4: AdvanceResult = expect(q, lex.TokenKind.RParen);
+    q = ar4.p;
+  }
+  return ParsePubResult { p: q, is_pub: true };
+}
+
 		fn parse_program(p: Parser) -> ParseProgramResult {
 		  let mut q: Parser = p;
 		  let mut imports: Vec[ast.ImportDecl] = Vec();
@@ -1743,11 +1766,9 @@ fn parse_params(p: Parser) -> ParseParamsResult {
 	    } else {
 	      // optional `pub`
 	      let mut is_pub: bool = false;
-	      if kind_is(peek_kind(q), lex.TokenKind.KwPub) {
-	        let ar1: AdvanceResult = advance(q);
-	        q = ar1.p;
-	        is_pub = true;
-	      }
+	      let pr: ParsePubResult = parse_pub_marker(q);
+	      q = pr.p;
+	      is_pub = pr.is_pub;
 	      let k: lex.TokenKind = peek_kind(q);
 	      if kind_is(k, lex.TokenKind.KwType) {
 	        let r: ParseTypeDeclResult = parse_type_decl(q, is_pub);
