@@ -46,6 +46,41 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
     let pr: PatLocalsResult = tc_pat(ctx, mod_path, imps, sr.ty, scrut_t, arm.pat, lr);
     if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
+    // Unreachable arm detection (Stage0/Stage1 v0):
+    // - Any arm after a `_` / bind arm is unreachable.
+    // - Enum: if previous arms already cover the entire match, later arms are unreachable.
+    // - Enum: if previous arms already cover the payload space of a specific variant, later arms for that variant are unreachable.
+    // - Int/String: duplicate literal arms are unreachable.
+    if arms_has_wild_or_bind(arms, ai) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(pat_span(arm.pat), "unreachable match arm") };
+    }
+    if is_enum {
+      if enum_covered_by_arms(ctx, es, arms, ai) {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(pat_span(arm.pat), "unreachable match arm") };
+      }
+      if match arm.pat { ast.Pat.EnumVariant(_sp, _ep, _vn, _args) => true, _ => false } {
+        let vn: String = match arm.pat { ast.Pat.EnumVariant(_sp, _ep, vname, _args) => vname, _ => "" };
+        let vidx: i32 = enum_variant_index(es, vn);
+        if vidx >= 0 && enum_variant_covered_by_arms(ctx, es, vidx, arms, ai) {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(pat_span(arm.pat), "unreachable match arm") };
+        }
+      }
+    } else if is_int {
+      if match arm.pat { ast.Pat.Int(_sp, _t) => true, _ => false } {
+        let lit: String = match arm.pat { ast.Pat.Int(_sp, t) => t, _ => "" };
+        if arms_has_int_lit(arms, ai, lit) {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(pat_span(arm.pat), "unreachable match arm") };
+        }
+      }
+    } else if is_str {
+      if match arm.pat { ast.Pat.Str(_sp, _t) => true, _ => false } {
+        let lit: String = match arm.pat { ast.Pat.Str(_sp, t) => t, _ => "" };
+        if arms_has_str_lit(arms, ai, lit) {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(pat_span(arm.pat), "unreachable match arm") };
+        }
+      }
+    }
+
     if match arm.pat { ast.Pat.Wild(_sp) => true, ast.Pat.Bind(_sp, _n) => true, _ => false } { has_wild = true; }
 
     let want: i32 = out_ty;
@@ -132,8 +167,112 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
 }
 
+fn pat_span(p: ast.Pat) -> ast.Span {
+  return match p {
+    ast.Pat.Wild(sp) => sp,
+    ast.Pat.Bind(sp, _n) => sp,
+    ast.Pat.Int(sp, _t) => sp,
+    ast.Pat.Str(sp, _t) => sp,
+    ast.Pat.EnumVariant(sp, _ep, _vn, _args) => sp,
+  };
+}
+
 fn is_wild_or_bind(p: ast.Pat) -> bool {
   return match p { ast.Pat.Wild(_sp) => true, ast.Pat.Bind(_sp, _n) => true, _ => false };
+}
+
+fn arms_has_wild_or_bind(arms: Vec[ast.MatchArm], upto: i32) -> bool {
+  let mut i: i32 = 0;
+  while i < upto {
+    let p: ast.Pat = arms.get(i).pat;
+    if is_wild_or_bind(p) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn arms_has_int_lit(arms: Vec[ast.MatchArm], upto: i32, lit: String) -> bool {
+  let mut i: i32 = 0;
+  while i < upto {
+    let p: ast.Pat = arms.get(i).pat;
+    if match p { ast.Pat.Int(_sp, t) => t == lit, _ => false } { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn arms_has_str_lit(arms: Vec[ast.MatchArm], upto: i32, lit: String) -> bool {
+  let mut i: i32 = 0;
+  while i < upto {
+    let p: ast.Pat = arms.get(i).pat;
+    if match p { ast.Pat.Str(_sp, t) => t == lit, _ => false } { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn enum_variant_index(es: EnumSig, vname: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < es.vars.len() {
+    if es.vars.get(i).name == vname { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn enum_variant_covered_by_arms(ctx: Ctx, es: EnumSig, vidx: i32, arms: Vec[ast.MatchArm], upto: i32) -> bool {
+  let v: EnumVariantSig = es.vars.get(vidx);
+  if v.fields.len() == 0 {
+    // unit: appears once covers it
+    let mut i: i32 = 0;
+    while i < upto {
+      let p: ast.Pat = arms.get(i).pat;
+      if match p { ast.Pat.EnumVariant(_sp, _ep, n, args) => n == v.name && args.len() == 0, _ => false } { return true; }
+      i = i + 1;
+    }
+    return false;
+  }
+  if v.fields.len() == 1 {
+    // gather payload patterns for this variant
+    let mut ps: Vec[ast.Pat] = Vec();
+    let mut i: i32 = 0;
+    while i < upto {
+      let p: ast.Pat = arms.get(i).pat;
+      if match p { ast.Pat.EnumVariant(_sp, _ep, n, args) => n == v.name && args.len() == 1, _ => false } {
+        let args: Vec[ast.Pat] = match p { ast.Pat.EnumVariant(_sp, _ep, _n, a) => a, _ => Vec() };
+        ps.push(args.get(0));
+      }
+      i = i + 1;
+    }
+    if ps.len() == 0 { return false; }
+    return pats_cover_all(ctx, v.fields.get(0), ps);
+  }
+  // multi payload: require a catch-all for the variant
+  let mut i: i32 = 0;
+  while i < upto {
+    let p: ast.Pat = arms.get(i).pat;
+    if match p { ast.Pat.EnumVariant(_sp, _ep, n, args) => n == v.name && args.len() == v.fields.len(), _ => false } {
+      let args: Vec[ast.Pat] = match p { ast.Pat.EnumVariant(_sp, _ep, _n, a) => a, _ => Vec() };
+      let mut full: bool = true;
+      let mut j: i32 = 0;
+      while j < args.len() {
+        if !is_wild_or_bind(args.get(j)) { full = false; }
+        j = j + 1;
+      }
+      if full { return true; }
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn enum_covered_by_arms(ctx: Ctx, es: EnumSig, arms: Vec[ast.MatchArm], upto: i32) -> bool {
+  let mut i: i32 = 0;
+  while i < es.vars.len() {
+    if !enum_variant_covered_by_arms(ctx, es, i, arms, upto) { return false; }
+    i = i + 1;
+  }
+  return true;
 }
 
 fn pats_cover_all(ctx: Ctx, ty: i32, pats: Vec[ast.Pat]) -> bool {

@@ -293,7 +293,8 @@ match x {
 说明：
 
 - `v` 的类型等于 scrutinee 的类型（这里是 `Option[i32]`）。
-- 绑定模式等价于“带名字的 `_`”，所以也会让 `match` 变为穷尽（后续 arm 不会被执行；Stage0 暂不做 unreachable 检测）。
+- 绑定模式等价于“带名字的 `_`”，所以也会让 `match` 变为穷尽。
+- Stage0/Stage1 v0 会对明显的 unreachable arm 报错（例如 `_`/绑定模式之后的 arm，或某个 enum variant 在 payload 空间已被覆盖之后的 arm）。
 
 ## 禁止的引用语法位置
 

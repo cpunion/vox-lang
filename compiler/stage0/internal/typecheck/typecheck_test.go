@@ -765,6 +765,64 @@ fn main() -> i32 {
 	}
 }
 
+func TestMatchRejectsUnreachableArmsWildcard(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main(x: i32) -> i32 {
+  return match x {
+    _ => 0,
+    1 => 1,
+  };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "unreachable match arm" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected unreachable arm diagnostic, got: %+v", tdiags.Items)
+	}
+}
+
+func TestMatchRejectsUnreachableArmsEnumVariantCovered(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum O { Some(i32), None }
+enum R { Ok(O), Err(i32) }
+fn main(x: R) -> i32 {
+  return match x {
+    R.Ok(O.Some(v)) => v,
+    R.Ok(O.None) => 0,
+    R.Ok(_o) => 0,
+    R.Err(_) => -1,
+  };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "unreachable match arm" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected unreachable arm diagnostic, got: %+v", tdiags.Items)
+	}
+}
+
 func TestPubVisibilityForCrossModuleAccess(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "a"
