@@ -2,7 +2,17 @@ import "ast" as ast
 import "ir" as ir
 import "typecheck" as tc
 
-fn gen_func_impl(ctx: tc.Ctx, w: tc.World, mod_path: String, name_mod_path: String, imps: tc.Imports, exprs: ast.ExprPool, fd: ast.FuncDecl, fn_name: String, sig: tc.FuncSig, type_subs: Vec[tc.TySub]) -> GenFuncResult {
+fn const_sub_lookup_gen(xs: Vec[tc.ConstSub], name: String) -> tc.ConstSub {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let cs: tc.ConstSub = xs.get(i);
+    if cs.name == name { return cs; }
+    i = i + 1;
+  }
+  return tc.ConstSub { name: "", ty: -1, iv: 0, text: "" };
+}
+
+fn gen_func_impl(ctx: tc.Ctx, w: tc.World, mod_path: String, name_mod_path: String, imps: tc.Imports, exprs: ast.ExprPool, fd: ast.FuncDecl, fn_name: String, sig: tc.FuncSig, type_subs: Vec[tc.TySub], const_subs: Vec[tc.ConstSub]) -> GenFuncResult {
   let mut g: Gen = Gen{
     ctx: ctx,
     w: w,
@@ -20,9 +30,21 @@ fn gen_func_impl(ctx: tc.Ctx, w: tc.World, mod_path: String, name_mod_path: Stri
     ret_ty: sig.ret,
     pending: Vec(),
     type_subs: type_subs,
+    const_subs: const_subs,
   };
   let mut l0: tc.Locals = g.locals;
   l0.fn_ret_ty = sig.ret;
+  let mut ci: i32 = 0;
+  while ci < sig.const_params.len() {
+    let cp: tc.ConstParamSig = sig.const_params.get(ci);
+    let cs: tc.ConstSub = const_sub_lookup_gen(g.const_subs, cp.name);
+    if cs.name == "" {
+      l0 = tc.locals_decl_const(l0, cp.name, cp.ty);
+    } else {
+      l0 = tc.locals_decl_const_value(l0, cp.name, cp.ty, cs.iv);
+    }
+    ci = ci + 1;
+  }
   g.locals = l0;
 
   // Create entry block.
@@ -73,11 +95,11 @@ fn gen_func_impl(ctx: tc.Ctx, w: tc.World, mod_path: String, name_mod_path: Stri
 fn gen_func(ctx: tc.Ctx, w: tc.World, mod_path: String, imps: tc.Imports, exprs: ast.ExprPool, fd: ast.FuncDecl) -> GenFuncResult {
   let fr: tc.FindFuncResult = tc.find_func(ctx, mod_path, fd.name);
   if !fr.found { return GenFuncResult { ok: false, err: "missing fn sig", ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, pending: Vec() }; }
-  return gen_func_impl(ctx, w, mod_path, mod_path, imps, exprs, fd, fd.name, fr.sig, Vec());
+  return gen_func_impl(ctx, w, mod_path, mod_path, imps, exprs, fd, fd.name, fr.sig, Vec(), Vec());
 }
 
 fn gen_func_inst(ctx: tc.Ctx, w: tc.World, mod_path: String, imps: tc.Imports, exprs: ast.ExprPool, fd: ast.FuncDecl, inst_name: String, inst_sig: tc.FuncSig, subs: Vec[tc.TySub]) -> GenFuncResult {
-  return gen_func_impl(ctx, w, mod_path, mod_path, imps, exprs, fd, inst_name, inst_sig, subs);
+  return gen_func_impl(ctx, w, mod_path, mod_path, imps, exprs, fd, inst_name, inst_sig, subs, Vec());
 }
 
 struct GenStmtResult { ok: bool, err: String, g: Gen }

@@ -321,6 +321,12 @@ fn maybe_resolve_typed_path_marker(ctx: Ctx, w: World, mod_path: String, imps: I
   let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_x, ts, _as) => ts, _ => Vec() };
   let args: Vec[i32] = match n { ast.ExprNode.Call(_x, _ts, as0) => as0, _ => Vec() };
   if args.len() != 0 || targs.len() == 0 { return c; }
+  // `Call(path, [@const...], [])` is not a typed-path marker.
+  let mut ti0: i32 = 0;
+  while ti0 < targs.len() {
+    if is_const_generic_arg_tn(targs.get(ti0)) { return c; }
+    ti0 = ti0 + 1;
+  }
 
   let pr: ExprPartsResult = expr_parts(exprs, callee);
   if !pr.ok { return c; }
@@ -347,9 +353,12 @@ fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, typ
     let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, ts, _a) => ts, _ => Vec() };
     let mut ti: i32 = 0;
     while ti < targs.len() {
-      let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, targs.get(ti));
-      c = tr.ctx;
-      if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in call type arg")); }
+      let ta: ast.TypeName = targs.get(ti);
+      if !is_const_generic_arg_tn(ta) {
+        let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, ta);
+        c = tr.ctx;
+        if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in call type arg")); }
+      }
       ti = ti + 1;
     }
   }
@@ -497,7 +506,7 @@ fn collect_body_type_names(ctx: Ctx, w: World) -> TcCtxResult {
     let mut fi: i32 = 0;
     while fi < m.prog.funcs.len() {
       let fd: ast.FuncDecl = m.prog.funcs.get(fi);
-      if fd.type_params.len() == 0 {
+      if fd.type_params.len() == 0 && fd.const_params.len() == 0 {
         let ir: ImportsResult = build_imports(w, m.path, m.prog.imports, fd.file);
         if !ir.ok { return TcCtxResult { ok: false, err: ir.err, ctx: c }; }
         let wr: TypeWalkResult = walk_block_type_names(c, w, m.path, ir.imps, fd.type_params, m.prog.exprs, fd.body, fd.file);
@@ -517,7 +526,7 @@ fn collect_body_type_names(ctx: Ctx, w: World) -> TcCtxResult {
         let mut mdi: i32 = 0;
         while mdi < id.methods.len() {
           let md: ast.FuncDecl = id.methods.get(mdi);
-          if md.type_params.len() == 0 {
+          if md.type_params.len() == 0 && md.const_params.len() == 0 {
             let wr: TypeWalkResult = walk_block_type_names(c, w, m.path, ir.imps, md.type_params, m.prog.exprs, md.body, md.file);
             if !wr.ok { return TcCtxResult { ok: false, err: wr.err, ctx: wr.ctx }; }
             c = wr.ctx;
@@ -548,19 +557,19 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
 
   // Builtins (stage1): keep minimal and stable.
   // Higher-level helpers should live in stdlib Vox sources.
-  c.funcs.push(FuncSym { mod_path: "", name: "panic", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "print", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "panic", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "print", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
   // Tooling/stdlib support builtins (stage1): used by std/fs and std/process.
   // Keep these low-level and prefer std wrappers.
   let v1: ResolveTyResult = intern_vec(c, c.ty_string);
   c = v1.ctx;
   let vec_string: i32 = v1.idx;
-  c.funcs.push(FuncSym { mod_path: "", name: "__args", sig: FuncSig { params: Vec(), ret: vec_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__exe_path", sig: FuncSig { params: Vec(), ret: c.ty_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__read_file", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__write_file", sig: FuncSig { params: vec2(c.ty_string, c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__exec", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_i32, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__walk_vox_files", sig: FuncSig { params: vec1(c.ty_string), ret: vec_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__args", sig: FuncSig { params: Vec(), ret: vec_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__exe_path", sig: FuncSig { params: Vec(), ret: c.ty_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__read_file", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__write_file", sig: FuncSig { params: vec2(c.ty_string, c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__exec", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_i32, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__walk_vox_files", sig: FuncSig { params: vec1(c.ty_string), ret: vec_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
 
   let mut mi: i32 = 0;
   while mi < w.mods.len() {
@@ -574,6 +583,33 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       let ir: ImportsResult = build_imports(w, m.path, m.prog.imports, fd.file);
       if !ir.ok { return TcCtxResult { ok: false, err: ir.err, ctx: c }; }
       let imps: Imports = ir.imps;
+      let mut cps: Vec[ConstParamSig] = Vec();
+      let mut cpi: i32 = 0;
+      while cpi < fd.const_params.len() {
+        let cp: ast.ConstParamDecl = fd.const_params.get(cpi);
+        if contains_str_local(fd.type_params, cp.name) {
+          return TcCtxResult { ok: false, err: type_error(fd.file, "const param duplicates type param: ".concat(cp.name)), ctx: c };
+        }
+        let mut dup: bool = false;
+        let mut cj: i32 = 0;
+        while cj < cps.len() {
+          if cps.get(cj).name == cp.name { dup = true; }
+          cj = cj + 1;
+        }
+        if dup {
+          return TcCtxResult { ok: false, err: type_error(fd.file, "duplicate const param: ".concat(cp.name)), ctx: c };
+        }
+        let cpr: ResolveTyResult = resolve_type(c, w, m.path, imps, fd.type_params, cp.ty);
+        c = cpr.ctx;
+        if !cpr.ok {
+          return TcCtxResult { ok: false, err: type_error(fd.file, "type resolve failed in const param"), ctx: c };
+        }
+        if !is_int_like_ty(c, cpr.idx) {
+          return TcCtxResult { ok: false, err: type_error(fd.file, "const param type must be integer"), ctx: c };
+        }
+        cps.push(ConstParamSig { name: cp.name, ty: cpr.idx });
+        cpi = cpi + 1;
+      }
       // Resolve signature types (skip bodies for generic fns; still collect signature).
       let mut ps: Vec[i32] = Vec();
       let mut pi: i32 = 0;
@@ -631,7 +667,7 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       let perr1: String = projection_bound_issue(c, fd.type_params, tbs, fd.ret);
       if perr1 != "" { return TcCtxResult { ok: false, err: type_error(fd.file, perr1), ctx: c }; }
 
-      let sig: FuncSig = FuncSig { params: ps, ret: rr.idx, vis: fd.vis, is_pub: fd.is_pub, type_params: fd.type_params, type_param_bounds: tbs };
+      let sig: FuncSig = FuncSig { params: ps, ret: rr.idx, vis: fd.vis, is_pub: fd.is_pub, type_params: fd.type_params, const_params: cps, type_param_bounds: tbs };
       c.funcs.push(FuncSym { mod_path: m.path, name: fd.name, sig: sig });
       fi = fi + 1;
     }

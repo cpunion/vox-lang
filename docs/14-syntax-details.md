@@ -36,18 +36,21 @@
   - `where` 约束：`fn eq[T](x: T) -> bool where T: Eq + Show { ... }`
   - 泛型调用（可显式给出类型实参）：`id[i32](1)`
   - 泛型调用（通常可省略类型实参，由实参/返回期望推导）：`id(1)`
-- 其它（Stage0 暂不实现）：`impl[T] ...`、const 泛型等。
-- 其它（当前仍未实现）：const 泛型等。
+  - 函数 const 泛型：`fn addn[const N: i32](x: i32) -> i32 { return x + N; }`
+  - const 泛型调用（显式 const 实参）：`addn[3](4)`
+- 其它（Stage0 暂不实现）：`impl[T] ...` 等。
 
 ## Trait 语法（Stage1 v0）
 
 - trait 方法声明（无默认实现）：`trait Eq { fn eq(a: Self, b: Self) -> bool; }`
 - trait 方法可带泛型参数与约束：`trait Wrap { fn wrap[T: Eq](x: Self, v: T) -> T where T: Show; }`
+- trait 方法可带 const 泛型参数：`trait AddN { fn addn[const N: i32](x: Self, v: i32) -> i32; }`
 - trait 方法默认实现：`trait Show { fn show(x: Self) -> String { return "x"; } }`
 - 关联类型声明：`trait Iter { type Item; fn next(x: Self) -> Self.Item; }`
 - supertrait：`trait Child: Parent + Other { ... }`
 - `impl` 可省略带默认实现的方法（同模块/跨模块 trait 均可继承默认实现）
 - `impl` 方法的泛型参数名按位置匹配 trait 方法（名称可不同）
+- `impl` 方法的 const 泛型参数当前要求与 trait 方法同名同类型（按位置匹配）
 - `impl` 需为 trait 中每个关联类型给出绑定：`impl Iter for I { type Item = i32; ... }`
 - 支持在类型位置引用 `Self.Assoc`（trait/impl 方法签名）以及 `T.Assoc`（泛型签名，`T` 为类型参数）。
 - `T.Assoc` 约束规则：`T` 的 trait bounds 中必须且只能有一个 trait 声明该关联类型，否则报错（unknown/ambiguous projection）。

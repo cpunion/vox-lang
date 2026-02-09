@@ -207,7 +207,7 @@ fn subst_self_in_sig(ctx: Ctx, sig: FuncSig, recv_ty: i32) -> FuncSig {
     i = i + 1;
   }
   let rr: i32 = subst_self_ty(ctx, sig.ret, recv_ty);
-  return FuncSig { params: ps, ret: rr, vis: sig.vis, is_pub: sig.is_pub, type_params: sig.type_params, type_param_bounds: sig.type_param_bounds };
+  return FuncSig { params: ps, ret: rr, vis: sig.vis, is_pub: sig.is_pub, type_params: sig.type_params, const_params: sig.const_params, type_param_bounds: sig.type_param_bounds };
 }
 
 struct AssocProjSubsResult { ok: bool, err: TcError, subs: Vec[TySub] }
@@ -592,7 +592,7 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: a
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
   }
 
-  if sig.type_params.len() == 0 {
+  if sig.type_params.len() == 0 && sig.const_params.len() == 0 {
     if type_args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     let mut i: i32 = 0;
     while i < args.len() {
@@ -606,9 +606,34 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: a
     return ExprTyResult { ok: true, ty: sig.ret, err: TcError.None };
   }
 
-  // Generic call: infer type parameters (with optional explicit type args).
-  if type_args.len() != 0 && type_args.len() != sig.type_params.len() {
+  // Generic call: split explicit generic args into:
+  // - optional type args prefix (for type params)
+  // - required const args suffix (for const params)
+  if type_args.len() < sig.const_params.len() {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+  }
+  let explicit_targ_n: i32 = type_args.len() - sig.const_params.len();
+  if explicit_targ_n > sig.type_params.len() {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+  }
+
+  let mut explicit_targs: Vec[ast.TypeName] = Vec();
+  let mut ci0: i32 = 0;
+  while ci0 < explicit_targ_n {
+    let ta0: ast.TypeName = type_args.get(ci0);
+    if is_const_generic_arg_tn(ta0) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    explicit_targs.push(ta0);
+    ci0 = ci0 + 1;
+  }
+
+  let mut cidx: i32 = 0;
+  while cidx < sig.const_params.len() {
+    let ctn: ast.TypeName = type_args.get(explicit_targ_n + cidx);
+    if !is_const_generic_arg_tn(ctn) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let cp: ConstParamSig = sig.const_params.get(cidx);
+    let pr: ParseConstGenericArgResult = parse_const_generic_arg(ctx, ctn, cp.ty);
+    if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    cidx = cidx + 1;
   }
 
   let mut subs: Vec[TySub] = Vec();
@@ -621,8 +646,8 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: a
 
   // Explicit type args win (when provided).
   let mut ti: i32 = 0;
-  while ti < type_args.len() {
-    let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, l0.type_params, type_args.get(ti));
+  while ti < explicit_targs.len() {
+    let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, l0.type_params, explicit_targs.get(ti));
     if !tr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     let tp: String = sig.type_params.get(ti);
     let cur: i32 = subs_lookup(subs, tp);

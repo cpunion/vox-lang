@@ -272,7 +272,7 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   let mut g: Gen = g0;
   if args.len() != sig.params.len() { return GenExprResult { ok: false, err: "arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
 
-  if sig.type_params.len() == 0 {
+  if sig.type_params.len() == 0 && sig.const_params.len() == 0 {
     if type_args.len() != 0 { return GenExprResult { ok: false, err: "non-generic fn with type args", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
 
     let mut vs: Vec[ir.Value] = Vec();
@@ -298,9 +298,39 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
     return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
   }
 
-  // Generic call: infer substitutions and call a monomorphized instantiation.
-  if type_args.len() != 0 && type_args.len() != sig.type_params.len() {
+  // Generic call: split generic args into [type args..., const args...].
+  if type_args.len() < sig.const_params.len() {
     return GenExprResult { ok: false, err: "type arg arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+  }
+  let explicit_targ_n: i32 = type_args.len() - sig.const_params.len();
+  if explicit_targ_n > sig.type_params.len() {
+    return GenExprResult { ok: false, err: "type arg arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+  }
+  let mut explicit_targs: Vec[ast.TypeName] = Vec();
+  let mut ti0: i32 = 0;
+  while ti0 < explicit_targ_n {
+    let ta0: ast.TypeName = type_args.get(ti0);
+    if tc.is_const_generic_arg_tn(ta0) {
+      return GenExprResult { ok: false, err: "const generic arg in type arg position", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+    explicit_targs.push(ta0);
+    ti0 = ti0 + 1;
+  }
+
+  let mut csubs: Vec[tc.ConstSub] = Vec();
+  let mut ci: i32 = 0;
+  while ci < sig.const_params.len() {
+    let cp: tc.ConstParamSig = sig.const_params.get(ci);
+    let atn: ast.TypeName = type_args.get(explicit_targ_n + ci);
+    if !tc.is_const_generic_arg_tn(atn) {
+      return GenExprResult { ok: false, err: "missing const generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+    let pr: tc.ParseConstGenericArgResult = tc.parse_const_generic_arg(g.ctx, atn, cp.ty);
+    if !pr.ok {
+      return GenExprResult { ok: false, err: "bad const generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+    csubs.push(tc.ConstSub { name: cp.name, ty: cp.ty, iv: pr.iv, text: pr.text });
+    ci = ci + 1;
   }
 
   let mut subs: Vec[tc.TySub] = Vec();
@@ -311,8 +341,8 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
 
   // Explicit type args.
   let mut ti: i32 = 0;
-  while ti < type_args.len() {
-    let tr: tc.ResolveTyResult = tc.resolve_type(g.ctx, g.w, g.mod_path, g.imps, Vec(), type_args.get(ti));
+  while ti < explicit_targs.len() {
+    let tr: tc.ResolveTyResult = tc.resolve_type(g.ctx, g.w, g.mod_path, g.imps, Vec(), explicit_targs.get(ti));
     g.ctx = tr.ctx;
     if !tr.ok { return GenExprResult { ok: false, err: "bad type arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
     let tp: String = sig.type_params.get(ti);
@@ -379,11 +409,11 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   }
   let rty: i32 = tc.subst_ty(g.ctx, sig.ret, subs);
   if rty == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad substituted ret type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-  let inst_sig: tc.FuncSig = tc.FuncSig { params: ps, ret: rty, vis: sig.vis, is_pub: sig.is_pub, type_params: Vec(), type_param_bounds: Vec() };
+  let inst_sig: tc.FuncSig = tc.FuncSig { params: ps, ret: rty, vis: sig.vis, is_pub: sig.is_pub, type_params: Vec(), const_params: sig.const_params, type_param_bounds: Vec() };
 
-  let inst: String = tc.inst_name(g.ctx, name, sig.type_params, subs);
+  let inst: String = tc.inst_name_ex(g.ctx, name, sig.type_params, sig.const_params, subs, csubs);
   let inst_qn: String = qname(target_mod, inst);
-  g.pending = pending_add(g.pending, PendingInst { qname: inst_qn, mod_path: target_mod, base_name: name, inst_name: inst, sig: inst_sig, subs: subs });
+  g.pending = pending_add(g.pending, PendingInst { qname: inst_qn, mod_path: target_mod, base_name: name, inst_name: inst, sig: inst_sig, subs: subs, const_subs: csubs });
 
   if out_ty == g.ctx.ty_unit {
     g = gen_emit(g, ir.Instr.Call(false, 0, out_ty, inst_qn, vs2));

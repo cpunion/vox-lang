@@ -45,6 +45,7 @@ struct FuncTask {
   inst_name: String, // for Inst
   inst_sig: tc.FuncSig,
   subs: Vec[tc.TySub],
+  const_subs: Vec[tc.ConstSub],
 }
 
 fn has_str(vs: Vec[String], s: String) -> bool {
@@ -100,7 +101,7 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
   let mut i: i32 = 0;
   while i < m.prog.funcs.len() {
     let fd: ast.FuncDecl = m.prog.funcs.get(i);
-    if fd.name == name && fd.type_params.len() != 0 { return FindFuncDeclResult { found: true, mod_path: m.path, fd: fd }; }
+    if fd.name == name && (fd.type_params.len() != 0 || fd.const_params.len() != 0) { return FindFuncDeclResult { found: true, mod_path: m.path, fd: fd }; }
     i = i + 1;
   }
 
@@ -115,7 +116,7 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
         let mut mi: i32 = 0;
         while mi < isg.methods.len() {
           let ms: tc.ImplMethodSig = isg.methods.get(mi);
-          if ms.lowered_name == name && ms.sig.type_params.len() != 0 {
+          if ms.lowered_name == name && (ms.sig.type_params.len() != 0 || ms.sig.const_params.len() != 0) {
             if ms.from_default {
               let fd0: ast.FuncDecl = ast.FuncDecl {
                 file: ms.default_file,
@@ -123,6 +124,7 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
                 is_pub: false,
                 name: ms.lowered_name,
                 type_params: ms.sig.type_params,
+                const_params: Vec(),
                 type_param_bounds: Vec(),
                 params: synth_params(ms.default_params),
                 ret: dummy_type_name(),
@@ -147,7 +149,7 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
     ii = ii + 1;
   }
 
-  return FindFuncDeclResult { found: false, mod_path: "", fd: ast.FuncDecl { file: "", vis: ast.vis_private(), is_pub: false, name: "", type_params: Vec(), type_param_bounds: Vec(), params: Vec(), ret: ast.TypeName { parts: Vec(), args: Vec() }, body: ast.Block { stmts: Vec() } } };
+  return FindFuncDeclResult { found: false, mod_path: "", fd: ast.FuncDecl { file: "", vis: ast.vis_private(), is_pub: false, name: "", type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), params: Vec(), ret: ast.TypeName { parts: Vec(), args: Vec() }, body: ast.Block { stmts: Vec() } } };
 }
 
 struct FindImplSigResult { found: bool, sig: tc.ImplSig }
@@ -161,7 +163,7 @@ fn empty_impl_method_sig() -> tc.ImplMethodSig {
   return tc.ImplMethodSig {
     name: "",
     lowered_name: "",
-    sig: tc.FuncSig { params: Vec(), ret: -1, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_bounds: Vec() },
+    sig: tc.FuncSig { params: Vec(), ret: -1, vis: ast.vis_private(), is_pub: false, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() },
     from_default: false,
     default_mod_path: "",
     default_file: "",
@@ -235,7 +237,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
     let mut fi: i32 = 0;
     while fi < m.prog.funcs.len() {
       let fd: ast.FuncDecl = m.prog.funcs.get(fi);
-      if fd.type_params.len() == 0 {
+      if fd.type_params.len() == 0 && fd.const_params.len() == 0 {
         tasks.push(FuncTask {
           kind: TaskKind.Normal,
           mod_path: m.path,
@@ -243,7 +245,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
           impl_idx: -1,
           impl_m_idx: -1,
           impl_name: "",
-          impl_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_bounds: Vec() },
+          impl_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() },
           impl_from_default: false,
           impl_default_mod_path: "",
           impl_default_file: "",
@@ -251,8 +253,9 @@ pub fn generate_world(w: tc.World) -> GenResult {
           impl_default_body: ast.Block { stmts: Vec() },
           base_name: "",
           inst_name: "",
-          inst_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_bounds: Vec() },
+          inst_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() },
           subs: Vec(),
+          const_subs: Vec(),
         });
       }
       fi = fi + 1;
@@ -268,7 +271,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
       let mut msi: i32 = 0;
       while msi < ir0.sig.methods.len() {
         let mr0: tc.ImplMethodSig = ir0.sig.methods.get(msi);
-        if mr0.sig.type_params.len() != 0 {
+        if mr0.sig.type_params.len() != 0 || mr0.sig.const_params.len() != 0 {
           msi = msi + 1;
           continue;
         }
@@ -292,8 +295,9 @@ pub fn generate_world(w: tc.World) -> GenResult {
           impl_default_body: mr0.default_body,
           base_name: "",
           inst_name: "",
-          inst_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_bounds: Vec() },
+          inst_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() },
           subs: Vec(),
+          const_subs: Vec(),
         });
         msi = msi + 1;
       }
@@ -328,7 +332,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
       r = gen_func(ctx, w, t.mod_path, imps, m2.prog.exprs, fd);
     } else if t.impl_idx != -1 {
       // Impl method task.
-      let mut md: ast.FuncDecl = ast.FuncDecl { file: "", vis: ast.vis_private(), is_pub: false, name: "", type_params: Vec(), type_param_bounds: Vec(), params: Vec(), ret: ast.TypeName { parts: Vec(), args: Vec() }, body: ast.Block { stmts: Vec() } };
+      let mut md: ast.FuncDecl = ast.FuncDecl { file: "", vis: ast.vis_private(), is_pub: false, name: "", type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), params: Vec(), ret: ast.TypeName { parts: Vec(), args: Vec() }, body: ast.Block { stmts: Vec() } };
       let mut body_mod_path: String = t.mod_path;
       let mut body_exprs: ast.ExprPool = m2.prog.exprs;
       let mut body_imports: Vec[ast.ImportDecl] = m2.prog.imports;
@@ -346,6 +350,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
           is_pub: false,
           name: t.impl_name,
           type_params: Vec(),
+          const_params: Vec(),
           type_param_bounds: Vec(),
           params: synth_params(t.impl_default_params),
           ret: dummy_type_name(),
@@ -361,7 +366,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
       imps = ar.imps;
       want_name = qname(t.mod_path, t.impl_name);
       if has_str(emitted, want_name) { ti = ti + 1; continue; }
-      r = gen_func_impl(ctx, w, body_mod_path, t.mod_path, imps, body_exprs, md, t.impl_name, t.impl_sig, Vec());
+      r = gen_func_impl(ctx, w, body_mod_path, t.mod_path, imps, body_exprs, md, t.impl_name, t.impl_sig, Vec(), Vec());
     } else {
       // Generic instantiation task.
       let fr: FindFuncDeclResult = find_generic_func(br.ctx, m2, t.base_name);
@@ -377,7 +382,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
       imps = ar.imps;
       want_name = qname(t.mod_path, t.inst_name);
       if has_str(emitted, want_name) { ti = ti + 1; continue; }
-      r = gen_func_impl(ctx, w, bmod.path, t.mod_path, imps, bmod.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs);
+      r = gen_func_impl(ctx, w, bmod.path, t.mod_path, imps, bmod.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs, t.const_subs);
     }
 
     if !r.ok { return err0(p, r.err); }
@@ -396,7 +401,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
         impl_idx: -1,
         impl_m_idx: -1,
         impl_name: "",
-        impl_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_bounds: Vec() },
+        impl_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() },
         impl_from_default: false,
         impl_default_mod_path: "",
         impl_default_file: "",
@@ -406,6 +411,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
         inst_name: pend.inst_name,
         inst_sig: pend.sig,
         subs: pend.subs,
+        const_subs: pend.const_subs,
       });
       pi = pi + 1;
     }

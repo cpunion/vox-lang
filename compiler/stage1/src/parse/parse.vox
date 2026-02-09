@@ -136,6 +136,7 @@ struct ParseVariantResult { p: Parser, v: ast.EnumVariantDecl }
 struct ParsePatResult { p: Parser, pat: ast.Pat }
 struct ParseArmResult { p: Parser, arm: ast.MatchArm }
 struct ParseTypeParamsResult { p: Parser, tps: Vec[String], tpbs: Vec[ast.TypeParamBoundsDecl] }
+struct ParseFnTypeParamsResult { p: Parser, tps: Vec[String], cps: Vec[ast.ConstParamDecl], tpbs: Vec[ast.TypeParamBoundsDecl] }
 struct ParseWhereBoundsResult { p: Parser, tpbs: Vec[ast.TypeParamBoundsDecl] }
 struct ParseBracedExprResult { p: Parser, id: i32 }
 struct ParseTypeDeclResult { p: Parser, is_union: bool, t: ast.TypeAliasDecl, e: ast.EnumDecl }
@@ -562,7 +563,7 @@ fn parse_if_expr(p: Parser) -> ParseExprResult {
   return add_expr(br2.p, sp0, ast.ExprNode.If(r2.id, br1.id, br2.id));
 }
 
-	fn parse_primary(p: Parser) -> ParseExprResult {
+fn parse_primary(p: Parser) -> ParseExprResult {
   if p.has_err {
     return ParseExprResult { p: p, id: -1 };
   }
@@ -660,7 +661,32 @@ fn parse_if_expr(p: Parser) -> ParseExprResult {
   return ParseExprResult { p: q, id: -1 };
 }
 
-		fn parse_postfix(p: Parser, base: i32) -> ParseExprResult {
+fn const_generic_arg_tn(text: String) -> ast.TypeName {
+  let mut parts: Vec[String] = Vec();
+  parts.push("@const");
+  parts.push(text);
+  return ast.TypeName { parts: parts, args: Vec() };
+}
+
+fn parse_generic_call_arg(p: Parser) -> ParseTypeResult {
+  // Generic call args support:
+  // - type args: `T`, `Vec[i32]`, ...
+  // - const int args: `3`, `-5` (encoded as pseudo type `@const`)
+  if kind_is(peek_kind(p), lex.TokenKind.Minus) && kind_is(peek2_kind(p), lex.TokenKind.Int) {
+    let ar0: AdvanceResult = advance(p);
+    let ar1: AdvanceResult = expect(ar0.p, lex.TokenKind.Int);
+    let text: String = "-".concat(lexeme(ar1.p, ar1.tok));
+    return ParseTypeResult { p: ar1.p, ty: const_generic_arg_tn(text) };
+  }
+  if kind_is(peek_kind(p), lex.TokenKind.Int) {
+    let ar0: AdvanceResult = advance(p);
+    let text: String = lexeme(ar0.p, ar0.tok);
+    return ParseTypeResult { p: ar0.p, ty: const_generic_arg_tn(text) };
+  }
+  return parse_type_name(p);
+}
+
+fn parse_postfix(p: Parser, base: i32) -> ParseExprResult {
 		  let mut q: Parser = p;
 		  let mut cur: i32 = base;
 		  let mut pending_targs: Vec[ast.TypeName] = Vec();
@@ -745,7 +771,7 @@ fn parse_if_expr(p: Parser) -> ParseExprResult {
 	      let mut r: Parser = ar0.p;
 	      if !kind_is(peek_kind(r), lex.TokenKind.RBracket) {
 	        while !r.has_err {
-	          let tr: ParseTypeResult = parse_type_name(r);
+	          let tr: ParseTypeResult = parse_generic_call_arg(r);
 	          r = tr.p;
 	          pending_targs.push(tr.ty);
 	          if kind_is(peek_kind(r), lex.TokenKind.Comma) {
@@ -1229,11 +1255,13 @@ fn parse_fn_decl(p: Parser, vis: i32, is_pub: bool) -> ParseFnResult {
   let r2: ParseIdentResult = parse_ident(ar1.p);
   let mut q: Parser = r2.p;
   let mut tps: Vec[String] = Vec();
+  let mut cps: Vec[ast.ConstParamDecl] = Vec();
   let mut tpbs: Vec[ast.TypeParamBoundsDecl] = Vec();
   if kind_is(peek_kind(q), lex.TokenKind.LBracket) {
-    let r3: ParseTypeParamsResult = parse_type_params(q);
+    let r3: ParseFnTypeParamsResult = parse_fn_type_params(q);
     q = r3.p;
     tps = r3.tps;
+    cps = r3.cps;
     tpbs = r3.tpbs;
   }
   let _ar4: AdvanceResult = expect(q, lex.TokenKind.LParen);
@@ -1254,7 +1282,73 @@ fn parse_fn_decl(p: Parser, vis: i32, is_pub: bool) -> ParseFnResult {
   }
   let params: Vec[ast.Param] = r5.params;
   let r9: ParseBlockResult = parse_block(q2);
-  return ParseFnResult { p: r9.p, f: ast.FuncDecl { file: p.file, vis: vis, is_pub: is_pub, name: r2.name, type_params: tps, type_param_bounds: tpbs2, params: params, ret: r8.ty, body: r9.b } };
+  return ParseFnResult { p: r9.p, f: ast.FuncDecl { file: p.file, vis: vis, is_pub: is_pub, name: r2.name, type_params: tps, const_params: cps, type_param_bounds: tpbs2, params: params, ret: r8.ty, body: r9.b } };
+}
+
+fn parse_fn_type_params(p: Parser) -> ParseFnTypeParamsResult {
+  let ar1: AdvanceResult = expect(p, lex.TokenKind.LBracket);
+  let mut q: Parser = ar1.p;
+  let mut tps: Vec[String] = Vec();
+  let mut cps: Vec[ast.ConstParamDecl] = Vec();
+  let mut tpbs: Vec[ast.TypeParamBoundsDecl] = Vec();
+  let mut seen_const: bool = false;
+  if kind_is(peek_kind(q), lex.TokenKind.RBracket) {
+    let ar2: AdvanceResult = expect(q, lex.TokenKind.RBracket);
+    return ParseFnTypeParamsResult { p: ar2.p, tps: tps, cps: cps, tpbs: tpbs };
+  }
+  while !q.has_err {
+    if kind_is(peek_kind(q), lex.TokenKind.KwConst) {
+      seen_const = true;
+      let ar2: AdvanceResult = advance(q);
+      let r1: ParseIdentResult = parse_ident(ar2.p);
+      let ar3: AdvanceResult = expect(r1.p, lex.TokenKind.Colon);
+      let tr: ParseTypeResult = parse_type_name(ar3.p);
+      q = tr.p;
+      cps.push(ast.ConstParamDecl { name: r1.name, ty: tr.ty });
+    } else {
+      if seen_const {
+        let mut qerr: Parser = q;
+        qerr.has_err = true;
+        qerr.err = ParseError.UnexpectedToken(lex.TokenKind.KwConst, peek_kind(q), peek(q).start);
+        return ParseFnTypeParamsResult { p: qerr, tps: tps, cps: cps, tpbs: tpbs };
+      }
+      let r1: ParseIdentResult = parse_ident(q);
+      q = r1.p;
+      tps.push(r1.name);
+
+      let mut bounds: Vec[ast.TypeName] = Vec();
+      if kind_is(peek_kind(q), lex.TokenKind.Colon) {
+        let ar4: AdvanceResult = advance(q);
+        q = ar4.p;
+        while !q.has_err {
+          let tr2: ParseTypeResult = parse_type_name(q);
+          q = tr2.p;
+          bounds.push(tr2.ty);
+          if kind_is(peek_kind(q), lex.TokenKind.Plus) {
+            let ar5: AdvanceResult = advance(q);
+            q = ar5.p;
+            continue;
+          }
+          break;
+        }
+      }
+      if bounds.len() != 0 {
+        tpbs.push(ast.TypeParamBoundsDecl { name: r1.name, bounds: bounds });
+      }
+    }
+
+    if kind_is(peek_kind(q), lex.TokenKind.Comma) {
+      let ar6: AdvanceResult = advance(q);
+      q = ar6.p;
+      if kind_is(peek_kind(q), lex.TokenKind.RBracket) {
+        break;
+      }
+      continue;
+    }
+    break;
+  }
+  let ar7: AdvanceResult = expect(q, lex.TokenKind.RBracket);
+  return ParseFnTypeParamsResult { p: ar7.p, tps: tps, cps: cps, tpbs: tpbs };
 }
 
 fn parse_type_params(p: Parser) -> ParseTypeParamsResult {
@@ -1455,11 +1549,13 @@ fn parse_trait_method_decl(p: Parser) -> ParseTraitMethodResult {
   let r2: ParseIdentResult = parse_ident(ar1.p);
   let mut q0: Parser = r2.p;
   let mut tps: Vec[String] = Vec();
+  let mut cps: Vec[ast.ConstParamDecl] = Vec();
   let mut tpbs: Vec[ast.TypeParamBoundsDecl] = Vec();
   if kind_is(peek_kind(q0), lex.TokenKind.LBracket) {
-    let rtp: ParseTypeParamsResult = parse_type_params(q0);
+    let rtp: ParseFnTypeParamsResult = parse_fn_type_params(q0);
     q0 = rtp.p;
     tps = rtp.tps;
+    cps = rtp.cps;
     tpbs = rtp.tpbs;
   }
   let ar3: AdvanceResult = expect(q0, lex.TokenKind.LParen);
@@ -1501,6 +1597,7 @@ fn parse_trait_method_decl(p: Parser) -> ParseTraitMethodResult {
     m: ast.TraitMethodDecl {
       name: r2.name,
       type_params: tps,
+      const_params: cps,
       type_param_bounds: tpbs2,
       params: r4.params,
       ret: r7.ty,
