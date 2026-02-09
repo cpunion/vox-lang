@@ -1,16 +1,23 @@
 import "ir" as ir
 
+fn c_struct_eq_fn_name(struct_qname: String) -> String {
+  return "vox_struct_eq_".concat(c_mangle(struct_qname));
+}
+
 fn c_enum_eq_fn_name(enum_qname: String) -> String {
   return "vox_enum_eq_".concat(c_mangle(enum_qname));
 }
 
-fn enum_eq_field_expr(pool: ir.TyPool, ty: i32, lhs: String, rhs: String) -> String {
+fn nominal_eq_field_expr(pool: ir.TyPool, ty: i32, lhs: String, rhs: String) -> String {
   let t0: ir.Ty = ir.ty_pool_get(pool, ty);
   if t0.kind == ir.TyKind.Range {
-    return enum_eq_field_expr(pool, t0.elem, lhs, rhs);
+    return nominal_eq_field_expr(pool, t0.elem, lhs, rhs);
   }
   if t0.kind == ir.TyKind.String {
     return "(strcmp(".concat(lhs).concat(", ").concat(rhs).concat(") == 0)");
+  }
+  if t0.kind == ir.TyKind.Struct {
+    return c_struct_eq_fn_name(ty_qname(t0)).concat("(").concat(lhs).concat(", ").concat(rhs).concat(")");
   }
   if t0.kind == ir.TyKind.Enum {
     return c_enum_eq_fn_name(ty_qname(t0)).concat("(").concat(lhs).concat(", ").concat(rhs).concat(")");
@@ -18,11 +25,44 @@ fn enum_eq_field_expr(pool: ir.TyPool, ty: i32, lhs: String, rhs: String) -> Str
   return "(".concat(lhs).concat(" == ").concat(rhs).concat(")");
 }
 
+fn emit_struct_eq_decl(pool: ir.TyPool, st: ir.StructDecl) -> String {
+  let qn: String = st.name;
+  let cty: String = c_struct_type_name(qn);
+  let fnn: String = c_struct_eq_fn_name(qn);
+  return "static bool ".concat(fnn).concat("(").concat(cty).concat(" a, ").concat(cty).concat(" b);");
+}
+
 fn emit_enum_eq_decl(pool: ir.TyPool, en: ir.EnumDecl) -> String {
   let qn: String = en.name;
   let cty: String = c_enum_type_name(qn);
   let fnn: String = c_enum_eq_fn_name(qn);
   return "static bool ".concat(fnn).concat("(").concat(cty).concat(" a, ").concat(cty).concat(" b);");
+}
+
+fn emit_struct_eq_def(pool: ir.TyPool, st: ir.StructDecl) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let qn: String = st.name;
+  let cty: String = c_struct_type_name(qn);
+  let fnn: String = c_struct_eq_fn_name(qn);
+  out.push("static bool ".concat(fnn).concat("(").concat(cty).concat(" a, ").concat(cty).concat(" b) {"));
+  if st.fields.len() == 0 {
+    out.push("  return true;");
+    out.push("}");
+    return out;
+  }
+  let mut expr: String = "";
+  let mut fi: i32 = 0;
+  while fi < st.fields.len() {
+    let f: ir.StructField = st.fields.get(fi);
+    let lhs: String = "a.".concat(c_ident(f.name));
+    let rhs: String = "b.".concat(c_ident(f.name));
+    let e: String = nominal_eq_field_expr(pool, f.ty, lhs, rhs);
+    if fi == 0 { expr = e; } else { expr = expr.concat(" && ").concat(e); }
+    fi = fi + 1;
+  }
+  out.push("  return ".concat(expr).concat(";"));
+  out.push("}");
+  return out;
 }
 
 fn emit_enum_eq_def(pool: ir.TyPool, en: ir.EnumDecl) -> Vec[String] {
@@ -45,7 +85,7 @@ fn emit_enum_eq_def(pool: ir.TyPool, en: ir.EnumDecl) -> Vec[String] {
       while fi < v.fields.len() {
         let lhs: String = "a.payload.".concat(c_ident(v.name)).concat("._").concat(fi.to_string());
         let rhs: String = "b.payload.".concat(c_ident(v.name)).concat("._").concat(fi.to_string());
-        let e: String = enum_eq_field_expr(pool, v.fields.get(fi), lhs, rhs);
+        let e: String = nominal_eq_field_expr(pool, v.fields.get(fi), lhs, rhs);
         if fi == 0 { expr = e; } else { expr = expr.concat(" && ").concat(e); }
         fi = fi + 1;
       }
@@ -60,11 +100,26 @@ fn emit_enum_eq_def(pool: ir.TyPool, en: ir.EnumDecl) -> Vec[String] {
   return out;
 }
 
-pub fn emit_enum_eq_lines(pool: ir.TyPool, p: ir.Program) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
-  if p.enums.len() == 0 { return out; }
+fn append_eq_lines(out0: Vec[String], lines: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = out0;
+  let mut i: i32 = 0;
+  while i < lines.len() {
+    out.push(lines.get(i));
+    i = i + 1;
+  }
+  return out;
+}
 
-  // Forward declarations allow recursive enum payload calls across helpers.
+pub fn emit_nominal_eq_lines(pool: ir.TyPool, p: ir.Program) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  if p.structs.len() == 0 && p.enums.len() == 0 { return out; }
+
+  // Forward declarations allow cross nominal calls across helpers.
+  let mut si: i32 = 0;
+  while si < p.structs.len() {
+    out.push(emit_struct_eq_decl(pool, p.structs.get(si)));
+    si = si + 1;
+  }
   let mut i: i32 = 0;
   while i < p.enums.len() {
     out.push(emit_enum_eq_decl(pool, p.enums.get(i)));
@@ -72,9 +127,16 @@ pub fn emit_enum_eq_lines(pool: ir.TyPool, p: ir.Program) -> Vec[String] {
   }
   out.push("");
 
+  si = 0;
+  while si < p.structs.len() {
+    out = append_eq_lines(out, emit_struct_eq_def(pool, p.structs.get(si)));
+    out.push("");
+    si = si + 1;
+  }
+
   i = 0;
   while i < p.enums.len() {
-    out = append_lines(out, emit_enum_eq_def(pool, p.enums.get(i)));
+    out = append_eq_lines(out, emit_enum_eq_def(pool, p.enums.get(i)));
     out.push("");
     i = i + 1;
   }

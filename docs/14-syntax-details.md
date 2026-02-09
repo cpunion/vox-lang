@@ -102,8 +102,10 @@ Stage1 当前对相等运算符的约束：
 
 - `bool/<int>/f32/f64/String`：支持完整 `==`/`!=`。
   - 其中 `<int>` 指整数标量类型：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`。
+- `struct`：支持同类型结构体的 `==`/`!=`，逐字段比较。
+  - 字段类型也必须是可比较类型（基础标量、`String`、或同样满足条件的 `struct/enum`）。
 - `enum`：支持同类型枚举的 `==`/`!=`，包含 payload 比较（先比 tag，再按 variant 逐字段比较）。
-  - payload 字段类型也必须是可比较类型（基础标量、`String`、或同样满足条件的 `enum`）。
+  - payload 字段类型也必须是可比较类型（基础标量、`String`、或同样满足条件的 `struct/enum`）。
 
 ## 浮点字面量（Stage0/Stage1 v0）
 

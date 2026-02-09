@@ -342,12 +342,27 @@ fn eq_ty_capable(ctx: Ctx, ty: i32, seen0: Vec[String]) -> bool {
   if is_int_like_ty(ctx, base) || is_float_ty(ctx, base) { return true; }
 
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
-  if t.kind != ir.TyKind.Enum { return false; }
+  let is_enum: bool = t.kind == ir.TyKind.Enum;
+  let is_struct: bool = t.kind == ir.TyKind.Struct;
+  if !is_enum && !is_struct { return false; }
 
-  let qn: String = ty_mod(t).concat("::").concat(ty_name(t));
+  let kind_prefix: String = if is_enum { "E:" } else { "S:" };
+  let qn: String = kind_prefix.concat(ty_mod(t)).concat("::").concat(ty_name(t));
   if contains_str_tc_expr(seen0, qn) { return true; }
   let mut seen: Vec[String] = seen0;
   seen.push(qn);
+
+  if is_struct {
+    let fs: FindStructResult = find_struct(ctx, ty_mod(t), ty_name(t));
+    if !fs.found { return false; }
+    let ss: StructSig = fs.sig;
+    let mut fi: i32 = 0;
+    while fi < ss.fields.len() {
+      if !eq_ty_capable(ctx, ss.fields.get(fi).ty, seen) { return false; }
+      fi = fi + 1;
+    }
+    return true;
+  }
 
   let fe: FindEnumResult = find_enum(ctx, ty_mod(t), ty_name(t));
   if !fe.found { return false; }
@@ -500,7 +515,7 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   if is_eq {
     // Allow equality between a range and its base (compare by base value).
     if strip_range(ctx, rr.ty) != strip_range(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    // v0: primitive equality only (keep Stage1 aligned with Stage0 subset).
+    // Primitive equality is always allowed; nominal types are handled below.
     let lbase: i32 = strip_range(ctx, lr.ty);
     let lt: ir.Ty = ir.ty_pool_get(ctx.pool, lbase);
     let ok_prim: bool =
@@ -534,8 +549,8 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
         if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
         return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
       }
-      // Enum payload equality: recursively allow enums whose payload fields are also equality-capable.
-      if is_enum_ty(ctx, lbase) {
+      // Nominal equality: recursively allow struct/enum whose fields are equality-capable.
+      if is_enum_ty(ctx, lbase) || is_struct_ty(ctx, lbase) {
         if !eq_ty_capable(ctx, lbase, Vec()) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       } else {
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };

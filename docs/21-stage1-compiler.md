@@ -42,12 +42,15 @@
 - Stage1 lexer 仅负责识别 token 边界；parser 会对字符串字面量做最小的反转义（至少支持 `\\ \" \n \r \t`）。
 - codegen 输出到 C 字符串字面量时，会对内容做 C 级别转义（例如把换行字符输出为 `\\n`），避免生成的 `.c` 文件被“字面量换行”破坏。
 
-### 2) enum 相等（Stage0/Stage1 v0 约束）
+### 2) 名义类型相等（Stage0/Stage1 v0 约束）
 
 为保持范围可控，Stage0/Stage1 对 `==/!=` 的支持与 lowering 有明确限制（详见 `docs/14-syntax-details.md`）：
 
-- `bool/i32/i64/String`：正常相等比较
-- `enum`：仅允许与 unit variant（无 payload）比较；该比较会降低为 `EnumTag(x) == tag(Variant)`
+- `bool/<int>/f32/f64/String`：直接比较
+- `struct`：逐字段比较（字段类型需可比较）
+- `enum`：先比较 tag，再对 payload 逐字段比较（字段类型需可比较）
+
+后端会为名义类型生成辅助函数（`vox_struct_eq_*` / `vox_enum_eq_*`），并在 `cmp_eq/cmp_ne` 处调用。
 
 ### 3) TyPool 在 lowering 期间的“可变性”
 
