@@ -5,13 +5,14 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   let sr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, scrut, -1);
   if !sr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
-  // v0: match on enums/ints/strings only (enough for stage1 tests).
+  // v0: match on enums/ints/strings/bools.
   let scrut_base: i32 = strip_range(ctx, sr.ty);
   let scrut_t: ir.Ty = ir.ty_pool_get(ctx.pool, scrut_base);
   let is_enum: bool = match scrut_t.kind { ir.TyKind.Enum => true, _ => false };
   let is_int: bool = is_int_like_ty(ctx, scrut_base);
   let is_str: bool = scrut_base == ctx.ty_string;
-  if !is_enum && !is_int && !is_str { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  let is_bool: bool = scrut_base == ctx.ty_bool;
+  if !is_enum && !is_int && !is_str && !is_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
   if arms.len() == 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
@@ -50,7 +51,7 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
     // - Any arm after a `_` / bind arm is unreachable.
     // - Enum: if previous arms already cover the entire match, later arms are unreachable.
     // - Enum: if previous arms already cover the payload space of a specific variant, later arms for that variant are unreachable.
-    // - Int/String: duplicate literal arms are unreachable.
+    // - Int/String/Bool: duplicate literal arms are unreachable.
     if arms_has_wild_or_bind(arms, ai) {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(pat_span(arm.pat), "unreachable match arm") };
     }
@@ -76,6 +77,13 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
       if match arm.pat { ast.Pat.Str(_sp, _t) => true, _ => false } {
         let lit: String = match arm.pat { ast.Pat.Str(_sp, t) => t, _ => "" };
         if arms_has_str_lit(arms, ai, lit) {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(pat_span(arm.pat), "unreachable match arm") };
+        }
+      }
+    } else if is_bool {
+      if match arm.pat { ast.Pat.Bool(_sp, _b) => true, _ => false } {
+        let lit: bool = match arm.pat { ast.Pat.Bool(_sp, b) => b, _ => false };
+        if arms_has_bool_lit(arms, ai, lit) {
           return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(pat_span(arm.pat), "unreachable match arm") };
         }
       }
@@ -155,6 +163,11 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
         vi = vi + 1;
       }
     }
+  } else if is_bool {
+    if !has_wild && (!arms_has_bool_lit(arms, arms.len(), true) || !arms_has_bool_lit(arms, arms.len(), false)) {
+      let sp: ast.Span = ast.expr_pool_span(exprs, scrut);
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "non-exhaustive match, missing coverage for bool") };
+    }
   } else {
     if !has_wild {
       let sp: ast.Span = ast.expr_pool_span(exprs, scrut);
@@ -171,6 +184,7 @@ fn pat_span(p: ast.Pat) -> ast.Span {
   return match p {
     ast.Pat.Wild(sp) => sp,
     ast.Pat.Bind(sp, _n) => sp,
+    ast.Pat.Bool(sp, _b) => sp,
     ast.Pat.Int(sp, _t) => sp,
     ast.Pat.Str(sp, _t) => sp,
     ast.Pat.EnumVariant(sp, _ep, _vn, _args) => sp,
@@ -206,6 +220,16 @@ fn arms_has_str_lit(arms: Vec[ast.MatchArm], upto: i32, lit: String) -> bool {
   while i < upto {
     let p: ast.Pat = arms.get(i).pat;
     if match p { ast.Pat.Str(_sp, t) => t == lit, _ => false } { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn arms_has_bool_lit(arms: Vec[ast.MatchArm], upto: i32, lit: bool) -> bool {
+  let mut i: i32 = 0;
+  while i < upto {
+    let p: ast.Pat = arms.get(i).pat;
+    if match p { ast.Pat.Bool(_sp, b) => b == lit, _ => false } { return true; }
     i = i + 1;
   }
   return false;
@@ -284,6 +308,18 @@ fn pats_cover_all(ctx: Ctx, ty: i32, pats: Vec[ast.Pat]) -> bool {
   }
 
   let base: i32 = strip_range(ctx, ty);
+  if base == ctx.ty_bool {
+    let mut has_t: bool = false;
+    let mut has_f: bool = false;
+    let mut j: i32 = 0;
+    while j < pats.len() {
+      let p0: ast.Pat = pats.get(j);
+      if match p0 { ast.Pat.Bool(_sp, b) => b, _ => false } { has_t = true; }
+      if match p0 { ast.Pat.Bool(_sp, b) => !b, _ => false } { has_f = true; }
+      j = j + 1;
+    }
+    return has_t && has_f;
+  }
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
   if t.kind != ir.TyKind.Enum { return false; }
   let fe: FindEnumResult = find_enum(ctx, ty_mod(t), ty_name(t));
@@ -353,6 +389,7 @@ fn tc_pat(ctx: Ctx, mod_path: String, imps: Imports, scrut_ty: i32, scrut_t: ir.
   return match pat {
     ast.Pat.Wild(_sp) => PatLocalsResult { ok: true, locals: l0 },
     ast.Pat.Bind(_sp, name) => PatLocalsResult { ok: true, locals: locals_decl(l0, name, scrut_ty, false) },
+    ast.Pat.Bool(_sp, _b) => if strip_range(ctx, scrut_ty) == ctx.ty_bool { PatLocalsResult { ok: true, locals: l0 } } else { PatLocalsResult { ok: false, locals: l0 } },
     ast.Pat.Int(_sp, text) => {
       if !is_int_like_ty(ctx, scrut_ty) {
         PatLocalsResult { ok: false, locals: l0 }

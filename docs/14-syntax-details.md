@@ -262,6 +262,7 @@ Stage0/Stage1 目前支持的 `match` pattern 形态：
 
 - `_`：wildcard
 - `name`：绑定模式（bind），总是匹配，并把 scrutinee 绑定到 `name`
+- `true` / `false`：布尔字面量（仅当 scrutinee 是 `bool`）
 - `123` / `-123`：整数字面量（仅当 scrutinee 是整数类型）
 - `"txt"`：字符串字面量（仅当 scrutinee 是 `String`）
 - `Enum.Variant(p0, p1, ...)`：枚举 variant pattern（payload 位置是 pattern，可递归）
@@ -335,7 +336,7 @@ pub const NAME: String = "vox";
   - `expr as <int>`、`expr as f32/f64`（运行时与 const 场景均支持整数与浮点互转；`float -> int` 为 checked cast）
   - `+ - * / %`、`& | ^ << >>`、比较、`== !=`、`&& ||`
   - `if cond { a } else { b }`（cond 必须为常量 bool）
-  - `match`（当前 const 子集支持 `_`、bind、整数字面量、字符串字面量 pattern；不支持 enum pattern）
+  - `match`（当前 const 子集支持 `_`、bind、`true/false`、整数字面量、字符串字面量 pattern；不支持 enum pattern）
 - 整数运算语义与运行时保持一致：
   - `+ - *`、`& | ^`、`<< >>` 按目标整数位宽执行（wrapping）。
   - `/ %` 在除数为 `0` 时编译期报错。
