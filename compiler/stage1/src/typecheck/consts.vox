@@ -569,10 +569,15 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
       let eval_expected_f: i32 = if match an_f { ast.ExprNode.Float(_s) => true, _ => false } { to_base } else { -1 };
       let ar_f: EvalConstExprResult = eval_const_expr_in_mod(c2, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, eval_expected_f);
       if !ar_f.ok { return ar_f; }
-      if ar_f.kind != const_kind_float() || !is_float_scalar_ty(c2, ar_f.ty) {
-        return EvalConstExprResult { ok: false, err: type_error(file, "const expression: cast expects float"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar_f.sigs, states: ar_f.states };
+      if ar_f.kind == const_kind_float() && is_float_scalar_ty(c2, ar_f.ty) {
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_float(), ty: to_base, iv: 0, bv: false, sv: float_norm_text(ar_f.sv), sigs: ar_f.sigs, states: ar_f.states };
       }
-      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_float(), ty: to_base, iv: 0, bv: false, sv: float_norm_text(ar_f.sv), sigs: ar_f.sigs, states: ar_f.states };
+      if ar_f.kind == const_kind_int() && is_int_like_ty(c2, ar_f.ty) {
+        let from_base_i: i32 = strip_range(c2, ar_f.ty);
+        let sv: String = const_int_to_float_text(c2, from_base_i, ar_f.iv);
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_float(), ty: to_base, iv: 0, bv: false, sv: sv, sigs: ar_f.sigs, states: ar_f.states };
+      }
+      return EvalConstExprResult { ok: false, err: type_error(file, "const expression: cast expects int/float"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar_f.sigs, states: ar_f.states };
     }
 
     let tk: ir.TyKind = int_kind(c2, to_base);
@@ -582,12 +587,21 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     let eval_expected: i32 = if match an { ast.ExprNode.Int(_s) => true, _ => false } && is_unsigned_int_kind(tk) { to_base } else { -1 };
     let ar: EvalConstExprResult = eval_const_expr_in_mod(c2, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, eval_expected);
     if !ar.ok { return ar; }
-    if ar.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: cast expects int"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
-
-    let from_base: i32 = strip_range(c2, ar.ty);
-    let cr: CastConstResult = cast_const_int_checked(c2, file, from_base, to_base, ar.iv);
-    if !cr.ok { return EvalConstExprResult { ok: false, err: cr.err, kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
-    let v: i64 = cr.v;
+    let mut v: i64 = 0;
+    if ar.kind == const_kind_int() {
+      let from_base: i32 = strip_range(c2, ar.ty);
+      let cr: CastConstResult = cast_const_int_checked(c2, file, from_base, to_base, ar.iv);
+      if !cr.ok { return EvalConstExprResult { ok: false, err: cr.err, kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
+      v = cr.v;
+    } else if ar.kind == const_kind_float() && is_float_scalar_ty(c2, ar.ty) {
+      let cfr: CastConstFloatToIntResult = cast_const_float_to_int_checked(c2, to_base, ar.sv);
+      if !cfr.ok {
+        return EvalConstExprResult { ok: false, err: type_error(file, cfr.err), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states };
+      }
+      v = cfr.v;
+    } else {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const expression: cast expects int/float"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states };
+    }
 
     if is_range_ty(c2, to) {
       let rt: ir.Ty = ir.ty_pool_get(c2.pool, to);

@@ -331,7 +331,7 @@ pub const NAME: String = "vox";
   - 字面量：`123` / `1.5` / `true` / `"txt"`
   - 其他常量引用（含跨模块的 `import` 访问）
   - `-x` / `!x`
-  - `expr as <int>`、`expr as f32/f64`（运行时支持整数与浮点互转；const 场景下整数与浮点之间的 cast 仍暂不支持）
+  - `expr as <int>`、`expr as f32/f64`（运行时与 const 场景均支持整数与浮点互转；`float -> int` 为 checked cast）
   - `+ - * / %`、`& | ^ << >>`、比较、`== !=`、`&& ||`
   - `if cond { a } else { b }`（cond 必须为常量 bool）
 - 整数运算语义与运行时保持一致：
