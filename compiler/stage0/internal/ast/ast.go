@@ -8,6 +8,8 @@ type Program struct {
 	Consts  []*ConstDecl
 	Structs []*StructDecl
 	Enums   []*EnumDecl
+	Traits  []*TraitDecl
+	Impls   []*ImplDecl
 	Funcs   []*FuncDecl
 }
 
@@ -74,6 +76,27 @@ type EnumVariant struct {
 	Name   string
 	Fields []Type // tuple-like payload, arity 0..N
 	Span   source.Span
+}
+
+type TraitDecl struct {
+	Pub     bool
+	Name    string
+	Methods []TraitMethodSig
+	Span    source.Span
+}
+
+type TraitMethodSig struct {
+	Name   string
+	Params []Param
+	Ret    Type
+	Span   source.Span
+}
+
+type ImplDecl struct {
+	Trait   Type
+	ForType Type
+	Methods []*FuncDecl
+	Span    source.Span
 }
 
 type Param struct {

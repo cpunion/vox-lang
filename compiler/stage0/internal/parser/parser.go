@@ -33,6 +33,8 @@ func ParseFiles(files []*source.File) (*ast.Program, *diag.Bag) {
 			merged.Consts = append(merged.Consts, prog.Consts...)
 			merged.Structs = append(merged.Structs, prog.Structs...)
 			merged.Enums = append(merged.Enums, prog.Enums...)
+			merged.Traits = append(merged.Traits, prog.Traits...)
+			merged.Impls = append(merged.Impls, prog.Impls...)
 			merged.Funcs = append(merged.Funcs, prog.Funcs...)
 		}
 		if d != nil && len(d.Items) > 0 {
@@ -92,8 +94,14 @@ func (p *Parser) parseProgram() *ast.Program {
 					fn.Pub = true
 					prog.Funcs = append(prog.Funcs, fn)
 				}
+			case p.match(lexer.TokenTrait):
+				td := p.parseTraitDecl()
+				if td != nil {
+					td.Pub = true
+					prog.Traits = append(prog.Traits, td)
+				}
 			default:
-				p.errorHere("expected `type`, `const`, `fn`, `struct`, or `enum` after `pub`")
+				p.errorHere("expected `type`, `const`, `fn`, `struct`, `enum`, or `trait` after `pub`")
 				p.advance()
 			}
 			continue
@@ -136,7 +144,21 @@ func (p *Parser) parseProgram() *ast.Program {
 			}
 			continue
 		}
-		p.errorHere("expected `import`, `type`, `const`, `struct`, `enum`, or `fn`")
+		if p.match(lexer.TokenTrait) {
+			td := p.parseTraitDecl()
+			if td != nil {
+				prog.Traits = append(prog.Traits, td)
+			}
+			continue
+		}
+		if p.match(lexer.TokenImpl) {
+			id := p.parseImplDecl()
+			if id != nil {
+				prog.Impls = append(prog.Impls, id)
+			}
+			continue
+		}
+		p.errorHere("expected `import`, `type`, `const`, `struct`, `enum`, `trait`, `impl`, or `fn`")
 		p.advance()
 	}
 	return prog
@@ -212,7 +234,7 @@ func (p *Parser) parseConstDecl() *ast.ConstDecl {
 		endTok = p.prev()
 	} else {
 		switch p.peek().Kind {
-		case lexer.TokenPub, lexer.TokenType, lexer.TokenConst, lexer.TokenFn, lexer.TokenStruct, lexer.TokenEnum, lexer.TokenImport, lexer.TokenEOF:
+		case lexer.TokenPub, lexer.TokenType, lexer.TokenConst, lexer.TokenFn, lexer.TokenStruct, lexer.TokenEnum, lexer.TokenTrait, lexer.TokenImpl, lexer.TokenImport, lexer.TokenEOF:
 			// ok
 		default:
 			p.errorHere("expected `;` or next top-level item after const")
@@ -273,7 +295,7 @@ func (p *Parser) parseImportDecl() *ast.ImportDecl {
 		endTok = p.prev()
 	} else {
 		switch p.peek().Kind {
-		case lexer.TokenPub, lexer.TokenType, lexer.TokenFn, lexer.TokenStruct, lexer.TokenEnum, lexer.TokenImport, lexer.TokenEOF:
+		case lexer.TokenPub, lexer.TokenType, lexer.TokenConst, lexer.TokenFn, lexer.TokenStruct, lexer.TokenEnum, lexer.TokenTrait, lexer.TokenImpl, lexer.TokenImport, lexer.TokenEOF:
 			// ok
 		default:
 			p.errorHere("expected `;` or next top-level item after import")
@@ -358,6 +380,94 @@ func (p *Parser) parseEnumDecl() *ast.EnumDecl {
 		endTok = p.prev()
 	}
 	return &ast.EnumDecl{Name: nameTok.Lexeme, Variants: variants, Span: joinSpan(startTok.Span, endTok.Span)}
+}
+
+func (p *Parser) parseTraitDecl() *ast.TraitDecl {
+	startTok := p.prev() // `trait`
+	nameTok := p.expect(lexer.TokenIdent, "expected trait name")
+	if nameTok.Kind != lexer.TokenIdent {
+		return nil
+	}
+	lbrace := p.expect(lexer.TokenLBrace, "expected `{` after trait name")
+	if lbrace.Kind != lexer.TokenLBrace {
+		return nil
+	}
+	methods := []ast.TraitMethodSig{}
+	for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
+		method := p.parseTraitMethodSig()
+		if method.Name != "" {
+			methods = append(methods, method)
+		}
+	}
+	rbrace := p.expect(lexer.TokenRBrace, "expected `}`")
+	return &ast.TraitDecl{Name: nameTok.Lexeme, Methods: methods, Span: joinSpan(startTok.Span, rbrace.Span)}
+}
+
+func (p *Parser) parseTraitMethodSig() ast.TraitMethodSig {
+	startTok := p.expect(lexer.TokenFn, "expected `fn` in trait")
+	if startTok.Kind != lexer.TokenFn {
+		return ast.TraitMethodSig{}
+	}
+	nameTok := p.expect(lexer.TokenIdent, "expected method name")
+	p.expect(lexer.TokenLParen, "expected `(`")
+	params := []ast.Param{}
+	if !p.at(lexer.TokenRParen) {
+		for {
+			paramName := p.expect(lexer.TokenIdent, "expected parameter name")
+			p.expect(lexer.TokenColon, "expected `:` after parameter name")
+			ty := p.parseType()
+			params = append(params, ast.Param{Name: paramName.Lexeme, Type: ty, Span: joinSpan(paramName.Span, ty.Span())})
+			if p.match(lexer.TokenComma) {
+				continue
+			}
+			break
+		}
+	}
+	endTok := p.expect(lexer.TokenRParen, "expected `)`")
+	var ret ast.Type = &ast.UnitType{S: endTok.Span}
+	if p.match(lexer.TokenArrow) {
+		ret = p.parseType()
+		endTok = p.prev()
+	}
+	if p.match(lexer.TokenSemicolon) {
+		endTok = p.prev()
+	} else {
+		p.errorHere("expected `;` after trait method signature")
+	}
+	if nameTok.Kind != lexer.TokenIdent {
+		return ast.TraitMethodSig{}
+	}
+	return ast.TraitMethodSig{
+		Name:   nameTok.Lexeme,
+		Params: params,
+		Ret:    ret,
+		Span:   joinSpan(startTok.Span, endTok.Span),
+	}
+}
+
+func (p *Parser) parseImplDecl() *ast.ImplDecl {
+	startTok := p.prev() // `impl`
+	traitTy := p.parseType()
+	p.expect(lexer.TokenFor, "expected `for` in impl declaration")
+	forTy := p.parseType()
+	lbrace := p.expect(lexer.TokenLBrace, "expected `{` after impl header")
+	if lbrace.Kind != lexer.TokenLBrace {
+		return nil
+	}
+	methods := []*ast.FuncDecl{}
+	for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
+		if !p.match(lexer.TokenFn) {
+			p.errorHere("expected `fn` in impl body")
+			p.advance()
+			continue
+		}
+		fn := p.parseFuncDecl()
+		if fn != nil {
+			methods = append(methods, fn)
+		}
+	}
+	rbrace := p.expect(lexer.TokenRBrace, "expected `}`")
+	return &ast.ImplDecl{Trait: traitTy, ForType: forTy, Methods: methods, Span: joinSpan(startTok.Span, rbrace.Span)}
 }
 
 func (p *Parser) parseFuncDecl() *ast.FuncDecl {

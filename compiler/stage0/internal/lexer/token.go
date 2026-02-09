@@ -32,6 +32,9 @@ const (
 	TokenMatch
 	TokenAs
 	TokenFrom
+	TokenFor
+	TokenTrait
+	TokenImpl
 	TokenWhile
 	TokenBreak
 	TokenContinue

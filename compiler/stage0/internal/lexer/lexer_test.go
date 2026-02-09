@@ -21,7 +21,7 @@ func TestLexBasic(t *testing.T) {
 func TestLexKeywordsAndPunct(t *testing.T) {
 	f := source.NewFile("test.vox", `
 // keywords
-fn let mut return if else true false type const static import pub match as from while break continue
+fn let mut return if else true false type const static import pub match as from for trait impl while break continue
 // punct/op
 (){}[] , ; : :: . .. ..= @ + += - -= * *= / /= % %= ! = == != < <= << <<= > >= >> >>= & &= && | |= || ^ ^= ->
 // string
@@ -37,7 +37,7 @@ fn let mut return if else true false type const static import pub match as from 
 	wantPrefix := []Kind{
 		TokenFn, TokenLet, TokenMut, TokenReturn, TokenIf, TokenElse,
 		TokenTrue, TokenFalse, TokenType, TokenConst, TokenStatic, TokenImport,
-		TokenPub, TokenMatch, TokenAs, TokenFrom, TokenWhile, TokenBreak, TokenContinue,
+		TokenPub, TokenMatch, TokenAs, TokenFrom, TokenFor, TokenTrait, TokenImpl, TokenWhile, TokenBreak, TokenContinue,
 	}
 	if len(ks) < len(wantPrefix) {
 		t.Fatalf("too few tokens: %d", len(ks))

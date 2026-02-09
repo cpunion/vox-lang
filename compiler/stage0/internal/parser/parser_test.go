@@ -544,6 +544,37 @@ fn main() -> i32 { return f(); }
 	}
 }
 
+func TestParseTraitAndImplDecls(t *testing.T) {
+	f := source.NewFile("test.vox", `pub trait Eq {
+  fn eq(a: Self, b: Self) -> bool;
+}
+impl Eq for i32 {
+  fn eq(a: i32, b: i32) -> bool { return a == b; }
+}
+fn main() -> i32 {
+  return 0;
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Traits) != 1 {
+		t.Fatalf("expected 1 trait, got %d", len(prog.Traits))
+	}
+	if !prog.Traits[0].Pub || prog.Traits[0].Name != "Eq" {
+		t.Fatalf("unexpected trait decl: %#v", prog.Traits[0])
+	}
+	if len(prog.Traits[0].Methods) != 1 || prog.Traits[0].Methods[0].Name != "eq" {
+		t.Fatalf("unexpected trait methods: %#v", prog.Traits[0].Methods)
+	}
+	if len(prog.Impls) != 1 {
+		t.Fatalf("expected 1 impl, got %d", len(prog.Impls))
+	}
+	if len(prog.Impls[0].Methods) != 1 || prog.Impls[0].Methods[0].Name != "eq" {
+		t.Fatalf("unexpected impl methods: %#v", prog.Impls[0].Methods)
+	}
+}
+
 func TestParseQualifiedTypePath(t *testing.T) {
 	f := source.NewFile("test.vox", `import "a"
 fn id(x: a.S) -> a.S { return x; }
