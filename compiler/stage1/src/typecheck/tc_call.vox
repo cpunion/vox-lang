@@ -1,6 +1,44 @@
 import "ast" as ast
 import "ir" as ir
 
+fn trait_is_or_extends(ctx: Ctx, mod_path: String, name: String, want_mod: String, want_name: String) -> bool {
+  if mod_path == want_mod && name == want_name { return true; }
+  let tf: FindTraitResult = find_trait(ctx, mod_path, name);
+  if !tf.found { return false; }
+  let mut i: i32 = 0;
+  while i < tf.sig.supers.len() {
+    let s: TraitSuperSig = tf.sig.supers.get(i);
+    if trait_is_or_extends(ctx, s.mod_path, s.name, want_mod, want_name) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn locals_has_type_param_bound(ctx: Ctx, l0: Locals, type_param: String, trait_mod: String, trait_name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < l0.type_param_bounds.len() {
+    let b: TypeParamBoundSig = l0.type_param_bounds.get(i);
+    if b.type_param == type_param && trait_is_or_extends(ctx, b.trait_mod_path, b.trait_name, trait_mod, trait_name) {
+      return true;
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn subst_self_in_sig(ctx: Ctx, sig: FuncSig, recv_ty: i32) -> FuncSig {
+  let mut self_subs: Vec[TySub] = Vec();
+  self_subs.push(TySub { name: "Self", ty: recv_ty });
+  let mut ps: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < sig.params.len() {
+    ps.push(subst_ty(ctx, sig.params.get(i), self_subs));
+    i = i + 1;
+  }
+  let rr: i32 = subst_ty(ctx, sig.ret, self_subs);
+  return FuncSig { params: ps, ret: rr, is_pub: sig.is_pub, type_params: sig.type_params, type_param_bounds: sig.type_param_bounds };
+}
+
 fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, call_sp: ast.Span, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {
   // Method calls: `recv.method(...)` for built-in types.
   let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
@@ -296,7 +334,7 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: a
   // Explicit type args win (when provided).
   let mut ti: i32 = 0;
   while ti < type_args.len() {
-    let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), type_args.get(ti));
+    let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, l0.type_params, type_args.get(ti));
     if !tr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     let tp: String = sig.type_params.get(ti);
     let cur: i32 = subs_lookup(subs, tp);
@@ -333,9 +371,17 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: a
     let b: TypeParamBoundSig = sig.type_param_bounds.get(bi);
     let ty0: i32 = subs_lookup(subs, b.type_param);
     if ty0 == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let fi: FindImplResult = find_impl(ctx, b.trait_mod_path, b.trait_name, strip_range(ctx, ty0));
+    let ty1: i32 = strip_range(ctx, ty0);
+    let fi: FindImplResult = find_impl(ctx, b.trait_mod_path, b.trait_name, ty1);
     if !fi.found {
-      let tname: String = ty_inst_str(ctx, strip_range(ctx, ty0));
+      let tt: ir.Ty = ir.ty_pool_get(ctx.pool, ty1);
+      if tt.kind == ir.TyKind.Param {
+        if locals_has_type_param_bound(ctx, l0, tt.name, b.trait_mod_path, b.trait_name) {
+          bi = bi + 1;
+          continue;
+        }
+      }
+      let tname: String = ty_inst_str(ctx, ty1);
       let cands: String = trait_impl_candidates_text(ctx, b.trait_mod_path, b.trait_name);
       let msg: String = "type argument ".concat(tname).concat(" does not satisfy trait bound ").concat(b.type_param).concat(": ").concat(b.trait_name).concat(" (available impls: ").concat(cands).concat(")");
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
@@ -369,6 +415,15 @@ fn tc_call_trait_static(ctx: Ctx, w: World, cur_mod: String, imps: Imports, expr
   let ar0: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(0), -1);
   if !ar0.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: ar0.err }; }
   let recv_ty: i32 = strip_range(ctx, ar0.ty);
+  let rt: ir.Ty = ir.ty_pool_get(ctx.pool, recv_ty);
+  if rt.kind == ir.TyKind.Param {
+    if !locals_has_type_param_bound(ctx, l0, rt.name, trait_mod, trait_name) {
+      let msg0: String = "type parameter ".concat(rt.name).concat(" does not satisfy trait bound: ").concat(trait_name);
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg0) };
+    }
+    let msig: FuncSig = subst_self_in_sig(ctx, tm.m.sig, recv_ty);
+    return tc_call_func_sig(ctx, w, cur_mod, imps, exprs, l0, call_sp, trait_mod, msig, type_args, args, expected);
+  }
 
   let fi: FindImplResult = find_impl(ctx, trait_mod, trait_name, recv_ty);
   if !fi.found {
