@@ -431,6 +431,20 @@ fn const_local_from_value(name: String, v: EvalConstExprResult) -> ConstLocal {
 
 struct ConstPatEvalResult { ok: bool, matched: bool, has_bind: bool, bind_name: String, err: String }
 
+fn const_find_enum_variant_idx(ctx: Ctx, ty: i32, vname: String) -> i32 {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind != ir.TyKind.Enum { return -1; }
+  let fe: FindEnumResult = find_enum(ctx, ty_mod(t), ty_name(t));
+  if !fe.found { return -1; }
+  let mut i: i32 = 0;
+  while i < fe.sig.vars.len() {
+    if fe.sig.vars.get(i).name == vname { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 fn const_match_int_pat(ctx: Ctx, scrut_ty: i32, scrut_iv: i64, text: String) -> ConstPatEvalResult {
   let base: i32 = strip_range(ctx, scrut_ty);
   if !is_int_like_ty(ctx, base) {
@@ -486,7 +500,20 @@ fn const_pat_matches(ctx: Ctx, scrut: EvalConstExprResult, pat: ast.Pat) -> Cons
         ConstPatEvalResult { ok: true, matched: scrut.sv == text, has_bind: false, bind_name: "", err: "" }
       }
     },
-    ast.Pat.EnumVariant(_sp, _enum_parts, _vname, _args) => ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const enum pattern is not supported yet" },
+    ast.Pat.EnumVariant(_sp, _enum_parts, vname, args) => {
+      if scrut.kind != const_kind_enum() {
+        ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const enum pattern requires enum scrutinee" }
+      } else if args.len() != 0 {
+        ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const enum payload pattern is not supported yet" }
+      } else {
+        let vidx: i32 = const_find_enum_variant_idx(ctx, scrut.ty, vname);
+        if vidx == -1 {
+          ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "unknown enum variant in const pattern" }
+        } else {
+          ConstPatEvalResult { ok: true, matched: scrut.iv == (vidx as i64), has_bind: false, bind_name: "", err: "" }
+        }
+      }
+    },
   };
 }
 
@@ -561,6 +588,39 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     }
     let s: String = match n { ast.ExprNode.Str(x) => x, _ => "" };
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_str(), ty: ctx.ty_string, iv: 0, bv: false, sv: s, sigs: sigs0, states: states0 };
+  }
+
+  // enum unit variant shorthand: `.None` (expected enum type required)
+  if match n { ast.ExprNode.DotIdent(_name) => true, _ => false } {
+    let vname: String = match n { ast.ExprNode.DotIdent(x) => x, _ => "" };
+    if expected == -1 {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const enum shorthand requires expected enum type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    let eb: i32 = strip_range(ctx, expected);
+    let et: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
+    if et.kind != ir.TyKind.Enum {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const enum shorthand requires expected enum type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    let fe: FindEnumResult = find_enum(ctx, ty_mod(et), ty_name(et));
+    if !fe.found {
+      return EvalConstExprResult { ok: false, err: type_error(file, "unknown enum in const expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    let mut vidx: i32 = -1;
+    let mut vi: i32 = 0;
+    while vi < fe.sig.vars.len() {
+      let v: EnumVariantSig = fe.sig.vars.get(vi);
+      if v.name == vname {
+        if v.fields.len() != 0 {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const enum payload init is not supported yet"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+        }
+        vidx = vi;
+      }
+      vi = vi + 1;
+    }
+    if vidx == -1 {
+      return EvalConstExprResult { ok: false, err: type_error(file, "unknown enum variant in const expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_enum(), ty: eb, iv: vidx as i64, bv: false, sv: vname, sigs: sigs0, states: states0 };
   }
 
   // identifier: must resolve to a const
@@ -716,7 +776,7 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     return eval_const_expr_in_mod_locals(ctx, w, items, cr.sigs, cr.states, cur_mod, imps, exprs, file, els, expected, locals);
   }
 
-  // match expr (const v0 subset: wildcard/bind/bool/int/string patterns).
+  // match expr (const v0 subset: wildcard/bind/bool/int/string/enum-unit patterns).
   if match n { ast.ExprNode.Match(_scrut, _arms) => true, _ => false } {
     let scrut: i32 = match n { ast.ExprNode.Match(s, _as) => s, _ => -1 };
     let arms: Vec[ast.MatchArm] = match n { ast.ExprNode.Match(_s, as0) => as0, _ => Vec() };
@@ -968,8 +1028,9 @@ fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig]
     ty == ctx.ty_string ||
     ty == ctx.ty_f32 ||
     ty == ctx.ty_f64 ||
+    is_enum_ty(ctx, ty) ||
     is_int_scalar_kind(int_kind(ctx, ty));
-  if !ok_v0 { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "const type must be primitive in v0"), sigs: sigs, states: states }; }
+  if !ok_v0 { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "const type must be primitive/enum-unit in v0"), sigs: sigs, states: states }; }
 
   // Evaluate init expression.
   let ev: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs, states, it.mod_path, imps, m.prog.exprs, it.decl.file, it.decl.init, ty);
