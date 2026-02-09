@@ -175,6 +175,15 @@ fn find_type_bind(binds: Vec[TypeBind], name: String) -> i32 {
   return -1;
 }
 
+fn has_type_param_name(type_params: Vec[String], name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < type_params.len() {
+    if type_params.get(i) == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn binds_from_args(type_params: Vec[String], arg_tys: Vec[i32]) -> Vec[TypeBind] {
   let mut out: Vec[TypeBind] = Vec();
   let mut i: i32 = 0;
@@ -278,6 +287,33 @@ fn set_enum_vars(ctx0: Ctx, mod_path: String, name: String, vars: Vec[EnumVarian
 
 fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_params: Vec[String], binds: Vec[TypeBind], tn: ast.TypeName) -> ResolveTyResult {
   let mut c: Ctx = ctx;
+  // Associated type projection over type params:
+  // - Self.Item
+  // - T.Item
+  if tn.parts.len() == 2 && tn.args.len() == 0 {
+    let base: String = tn.parts.get(0);
+    let assoc: String = tn.parts.get(1);
+    let proj: String = base.concat(".").concat(assoc);
+
+    let pty: i32 = find_type_bind(binds, proj);
+    if pty != -1 { return ResolveTyResult { ctx: c, ok: true, idx: pty }; }
+
+    let bty: i32 = find_type_bind(binds, base);
+    if bty != -1 {
+      let bt: ir.Ty = ir.ty_pool_get(c.pool, bty);
+      if bt.kind != ir.TyKind.Param { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      let ir0: InternResult = intern_ty(c, ir.ty_param(bt.name.concat(".").concat(assoc)));
+      c = ir0.ctx;
+      return ResolveTyResult { ctx: c, ok: true, idx: ir0.idx };
+    }
+
+    if has_type_param_name(type_params, base) {
+      let ir1: InternResult = intern_ty(c, ir.ty_param(proj));
+      c = ir1.ctx;
+      return ResolveTyResult { ctx: c, ok: true, idx: ir1.idx };
+    }
+  }
+
   // type param (generic function): `T`
   if tn.parts.len() == 1 && tn.args.len() == 0 {
     let name0: String = tn.parts.get(0);

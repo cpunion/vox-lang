@@ -134,16 +134,79 @@ fn locals_has_type_param_bound(ctx: Ctx, l0: Locals, type_param: String, trait_m
   return false;
 }
 
+fn find_param_ty_idx(ctx: Ctx, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Param && t.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn find_vec_ty_idx_local(ctx: Ctx, elem: i32) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Vec && t.elem == elem { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn find_range_ty_idx_local(ctx: Ctx, elem: i32, lo: i64, hi: i64) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Range && t.elem == elem && t.lo == lo && t.hi == hi { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn has_self_assoc_prefix(name: String) -> bool {
+  return name.len() > 5 && name.slice(0, 5) == "Self.";
+}
+
+fn subst_self_ty(ctx: Ctx, ty: i32, recv_ty: i32) -> i32 {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param {
+    if t.name == "Self" { return recv_ty; }
+    if has_self_assoc_prefix(t.name) {
+      let rt: ir.Ty = ir.ty_pool_get(ctx.pool, recv_ty);
+      if rt.kind == ir.TyKind.Param {
+        let want: String = rt.name.concat(t.name.slice(4, t.name.len()));
+        let pty: i32 = find_param_ty_idx(ctx, want);
+        if pty != -1 { return pty; }
+      }
+    }
+    return ty;
+  }
+  if t.kind == ir.TyKind.Vec {
+    let e: i32 = subst_self_ty(ctx, t.elem, recv_ty);
+    if e == t.elem { return ty; }
+    let v: i32 = find_vec_ty_idx_local(ctx, e);
+    if v != -1 { return v; }
+    return ctx.ty_bad;
+  }
+  if t.kind == ir.TyKind.Range {
+    let e2: i32 = subst_self_ty(ctx, t.elem, recv_ty);
+    if e2 == t.elem { return ty; }
+    let r: i32 = find_range_ty_idx_local(ctx, e2, t.lo, t.hi);
+    if r != -1 { return r; }
+    return ctx.ty_bad;
+  }
+  return ty;
+}
+
 fn subst_self_in_sig(ctx: Ctx, sig: FuncSig, recv_ty: i32) -> FuncSig {
-  let mut self_subs: Vec[TySub] = Vec();
-  self_subs.push(TySub { name: "Self", ty: recv_ty });
   let mut ps: Vec[i32] = Vec();
   let mut i: i32 = 0;
   while i < sig.params.len() {
-    ps.push(subst_ty(ctx, sig.params.get(i), self_subs));
+    ps.push(subst_self_ty(ctx, sig.params.get(i), recv_ty));
     i = i + 1;
   }
-  let rr: i32 = subst_ty(ctx, sig.ret, self_subs);
+  let rr: i32 = subst_self_ty(ctx, sig.ret, recv_ty);
   return FuncSig { params: ps, ret: rr, is_pub: sig.is_pub, type_params: sig.type_params, type_param_bounds: sig.type_param_bounds };
 }
 
