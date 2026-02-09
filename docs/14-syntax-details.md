@@ -293,6 +293,11 @@ pub const NAME: String = "vox";
   - `expr as <int>`（显式整数转换；在 const 表达式中溢出一定会在编译期报错）
   - `+ - * / %`、`& | ^ << >>`、比较、`== !=`、`&& ||`
   - `if cond { a } else { b }`（cond 必须为常量 bool）
+- 整数运算语义与运行时保持一致：
+  - `+ - *`、`& | ^`、`<< >>` 按目标整数位宽执行（wrapping）。
+  - `/ %` 在除数为 `0` 时编译期报错。
+  - 有符号整数在 `MIN / -1` 与 `MIN % -1` 时编译期报错（`division overflow`）。
+  - `<< >>` 的移位位数必须在 `[0, bit_width(T)-1]`，否则编译期报错。
 - 不支持在 const 初始化中调用函数、构造 struct/enum、`match` 等（后续由 `comptime` 统一解决）。
 
 可见性与导入（Stage0/Stage1 v0）：

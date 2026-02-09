@@ -330,6 +330,17 @@ fn main() -> i32 {
 	}
 }
 
+func TestConstI8WrappingAdd(t *testing.T) {
+	out := runMain(t, `const A: i8 = 120
+const B: i8 = A + A
+fn main() -> i32 {
+  return B as i32;
+}`)
+	if out != "-16" {
+		t.Fatalf("expected -16, got %q", out)
+	}
+}
+
 func TestShiftCountOutOfRangePanics(t *testing.T) {
 	_, err := runMainErr(t, `fn main() -> i32 {
   let x: i32 = 1 << 32;

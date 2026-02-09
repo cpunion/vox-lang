@@ -626,6 +626,89 @@ fn main() -> i32 { return N as i32; }`)
 	}
 }
 
+func TestConstDeclI8WrappingAddTypechecks(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const A: i8 = 120
+const B: i8 = A + A
+fn main() -> i32 { return B as i32; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestConstDeclDivisionOverflowRejected(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const N: i8 = (-128) / (-1)
+fn main() -> i32 { return N as i32; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "const expression: division overflow") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected const division overflow error, got: %+v", tdiags.Items)
+	}
+}
+
+func TestConstDeclShiftCountOutOfRangeRejected(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const N: i32 = 1 << 32
+fn main() -> i32 { return N; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "const expression: shift count out of range") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected const shift count out of range error, got: %+v", tdiags.Items)
+	}
+}
+
+func TestConstDeclEqTypeMismatchRejected(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const B: bool = (1 as i8) == (1 as i16)
+fn main() -> i32 { return if B { 1 } else { 0 }; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "const expression: ==/!= type mismatch") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected const equality type mismatch error, got: %+v", tdiags.Items)
+	}
+}
+
 func TestConstDeclU8OutOfRangeRejected(t *testing.T) {
 	f := source.NewFile("src/main.vox", `const N: u8 = 256
 fn main() -> i32 { return N as i32; }`)

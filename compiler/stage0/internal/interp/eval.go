@@ -156,6 +156,19 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 	case *ast.BoolLit:
 		return Value{K: VBool, B: e.Value}, nil
 	case *ast.IdentExpr:
+		if cv, ok := rt.prog.ConstExprValues[ex]; ok {
+			ty := stripRange(rt.prog.ExprTypes[ex])
+			switch cv.K {
+			case typecheck.ConstInt:
+				return Value{K: VInt, I: truncInt(uint64(cv.I64), ty)}, nil
+			case typecheck.ConstBool:
+				return Value{K: VBool, B: cv.B}, nil
+			case typecheck.ConstStr:
+				return Value{K: VString, S: cv.S}, nil
+			default:
+				return unit(), fmt.Errorf("bad const value")
+			}
+		}
 		v, ok := rt.lookupValue(e.Name)
 		if !ok {
 			return unit(), fmt.Errorf("unknown identifier: %s", e.Name)
@@ -711,6 +724,19 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		// Unit enum variant value: `Enum.Variant`.
 		if cu, ok := rt.prog.EnumUnitVariants[e]; ok {
 			return Value{K: VEnum, E: cu.Enum.Name, T: cu.Tag}, nil
+		}
+		if cv, ok := rt.prog.ConstExprValues[ex]; ok {
+			ty := stripRange(rt.prog.ExprTypes[ex])
+			switch cv.K {
+			case typecheck.ConstInt:
+				return Value{K: VInt, I: truncInt(uint64(cv.I64), ty)}, nil
+			case typecheck.ConstBool:
+				return Value{K: VBool, B: cv.B}, nil
+			case typecheck.ConstStr:
+				return Value{K: VString, S: cv.S}, nil
+			default:
+				return unit(), fmt.Errorf("bad const value")
+			}
 		}
 
 		recv, err := rt.evalExpr(e.Recv)

@@ -57,7 +57,7 @@ func (c *checker) evalConst(qname string, at *source.File) ConstValue {
 	}
 	c.constBusy[qname] = true
 	declTy := c.constSigs[qname].Ty
-	v, vty := c.evalConstExpr(cd.Expr, cd.Span.File)
+	v, vty := c.evalConstExprWithExpected(cd.Expr, cd.Span.File, declTy)
 	if v.K == ConstBad || vty.K == TyBad || declTy.K == TyBad {
 		c.constBusy[qname] = false
 		c.constVals[qname] = ConstValue{K: ConstBad}
@@ -150,13 +150,166 @@ func (c *checker) lookupConstByParts(file *source.File, parts []string, s source
 	return q, sig, c.evalConst(q, file), true
 }
 
+func constTruncBits(u uint64, w int) uint64 {
+	if w <= 0 || w >= 64 {
+		return u
+	}
+	return u & ((uint64(1) << uint64(w)) - 1)
+}
+
+func constBitWidth(t Type) int {
+	if t.K == TyUntypedInt {
+		return 64
+	}
+	return intBitWidth(t)
+}
+
+func constIntSigned(bits uint64, t Type) int64 {
+	bt := stripRange(t)
+	w := constBitWidth(bt)
+	bits = constTruncBits(bits, w)
+	switch bt.K {
+	case TyI8:
+		return int64(int8(bits))
+	case TyI16:
+		return int64(int16(bits))
+	case TyI32:
+		return int64(int32(bits))
+	default:
+		return int64(bits)
+	}
+}
+
+func constIntMinSigned(t Type) int64 {
+	switch stripRange(t).K {
+	case TyI8:
+		return -128
+	case TyI16:
+		return -32768
+	case TyI32:
+		return -2147483648
+	default:
+		return -9223372036854775808
+	}
+}
+
+func constUintBitsForType(v int64, t Type) (uint64, bool) {
+	bt := stripRange(t)
+	if bt.K == TyUntypedInt || isSignedIntType(bt) {
+		return constTruncBits(uint64(v), constBitWidth(bt)), true
+	}
+	if !isUnsignedIntType(bt) {
+		return 0, false
+	}
+	if (bt.K == TyU64 || bt.K == TyUSize) && v < 0 {
+		return 0, false
+	}
+	return constTruncBits(uint64(v), constBitWidth(bt)), true
+}
+
+func constIntValueFromBits(bits uint64, t Type) (int64, bool) {
+	bt := stripRange(t)
+	if bt.K == TyUntypedInt || isSignedIntType(bt) {
+		return constIntSigned(bits, bt), true
+	}
+	if !isUnsignedIntType(bt) {
+		return 0, false
+	}
+	u := constTruncBits(bits, constBitWidth(bt))
+	if bt.K == TyU64 || bt.K == TyUSize {
+		if u > uint64(^uint64(0)>>1) {
+			return 0, false
+		}
+	}
+	return int64(u), true
+}
+
+func constExpectedScalarInt(expected Type) (Type, bool) {
+	if expected.K == TyBad || expected.K == TyRange {
+		return Type{K: TyBad}, false
+	}
+	bt := stripRange(expected)
+	if !isIntType(bt) {
+		return Type{K: TyBad}, false
+	}
+	return bt, true
+}
+
+func constIsIntOrUntyped(t Type) bool {
+	bt := stripRange(t)
+	return bt.K == TyUntypedInt || isIntType(bt)
+}
+
+func constResolveIntType(expected, left, right Type) (Type, bool) {
+	want, hasWant := constExpectedScalarInt(expected)
+	l := stripRange(left)
+	r := stripRange(right)
+	if !constIsIntOrUntyped(l) || !constIsIntOrUntyped(r) {
+		return Type{K: TyBad}, false
+	}
+	if l.K == TyUntypedInt && r.K == TyUntypedInt {
+		if hasWant {
+			return want, true
+		}
+		return Type{K: TyI64}, true
+	}
+	if l.K == TyUntypedInt {
+		if hasWant {
+			if !sameType(want, r) {
+				return Type{K: TyBad}, false
+			}
+			return want, true
+		}
+		return r, true
+	}
+	if r.K == TyUntypedInt {
+		if hasWant {
+			if !sameType(want, l) {
+				return Type{K: TyBad}, false
+			}
+			return want, true
+		}
+		return l, true
+	}
+	if !sameType(l, r) {
+		return Type{K: TyBad}, false
+	}
+	if hasWant && !sameType(want, l) {
+		return Type{K: TyBad}, false
+	}
+	return l, true
+}
+
 func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Type) {
+	return c.evalConstExprWithExpected(ex, file, Type{K: TyBad})
+}
+
+func (c *checker) evalConstExprWithExpected(ex ast.Expr, file *source.File, expected Type) (ConstValue, Type) {
 	switch e := ex.(type) {
 	case *ast.IntLit:
 		u, err := strconv.ParseUint(e.Text, 10, 64)
 		if err != nil || u > uint64(^uint64(0)>>1) {
 			c.errorAt(e.S, "invalid integer literal")
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
+		}
+		if want, ok := constExpectedScalarInt(expected); ok {
+			min, max, ok2 := intMinMax(want)
+			if !ok2 {
+				c.errorAt(e.S, "const expression: bad int type")
+				return ConstValue{K: ConstBad}, Type{K: TyBad}
+			}
+			if isUnsignedIntType(want) {
+				if u > max {
+					c.errorAt(e.S, "const integer out of range for "+want.String())
+					return ConstValue{K: ConstBad}, Type{K: TyBad}
+				}
+				return ConstValue{K: ConstInt, I64: int64(u)}, want
+			}
+			if int64(u) < min || u > max {
+				c.errorAt(e.S, "const integer out of range for "+want.String())
+				return ConstValue{K: ConstBad}, Type{K: TyBad}
+			}
+			return ConstValue{K: ConstInt, I64: int64(u)}, want
 		}
 		return ConstValue{K: ConstInt, I64: int64(u)}, Type{K: TyUntypedInt}
 	case *ast.BoolLit:
@@ -195,31 +348,51 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 		}
 		return v, sig.Ty
 	case *ast.UnaryExpr:
-		v, ty := c.evalConstExpr(e.Expr, file)
+		if e.Op == "!" {
+			v, ty := c.evalConstExprWithExpected(e.Expr, file, Type{K: TyBool})
+			if v.K == ConstBad || ty.K != TyBool || v.K != ConstBool {
+				c.errorAt(e.S, "const expression: unary ! expects bool")
+				return ConstValue{K: ConstBad}, Type{K: TyBad}
+			}
+			return ConstValue{K: ConstBool, B: !v.B}, Type{K: TyBool}
+		}
+		v, ty := c.evalConstExprWithExpected(e.Expr, file, Type{K: TyBad})
 		if v.K == ConstBad {
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 		switch e.Op {
 		case "-":
-			base := stripRange(ty)
-			if base.K != TyUntypedInt && (!isIntType(base) || !isSignedIntType(base)) {
+			outTy, hasOutTy := constExpectedScalarInt(expected)
+			if !hasOutTy {
+				outTy = stripRange(ty)
+			}
+			if outTy.K == TyUntypedInt {
+				return ConstValue{K: ConstInt, I64: -v.I64}, Type{K: TyUntypedInt}
+			}
+			if !isIntType(outTy) || !isSignedIntType(outTy) {
 				c.errorAt(e.S, "const expression: unary - expects int")
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
 			}
-			return ConstValue{K: ConstInt, I64: -v.I64}, Type{K: TyUntypedInt}
-		case "!":
-			if ty.K != TyBool || v.K != ConstBool {
-				c.errorAt(e.S, "const expression: unary ! expects bool")
+			bits, okBits := constUintBitsForType(v.I64, outTy)
+			if !okBits {
+				c.errorAt(e.S, "const expression: const u64 overflow")
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
 			}
-			return ConstValue{K: ConstBool, B: !v.B}, Type{K: TyBool}
+			w := constBitWidth(outTy)
+			negBits := constTruncBits(uint64(-constIntSigned(bits, outTy)), w)
+			out, okOut := constIntValueFromBits(negBits, outTy)
+			if !okOut {
+				c.errorAt(e.S, "const expression: const u64 overflow")
+				return ConstValue{K: ConstBad}, Type{K: TyBad}
+			}
+			return ConstValue{K: ConstInt, I64: out}, outTy
 		default:
 			c.errorAt(e.S, "const expression: unsupported unary op: "+e.Op)
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 	case *ast.AsExpr:
 		// const casts (stage0 v0): int <-> int, and `@range(..) T`.
-		v, ty := c.evalConstExpr(e.Expr, file)
+		v, ty := c.evalConstExprWithExpected(e.Expr, file, Type{K: TyBad})
 		if v.K == ConstBad || ty.K == TyBad {
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
@@ -300,7 +473,7 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 	case *ast.BinaryExpr:
 		// Short-circuit for && and ||.
 		if e.Op == "&&" || e.Op == "||" {
-			lv, lty := c.evalConstExpr(e.Left, file)
+			lv, lty := c.evalConstExprWithExpected(e.Left, file, Type{K: TyBool})
 			if lv.K == ConstBad || lty.K != TyBool {
 				c.errorAt(e.S, "const expression: &&/|| expects bool")
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
@@ -311,7 +484,7 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 			if e.Op == "||" && lv.B {
 				return ConstValue{K: ConstBool, B: true}, Type{K: TyBool}
 			}
-			rv, rty := c.evalConstExpr(e.Right, file)
+			rv, rty := c.evalConstExprWithExpected(e.Right, file, Type{K: TyBool})
 			if rv.K == ConstBad || rty.K != TyBool {
 				c.errorAt(e.S, "const expression: &&/|| expects bool")
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
@@ -322,77 +495,169 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 			return ConstValue{K: ConstBool, B: lv.B || rv.B}, Type{K: TyBool}
 		}
 
-		lv, lty := c.evalConstExpr(e.Left, file)
-		rv, rty := c.evalConstExpr(e.Right, file)
+		want, hasWant := constExpectedScalarInt(expected)
+		leftExpected := Type{K: TyBad}
+		if hasWant {
+			leftExpected = want
+		}
+		lv, lty := c.evalConstExprWithExpected(e.Left, file, leftExpected)
+		rightExpected := Type{K: TyBad}
+		lb := stripRange(lty)
+		if isIntType(lb) {
+			rightExpected = lb
+		} else if hasWant {
+			rightExpected = want
+		}
+		rv, rty := c.evalConstExprWithExpected(e.Right, file, rightExpected)
 		if lv.K == ConstBad || rv.K == ConstBad || lty.K == TyBad || rty.K == TyBad {
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 
 		// int ops
-		isInt := func(t Type) bool { bt := stripRange(t); return bt.K == TyUntypedInt || isIntType(bt) }
 		if e.Op == "+" || e.Op == "-" || e.Op == "*" || e.Op == "/" || e.Op == "%" || e.Op == "&" || e.Op == "|" || e.Op == "^" || e.Op == "<<" || e.Op == ">>" {
-			if !isInt(lty) || !isInt(rty) {
+			if !constIsIntOrUntyped(lty) || !constIsIntOrUntyped(rty) {
 				c.errorAt(e.S, "const expression: arithmetic expects ints")
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
 			}
-			var out int64
+			outTy, okTy := constResolveIntType(expected, lty, rty)
+			if !okTy {
+				c.errorAt(e.S, "const expression: arithmetic expects same integer type")
+				return ConstValue{K: ConstBad}, Type{K: TyBad}
+			}
+			w := constBitWidth(outTy)
+			ua, okA := constUintBitsForType(lv.I64, outTy)
+			ub, okB := constUintBitsForType(rv.I64, outTy)
+			if !okA || !okB {
+				c.errorAt(e.S, "const expression: const u64 overflow")
+				return ConstValue{K: ConstBad}, Type{K: TyBad}
+			}
+			var outBits uint64
 			switch e.Op {
 			case "+":
-				out = lv.I64 + rv.I64
+				outBits = constTruncBits(ua+ub, w)
 			case "-":
-				out = lv.I64 - rv.I64
+				outBits = constTruncBits(ua-ub, w)
 			case "*":
-				out = lv.I64 * rv.I64
+				outBits = constTruncBits(ua*ub, w)
 			case "/":
-				if rv.I64 == 0 {
+				if ub == 0 {
 					c.errorAt(e.S, "const expression: division by zero")
 					return ConstValue{K: ConstBad}, Type{K: TyBad}
 				}
-				out = lv.I64 / rv.I64
+				if isSignedIntType(outTy) || outTy.K == TyUntypedInt {
+					a := constIntSigned(ua, outTy)
+					b := constIntSigned(ub, outTy)
+					if b == -1 && a == constIntMinSigned(outTy) {
+						c.errorAt(e.S, "const expression: division overflow")
+						return ConstValue{K: ConstBad}, Type{K: TyBad}
+					}
+					outBits = constTruncBits(uint64(a/b), w)
+				} else {
+					outBits = constTruncBits(ua/ub, w)
+				}
 			case "%":
-				if rv.I64 == 0 {
+				if ub == 0 {
 					c.errorAt(e.S, "const expression: division by zero")
 					return ConstValue{K: ConstBad}, Type{K: TyBad}
 				}
-				out = lv.I64 % rv.I64
+				if isSignedIntType(outTy) || outTy.K == TyUntypedInt {
+					a := constIntSigned(ua, outTy)
+					b := constIntSigned(ub, outTy)
+					if b == -1 && a == constIntMinSigned(outTy) {
+						c.errorAt(e.S, "const expression: division overflow")
+						return ConstValue{K: ConstBad}, Type{K: TyBad}
+					}
+					outBits = constTruncBits(uint64(a%b), w)
+				} else {
+					outBits = constTruncBits(ua%ub, w)
+				}
 			case "&":
-				out = lv.I64 & rv.I64
+				outBits = constTruncBits(ua&ub, w)
 			case "|":
-				out = lv.I64 | rv.I64
+				outBits = constTruncBits(ua|ub, w)
 			case "^":
-				out = lv.I64 ^ rv.I64
+				outBits = constTruncBits(ua^ub, w)
 			case "<<":
-				if rv.I64 < 0 || rv.I64 >= 64 {
-					c.errorAt(e.S, "const expression: shift count out of range")
-					return ConstValue{K: ConstBad}, Type{K: TyBad}
+				if isSignedIntType(outTy) || outTy.K == TyUntypedInt {
+					n := constIntSigned(ub, outTy)
+					if n < 0 || n >= int64(w) {
+						c.errorAt(e.S, "const expression: shift count out of range")
+						return ConstValue{K: ConstBad}, Type{K: TyBad}
+					}
+					outBits = constTruncBits(ua<<uint(n), w)
+				} else {
+					if ub >= uint64(w) {
+						c.errorAt(e.S, "const expression: shift count out of range")
+						return ConstValue{K: ConstBad}, Type{K: TyBad}
+					}
+					outBits = constTruncBits(ua<<uint(ub), w)
 				}
-				out = lv.I64 << uint(rv.I64)
 			case ">>":
-				if rv.I64 < 0 || rv.I64 >= 64 {
-					c.errorAt(e.S, "const expression: shift count out of range")
-					return ConstValue{K: ConstBad}, Type{K: TyBad}
+				if isSignedIntType(outTy) || outTy.K == TyUntypedInt {
+					n := constIntSigned(ub, outTy)
+					if n < 0 || n >= int64(w) {
+						c.errorAt(e.S, "const expression: shift count out of range")
+						return ConstValue{K: ConstBad}, Type{K: TyBad}
+					}
+					outBits = constTruncBits(uint64(constIntSigned(ua, outTy)>>uint(n)), w)
+				} else {
+					if ub >= uint64(w) {
+						c.errorAt(e.S, "const expression: shift count out of range")
+						return ConstValue{K: ConstBad}, Type{K: TyBad}
+					}
+					outBits = constTruncBits(ua>>uint(ub), w)
 				}
-				out = lv.I64 >> uint(rv.I64)
 			}
-			return ConstValue{K: ConstInt, I64: out}, Type{K: TyUntypedInt}
+			out, okOut := constIntValueFromBits(outBits, outTy)
+			if !okOut {
+				c.errorAt(e.S, "const expression: const u64 overflow")
+				return ConstValue{K: ConstBad}, Type{K: TyBad}
+			}
+			return ConstValue{K: ConstInt, I64: out}, outTy
 		}
 
 		// comparisons
 		if e.Op == "<" || e.Op == "<=" || e.Op == ">" || e.Op == ">=" {
-			if !isInt(lty) || !isInt(rty) {
+			if !constIsIntOrUntyped(lty) || !constIsIntOrUntyped(rty) {
 				c.errorAt(e.S, "const expression: comparison expects ints")
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
 			}
+			cmpTy, okTy := constResolveIntType(expected, lty, rty)
+			if !okTy {
+				c.errorAt(e.S, "const expression: comparison expects same integer type")
+				return ConstValue{K: ConstBad}, Type{K: TyBad}
+			}
+			ua, okA := constUintBitsForType(lv.I64, cmpTy)
+			ub, okB := constUintBitsForType(rv.I64, cmpTy)
+			if !okA || !okB {
+				c.errorAt(e.S, "const expression: const u64 overflow")
+				return ConstValue{K: ConstBad}, Type{K: TyBad}
+			}
 			var b bool
-			switch e.Op {
-			case "<":
-				b = lv.I64 < rv.I64
-			case "<=":
-				b = lv.I64 <= rv.I64
-			case ">":
-				b = lv.I64 > rv.I64
-			default:
-				b = lv.I64 >= rv.I64
+			if isSignedIntType(cmpTy) || cmpTy.K == TyUntypedInt {
+				a := constIntSigned(ua, cmpTy)
+				r := constIntSigned(ub, cmpTy)
+				switch e.Op {
+				case "<":
+					b = a < r
+				case "<=":
+					b = a <= r
+				case ">":
+					b = a > r
+				default:
+					b = a >= r
+				}
+			} else {
+				switch e.Op {
+				case "<":
+					b = ua < ub
+				case "<=":
+					b = ua <= ub
+				case ">":
+					b = ua > ub
+				default:
+					b = ua >= ub
+				}
 			}
 			return ConstValue{K: ConstBool, B: b}, Type{K: TyBool}
 		}
@@ -401,8 +666,19 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 		if e.Op == "==" || e.Op == "!=" {
 			var b bool
 			switch {
-			case isInt(lty) && isInt(rty):
-				b = lv.I64 == rv.I64
+			case constIsIntOrUntyped(lty) && constIsIntOrUntyped(rty):
+				eqTy, okTy := constResolveIntType(Type{K: TyBad}, lty, rty)
+				if !okTy {
+					c.errorAt(e.S, "const expression: ==/!= type mismatch")
+					return ConstValue{K: ConstBad}, Type{K: TyBad}
+				}
+				ua, okA := constUintBitsForType(lv.I64, eqTy)
+				ub, okB := constUintBitsForType(rv.I64, eqTy)
+				if !okA || !okB {
+					c.errorAt(e.S, "const expression: const u64 overflow")
+					return ConstValue{K: ConstBad}, Type{K: TyBad}
+				}
+				b = ua == ub
 			case lty.K == TyBool && rty.K == TyBool && lv.K == ConstBool && rv.K == ConstBool:
 				b = lv.B == rv.B
 			case lty.K == TyString && rty.K == TyString && lv.K == ConstStr && rv.K == ConstStr:
@@ -420,15 +696,15 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 		c.errorAt(e.S, "const expression: unsupported binary op: "+e.Op)
 		return ConstValue{K: ConstBad}, Type{K: TyBad}
 	case *ast.IfExpr:
-		cv, cty := c.evalConstExpr(e.Cond, file)
+		cv, cty := c.evalConstExprWithExpected(e.Cond, file, Type{K: TyBool})
 		if cv.K == ConstBad || cty.K != TyBool {
 			c.errorAt(e.S, "const expression: if cond must be bool")
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 		if cv.B {
-			return c.evalConstExpr(e.Then, file)
+			return c.evalConstExprWithExpected(e.Then, file, expected)
 		}
-		return c.evalConstExpr(e.Else, file)
+		return c.evalConstExprWithExpected(e.Else, file, expected)
 	default:
 		c.errorAt(ex.Span(), "const expression: unsupported form")
 		return ConstValue{K: ConstBad}, Type{K: TyBad}
