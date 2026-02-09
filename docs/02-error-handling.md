@@ -36,7 +36,9 @@ Stage1 当前实现（v0）：
   - 所在函数返回类型也必须是对应容器类型（`Result` 对 `Result`，`Option` 对 `Option`）。
   - `Result` 情况下，传播的 `Err` 类型规则：
     - 若源 `Err` 类型可直接赋给目标 `Err` 类型，则直接传播；
-    - 否则会尝试 `std/prelude::Into`：要求源 `Err` 类型存在 `impl Into`，且其 `Target` 可赋给目标 `Err` 类型（当前仅支持非泛型 `into` 方法）。
+    - 否则会尝试 `std/prelude::Into`：要求源 `Err` 类型存在 `impl Into`，且转换结果可赋给目标 `Err` 类型。
+      - 支持非泛型 `into`。
+      - 也支持“可从上下文推导”的泛型 `into`（通过源 `Err` 与目标 `Err` 统一类型参数并校验 trait bounds）。
 
 ## `try {}` 块
 

@@ -10,6 +10,16 @@ struct TryContainerInfo { ok: bool, is_result: bool, ok_ty: i32, residual_ty: i3
 struct VariantLookupFieldResult { found: bool, field_count: i32, field0: i32 }
 struct TryErrCompatResult { ok: bool, err: TcError }
 
+fn try_subs_lookup_tc(subs: Vec[TySub], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < subs.len() {
+    let s: TySub = subs.get(i);
+    if s.name == name { return s.ty; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, id: i32, expected: i32) -> ExprTyResult {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
 
@@ -114,12 +124,53 @@ fn try_result_err_compatible(ctx: Ctx, mod_path: String, sp: ast.Span, src_err_t
   if !im.found {
     return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
   }
-  if im.m.sig.type_params.len() != 0 {
-    return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch (generic Into method is unsupported in `?`)") };
+  if im.m.sig.params.len() != 1 {
+    return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
+  }
+  if im.m.sig.const_params.len() != 0 {
+    return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
+  }
+
+  let mut subs: Vec[TySub] = Vec();
+  let ur0: UnifyResult = unify_ty(ctx, im.m.sig.ret, dst_err_ty, subs);
+  if !ur0.ok {
+    return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
+  }
+  subs = ur0.subs;
+  let ur1: UnifyResult = unify_ty(ctx, im.m.sig.params.get(0), src_err_ty, subs);
+  if !ur1.ok {
+    return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
+  }
+  subs = ur1.subs;
+
+  // For `?` conversion we may not have explicit generic args; default any remaining
+  // unconstrained method params to destination Err type.
+  let mut ti: i32 = 0;
+  while ti < im.m.sig.type_params.len() {
+    let tp: String = im.m.sig.type_params.get(ti);
+    if try_subs_lookup_tc(subs, tp) == -1 {
+      subs.push(TySub { name: tp, ty: dst_err_ty });
+    }
+    ti = ti + 1;
+  }
+
+  let mut bi: i32 = 0;
+  while bi < im.m.sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = im.m.sig.type_param_bounds.get(bi);
+    let ty0: i32 = try_subs_lookup_tc(subs, b.type_param);
+    if ty0 == -1 {
+      return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
+    }
+    let fi2: FindImplForTyResult = find_impl_for_ty(ctx, b.trait_mod_path, b.trait_name, strip_range(ctx, ty0));
+    if fi2.ambiguous || !fi2.found {
+      return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
+    }
+    bi = bi + 1;
   }
 
   let assoc_target: i32 = try_impl_assoc_ty(fi.sig, "Target");
-  let via_ty: i32 = if assoc_target != -1 { assoc_target } else { im.m.sig.ret };
+  let via_ty0: i32 = if assoc_target != -1 { assoc_target } else { im.m.sig.ret };
+  let via_ty: i32 = subst_ty(ctx, via_ty0, subs);
   if !assignable_to(ctx, dst_err_ty, via_ty) {
     return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
   }
