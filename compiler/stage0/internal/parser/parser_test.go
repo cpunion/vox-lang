@@ -610,6 +610,29 @@ fn main() -> i32 { return 0; }`)
 	}
 }
 
+func TestParseTraitAssocTypeCompat(t *testing.T) {
+	f := source.NewFile("test.vox", `trait Iter {
+  type Item;
+  fn next(x: Self) -> Self.Item;
+}
+struct I { v: i32 }
+impl Iter for I {
+  type Item = i32;
+  fn next(x: I) -> i32 { return x.v; }
+}
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Traits) != 1 || len(prog.Traits[0].Methods) != 1 {
+		t.Fatalf("unexpected trait parse result: %#v", prog.Traits)
+	}
+	if len(prog.Impls) != 1 || len(prog.Impls[0].Methods) != 1 {
+		t.Fatalf("unexpected impl parse result: %#v", prog.Impls)
+	}
+}
+
 func TestParseQualifiedTypePath(t *testing.T) {
 	f := source.NewFile("test.vox", `import "a"
 fn id(x: a.S) -> a.S { return x; }

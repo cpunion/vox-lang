@@ -402,10 +402,19 @@ func (p *Parser) parseTraitDecl() *ast.TraitDecl {
 	}
 	methods := []ast.TraitMethodSig{}
 	for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
-		method := p.parseTraitMethodSig()
-		if method.Name != "" {
-			methods = append(methods, method)
+		if p.at(lexer.TokenFn) {
+			method := p.parseTraitMethodSig()
+			if method.Name != "" {
+				methods = append(methods, method)
+			}
+			continue
 		}
+		if p.match(lexer.TokenType) {
+			p.parseIgnoredAssocTypeDeclAfterType("trait")
+			continue
+		}
+		p.errorHere("expected `fn` or `type` in trait body")
+		p.advance()
 	}
 	rbrace := p.expect(lexer.TokenRBrace, "expected `}`")
 	return &ast.TraitDecl{Name: nameTok.Lexeme, Methods: methods, Span: joinSpan(startTok.Span, rbrace.Span)}
@@ -458,6 +467,21 @@ func (p *Parser) parseTraitMethodSig() ast.TraitMethodSig {
 	}
 }
 
+func (p *Parser) parseIgnoredAssocTypeDeclAfterType(where string) {
+	p.expect(lexer.TokenIdent, "expected associated type name")
+	if p.match(lexer.TokenEq) {
+		_ = p.parseType()
+	}
+	if p.match(lexer.TokenSemicolon) {
+		return
+	}
+	p.errorHere("expected `;` after associated type in " + where + " body")
+	for !p.at(lexer.TokenSemicolon) && !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
+		p.advance()
+	}
+	_ = p.match(lexer.TokenSemicolon)
+}
+
 func (p *Parser) parseImplDecl() *ast.ImplDecl {
 	startTok := p.prev() // `impl`
 	traitTy := p.parseType()
@@ -469,15 +493,19 @@ func (p *Parser) parseImplDecl() *ast.ImplDecl {
 	}
 	methods := []*ast.FuncDecl{}
 	for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
-		if !p.match(lexer.TokenFn) {
-			p.errorHere("expected `fn` in impl body")
-			p.advance()
+		if p.match(lexer.TokenFn) {
+			fn := p.parseFuncDecl()
+			if fn != nil {
+				methods = append(methods, fn)
+			}
 			continue
 		}
-		fn := p.parseFuncDecl()
-		if fn != nil {
-			methods = append(methods, fn)
+		if p.match(lexer.TokenType) {
+			p.parseIgnoredAssocTypeDeclAfterType("impl")
+			continue
 		}
+		p.errorHere("expected `fn` or `type` in impl body")
+		p.advance()
 	}
 	rbrace := p.expect(lexer.TokenRBrace, "expected `}`")
 	return &ast.ImplDecl{Trait: traitTy, ForType: forTy, Methods: methods, Span: joinSpan(startTok.Span, rbrace.Span)}
