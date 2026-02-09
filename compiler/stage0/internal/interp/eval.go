@@ -139,19 +139,28 @@ func (rt *Runtime) evalStmt(st ast.Stmt) (Value, error) {
 func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 	switch e := ex.(type) {
 	case *ast.IntLit:
-		// typechecker guaranteed parseability
-		var n uint64
-		for i := 0; i < len(e.Text); i++ {
-			n = n*10 + uint64(e.Text[i]-'0')
+		n, ok := rt.intLitCache[e.Text]
+		if !ok {
+			// typechecker guaranteed parseability
+			var parsed uint64
+			for i := 0; i < len(e.Text); i++ {
+				parsed = parsed*10 + uint64(e.Text[i]-'0')
+			}
+			rt.intLitCache[e.Text] = parsed
+			n = parsed
 		}
 		ty := stripRange(rt.prog.ExprTypes[ex])
 		return Value{K: VInt, I: truncInt(n, ty)}, nil
 	case *ast.StringLit:
+		if s, ok := rt.strLitCache[e.Text]; ok {
+			return Value{K: VString, S: s}, nil
+		}
 		// Keep runtime semantics aligned with IR generation (Go-like unquoting).
 		s, err := strconv.Unquote(e.Text)
 		if err != nil {
 			return unit(), fmt.Errorf("invalid string literal")
 		}
+		rt.strLitCache[e.Text] = s
 		return Value{K: VString, S: s}, nil
 	case *ast.BoolLit:
 		return Value{K: VBool, B: e.Value}, nil

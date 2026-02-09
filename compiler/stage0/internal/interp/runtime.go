@@ -17,6 +17,10 @@ type Runtime struct {
 	funcs map[string]*ast.FuncDecl
 	stack []map[string]Value
 	args  []string
+	// Cache decoded string literals (token text -> runtime string).
+	strLitCache map[string]string
+	// Cache parsed integer literals (token text -> uint64 bits before truncation).
+	intLitCache map[string]uint64
 }
 
 func RunMain(p *typecheck.CheckedProgram) (string, error) {
@@ -24,7 +28,7 @@ func RunMain(p *typecheck.CheckedProgram) (string, error) {
 }
 
 func RunMainWithArgs(p *typecheck.CheckedProgram, args []string) (string, error) {
-	rt := &Runtime{prog: p, funcs: map[string]*ast.FuncDecl{}}
+	rt := &Runtime{prog: p, funcs: map[string]*ast.FuncDecl{}, strLitCache: map[string]string{}, intLitCache: map[string]uint64{}}
 	rt.args = args
 	for _, fn := range p.Prog.Funcs {
 		rt.funcs[names.QualifyFunc(fn.Span.File.Name, fn.Name)] = fn
@@ -83,7 +87,7 @@ func formatInt(bits uint64, ty typecheck.Type) string {
 }
 
 func RunTests(p *typecheck.CheckedProgram) (string, error) {
-	rt := &Runtime{prog: p, funcs: map[string]*ast.FuncDecl{}}
+	rt := &Runtime{prog: p, funcs: map[string]*ast.FuncDecl{}, strLitCache: map[string]string{}, intLitCache: map[string]uint64{}}
 	for _, fn := range p.Prog.Funcs {
 		rt.funcs[names.QualifyFunc(fn.Span.File.Name, fn.Name)] = fn
 	}
@@ -151,26 +155,26 @@ func isTestFile(name string) bool {
 }
 
 func (rt *Runtime) call(name string, args []Value) (Value, error) {
+	fn, ok := rt.funcs[name]
+	if ok {
+		rt.pushFrame()
+		for i, p := range fn.Params {
+			rt.frame()[p.Name] = args[i]
+		}
+		v, err := rt.evalBlock(fn.Body)
+		rt.popFrame()
+		if err != nil {
+			if r, ok := err.(returnSignal); ok {
+				return r.V, nil
+			}
+			return unit(), err
+		}
+		return v, nil
+	}
 	if v, ok, err := rt.callBuiltin(name, args); ok {
 		return v, err
 	}
-	fn, ok := rt.funcs[name]
-	if !ok {
-		return unit(), fmt.Errorf("unknown function: %s", name)
-	}
-	rt.pushFrame()
-	for i, p := range fn.Params {
-		rt.frame()[p.Name] = args[i]
-	}
-	v, err := rt.evalBlock(fn.Body)
-	rt.popFrame()
-	if err != nil {
-		if r, ok := err.(returnSignal); ok {
-			return r.V, nil
-		}
-		return unit(), err
-	}
-	return v, nil
+	return unit(), fmt.Errorf("unknown function: %s", name)
 }
 
 func (rt *Runtime) pushFrame() { rt.stack = append(rt.stack, map[string]Value{}) }
@@ -190,8 +194,10 @@ func (rt *Runtime) lookup(name string) (map[string]Value, bool) {
 }
 
 func (rt *Runtime) lookupValue(name string) (Value, bool) {
-	if fr, ok := rt.lookup(name); ok {
-		return fr[name], true
+	for i := len(rt.stack) - 1; i >= 0; i-- {
+		if v, ok := rt.stack[i][name]; ok {
+			return v, true
+		}
 	}
 	return unit(), false
 }
