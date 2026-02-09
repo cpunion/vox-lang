@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"voxlang/internal/codegen"
 	"voxlang/internal/diag"
@@ -321,19 +322,28 @@ func test(dir string, eng engine) error {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Stdin = os.Stdin
+		start := time.Now()
 		if err := cmd.Run(); err != nil {
 			failed++
-			fmt.Fprintf(os.Stdout, "[FAIL] %s\n", name)
+			fmt.Fprintf(os.Stdout, "[FAIL] %s (%s)\n", name, formatTestDuration(time.Since(start)))
 			continue
 		}
 		passed++
-		fmt.Fprintf(os.Stdout, "[OK] %s\n", name)
+		fmt.Fprintf(os.Stdout, "[OK] %s (%s)\n", name, formatTestDuration(time.Since(start)))
 	}
 	fmt.Fprintf(os.Stdout, "[test] %d passed, %d failed\n", passed, failed)
 	if failed != 0 {
 		return fmt.Errorf("%d test(s) failed", failed)
 	}
 	return nil
+}
+
+func formatTestDuration(d time.Duration) string {
+	us := d.Microseconds()
+	if us < 1000 {
+		return fmt.Sprintf("%dus", us)
+	}
+	return fmt.Sprintf("%.2fms", float64(us)/1000.0)
 }
 
 func compile(dir string) (string, error) {

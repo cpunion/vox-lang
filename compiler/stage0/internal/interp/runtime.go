@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"voxlang/internal/ast"
 	"voxlang/internal/names"
@@ -104,18 +105,19 @@ func RunTests(p *typecheck.CheckedProgram) (string, error) {
 	var log strings.Builder
 	failed := 0
 	for _, name := range testNames {
+		start := time.Now()
 		sig, ok := p.FuncSigs[name]
 		if !ok || len(sig.Params) != 0 || sig.Ret.K != typecheck.TyUnit {
 			failed++
-			fmt.Fprintf(&log, "[FAIL] %s: invalid test signature (expected fn %s() -> ())\n", name, name)
+			fmt.Fprintf(&log, "[FAIL] %s (%s): invalid test signature (expected fn %s() -> ())\n", name, formatTestDuration(time.Since(start)), name)
 			continue
 		}
 		_, err := rt.call(name, nil)
 		if err != nil {
 			failed++
-			fmt.Fprintf(&log, "[FAIL] %s: %v\n", name, err)
+			fmt.Fprintf(&log, "[FAIL] %s (%s): %v\n", name, formatTestDuration(time.Since(start)), err)
 		} else {
-			fmt.Fprintf(&log, "[OK] %s\n", name)
+			fmt.Fprintf(&log, "[OK] %s (%s)\n", name, formatTestDuration(time.Since(start)))
 		}
 	}
 	if len(testNames) == 0 {
@@ -127,6 +129,14 @@ func RunTests(p *typecheck.CheckedProgram) (string, error) {
 		return log.String(), fmt.Errorf("%d test(s) failed", failed)
 	}
 	return log.String(), nil
+}
+
+func formatTestDuration(d time.Duration) string {
+	us := d.Microseconds()
+	if us < 1000 {
+		return fmt.Sprintf("%dus", us)
+	}
+	return fmt.Sprintf("%.2fms", float64(us)/1000.0)
 }
 
 func isTestFile(name string) bool {
