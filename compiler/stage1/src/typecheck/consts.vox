@@ -414,6 +414,60 @@ fn cast_const_int_checked(ctx: Ctx, file: String, from_ty: i32, to_ty: i32, v: i
   return CastConstResult { ok: true, err: TcError.None, v: wr_to2.v };
 }
 
+struct ConstPatEvalResult { ok: bool, matched: bool, err: String }
+
+fn const_match_int_pat(ctx: Ctx, scrut_ty: i32, scrut_iv: i64, text: String) -> ConstPatEvalResult {
+  let base: i32 = strip_range(ctx, scrut_ty);
+  if !is_int_like_ty(ctx, base) {
+    return ConstPatEvalResult { ok: false, matched: false, err: "const int pattern requires int scrutinee" };
+  }
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.U64 || t.kind == ir.TyKind.USize {
+    let pru: ParseU64DecResult = parse_u64_dec(text);
+    if !pru.ok { return ConstPatEvalResult { ok: false, matched: false, err: "const int pattern out of range" }; }
+    return ConstPatEvalResult { ok: true, matched: pru.val == scrut_iv, err: "" };
+  }
+
+  let pr: ParseI64DecResult = parse_i64_dec(text);
+  if !pr.ok { return ConstPatEvalResult { ok: false, matched: false, err: "const int pattern out of range" }; }
+  let v: i64 = pr.val;
+  let ok_lit: bool = match t.kind {
+    ir.TyKind.I8 => v >= -128 && v <= 127,
+    ir.TyKind.U8 => v >= 0 && v <= 255,
+    ir.TyKind.I16 => v >= -32768 && v <= 32767,
+    ir.TyKind.U16 => v >= 0 && v <= 65535,
+    ir.TyKind.I32 => v >= -2147483648 && v <= 2147483647,
+    ir.TyKind.U32 => v >= 0 && v <= 4294967295,
+    ir.TyKind.I64 => true,
+    ir.TyKind.ISize => true,
+    _ => false,
+  };
+  if !ok_lit { return ConstPatEvalResult { ok: false, matched: false, err: "const int pattern out of range" }; }
+  return ConstPatEvalResult { ok: true, matched: v == scrut_iv, err: "" };
+}
+
+fn const_pat_matches(ctx: Ctx, scrut: EvalConstExprResult, pat: ast.Pat) -> ConstPatEvalResult {
+  return match pat {
+    ast.Pat.Wild(_sp) => ConstPatEvalResult { ok: true, matched: true, err: "" },
+    ast.Pat.Bind(_sp, _n) => ConstPatEvalResult { ok: false, matched: false, err: "const match bind pattern is not supported yet" },
+    ast.Pat.Int(_sp, text) => {
+      if scrut.kind != const_kind_int() {
+        ConstPatEvalResult { ok: false, matched: false, err: "const int pattern requires int scrutinee" }
+      } else {
+        const_match_int_pat(ctx, scrut.ty, scrut.iv, text)
+      }
+    },
+    ast.Pat.Str(_sp, text) => {
+      if scrut.kind != const_kind_str() {
+        ConstPatEvalResult { ok: false, matched: false, err: "const string pattern requires String scrutinee" }
+      } else {
+        ConstPatEvalResult { ok: true, matched: scrut.sv == text, err: "" }
+      }
+    },
+    ast.Pat.EnumVariant(_sp, _enum_parts, _vname, _args) => ConstPatEvalResult { ok: false, matched: false, err: "const enum pattern is not supported yet" },
+  };
+}
+
 // Evaluate in a specific module's expr pool (const init expr ids are module-local).
 fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig], states0: Vec[i32], cur_mod: String, imps: Imports, exprs: ast.ExprPool, file: String, id: i32, expected: i32) -> EvalConstExprResult {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
@@ -473,12 +527,16 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_float(), ty: out_ty, iv: 0, bv: false, sv: float_norm_text(s), sigs: sigs0, states: states0 };
   }
   if match n { ast.ExprNode.Bool(_v) => true, _ => false } {
-    if expected != ctx.ty_bool { return EvalConstExprResult { ok: false, err: type_error(file, "const bool requires expected bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if expected != -1 && expected != ctx.ty_bool {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const bool requires expected bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
     let b: bool = match n { ast.ExprNode.Bool(x) => x, _ => false };
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: b, sv: "", sigs: sigs0, states: states0 };
   }
   if match n { ast.ExprNode.Str(_v) => true, _ => false } {
-    if expected != ctx.ty_string { return EvalConstExprResult { ok: false, err: type_error(file, "const string requires expected String"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if expected != -1 && expected != ctx.ty_string {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const string requires expected String"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
     let s: String = match n { ast.ExprNode.Str(x) => x, _ => "" };
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_str(), ty: ctx.ty_string, iv: 0, bv: false, sv: s, sigs: sigs0, states: states0 };
   }
@@ -625,6 +683,33 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
       return eval_const_expr_in_mod(ctx, w, items, cr.sigs, cr.states, cur_mod, imps, exprs, file, thn, expected);
     }
     return eval_const_expr_in_mod(ctx, w, items, cr.sigs, cr.states, cur_mod, imps, exprs, file, els, expected);
+  }
+
+  // match expr (const v0 subset: wildcard/int/string patterns, no local bind env).
+  if match n { ast.ExprNode.Match(_scrut, _arms) => true, _ => false } {
+    let scrut: i32 = match n { ast.ExprNode.Match(s, _as) => s, _ => -1 };
+    let arms: Vec[ast.MatchArm] = match n { ast.ExprNode.Match(_s, as0) => as0, _ => Vec() };
+    if arms.len() == 0 {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const match requires at least one arm"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+
+    let sr: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, scrut, -1);
+    if !sr.ok { return sr; }
+
+    let mut ai: i32 = 0;
+    while ai < arms.len() {
+      let arm: ast.MatchArm = arms.get(ai);
+      let pr: ConstPatEvalResult = const_pat_matches(ctx, sr, arm.pat);
+      if !pr.ok {
+        return EvalConstExprResult { ok: false, err: type_error(file, pr.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sr.sigs, states: sr.states };
+      }
+      if pr.matched {
+        return eval_const_expr_in_mod(ctx, w, items, sr.sigs, sr.states, cur_mod, imps, exprs, file, arm.expr, expected);
+      }
+      ai = ai + 1;
+    }
+
+    return EvalConstExprResult { ok: false, err: type_error(file, "const match has no matching arm"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sr.sigs, states: sr.states };
   }
 
   // binary

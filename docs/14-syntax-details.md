@@ -335,6 +335,7 @@ pub const NAME: String = "vox";
   - `expr as <int>`、`expr as f32/f64`（运行时与 const 场景均支持整数与浮点互转；`float -> int` 为 checked cast）
   - `+ - * / %`、`& | ^ << >>`、比较、`== !=`、`&& ||`
   - `if cond { a } else { b }`（cond 必须为常量 bool）
+  - `match`（当前 const 子集支持 `_`、整数字面量、字符串字面量 pattern；不支持 bind/enum pattern）
 - 整数运算语义与运行时保持一致：
   - `+ - *`、`& | ^`、`<< >>` 按目标整数位宽执行（wrapping）。
   - `/ %` 在除数为 `0` 时编译期报错。
@@ -342,7 +343,7 @@ pub const NAME: String = "vox";
   - `<< >>` 的移位位数必须在 `[0, bit_width(T)-1]`，否则编译期报错。
 - 浮点常量（`f32/f64`）在 v0 支持：字面量、常量引用、`-x`、`f32 <-> f64 as`、`+ - * /`、`< <= > >=`、`== !=`。
 - 浮点常量的 `/` 在除数为 `0.0`（或规范化后为 `0.0`）时报错：`const division by zero`。
-- 不支持在 const 初始化中调用函数、构造 struct/enum、`match` 等（后续由 `comptime` 统一解决）。
+- 不支持在 const 初始化中调用函数、构造 struct/enum（后续由 `comptime` 统一解决）。
 
 可见性与导入（Stage0/Stage1 v0）：
 
