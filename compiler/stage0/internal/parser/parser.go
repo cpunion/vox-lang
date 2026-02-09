@@ -429,10 +429,15 @@ func (p *Parser) parseTraitMethodSig() ast.TraitMethodSig {
 		ret = p.parseType()
 		endTok = p.prev()
 	}
-	if p.match(lexer.TokenSemicolon) {
+	if p.at(lexer.TokenLBrace) {
+		b := p.parseBlock()
+		if b != nil {
+			endTok = lexer.Token{Span: b.S}
+		}
+	} else if p.match(lexer.TokenSemicolon) {
 		endTok = p.prev()
 	} else {
-		p.errorHere("expected `;` after trait method signature")
+		p.errorHere("expected `;` or default method body after trait method signature")
 	}
 	if nameTok.Kind != lexer.TokenIdent {
 		return ast.TraitMethodSig{}

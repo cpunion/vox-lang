@@ -38,6 +38,12 @@
   - 泛型调用（通常可省略类型实参，由实参/返回期望推导）：`id(1)`
 - 其它（Stage0 暂不实现）：`impl[T] ...`、const 泛型等。
 
+## Trait 语法（Stage1 v0）
+
+- trait 方法声明（无默认实现）：`trait Eq { fn eq(a: Self, b: Self) -> bool; }`
+- trait 方法默认实现：`trait Show { fn show(x: Self) -> String { return "x"; } }`
+- `impl` 可省略带默认实现的方法（当前仅支持同模块 trait 的默认实现继承）
+
 ## 运算符优先级
 
 当前已实现子集的优先级（从高到低）：

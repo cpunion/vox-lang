@@ -36,6 +36,10 @@ struct FuncTask {
   impl_m_idx: i32,   // for impl method task (-1 otherwise)
   impl_name: String, // lowered impl method name
   impl_sig: tc.FuncSig,
+  impl_from_default: bool,
+  impl_default_file: String,
+  impl_default_params: Vec[String],
+  impl_default_body: ast.Block,
   base_name: String, // for Inst
   inst_name: String, // for Inst
   inst_sig: tc.FuncSig,
@@ -49,6 +53,31 @@ fn has_str(vs: Vec[String], s: String) -> bool {
     i = i + 1;
   }
   return false;
+}
+
+fn dummy_type_name() -> ast.TypeName {
+  let mut parts: Vec[String] = Vec();
+  parts.push("i32");
+  return ast.TypeName { parts: parts, args: Vec() };
+}
+
+fn synth_params(names: Vec[String]) -> Vec[ast.Param] {
+  let mut out: Vec[ast.Param] = Vec();
+  let mut i: i32 = 0;
+  while i < names.len() {
+    out.push(ast.Param { name: names.get(i), ty: dummy_type_name() });
+    i = i + 1;
+  }
+  return out;
+}
+
+fn find_impl_method_decl_idx(id: ast.ImplDecl, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < id.methods.len() {
+    if id.methods.get(i).name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
 }
 
 struct FindModResult { found: bool, m: tc.WorldModule }
@@ -88,6 +117,10 @@ fn empty_impl_method_sig() -> tc.ImplMethodSig {
     name: "",
     lowered_name: "",
     sig: tc.FuncSig { params: Vec(), ret: -1, is_pub: false, type_params: Vec(), type_param_bounds: Vec() },
+    from_default: false,
+    default_file: "",
+    default_params: Vec(),
+    default_body: ast.Block { stmts: Vec() },
   };
 }
 
@@ -165,6 +198,10 @@ pub fn generate_world(w: tc.World) -> GenResult {
           impl_m_idx: -1,
           impl_name: "",
           impl_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, is_pub: false, type_params: Vec(), type_param_bounds: Vec() },
+          impl_from_default: false,
+          impl_default_file: "",
+          impl_default_params: Vec(),
+          impl_default_body: ast.Block { stmts: Vec() },
           base_name: "",
           inst_name: "",
           inst_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, is_pub: false, type_params: Vec(), type_param_bounds: Vec() },
@@ -181,25 +218,32 @@ pub fn generate_world(w: tc.World) -> GenResult {
       let ir0: FindImplSigResult = find_impl_sig(br.ctx, m.path, ii);
       if !ir0.found { return err0(p, "missing impl signature"); }
 
-      let mut mdi: i32 = 0;
-      while mdi < id.methods.len() {
-        let md: ast.FuncDecl = id.methods.get(mdi);
-        let mr0: FindImplMethodResult = find_impl_method_sig(ir0.sig, md.name);
-        if !mr0.found { return err0(p, "missing impl method signature"); }
+      let mut msi: i32 = 0;
+      while msi < ir0.sig.methods.len() {
+        let mr0: tc.ImplMethodSig = ir0.sig.methods.get(msi);
+        let mut mdi: i32 = -1;
+        if !mr0.from_default {
+          mdi = find_impl_method_decl_idx(id, mr0.name);
+          if mdi == -1 { return err0(p, "missing impl method decl"); }
+        }
         tasks.push(FuncTask {
           kind: TaskKind.Normal,
           mod_path: m.path,
           func_idx: -1,
           impl_idx: ii,
           impl_m_idx: mdi,
-          impl_name: mr0.sig.lowered_name,
-          impl_sig: mr0.sig.sig,
+          impl_name: mr0.lowered_name,
+          impl_sig: mr0.sig,
+          impl_from_default: mr0.from_default,
+          impl_default_file: mr0.default_file,
+          impl_default_params: mr0.default_params,
+          impl_default_body: mr0.default_body,
           base_name: "",
           inst_name: "",
           inst_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, is_pub: false, type_params: Vec(), type_param_bounds: Vec() },
           subs: Vec(),
         });
-        mdi = mdi + 1;
+        msi = msi + 1;
       }
 
       ii = ii + 1;
@@ -232,9 +276,26 @@ pub fn generate_world(w: tc.World) -> GenResult {
       r = gen_func(ctx, w, t.mod_path, imps, m2.prog.exprs, fd);
     } else if t.impl_idx != -1 {
       // Impl method task.
-      let id: ast.ImplDecl = m2.prog.impls.get(t.impl_idx);
-      let md: ast.FuncDecl = id.methods.get(t.impl_m_idx);
-      let ar: tc.ImportsResult = tc.build_imports(w, t.mod_path, m2.prog.imports, md.file);
+      let mut md: ast.FuncDecl = ast.FuncDecl { file: "", is_pub: false, name: "", type_params: Vec(), type_param_bounds: Vec(), params: Vec(), ret: ast.TypeName { parts: Vec(), args: Vec() }, body: ast.Block { stmts: Vec() } };
+      let mut file_for_imports: String = "";
+      if t.impl_from_default {
+        file_for_imports = t.impl_default_file;
+        md = ast.FuncDecl {
+          file: t.impl_default_file,
+          is_pub: false,
+          name: t.impl_name,
+          type_params: Vec(),
+          type_param_bounds: Vec(),
+          params: synth_params(t.impl_default_params),
+          ret: dummy_type_name(),
+          body: t.impl_default_body,
+        };
+      } else {
+        let id: ast.ImplDecl = m2.prog.impls.get(t.impl_idx);
+        md = id.methods.get(t.impl_m_idx);
+        file_for_imports = md.file;
+      }
+      let ar: tc.ImportsResult = tc.build_imports(w, t.mod_path, m2.prog.imports, file_for_imports);
       if !ar.ok { return err0(p, tc.tc_error_to_string(ar.err)); }
       imps = ar.imps;
       want_name = qname(t.mod_path, t.impl_name);
@@ -269,6 +330,10 @@ pub fn generate_world(w: tc.World) -> GenResult {
         impl_m_idx: -1,
         impl_name: "",
         impl_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, is_pub: false, type_params: Vec(), type_param_bounds: Vec() },
+        impl_from_default: false,
+        impl_default_file: "",
+        impl_default_params: Vec(),
+        impl_default_body: ast.Block { stmts: Vec() },
         base_name: pend.base_name,
         inst_name: pend.inst_name,
         inst_sig: pend.sig,

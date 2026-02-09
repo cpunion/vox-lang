@@ -54,6 +54,16 @@ fn trait_method_exists(ms: Vec[TraitMethodSig], name: String) -> bool {
   return false;
 }
 
+fn trait_method_param_names(ps: Vec[ast.Param]) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < ps.len() {
+    out.push(ps.get(i).name);
+    i = i + 1;
+  }
+  return out;
+}
+
 fn impl_method_decl_idx(ds: Vec[ast.FuncDecl], name: String) -> i32 {
   let mut i: i32 = 0;
   while i < ds.len() {
@@ -61,6 +71,17 @@ fn impl_method_decl_idx(ds: Vec[ast.FuncDecl], name: String) -> i32 {
     i = i + 1;
   }
   return -1;
+}
+
+fn fresh_impl_lowered_name(c: Ctx, mod_path: String, ts: TraitSig, method: String, seed: i32) -> String {
+  let mut n: i32 = seed;
+  while true {
+    let lowered: String = impl_lowered_name(ts, method, n);
+    let ex: FindFuncResult = find_func(c, mod_path, lowered);
+    if !ex.found { return lowered; }
+    n = n + 1;
+  }
+  return impl_lowered_name(ts, method, seed);
 }
 
 fn impl_method_decl_name_unique(ds: Vec[ast.FuncDecl], name: String, idx: i32) -> bool {
@@ -140,7 +161,14 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         if !rr.ok {
           return TcCtxResult { ok: false, err: type_error(td.file, "type resolve failed in trait method ret"), ctx: c };
         }
-        ms.push(TraitMethodSig { name: md.name, sig: FuncSig { params: ps, ret: rr.idx, is_pub: true, type_params: Vec(), type_param_bounds: Vec() } });
+        ms.push(TraitMethodSig {
+          name: md.name,
+          sig: FuncSig { params: ps, ret: rr.idx, is_pub: true, type_params: Vec(), type_param_bounds: Vec() },
+          has_default: md.has_body,
+          default_file: td.file,
+          default_params: trait_method_param_names(md.params),
+          default_body: md.body,
+        });
         fi = fi + 1;
       }
 
@@ -200,7 +228,27 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let tms: TraitMethodSig = tf.sig.methods.get(tm);
         let mdi: i32 = impl_method_decl_idx(id.methods, tms.name);
         if mdi == -1 {
-          return TcCtxResult { ok: false, err: type_error(id.file, "impl missing trait method: ".concat(tms.name)), ctx: c };
+          if !tms.has_default {
+            return TcCtxResult { ok: false, err: type_error(id.file, "impl missing trait method: ".concat(tms.name)), ctx: c };
+          }
+          if trr.mod_path != m.path {
+            return TcCtxResult { ok: false, err: type_error(id.file, "default trait method from external trait not supported in v0"), ctx: c };
+          }
+
+          let want0: FuncSig = trait_method_sig_for(c, tms, for_ty);
+          let lowered0: String = fresh_impl_lowered_name(c, m.path, tf.sig, tms.name, c.impls.len() * 1000 + 500 + tm);
+          c.funcs.push(FuncSym { mod_path: m.path, name: lowered0, sig: want0 });
+          ims.push(ImplMethodSig {
+            name: tms.name,
+            lowered_name: lowered0,
+            sig: want0,
+            from_default: true,
+            default_file: tms.default_file,
+            default_params: tms.default_params,
+            default_body: tms.default_body,
+          });
+          tm = tm + 1;
+          continue;
         }
         if !impl_method_decl_name_unique(id.methods, tms.name, mdi) {
           return TcCtxResult { ok: false, err: type_error(id.file, "duplicate impl method: ".concat(tms.name)), ctx: c };
@@ -230,13 +278,17 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         if !ret_r.ok { return TcCtxResult { ok: false, err: type_error(md.file, "impl method ret type resolve failed"), ctx: c }; }
         if ret_r.idx != want.ret { return TcCtxResult { ok: false, err: type_error(md.file, "impl method ret type mismatch"), ctx: c }; }
 
-        let lowered: String = impl_lowered_name(tf.sig, tms.name, c.impls.len() * 1000 + mdi);
-        let ex: FindFuncResult = find_func(c, m.path, lowered);
-        if ex.found {
-          return TcCtxResult { ok: false, err: type_error(md.file, "duplicate lowered impl method symbol"), ctx: c };
-        }
+        let lowered: String = fresh_impl_lowered_name(c, m.path, tf.sig, tms.name, c.impls.len() * 1000 + mdi);
         c.funcs.push(FuncSym { mod_path: m.path, name: lowered, sig: want });
-        ims.push(ImplMethodSig { name: tms.name, lowered_name: lowered, sig: want });
+        ims.push(ImplMethodSig {
+          name: tms.name,
+          lowered_name: lowered,
+          sig: want,
+          from_default: false,
+          default_file: "",
+          default_params: Vec(),
+          default_body: ast.Block { stmts: Vec() },
+        });
         tm = tm + 1;
       }
 

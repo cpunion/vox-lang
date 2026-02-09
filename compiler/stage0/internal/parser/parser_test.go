@@ -575,6 +575,25 @@ fn main() -> i32 {
 	}
 }
 
+func TestParseTraitDefaultMethodBodyCompat(t *testing.T) {
+	f := source.NewFile("test.vox", `trait Show {
+  fn show(x: Self) -> String { return "x"; }
+}
+struct I { v: i32 }
+impl Show for I {}
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Traits) != 1 || len(prog.Traits[0].Methods) != 1 {
+		t.Fatalf("unexpected trait parse result: %#v", prog.Traits)
+	}
+	if len(prog.Impls) != 1 {
+		t.Fatalf("unexpected impl parse result: %#v", prog.Impls)
+	}
+}
+
 func TestParseQualifiedTypePath(t *testing.T) {
 	f := source.NewFile("test.vox", `import "a"
 fn id(x: a.S) -> a.S { return x; }

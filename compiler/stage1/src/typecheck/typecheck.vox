@@ -83,6 +83,22 @@ fn find_impl_by_decl(ctx: Ctx, mod_path: String, decl_idx: i32) -> FindImplByDec
   return FindImplByDeclResult { found: false, sig: empty_impl_sig() };
 }
 
+fn dummy_type_name() -> ast.TypeName {
+  let mut parts: Vec[String] = Vec();
+  parts.push("i32");
+  return ast.TypeName { parts: parts, args: Vec() };
+}
+
+fn synth_params(names: Vec[String]) -> Vec[ast.Param] {
+  let mut out: Vec[ast.Param] = Vec();
+  let mut i: i32 = 0;
+  while i < names.len() {
+    out.push(ast.Param { name: names.get(i), ty: dummy_type_name() });
+    i = i + 1;
+  }
+  return out;
+}
+
 pub fn typecheck_world(w: World) -> TcResult {
   let br: BuildCtxResult = build_ctx(w);
   if !br.ok { return TcResult { ok: false, err: br.err }; }
@@ -126,6 +142,30 @@ pub fn typecheck_world(w: World) -> TcResult {
         let tr: TcResult = typecheck_fn_with_sig(c, w, m2.path, imps0, m2.prog.exprs, md, mf.m.sig);
         if !tr.ok { return tr; }
         mdi = mdi + 1;
+      }
+
+      // Typecheck synthesized default trait methods lowered into impl signatures.
+      let mut mi3: i32 = 0;
+      while mi3 < fr0.sig.methods.len() {
+        let ms: ImplMethodSig = fr0.sig.methods.get(mi3);
+        if ms.from_default {
+          let ird: ImportsResult = build_imports(w, m2.path, m2.prog.imports, ms.default_file);
+          if !ird.ok { return TcResult { ok: false, err: ird.err }; }
+          let impsd: Imports = ird.imps;
+          let fd: ast.FuncDecl = ast.FuncDecl {
+            file: ms.default_file,
+            is_pub: false,
+            name: ms.name,
+            type_params: Vec(),
+            type_param_bounds: Vec(),
+            params: synth_params(ms.default_params),
+            ret: dummy_type_name(),
+            body: ms.default_body,
+          };
+          let tr2: TcResult = typecheck_fn_with_sig(c, w, m2.path, impsd, m2.prog.exprs, fd, ms.sig);
+          if !tr2.ok { return tr2; }
+        }
+        mi3 = mi3 + 1;
       }
 
       ii2 = ii2 + 1;
