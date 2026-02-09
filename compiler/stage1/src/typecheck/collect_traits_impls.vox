@@ -19,6 +19,21 @@ fn vec_self_tps(tps: Vec[String]) -> Vec[String] {
   return v;
 }
 
+fn type_name1(s: String) -> ast.TypeName {
+  let mut ps: Vec[String] = Vec();
+  ps.push(s);
+  return ast.TypeName { parts: ps, args: Vec() };
+}
+
+fn type_param_pos(tps: Vec[String], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < tps.len() {
+    if tps.get(i) == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 fn resolve_trait_ref(ctx: Ctx, _w: World, cur_mod: String, imps: Imports, tn: ast.TypeName) -> ResolveTraitRefResult {
   if tn.args.len() != 0 { return ResolveTraitRefResult { ok: false, mod_path: "", name: "" }; }
   if tn.parts.len() == 1 {
@@ -340,11 +355,16 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         if md.type_params.len() != want.type_params.len() {
           return TcCtxResult { ok: false, err: type_error(md.file, "impl method type param count mismatch"), ctx: c };
         }
+
+        // Impl method generic param names may differ from trait method names;
+        // map impl names to trait names positionally for type/bound comparison.
+        let mut impl_to_trait_tps: Vec[TySub] = Vec();
         let mut tpi: i32 = 0;
         while tpi < md.type_params.len() {
-          if md.type_params.get(tpi) != want.type_params.get(tpi) {
-            return TcCtxResult { ok: false, err: type_error(md.file, "impl method type param name mismatch"), ctx: c };
-          }
+          let trtp: ResolveTyResult = resolve_type(c, w, m.path, imps, want.type_params, type_name1(want.type_params.get(tpi)));
+          c = trtp.ctx;
+          if !trtp.ok { return TcCtxResult { ok: false, err: type_error(md.file, "impl method type param resolve failed"), ctx: c }; }
+          impl_to_trait_tps.push(TySub { name: md.type_params.get(tpi), ty: trtp.idx });
           tpi = tpi + 1;
         }
 
@@ -355,6 +375,9 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           if !contains_str_local(md.type_params, bdecl2.name) {
             return TcCtxResult { ok: false, err: type_error(md.file, "unknown type param in impl method bound: ".concat(bdecl2.name)), ctx: c };
           }
+          let bpos: i32 = type_param_pos(md.type_params, bdecl2.name);
+          if bpos < 0 { return TcCtxResult { ok: false, err: type_error(md.file, "unknown type param in impl method bound: ".concat(bdecl2.name)), ctx: c }; }
+          let btp: String = want.type_params.get(bpos);
           let mut bj2: i32 = 0;
           while bj2 < bdecl2.bounds.len() {
             let rtr2: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, bdecl2.bounds.get(bj2));
@@ -364,8 +387,8 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
             if rtr2.mod_path != m.path && !tf3.sig.is_pub {
               return TcCtxResult { ok: false, err: type_error(md.file, "impl method bound refers to private trait"), ctx: c };
             }
-            if !has_bound_sig(got_tbs, bdecl2.name, rtr2.mod_path, rtr2.name) {
-              got_tbs.push(TypeParamBoundSig { type_param: bdecl2.name, trait_mod_path: rtr2.mod_path, trait_name: rtr2.name });
+            if !has_bound_sig(got_tbs, btp, rtr2.mod_path, rtr2.name) {
+              got_tbs.push(TypeParamBoundSig { type_param: btp, trait_mod_path: rtr2.mod_path, trait_name: rtr2.name });
             }
             bj2 = bj2 + 1;
           }
@@ -393,13 +416,14 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, md.type_params, pr.ty);
           c = rr.ctx;
           if !rr.ok { return TcCtxResult { ok: false, err: type_error(md.file, "impl method param type resolve failed"), ctx: c }; }
-          if rr.idx != want.params.get(pi) { return TcCtxResult { ok: false, err: type_error(md.file, "impl method param type mismatch"), ctx: c }; }
+          let gotp: i32 = subst_ty(c, rr.idx, impl_to_trait_tps);
+          if gotp != want.params.get(pi) { return TcCtxResult { ok: false, err: type_error(md.file, "impl method param type mismatch"), ctx: c }; }
           pi = pi + 1;
         }
         let ret_r: ResolveTyResult = resolve_type(c, w, m.path, imps, md.type_params, md.ret);
         c = ret_r.ctx;
         if !ret_r.ok { return TcCtxResult { ok: false, err: type_error(md.file, "impl method ret type resolve failed"), ctx: c }; }
-        if ret_r.idx != want.ret { return TcCtxResult { ok: false, err: type_error(md.file, "impl method ret type mismatch"), ctx: c }; }
+        if subst_ty(c, ret_r.idx, impl_to_trait_tps) != want.ret { return TcCtxResult { ok: false, err: type_error(md.file, "impl method ret type mismatch"), ctx: c }; }
 
         let lowered: String = fresh_impl_lowered_name(c, m.path, tf.sig, tms.name, c.impls.len() * 1000 + mdi);
         c.funcs.push(FuncSym { mod_path: m.path, name: lowered, sig: want });

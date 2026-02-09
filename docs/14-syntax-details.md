@@ -45,6 +45,7 @@
 - trait 方法默认实现：`trait Show { fn show(x: Self) -> String { return "x"; } }`
 - supertrait：`trait Child: Parent + Other { ... }`
 - `impl` 可省略带默认实现的方法（同模块/跨模块 trait 均可继承默认实现）
+- `impl` 方法的泛型参数名按位置匹配 trait 方法（名称可不同）
 
 ## 运算符优先级
 
