@@ -27,17 +27,16 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
     es = fe.sig;
   }
 
-  // Stage0/Stage1 v0 exhaustiveness approximation:
+  // Exhaustiveness approximation (Stage0/Stage1 v0):
   // - Any top-level wildcard/bind arm makes the match exhaustive.
   // - Otherwise:
-  //   - enum scrutinee: require a catch-all arm per variant (payload args are all wild/bind).
+  //   - enum scrutinee:
+  //     - unit variant is covered if it appears in at least one arm.
+  //     - single-payload variant is covered if the union of its payload patterns covers the field type
+  //       (recursively, but only through enums; ints/strings require a wildcard/bind).
+  //     - multi-payload variant requires a catch-all arm for that variant (all payload patterns are wild/bind).
   //   - non-enum scrutinee: require a wildcard/bind arm.
   let mut has_wild: bool = false;
-  let mut seen_full: Vec[bool] = Vec();
-  if is_enum {
-    let mut i: i32 = 0;
-    while i < es.vars.len() { seen_full.push(false); i = i + 1; }
-  }
 
   let mut out_ty: i32 = expected;
   let mut ai: i32 = 0;
@@ -47,41 +46,7 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
     let pr: PatLocalsResult = tc_pat(ctx, mod_path, imps, sr.ty, scrut_t, arm.pat, lr);
     if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
-    // Track exhaustiveness coverage (after tc_pat validates the pattern).
-    if match arm.pat { ast.Pat.Wild(_sp) => true, ast.Pat.Bind(_sp, _n) => true, _ => false } {
-      has_wild = true;
-    } else {
-      if is_enum {
-        if match arm.pat { ast.Pat.EnumVariant(_sp, _ep, _vn, _args) => true, _ => false } {
-          let vn: String = match arm.pat { ast.Pat.EnumVariant(_sp, _ep, vname, _args) => vname, _ => "" };
-          let args: Vec[ast.Pat] = match arm.pat { ast.Pat.EnumVariant(_sp, _ep, _vname, a) => a, _ => Vec() };
-          let mut full: bool = true;
-          let mut pi: i32 = 0;
-          while pi < args.len() {
-            let ap: ast.Pat = args.get(pi);
-            if !match ap { ast.Pat.Wild(_s) => true, ast.Pat.Bind(_s, _n) => true, _ => false } { full = false; }
-            pi = pi + 1;
-          }
-          if full {
-            // Find the variant index and mark it.
-            let mut vi: i32 = 0;
-            while vi < es.vars.len() {
-              if es.vars.get(vi).name == vn {
-                // Update bool vec element.
-                let mut newv: Vec[bool] = Vec();
-                let mut j: i32 = 0;
-                while j < seen_full.len() {
-                  if j == vi { newv.push(true); } else { newv.push(seen_full.get(j)); }
-                  j = j + 1;
-                }
-                seen_full = newv;
-              }
-              vi = vi + 1;
-            }
-          }
-        }
-      }
-    }
+    if match arm.pat { ast.Pat.Wild(_sp) => true, ast.Pat.Bind(_sp, _n) => true, _ => false } { has_wild = true; }
 
     let want: i32 = out_ty;
     let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, pr.locals, arm.expr, want);
@@ -109,9 +74,48 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
     if !has_wild {
       let mut vi: i32 = 0;
       while vi < es.vars.len() {
-        if !seen_full.get(vi) {
+        let v: EnumVariantSig = es.vars.get(vi);
+        let mut any_pat: bool = false;
+        let mut arg_pats: Vec[ast.Pat] = Vec();
+        let mut has_catch_all: bool = false;
+
+        // Collect patterns for this variant from arms.
+        let mut ai2: i32 = 0;
+        while ai2 < arms.len() {
+          let ap: ast.Pat = arms.get(ai2).pat;
+          if match ap { ast.Pat.EnumVariant(_sp, _ep, name, _args) => name == v.name, _ => false } {
+            let args: Vec[ast.Pat] = match ap { ast.Pat.EnumVariant(_sp, _ep, _n, a) => a, _ => Vec() };
+            if args.len() == v.fields.len() {
+              any_pat = true;
+              if v.fields.len() == 1 {
+                arg_pats.push(args.get(0));
+              } else if v.fields.len() > 1 {
+                // catch-all: all args are wild/bind
+                let mut full: bool = true;
+                let mut pi: i32 = 0;
+                while pi < args.len() {
+                  if !is_wild_or_bind(args.get(pi)) { full = false; }
+                  pi = pi + 1;
+                }
+                if full { has_catch_all = true; }
+              }
+            }
+          }
+          ai2 = ai2 + 1;
+        }
+
+        let mut covered: bool = false;
+        if v.fields.len() == 0 {
+          covered = any_pat;
+        } else if v.fields.len() == 1 {
+          if arg_pats.len() != 0 { covered = pats_cover_all(ctx, v.fields.get(0), arg_pats); }
+        } else {
+          covered = has_catch_all;
+        }
+
+        if !covered {
           let sp: ast.Span = ast.expr_pool_span(exprs, scrut);
-          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "non-exhaustive match, missing catch-all arm for variant: ".concat(es.vars.get(vi).name)) };
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "non-exhaustive match, missing coverage for variant: ".concat(v.name)) };
         }
         vi = vi + 1;
       }
@@ -126,6 +130,82 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   if out_ty == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   if expected != -1 && !assignable_to(ctx, expected, out_ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
+}
+
+fn is_wild_or_bind(p: ast.Pat) -> bool {
+  return match p { ast.Pat.Wild(_sp) => true, ast.Pat.Bind(_sp, _n) => true, _ => false };
+}
+
+fn pats_cover_all(ctx: Ctx, ty: i32, pats: Vec[ast.Pat]) -> bool {
+  // Any wildcard/bind covers all.
+  let mut i: i32 = 0;
+  while i < pats.len() {
+    if is_wild_or_bind(pats.get(i)) { return true; }
+    i = i + 1;
+  }
+
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind != ir.TyKind.Enum { return false; }
+  let fe: FindEnumResult = find_enum(ctx, ty_mod(t), ty_name(t));
+  if !fe.found { return false; }
+  let es: EnumSig = fe.sig;
+
+  let mut vi: i32 = 0;
+  while vi < es.vars.len() {
+    let v: EnumVariantSig = es.vars.get(vi);
+    // Collect patterns for this variant.
+    let mut var_pats: Vec[ast.Pat] = Vec();
+    let mut pi: i32 = 0;
+    while pi < pats.len() {
+      let p: ast.Pat = pats.get(pi);
+      if match p { ast.Pat.EnumVariant(_sp, _ep, n, _args) => n == v.name, _ => false } { var_pats.push(p); }
+      pi = pi + 1;
+    }
+
+    if v.fields.len() == 0 {
+      // unit variant: must appear with correct arity (0)
+      let mut ok: bool = false;
+      let mut j: i32 = 0;
+      while j < var_pats.len() {
+        let args: Vec[ast.Pat] = match var_pats.get(j) { ast.Pat.EnumVariant(_sp, _ep, _n, a) => a, _ => Vec() };
+        if args.len() == 0 { ok = true; }
+        j = j + 1;
+      }
+      if !ok { return false; }
+    } else if v.fields.len() == 1 {
+      let mut arg_pats: Vec[ast.Pat] = Vec();
+      let mut j: i32 = 0;
+      while j < var_pats.len() {
+        let args: Vec[ast.Pat] = match var_pats.get(j) { ast.Pat.EnumVariant(_sp, _ep, _n, a) => a, _ => Vec() };
+        if args.len() == 1 { arg_pats.push(args.get(0)); }
+        j = j + 1;
+      }
+      if arg_pats.len() == 0 { return false; }
+      if !pats_cover_all(ctx, v.fields.get(0), arg_pats) { return false; }
+    } else {
+      // multi-payload: require a catch-all pattern for the variant
+      let mut ok: bool = false;
+      let mut j: i32 = 0;
+      while j < var_pats.len() {
+        let args: Vec[ast.Pat] = match var_pats.get(j) { ast.Pat.EnumVariant(_sp, _ep, _n, a) => a, _ => Vec() };
+        if args.len() == v.fields.len() {
+          let mut full: bool = true;
+          let mut k: i32 = 0;
+          while k < args.len() {
+            if !is_wild_or_bind(args.get(k)) { full = false; }
+            k = k + 1;
+          }
+          if full { ok = true; }
+        }
+        j = j + 1;
+      }
+      if !ok { return false; }
+    }
+
+    vi = vi + 1;
+  }
+  return true;
 }
 
 struct PatLocalsResult { ok: bool, locals: Locals }

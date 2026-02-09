@@ -755,13 +755,13 @@ fn main() -> i32 {
 	}
 	found := false
 	for _, it := range tdiags.Items {
-		if it.Msg == "non-exhaustive match, missing catch-all arm for variant: A" {
+		if it.Msg == "non-exhaustive match, missing coverage for variant: A" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected catch-all diagnostic, got: %+v", tdiags.Items)
+		t.Fatalf("expected non-exhaustive diagnostic, got: %+v", tdiags.Items)
 	}
 }
 

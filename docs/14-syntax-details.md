@@ -223,8 +223,13 @@ match r {
 穷尽性（Stage0/Stage1 v0 的近似规则，已实现）：
 
 - 若存在 `_` 或 `name` 这种“总是匹配”的 arm，则视为穷尽。
-- 否则：对每个 enum variant，必须至少有一个“catch-all arm”，其 payload pattern 全是 `_` 或绑定模式（例如 `.Some(_)` / `.Some(x)`），以覆盖该 variant 的剩余情况。
-  - 允许同一个 variant 出现多个 arm：先写更具体的 payload pattern，再写该 variant 的 catch-all arm。
+- 否则（enum scrutinee）：
+  - unit variant（无 payload）：必须在某个 arm 中显式出现（例如 `.None => ...`）。
+  - 单 payload variant：该 variant 的所有 arm 的 payload pattern 需要**联合**覆盖该 payload 类型；覆盖判定对 enum 类型可递归（对 int/String 等“无限域”类型则必须出现 `_`/绑定模式）。
+    - 例如 `Result.Ok(Option[T])` 的 `.Ok(.Some(v))` 与 `.Ok(.None)` 组合起来即可覆盖 `.Ok(...)`。
+  - 多 payload variant：仍需要一个该 variant 的 “catch-all arm”，其所有 payload pattern 都是 `_` 或绑定模式（例如 `.Pair(_, _)` / `.Pair(a, b)`）。
+    - 允许同一个 variant 出现多个 arm：先写更具体的 payload pattern，再写该 variant 的 catch-all arm。
+- 否则（非 enum scrutinee）：必须有 `_` 或绑定模式 arm（Stage0/Stage1 v0 不做完整穷尽推导）。
 
 ## 类型别名（type alias）
 

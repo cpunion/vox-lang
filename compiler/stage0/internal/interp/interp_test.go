@@ -181,8 +181,6 @@ fn main() -> i32 {
   return match x {
     R.Ok(O.Some(v)) => v,
     R.Ok(O.None) => 0,
-    // Stage0: exhaustiveness checking is variant-based; require a catch-all arm per variant.
-    R.Ok(_o) => 0,
     R.Err(_) => -1,
   };
 }`)
