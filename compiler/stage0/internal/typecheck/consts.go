@@ -449,14 +449,18 @@ func (c *checker) evalConstExprWithExpected(ex ast.Expr, file *source.File, expe
 		}
 	case *ast.AsExpr:
 		// const casts (stage0 v0): int <-> int, and `@range(..) T`.
-		v, ty := c.evalConstExprWithExpected(e.Expr, file, Type{K: TyBad})
-		if v.K == ConstBad || ty.K == TyBad {
-			return ConstValue{K: ConstBad}, Type{K: TyBad}
-		}
 		to := c.typeFromAstInFile(e.Ty, file)
 		toBase := stripRange(to)
 		if !isIntType(toBase) {
 			c.errorAt(e.S, "const expression: cast target must be int or @range(..) int")
+			return ConstValue{K: ConstBad}, Type{K: TyBad}
+		}
+		evalExpected := Type{K: TyBad}
+		if _, isLit := e.Expr.(*ast.IntLit); isLit && isUnsignedIntType(toBase) {
+			evalExpected = toBase
+		}
+		v, ty := c.evalConstExprWithExpected(e.Expr, file, evalExpected)
+		if v.K == ConstBad || ty.K == TyBad {
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 		// Only integer consts are supported.

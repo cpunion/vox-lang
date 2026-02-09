@@ -363,6 +363,26 @@ fn main() -> i32 {
 	}
 }
 
+func TestExprCastU64MaxLiteral(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+  let x: u64 = 18446744073709551615 as u64;
+  if x > 1 { return 1; } else { return 0; }
+}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
+func TestConstCastU64MaxLiteral(t *testing.T) {
+	out := runMain(t, `const N: u64 = 18446744073709551615 as u64
+fn main() -> i32 {
+  if N > 1 { return 1; } else { return 0; }
+}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
 func TestShiftCountOutOfRangePanics(t *testing.T) {
 	_, err := runMainErr(t, `fn main() -> i32 {
   let x: i32 = 1 << 32;

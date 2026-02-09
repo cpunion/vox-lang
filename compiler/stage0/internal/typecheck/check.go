@@ -274,7 +274,16 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			file = c.curFn.Span.File
 		}
 		wantTy := c.typeFromAstInFile(e.Ty, file)
-		gotTy := c.checkExpr(e.Expr, Type{K: TyBad})
+		exprExpected := Type{K: TyBad}
+		// Keep `3000000000 as i32` behavior unchanged (explicit checked cast from i64),
+		// but allow full-width unsigned literals in explicit casts (`... as u64/usize`).
+		if _, isLit := e.Expr.(*ast.IntLit); isLit {
+			toBase := stripRange(wantTy)
+			if isUnsignedIntType(toBase) {
+				exprExpected = toBase
+			}
+		}
+		gotTy := c.checkExpr(e.Expr, exprExpected)
 		// Allow casts on integer literals: treat untyped ints as i64 to make
 		// narrowing explicit (i64 -> i32 uses a checked cast).
 		if gotTy.K == TyUntypedInt {

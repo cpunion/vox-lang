@@ -797,6 +797,34 @@ fn main() -> i32 { return B as i32; }`)
 	}
 }
 
+func TestExprCastU64MaxLiteralTypechecks(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main() -> i32 {
+  let x: u64 = 18446744073709551615 as u64;
+  return if x > 1 { 1 } else { 0 };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestConstDeclU64MaxLiteralCastTypechecks(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const N: u64 = 18446744073709551615 as u64
+fn main() -> i32 { return if N > 1 { 1 } else { 0 }; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestConstImportAliasAccessRequiresPub(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "dep" as d
