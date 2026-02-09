@@ -333,8 +333,11 @@ pub const NAME: String = "vox";
   - 字面量：`123` / `1.5` / `true` / `"txt"`
   - 其他常量引用（含跨模块的 `import` 访问）
   - 块表达式（最小子集）：`{ let x = ...; ...; tail }`
-    - 仅支持 `let`（不可 `mut`）与表达式语句
-    - 必须有 tail 表达式（无 tail 视为不支持的 const block）
+    - 支持 `let`（不可 `mut`）、表达式语句、`if` 语句
+    - `if` 语句按常量条件执行选中分支；分支内绑定不泄漏到外层
+    - 暂不支持 `while`/`break`/`continue`/`return`
+    - 在“需要值”的上下文中必须有 tail 表达式（无 tail 视为不支持）
+    - 在 unit 上下文（例如 `if` 表达式分支仅用于语句执行）允许省略 tail
   - `-x` / `!x`
   - `expr as <int>`、`expr as f32/f64`（运行时与 const 场景均支持整数与浮点互转；`float -> int` 为 checked cast）
   - `+ - * / %`、`& | ^ << >>`、比较、`== !=`、`&& ||`
