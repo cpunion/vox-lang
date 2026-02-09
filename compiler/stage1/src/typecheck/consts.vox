@@ -67,6 +67,10 @@ fn is_signed_int_kind(k: ir.TyKind) -> bool {
   return match k { ir.TyKind.I8 => true, ir.TyKind.I16 => true, ir.TyKind.I32 => true, ir.TyKind.I64 => true, ir.TyKind.ISize => true, _ => false };
 }
 
+fn is_unsigned_int_kind(k: ir.TyKind) -> bool {
+  return match k { ir.TyKind.U8 => true, ir.TyKind.U16 => true, ir.TyKind.U32 => true, ir.TyKind.U64 => true, ir.TyKind.USize => true, _ => false };
+}
+
 fn int_bits_of_kind(k: ir.TyKind) -> i64 {
   return match k {
     ir.TyKind.I8 => 8,
@@ -87,6 +91,81 @@ fn int_kind(ctx: Ctx, ty: i32) -> ir.TyKind {
   let base: i32 = strip_range(ctx, ty);
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
   return t.kind;
+}
+
+fn signed_min_of_kind(k: ir.TyKind) -> i64 {
+  if k == ir.TyKind.I8 { return -128; }
+  if k == ir.TyKind.I16 { return -32768; }
+  if k == ir.TyKind.I32 { return -2147483647 - 1; }
+  return -9223372036854775807 - 1;
+}
+
+fn signed_max_of_kind(k: ir.TyKind) -> i64 {
+  if k == ir.TyKind.I8 { return 127; }
+  if k == ir.TyKind.I16 { return 32767; }
+  if k == ir.TyKind.I32 { return 2147483647; }
+  return 9223372036854775807;
+}
+
+fn unsigned_max_bits_of_kind(k: ir.TyKind) -> i64 {
+  if k == ir.TyKind.U8 { return 255; }
+  if k == ir.TyKind.U16 { return 65535; }
+  if k == ir.TyKind.U32 { return 4294967295; }
+  // u64/usize max as full 64-bit ones.
+  return -1;
+}
+
+fn u64_lt_bits(a: i64, b: i64) -> bool {
+  let an: bool = a < 0;
+  let bn: bool = b < 0;
+  if an != bn {
+    return !an && bn;
+  }
+  return a < b;
+}
+
+fn u64_le_bits(a: i64, b: i64) -> bool {
+  return !u64_lt_bits(b, a);
+}
+
+fn u64_div_bits(a0: i64, b0: i64) -> i64 {
+  // Bit-by-bit long division on u64 values represented as i64 bit patterns.
+  let mut a: i64 = a0;
+  let b: i64 = b0;
+  let mut q: i64 = 0;
+  let mut rem: i64 = 0;
+  let mut i: i32 = 0;
+  while i < 64 {
+    let top1: bool = a < 0;
+    rem = rem << 1;
+    if top1 { rem = rem | 1; }
+    a = a << 1;
+    q = q << 1;
+    if !u64_lt_bits(rem, b) {
+      rem = rem - b;
+      q = q | 1;
+    }
+    i = i + 1;
+  }
+  return q;
+}
+
+fn u64_mod_bits(a0: i64, b0: i64) -> i64 {
+  let mut a: i64 = a0;
+  let b: i64 = b0;
+  let mut rem: i64 = 0;
+  let mut i: i32 = 0;
+  while i < 64 {
+    let top1: bool = a < 0;
+    rem = rem << 1;
+    if top1 { rem = rem | 1; }
+    a = a << 1;
+    if !u64_lt_bits(rem, b) {
+      rem = rem - b;
+    }
+    i = i + 1;
+  }
+  return rem;
 }
 
 fn wrap_signed_i8(v: i64) -> i64 {
@@ -146,12 +225,55 @@ fn wrap_value_for_type(ctx: Ctx, file: String, ty: i32, v: i64) -> WrapResult {
   if k == ir.TyKind.I32 { return WrapResult { ok: true, err: TcError.None, v: wrap_signed_i32(v) }; }
   if k == ir.TyKind.U32 { return WrapResult { ok: true, err: TcError.None, v: wrap_unsigned_u32(v) }; }
   if k == ir.TyKind.I64 || k == ir.TyKind.ISize { return WrapResult { ok: true, err: TcError.None, v: v }; }
-  if k == ir.TyKind.U64 || k == ir.TyKind.USize {
-    // v0 limitation: represent u64/usize as non-negative i64 only.
-    if v < 0 { return WrapResult { ok: false, err: type_error(file, "const u64 overflow"), v: 0 }; }
-    return WrapResult { ok: true, err: TcError.None, v: v };
-  }
+  if k == ir.TyKind.U64 || k == ir.TyKind.USize { return WrapResult { ok: true, err: TcError.None, v: v }; }
   return WrapResult { ok: false, err: type_error(file, "expected int type"), v: 0 };
+}
+
+struct CastConstResult { ok: bool, err: TcError, v: i64 }
+
+fn cast_const_int_checked(ctx: Ctx, file: String, from_ty: i32, to_ty: i32, v: i64) -> CastConstResult {
+  let fk: ir.TyKind = int_kind(ctx, from_ty);
+  let tk: ir.TyKind = int_kind(ctx, to_ty);
+  if !is_int_scalar_kind(fk) || !is_int_scalar_kind(tk) {
+    return CastConstResult { ok: false, err: type_error(file, "const expression: int cast overflow"), v: 0 };
+  }
+
+  let msg: String = if (fk == ir.TyKind.I64 || fk == ir.TyKind.ISize) && tk == ir.TyKind.I32 { "const expression: i64 to i32 overflow" } else { "const expression: int cast overflow" };
+
+  let wr_from: WrapResult = wrap_value_for_type(ctx, file, from_ty, v);
+  if !wr_from.ok { return CastConstResult { ok: false, err: wr_from.err, v: 0 }; }
+  let x: i64 = wr_from.v;
+
+  if is_signed_int_kind(fk) {
+    if is_signed_int_kind(tk) {
+      let lo: i64 = signed_min_of_kind(tk);
+      let hi: i64 = signed_max_of_kind(tk);
+      if x < lo || x > hi { return CastConstResult { ok: false, err: type_error(file, msg), v: 0 }; }
+      let wr_to: WrapResult = wrap_value_for_type(ctx, file, to_ty, x);
+      if !wr_to.ok { return CastConstResult { ok: false, err: wr_to.err, v: 0 }; }
+      return CastConstResult { ok: true, err: TcError.None, v: wr_to.v };
+    }
+    if x < 0 { return CastConstResult { ok: false, err: type_error(file, msg), v: 0 }; }
+    let umax0: i64 = unsigned_max_bits_of_kind(tk);
+    if u64_lt_bits(umax0, x) { return CastConstResult { ok: false, err: type_error(file, msg), v: 0 }; }
+    let wr_to0: WrapResult = wrap_value_for_type(ctx, file, to_ty, x);
+    if !wr_to0.ok { return CastConstResult { ok: false, err: wr_to0.err, v: 0 }; }
+    return CastConstResult { ok: true, err: TcError.None, v: wr_to0.v };
+  }
+
+  // from unsigned
+  if is_signed_int_kind(tk) {
+    let smax: i64 = signed_max_of_kind(tk);
+    if u64_lt_bits(smax, x) { return CastConstResult { ok: false, err: type_error(file, msg), v: 0 }; }
+    let wr_to1: WrapResult = wrap_value_for_type(ctx, file, to_ty, x);
+    if !wr_to1.ok { return CastConstResult { ok: false, err: wr_to1.err, v: 0 }; }
+    return CastConstResult { ok: true, err: TcError.None, v: wr_to1.v };
+  }
+  let umax: i64 = unsigned_max_bits_of_kind(tk);
+  if u64_lt_bits(umax, x) { return CastConstResult { ok: false, err: type_error(file, msg), v: 0 }; }
+  let wr_to2: WrapResult = wrap_value_for_type(ctx, file, to_ty, x);
+  if !wr_to2.ok { return CastConstResult { ok: false, err: wr_to2.err, v: 0 }; }
+  return CastConstResult { ok: true, err: TcError.None, v: wr_to2.v };
 }
 
 // Evaluate in a specific module's expr pool (const init expr ids are module-local).
@@ -161,8 +283,6 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
   // literals
   if match n { ast.ExprNode.Int(_v) => true, _ => false } {
     let s: String = match n { ast.ExprNode.Int(x) => x, _ => "" };
-    let pr2: ParseI64DecResult = parse_i64_dec(s);
-    if !pr2.ok { return EvalConstExprResult { ok: false, err: type_error(file, "integer literal out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
 
     // When expected is present, constrain to that scalar type (range types require explicit `as`).
     if expected != -1 {
@@ -170,8 +290,16 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
       if eb != expected { return EvalConstExprResult { ok: false, err: type_error(file, "const int requires expected scalar int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
       if !is_int_like_ty(ctx, eb) { return EvalConstExprResult { ok: false, err: type_error(file, "const int requires expected int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
 
-      let v: i64 = pr2.val;
       let bt: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
+      if bt.kind == ir.TyKind.U64 || bt.kind == ir.TyKind.USize {
+        let pru: ParseU64DecResult = parse_u64_dec(s);
+        if !pru.ok { return EvalConstExprResult { ok: false, err: type_error(file, "integer literal out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: eb, iv: pru.val, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+
+      let pr2: ParseI64DecResult = parse_i64_dec(s);
+      if !pr2.ok { return EvalConstExprResult { ok: false, err: type_error(file, "integer literal out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+      let v: i64 = pr2.val;
       if bt.kind == ir.TyKind.I8 && (v < -128 || v > 127) { return EvalConstExprResult { ok: false, err: type_error(file, "i8 literal out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
       if bt.kind == ir.TyKind.U8 && (v < 0 || v > 255) { return EvalConstExprResult { ok: false, err: type_error(file, "u8 literal out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
       if bt.kind == ir.TyKind.I16 && (v < -32768 || v > 32767) { return EvalConstExprResult { ok: false, err: type_error(file, "i16 literal out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
@@ -179,11 +307,12 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
       if bt.kind == ir.TyKind.I32 && (v < -2147483648 || v > 2147483647) { return EvalConstExprResult { ok: false, err: type_error(file, "i32 literal out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
       if bt.kind == ir.TyKind.U32 && (v < 0 || v > 4294967295) { return EvalConstExprResult { ok: false, err: type_error(file, "u32 literal out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
       if bt.kind == ir.TyKind.ISize { return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: eb, iv: v, bv: false, sv: "", sigs: sigs0, states: states0 }; }
-      if (bt.kind == ir.TyKind.U64 || bt.kind == ir.TyKind.USize) && v < 0 { return EvalConstExprResult { ok: false, err: type_error(file, "unsigned literal out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
       return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: eb, iv: v, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
 
     // No expected type: default to i32 if it fits, else i64.
+    let pr2: ParseI64DecResult = parse_i64_dec(s);
+    if !pr2.ok { return EvalConstExprResult { ok: false, err: type_error(file, "integer literal out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let v2: i64 = pr2.val;
     if v2 >= -2147483648 && v2 <= 2147483647 {
       return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: ctx.ty_i32, iv: v2, bv: false, sv: "", sigs: sigs0, states: states0 };
@@ -279,21 +408,16 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     let tk: ir.TyKind = int_kind(c2, to_base);
     if !is_int_scalar_kind(tk) { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: cast target must be int or @range(..) int"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
 
-    // Evaluate operand without an expected type: casts make the target explicit.
-    let ar: EvalConstExprResult = eval_const_expr_in_mod(c2, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, -1);
+    let an: ast.ExprNode = ast.expr_pool_get(exprs, a);
+    let eval_expected: i32 = if match an { ast.ExprNode.Int(_s) => true, _ => false } && is_unsigned_int_kind(tk) { to_base } else { -1 };
+    let ar: EvalConstExprResult = eval_const_expr_in_mod(c2, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, eval_expected);
     if !ar.ok { return ar; }
     if ar.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: cast expects int"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
 
-    let v0: i64 = ar.iv;
-    // checked cast to target base
-    let mut v: i64 = v0;
-    if tk == ir.TyKind.I8 && (v < -128 || v > 127) { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: int cast overflow"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
-    if tk == ir.TyKind.U8 && (v < 0 || v > 255) { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: int cast overflow"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
-    if tk == ir.TyKind.I16 && (v < -32768 || v > 32767) { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: int cast overflow"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
-    if tk == ir.TyKind.U16 && (v < 0 || v > 65535) { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: int cast overflow"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
-    if tk == ir.TyKind.I32 && (v < -2147483648 || v > 2147483647) { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: i64 to i32 overflow"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
-    if tk == ir.TyKind.U32 && (v < 0 || v > 4294967295) { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: int cast overflow"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
-    if (tk == ir.TyKind.U64 || tk == ir.TyKind.USize) && v < 0 { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: int cast overflow"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
+    let from_base: i32 = strip_range(c2, ar.ty);
+    let cr: CastConstResult = cast_const_int_checked(c2, file, from_base, to_base, ar.iv);
+    if !cr.ok { return EvalConstExprResult { ok: false, err: cr.err, kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
+    let v: i64 = cr.v;
 
     if is_range_ty(c2, to) {
       let rt: ir.Ty = ir.ty_pool_get(c2.pool, to);
@@ -364,12 +488,22 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
       if !is_int_scalar_kind(k) { return EvalConstExprResult { ok: false, err: type_error(file, "const int op expects int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
 
       if is_cmp {
-        let outb: bool = match op {
-          ast.BinaryOp.Lt => lr2.iv < rr2.iv,
-          ast.BinaryOp.Le => lr2.iv <= rr2.iv,
-          ast.BinaryOp.Gt => lr2.iv > rr2.iv,
-          _ => lr2.iv >= rr2.iv,
-        };
+        let outb: bool =
+          if is_signed_int_kind(k) {
+            match op {
+              ast.BinaryOp.Lt => lr2.iv < rr2.iv,
+              ast.BinaryOp.Le => lr2.iv <= rr2.iv,
+              ast.BinaryOp.Gt => lr2.iv > rr2.iv,
+              _ => lr2.iv >= rr2.iv,
+            }
+          } else {
+            match op {
+              ast.BinaryOp.Lt => u64_lt_bits(lr2.iv, rr2.iv),
+              ast.BinaryOp.Le => u64_le_bits(lr2.iv, rr2.iv),
+              ast.BinaryOp.Gt => u64_lt_bits(rr2.iv, lr2.iv),
+              _ => u64_le_bits(rr2.iv, lr2.iv),
+            }
+          };
         return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: outb, sv: "", sigs: rr2.sigs, states: rr2.states };
       }
 
@@ -395,18 +529,25 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
         }
       }
 
-      let raw: i64 = match op {
-        ast.BinaryOp.Add => lr2.iv + rr2.iv,
-        ast.BinaryOp.Sub => lr2.iv - rr2.iv,
-        ast.BinaryOp.Mul => lr2.iv * rr2.iv,
-        ast.BinaryOp.Div => lr2.iv / rr2.iv,
-        ast.BinaryOp.Mod => lr2.iv % rr2.iv,
-        ast.BinaryOp.BitAnd => lr2.iv & rr2.iv,
-        ast.BinaryOp.BitOr => lr2.iv | rr2.iv,
-        ast.BinaryOp.BitXor => lr2.iv ^ rr2.iv,
-        ast.BinaryOp.Shl => lr2.iv << rr2.iv,
-        _ => lr2.iv >> rr2.iv,
-      };
+      let mut raw: i64 = 0;
+      if is_div {
+        if is_signed_int_kind(k) { raw = lr2.iv / rr2.iv; }
+        else { raw = u64_div_bits(lr2.iv, rr2.iv); }
+      } else if is_mod {
+        if is_signed_int_kind(k) { raw = lr2.iv % rr2.iv; }
+        else { raw = u64_mod_bits(lr2.iv, rr2.iv); }
+      } else {
+        raw = match op {
+          ast.BinaryOp.Add => lr2.iv + rr2.iv,
+          ast.BinaryOp.Sub => lr2.iv - rr2.iv,
+          ast.BinaryOp.Mul => lr2.iv * rr2.iv,
+          ast.BinaryOp.BitAnd => lr2.iv & rr2.iv,
+          ast.BinaryOp.BitOr => lr2.iv | rr2.iv,
+          ast.BinaryOp.BitXor => lr2.iv ^ rr2.iv,
+          ast.BinaryOp.Shl => lr2.iv << rr2.iv,
+          _ => lr2.iv >> rr2.iv,
+        };
+      }
       let wr: WrapResult = wrap_value_for_type(ctx, file, out_ty, raw);
       if !wr.ok { return EvalConstExprResult { ok: false, err: wr.err, kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
       return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: out_ty, iv: wr.v, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };

@@ -136,7 +136,7 @@ type Tiny = @range(0..=3) i32;
 
 Stage0/Stage1 v0 当前实现限制：
 
-- `T` 仅支持整数类型（当前 stage0 实现：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`）。
+- `T` 仅支持整数类型（当前 stage0/stage1 实现：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`）。
 - `lo/hi` 仅支持十进制整数字面量（更多标量与字面量形式后续再扩展）。
 
 建议提供的转换 API（草案）：
