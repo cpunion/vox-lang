@@ -109,22 +109,31 @@ fn tc_expr_as(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.Ex
 
 fn tc_expr_block(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, b: ast.ExprBlock, expected: i32) -> ExprTyResult {
   // Expression block: `{ stmt*; tailExpr }`. Tail is optional (missing => unit).
-  //
-  // v0 restriction (stage0 parity): terminators are not allowed in expression blocks.
+  // Terminators are allowed; when control flow definitely terminates inside the
+  // block, the expression is treated as diverging and can coerce to `expected`.
   let mut c: Ctx = ctx;
   let mut l: Locals = locals_enter(l0);
+  let block_ret_ty: i32 = if l.fn_ret_ty != -1 { l.fn_ret_ty } else { c.ty_unit };
+  let mut diverges: bool = false;
 
   let mut i: i32 = 0;
   while i < b.stmts.len() {
     let st: ast.Stmt = b.stmts.get(i);
-    let is_term: bool = match st { ast.Stmt.Return(_, _, _) => true, ast.Stmt.Break(_) => true, ast.Stmt.Continue(_) => true, _ => false };
-    if is_term { return ExprTyResult { ok: false, ty: c.ty_bad, err: TcError.None }; }
-
-    let r: TcStmtResult = tc_stmt(c, w, mod_path, imps, exprs, l, c.ty_unit, st);
-    if !r.ok { return ExprTyResult { ok: false, ty: c.ty_bad, err: TcError.None }; }
+    let r: TcStmtResult = tc_stmt(c, w, mod_path, imps, exprs, l, block_ret_ty, st);
+    if !r.ok { return ExprTyResult { ok: false, ty: c.ty_bad, err: r.err }; }
     c = r.ctx;
     l = r.locals;
-    i = i + 1;
+    if stmt_definitely_diverges(st) {
+      diverges = true;
+      i = b.stmts.len();
+    } else {
+      i = i + 1;
+    }
+  }
+
+  if diverges {
+    let out_div: i32 = if expected != -1 { expected } else { c.ty_unit };
+    return ExprTyResult { ok: true, ty: out_div, err: TcError.None };
   }
 
   if !b.has_tail {
@@ -137,6 +146,42 @@ fn tc_expr_block(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   let out_ty: i32 = if expected != -1 { expected } else { er.ty };
   if expected != -1 && !assignable_to(c, expected, er.ty) { return ExprTyResult { ok: false, ty: c.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
+}
+
+fn block_definitely_diverges(b: ast.Block) -> bool {
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    if stmt_definitely_diverges(b.stmts.get(i)) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn stmt_definitely_diverges(st: ast.Stmt) -> bool {
+  return match st {
+    ast.Stmt.Return(_, _, _) => true,
+    ast.Stmt.Break(_) => true,
+    ast.Stmt.Continue(_) => true,
+    ast.Stmt.If(_sp, _cond, then_b, has_else, else_b) => has_else && block_definitely_diverges(then_b) && block_definitely_diverges(else_b),
+    _ => false,
+  };
+}
+
+fn expr_definitely_diverges(exprs: ast.ExprPool, id: i32) -> bool {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
+  return match n {
+    ast.ExprNode.Block(b) => {
+      let mut i: i32 = 0;
+      while i < b.stmts.len() {
+        if stmt_definitely_diverges(b.stmts.get(i)) { return true; }
+        i = i + 1;
+      }
+      if b.has_tail { return expr_definitely_diverges(exprs, b.tail); }
+      false
+    },
+    ast.ExprNode.If(_c, t, e) => expr_definitely_diverges(exprs, t) && expr_definitely_diverges(exprs, e),
+    _ => false,
+  };
 }
 
 fn tc_expr_dot_ident(ctx: Ctx, mod_path: String, name: String, expected: i32) -> ExprTyResult {
@@ -590,16 +635,23 @@ fn tc_expr_if(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.Ex
   if !cr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   if cr.ty != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
+  let t_div: bool = expr_definitely_diverges(exprs, t);
+  let e_div: bool = expr_definitely_diverges(exprs, e);
+
   let want: i32 = expected;
   let tr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, t, want);
-  if !tr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if !tr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: tr.err }; }
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, e, want);
-  if !er.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if !er.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: er.err }; }
 
   if expected != -1 {
     // Branches already checked under `expected`; accept.
     return ExprTyResult { ok: true, ty: expected, err: TcError.None };
   }
+
+  if t_div && !e_div { return ExprTyResult { ok: true, ty: er.ty, err: TcError.None }; }
+  if e_div && !t_div { return ExprTyResult { ok: true, ty: tr.ty, err: TcError.None }; }
+  if t_div && e_div { return ExprTyResult { ok: true, ty: ctx.ty_unit, err: TcError.None }; }
 
   if tr.ty == er.ty { return ExprTyResult { ok: true, ty: tr.ty, err: TcError.None }; }
 

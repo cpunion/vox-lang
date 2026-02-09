@@ -5,6 +5,7 @@ fn typecheck_fn_with_sig(ctx: Ctx, w: World, mod_path: String, imps: Imports, ex
   let mut l: Locals = locals_new();
   l.type_params = sig.type_params;
   l.type_param_bounds = sig.type_param_bounds;
+  l.fn_ret_ty = sig.ret;
   // params at depth 0
   let mut pi: i32 = 0;
   while pi < fnc.params.len() {
@@ -53,8 +54,8 @@ fn tc_stmt(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprP
     ast.Stmt.Expr(sp, eid) => tc_stmt_expr(ctx, w, mod_path, imps, exprs, l0, sp, eid),
     ast.Stmt.If(sp, cond, then_b, has_else, else_b) => tc_stmt_if(ctx, w, mod_path, imps, exprs, l0, ret_ty, sp, cond, then_b, has_else, else_b),
     ast.Stmt.While(sp, cond, body) => tc_stmt_while(ctx, w, mod_path, imps, exprs, l0, ret_ty, sp, cond, body),
-    ast.Stmt.Break(_sp) => TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 },
-    ast.Stmt.Continue(_sp) => TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 },
+    ast.Stmt.Break(sp) => if l0.loop_depth > 0 { TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 } } else { TcStmtResult { ok: false, err: type_error_at(sp, "break outside loop"), ctx: ctx, locals: l0 } },
+    ast.Stmt.Continue(sp) => if l0.loop_depth > 0 { TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 } } else { TcStmtResult { ok: false, err: type_error_at(sp, "continue outside loop"), ctx: ctx, locals: l0 } },
     ast.Stmt.Return(sp, has, eid) => tc_stmt_return(ctx, w, mod_path, imps, exprs, l0, ret_ty, sp, has, eid),
   };
 }
@@ -148,7 +149,9 @@ fn tc_stmt_while(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   let cr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, cond, ctx.ty_bool);
   if !cr.ok { return TcStmtResult { ok: false, err: cr.err, ctx: ctx, locals: l0 }; }
   if cr.ty != ctx.ty_bool { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, cond), "while cond must be bool"), ctx: ctx, locals: l0 }; }
-  let r1: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, locals_enter(l0), ret_ty, body);
+  let mut lb: Locals = locals_enter(l0);
+  lb.loop_depth = lb.loop_depth + 1;
+  let r1: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, lb, ret_ty, body);
   if !r1.ok { return r1; }
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
 }
