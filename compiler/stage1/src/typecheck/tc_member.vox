@@ -39,17 +39,18 @@ fn tc_expr_member(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
   }
 
-  // 2) Unit enum variant value: `Enum.None` / `alias.Enum.None`
-  let pr: ExprPartsResult = expr_parts(exprs, recv);
+  // 2) Unit enum variant value: `Enum.None` / `alias.Enum.None` / `Enum[T].None`
+  let pr: ExprTypePathResult = expr_type_path(exprs, recv);
   if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let mut parts: Vec[String] = pr.parts;
+  let enum_targs: Vec[ast.TypeName] = pr.targs;
   parts.push(name);
 
   if parts.len() != 2 && parts.len() != 3 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
   // 2.1) Module const: `alias.NAME` / `alias.mod.NAME` (only when alias resolves).
   let base_mod: String = find_alias(imps.aliases, parts.get(0));
-  if base_mod != "" {
+  if base_mod != "" && enum_targs.len() == 0 {
     let const_mod: String = if parts.len() == 2 { base_mod } else { base_mod.concat("/").concat(parts.get(1)) };
     let const_name: String = if parts.len() == 2 { parts.get(1) } else { parts.get(2) };
     let cs: ConstSig = find_const(ctx, const_mod, const_name);
@@ -78,7 +79,27 @@ fn tc_expr_member(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   }
   let var_name: String = if parts.len() == 2 { parts.get(1) } else { parts.get(2) };
 
-  let fe: FindEnumResult = find_enum_for_member(ctx, enum_mod, enum_name, expected);
+  let mut ty_idx_hint: i32 = -1;
+  let mut fe: FindEnumResult = find_enum_for_member(ctx, enum_mod, enum_name, expected);
+  if enum_targs.len() != 0 {
+    let mut enum_type_parts: Vec[String] = Vec();
+    if parts.len() == 2 {
+      enum_type_parts.push(parts.get(0));
+    } else {
+      enum_type_parts.push(parts.get(0));
+      enum_type_parts.push(parts.get(1));
+    }
+    let tn: ast.TypeName = ast.TypeName { parts: enum_type_parts, args: enum_targs };
+    let tr: ResolveTyResult = resolve_type(ctx, w, mod_path, imps, l0.type_params, tn);
+    if !tr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if tr.idx < 0 || tr.idx >= ctx.pool.tys.len() { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if !is_enum_ty(ctx, tr.idx) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    ty_idx_hint = tr.idx;
+    let et0: ir.Ty = ir.ty_pool_get(ctx.pool, tr.idx);
+    enum_mod = ty_mod(et0);
+    enum_name = ty_name(et0);
+    fe = find_enum(ctx, enum_mod, enum_name);
+  }
   if !fe.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let es: EnumSig = fe.sig;
   if es.mod_path != mod_path && !es.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
@@ -89,7 +110,7 @@ fn tc_expr_member(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
     if v.name == var_name {
       // Only unit variants are values without a call: `E.None`.
       if v.fields.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-      let ty_idx: i32 = find_enum_ty_idx(ctx, enum_mod, es.name);
+      let ty_idx: i32 = if ty_idx_hint != -1 { ty_idx_hint } else { find_enum_ty_idx(ctx, enum_mod, es.name) };
       if ty_idx == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       if expected != -1 && !assignable_to(ctx, expected, ty_idx) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       return ExprTyResult { ok: true, ty: ty_idx, err: TcError.None };

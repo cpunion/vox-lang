@@ -309,6 +309,30 @@ struct TypeWalkResult {
 fn type_walk_ok(c: Ctx) -> TypeWalkResult { return TypeWalkResult { ok: true, err: TcError.None, ctx: c }; }
 fn type_walk_err(c: Ctx, e: TcError) -> TypeWalkResult { return TypeWalkResult { ok: false, err: e, ctx: c }; }
 
+// Typed-path marker pre-resolution:
+// parser encodes `TypePath[T]` (before `.member` or `{ ... }`) as `Call(path, [T], [])`.
+// We resolve it here to ensure typecheck/irgen can rely on already-interned nominal types.
+fn maybe_resolve_typed_path_marker(ctx: Ctx, w: World, mod_path: String, imps: Imports, type_params: Vec[String], exprs: ast.ExprPool, id: i32) -> Ctx {
+  let mut c: Ctx = ctx;
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
+  if !match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } { return c; }
+
+  let callee: i32 = match n { ast.ExprNode.Call(x, _ts, _as) => x, _ => -1 };
+  let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_x, ts, _as) => ts, _ => Vec() };
+  let args: Vec[i32] = match n { ast.ExprNode.Call(_x, _ts, as0) => as0, _ => Vec() };
+  if args.len() != 0 || targs.len() == 0 { return c; }
+
+  let pr: ExprPartsResult = expr_parts(exprs, callee);
+  if !pr.ok { return c; }
+  if pr.parts.len() != 1 && pr.parts.len() != 2 { return c; }
+
+  let tn: ast.TypeName = ast.TypeName { parts: pr.parts, args: targs };
+  let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, tn);
+  // Best-effort pre-warm only; real type errors are reported in main typecheck pass.
+  if tr.ok { c = tr.ctx; }
+  return c;
+}
+
 fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, type_params: Vec[String], exprs: ast.ExprPool, id: i32, owner_file: String) -> TypeWalkResult {
   let mut c: Ctx = ctx;
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
@@ -328,6 +352,14 @@ fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, typ
       if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in call type arg")); }
       ti = ti + 1;
     }
+  }
+  if match n { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+    let recv: i32 = match n { ast.ExprNode.Member(r, _n) => r, _ => -1 };
+    c = maybe_resolve_typed_path_marker(c, w, mod_path, imps, type_params, exprs, recv);
+  }
+  if match n { ast.ExprNode.StructLit(_tyex, _fields) => true, _ => false } {
+    let tyex: i32 = match n { ast.ExprNode.StructLit(t, _fs) => t, _ => -1 };
+    c = maybe_resolve_typed_path_marker(c, w, mod_path, imps, type_params, exprs, tyex);
   }
 
   let wr: TypeWalkResult = match n {

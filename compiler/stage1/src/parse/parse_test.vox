@@ -293,6 +293,81 @@ fn test_parse_enum_decl_type_params() -> () {
   t.assert(ty_is0(e.variants.get(0).fields.get(0), "T"));
 }
 
+fn test_parse_typed_path_struct_lit() -> () {
+  let src: String = "struct Pair[T] { a: T, b: T }\nfn main() -> i32 { let p = Pair[i32] { a: 1, b: 2 }; return p.a + p.b; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  let st: ast.Stmt = f.body.stmts.get(0);
+  let exprs: ast.ExprPool = r.prog.exprs;
+  let ok0: bool = match st {
+    ast.Stmt.Let(_sp, _m, _name, _has_ty, _ty, id) =>
+      match ast.expr_pool_get(exprs, id) {
+        ast.ExprNode.StructLit(ty_expr, _fields) =>
+          match ast.expr_pool_get(exprs, ty_expr) {
+            ast.ExprNode.Call(callee, targs, args) =>
+              args.len() == 0 && targs.len() == 1 && ty_is0(targs.get(0), "i32") &&
+              match ast.expr_pool_get(exprs, callee) { ast.ExprNode.Ident(n) => n == "Pair", _ => false },
+            _ => false,
+          },
+        _ => false,
+      },
+    _ => false,
+  };
+  t.assert(ok0);
+}
+
+fn test_parse_typed_path_enum_variant_ctor_and_member() -> () {
+  let src: String = "enum Option[T] { Some(T), None }\nfn main() -> i32 { let a = Option[i32].Some(1); let b = Option[i32].None; return match a { Option.Some(v) => v, Option.None => 0 }; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  let exprs: ast.ExprPool = r.prog.exprs;
+
+  let st0: ast.Stmt = f.body.stmts.get(0);
+  let ok_ctor: bool = match st0 {
+    ast.Stmt.Let(_sp, _m, _name, _has_ty, _ty, id) =>
+      match ast.expr_pool_get(exprs, id) {
+        ast.ExprNode.Call(callee, _targs, args) =>
+          args.len() == 1 &&
+          match ast.expr_pool_get(exprs, callee) {
+            ast.ExprNode.Member(recv, name) =>
+              name == "Some" &&
+              match ast.expr_pool_get(exprs, recv) {
+                ast.ExprNode.Call(c2, t2, a2) =>
+                  a2.len() == 0 && t2.len() == 1 && ty_is0(t2.get(0), "i32") &&
+                  match ast.expr_pool_get(exprs, c2) { ast.ExprNode.Ident(n) => n == "Option", _ => false },
+                _ => false,
+              },
+            _ => false,
+          },
+        _ => false,
+      },
+    _ => false,
+  };
+  t.assert(ok_ctor);
+
+  let st1: ast.Stmt = f.body.stmts.get(1);
+  let ok_member: bool = match st1 {
+    ast.Stmt.Let(_sp, _m, _name, _has_ty, _ty, id) =>
+      match ast.expr_pool_get(exprs, id) {
+        ast.ExprNode.Member(recv, name) =>
+          name == "None" &&
+          match ast.expr_pool_get(exprs, recv) {
+            ast.ExprNode.Call(c2, t2, a2) =>
+              a2.len() == 0 && t2.len() == 1 && ty_is0(t2.get(0), "i32") &&
+              match ast.expr_pool_get(exprs, c2) { ast.ExprNode.Ident(n) => n == "Option", _ => false },
+            _ => false,
+          },
+        _ => false,
+      },
+    _ => false,
+  };
+  t.assert(ok_member);
+}
+
 fn test_parse_trait_and_impl_decl_smoke() -> () {
   let src: String = "pub trait Show {\n  fn show(x: Self) -> String;\n}\nstruct I { v: i32 }\nimpl Show for I {\n  fn show(x: I) -> String { return \"ok\"; }\n}\nfn main() -> i32 { let x: I = I { v: 1 }; let _s: String = Show.show(x); return 0; }";
   let r: p.ParseResult = p.parse_text(src);
