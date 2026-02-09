@@ -406,7 +406,8 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		rt.popFrame()
 		return v, err
 	case *ast.CallExpr:
-		if vc, ok := rt.prog.VecCalls[e]; ok {
+		if rt.callKinds[e] == callKindVec {
+			vc := rt.prog.VecCalls[e]
 			switch vc.Kind {
 			case typecheck.VecCallNew:
 				return Value{K: VVec, A: nil}, nil
@@ -557,7 +558,8 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			}
 		}
 
-		if sc, ok := rt.prog.StrCalls[e]; ok {
+		if rt.callKinds[e] == callKindStr {
+			sc := rt.prog.StrCalls[e]
 			var recv Value
 			if sc.Recv != nil {
 				rv, err := rt.evalExpr(sc.Recv)
@@ -637,7 +639,8 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			}
 		}
 
-		if ts, ok := rt.prog.ToStrCalls[e]; ok {
+		if rt.callKinds[e] == callKindToStr {
+			ts := rt.prog.ToStrCalls[e]
 			var recv Value
 			if ts.Recv != nil {
 				rv, err := rt.evalExpr(ts.Recv)
@@ -681,7 +684,8 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			}
 		}
 
-		if ctor, ok := rt.prog.EnumCtors[e]; ok {
+		if rt.callKinds[e] == callKindEnumCtor {
+			ctor := rt.prog.EnumCtors[e]
 			if len(ctor.Fields) == 0 {
 				return Value{K: VEnum, E: ctor.Enum.Name, T: ctor.Tag}, nil
 			}
@@ -783,18 +787,31 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		}
 		scrutTy := stripRange(rt.prog.ExprTypes[e.Scrutinee])
 		for _, arm := range e.Arms {
-			rt.pushFrame()
-			ok, err := rt.matchPat(arm.Pat, sv, scrutTy)
+			if !rt.patHasBindings(arm.Pat) {
+				ok, err := rt.matchPatInto(arm.Pat, sv, scrutTy, nil)
+				if err != nil {
+					return unit(), err
+				}
+				if ok {
+					return rt.evalExpr(arm.Expr)
+				}
+				continue
+			}
+			bindings := map[string]Value{}
+			ok, err := rt.matchPatInto(arm.Pat, sv, scrutTy, bindings)
 			if err != nil {
-				rt.popFrame()
 				return unit(), err
 			}
 			if ok {
+				rt.pushFrame()
+				fr := rt.frame()
+				for name, vv := range bindings {
+					fr[name] = vv
+				}
 				v, err := rt.evalExpr(arm.Expr)
 				rt.popFrame()
 				return v, err
 			}
-			rt.popFrame()
 		}
 		return unit(), fmt.Errorf("non-exhaustive match")
 	default:

@@ -16,19 +16,37 @@ type Runtime struct {
 	prog  *typecheck.CheckedProgram
 	funcs map[string]*ast.FuncDecl
 	stack []map[string]Value
-	args  []string
+	// Reuse stack frames to reduce map allocations in hot paths.
+	framePool []map[string]Value
+	args      []string
 	// Cache decoded string literals (token text -> runtime string).
 	strLitCache map[string]string
 	// Cache parsed integer literals (token text -> uint64 bits before truncation).
 	intLitCache map[string]uint64
+	// Cache parsed integer patterns (token text -> int64).
+	intPatCache map[string]int64
+	// Cache whether a pattern subtree introduces bindings.
+	patBindsCache map[ast.Pattern]bool
+	// Pre-classified call kinds keyed by call expr node.
+	callKinds map[*ast.CallExpr]callKind
 }
+
+type callKind uint8
+
+const (
+	callKindPlain callKind = iota
+	callKindVec
+	callKindStr
+	callKindToStr
+	callKindEnumCtor
+)
 
 func RunMain(p *typecheck.CheckedProgram) (string, error) {
 	return RunMainWithArgs(p, nil)
 }
 
 func RunMainWithArgs(p *typecheck.CheckedProgram, args []string) (string, error) {
-	rt := &Runtime{prog: p, funcs: map[string]*ast.FuncDecl{}, strLitCache: map[string]string{}, intLitCache: map[string]uint64{}}
+	rt := newRuntime(p)
 	rt.args = args
 	for _, fn := range p.Prog.Funcs {
 		rt.funcs[names.QualifyFunc(fn.Span.File.Name, fn.Name)] = fn
@@ -87,7 +105,7 @@ func formatInt(bits uint64, ty typecheck.Type) string {
 }
 
 func RunTests(p *typecheck.CheckedProgram) (string, error) {
-	rt := &Runtime{prog: p, funcs: map[string]*ast.FuncDecl{}, strLitCache: map[string]string{}, intLitCache: map[string]uint64{}}
+	rt := newRuntime(p)
 	for _, fn := range p.Prog.Funcs {
 		rt.funcs[names.QualifyFunc(fn.Span.File.Name, fn.Name)] = fn
 	}
@@ -143,6 +161,31 @@ func formatTestDuration(d time.Duration) string {
 	return fmt.Sprintf("%.2fms", float64(us)/1000.0)
 }
 
+func newRuntime(p *typecheck.CheckedProgram) *Runtime {
+	rt := &Runtime{
+		prog:          p,
+		funcs:         map[string]*ast.FuncDecl{},
+		strLitCache:   map[string]string{},
+		intLitCache:   map[string]uint64{},
+		intPatCache:   map[string]int64{},
+		patBindsCache: map[ast.Pattern]bool{},
+		callKinds:     map[*ast.CallExpr]callKind{},
+	}
+	for call := range p.VecCalls {
+		rt.callKinds[call] = callKindVec
+	}
+	for call := range p.StrCalls {
+		rt.callKinds[call] = callKindStr
+	}
+	for call := range p.ToStrCalls {
+		rt.callKinds[call] = callKindToStr
+	}
+	for call := range p.EnumCtors {
+		rt.callKinds[call] = callKindEnumCtor
+	}
+	return rt
+}
+
 func isTestFile(name string) bool {
 	// Stage0 convention:
 	// - tests/**/*.vox
@@ -177,8 +220,29 @@ func (rt *Runtime) call(name string, args []Value) (Value, error) {
 	return unit(), fmt.Errorf("unknown function: %s", name)
 }
 
-func (rt *Runtime) pushFrame() { rt.stack = append(rt.stack, map[string]Value{}) }
-func (rt *Runtime) popFrame()  { rt.stack = rt.stack[:len(rt.stack)-1] }
+func (rt *Runtime) pushFrame() {
+	n := len(rt.framePool)
+	if n == 0 {
+		rt.stack = append(rt.stack, map[string]Value{})
+		return
+	}
+	fr := rt.framePool[n-1]
+	rt.framePool = rt.framePool[:n-1]
+	rt.stack = append(rt.stack, fr)
+}
+
+func (rt *Runtime) popFrame() {
+	n := len(rt.stack)
+	fr := rt.stack[n-1]
+	rt.stack = rt.stack[:n-1]
+	for k := range fr {
+		delete(fr, k)
+	}
+	// Keep pool bounded.
+	if len(rt.framePool) < 1024 {
+		rt.framePool = append(rt.framePool, fr)
+	}
+}
 
 func (rt *Runtime) frame() map[string]Value {
 	return rt.stack[len(rt.stack)-1]
@@ -200,4 +264,24 @@ func (rt *Runtime) lookupValue(name string) (Value, bool) {
 		}
 	}
 	return unit(), false
+}
+
+func (rt *Runtime) patHasBindings(p ast.Pattern) bool {
+	if b, ok := rt.patBindsCache[p]; ok {
+		return b
+	}
+	bind := false
+	switch pt := p.(type) {
+	case *ast.BindPat:
+		bind = pt.Name != "" && pt.Name != "_"
+	case *ast.VariantPat:
+		for i := 0; i < len(pt.Args); i++ {
+			if rt.patHasBindings(pt.Args[i]) {
+				bind = true
+				break
+			}
+		}
+	}
+	rt.patBindsCache[p] = bind
+	return bind
 }

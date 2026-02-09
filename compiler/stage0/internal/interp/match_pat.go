@@ -11,6 +11,10 @@ import (
 // matchPat checks whether v (of expected type) matches pattern p.
 // On success, it may bind names into the current stack frame.
 func (rt *Runtime) matchPat(p ast.Pattern, v Value, expected typecheck.Type) (bool, error) {
+	return rt.matchPatInto(p, v, expected, rt.frame())
+}
+
+func (rt *Runtime) matchPatInto(p ast.Pattern, v Value, expected typecheck.Type, bindings map[string]Value) (bool, error) {
 	expected = stripRange(expected)
 
 	switch p := p.(type) {
@@ -20,8 +24,8 @@ func (rt *Runtime) matchPat(p ast.Pattern, v Value, expected typecheck.Type) (bo
 	case *ast.BindPat:
 		// Bind pattern always matches and binds the value to Name.
 		// "_" is parsed as WildPat, but keep this defensive check.
-		if p.Name != "" && p.Name != "_" {
-			rt.frame()[p.Name] = cloneValue(v)
+		if p.Name != "" && p.Name != "_" && bindings != nil {
+			bindings[p.Name] = cloneValue(v)
 		}
 		return true, nil
 
@@ -29,9 +33,14 @@ func (rt *Runtime) matchPat(p ast.Pattern, v Value, expected typecheck.Type) (bo
 		if v.K != VInt || !isIntType(expected) {
 			return false, nil
 		}
-		n, err := strconv.ParseInt(p.Text, 10, 64)
-		if err != nil {
-			return false, fmt.Errorf("invalid int pattern")
+		n, ok := rt.intPatCache[p.Text]
+		if !ok {
+			parsed, err := strconv.ParseInt(p.Text, 10, 64)
+			if err != nil {
+				return false, fmt.Errorf("invalid int pattern")
+			}
+			rt.intPatCache[p.Text] = parsed
+			n = parsed
 		}
 		patBits, err := castIntChecked(uint64(n), typecheck.Type{K: typecheck.TyI64}, expected)
 		if err != nil {
@@ -47,9 +56,14 @@ func (rt *Runtime) matchPat(p ast.Pattern, v Value, expected typecheck.Type) (bo
 		if v.K != VString {
 			return false, nil
 		}
-		s, err := strconv.Unquote(p.Text)
-		if err != nil {
-			return false, fmt.Errorf("invalid string pattern")
+		s, ok := rt.strLitCache[p.Text]
+		if !ok {
+			parsed, err := strconv.Unquote(p.Text)
+			if err != nil {
+				return false, fmt.Errorf("invalid string pattern")
+			}
+			rt.strLitCache[p.Text] = parsed
+			s = parsed
 		}
 		if v.S != s {
 			return false, nil
@@ -89,7 +103,7 @@ func (rt *Runtime) matchPat(p ast.Pattern, v Value, expected typecheck.Type) (bo
 			return false, fmt.Errorf("internal: enum payload arity mismatch for %s.%s", es.Name, p.Variant)
 		}
 		for i := 0; i < len(p.Args); i++ {
-			ok, err := rt.matchPat(p.Args[i], v.P[i], vsig.Fields[i])
+			ok, err := rt.matchPatInto(p.Args[i], v.P[i], vsig.Fields[i], bindings)
 			if err != nil {
 				return false, err
 			}
@@ -103,4 +117,3 @@ func (rt *Runtime) matchPat(p ast.Pattern, v Value, expected typecheck.Type) (bo
 		return false, fmt.Errorf("unsupported pattern")
 	}
 }
-
