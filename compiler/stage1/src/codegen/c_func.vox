@@ -90,6 +90,10 @@ fn is_signed_int_kind(k: ir.TyKind) -> bool {
   return match k { ir.TyKind.I8 => true, ir.TyKind.I16 => true, ir.TyKind.I32 => true, ir.TyKind.I64 => true, ir.TyKind.ISize => true, _ => false };
 }
 
+fn is_unsigned_int_kind(k: ir.TyKind) -> bool {
+  return match k { ir.TyKind.U8 => true, ir.TyKind.U16 => true, ir.TyKind.U32 => true, ir.TyKind.U64 => true, ir.TyKind.USize => true, _ => false };
+}
+
 fn int_bits(k: ir.TyKind) -> i32 {
   return match k {
     ir.TyKind.I8 => 8,
@@ -104,6 +108,19 @@ fn int_bits(k: ir.TyKind) -> i32 {
     ir.TyKind.USize => 64,
     _ => 0,
   };
+}
+
+fn int_cast_needs_runtime_check(dst: ir.TyKind, src: ir.TyKind) -> bool {
+  if !is_int_scalar_kind(dst) || !is_int_scalar_kind(src) { return true; }
+  let db: i32 = int_bits(dst);
+  let sb: i32 = int_bits(src);
+  if db == 0 || sb == 0 { return true; }
+
+  let du: bool = is_unsigned_int_kind(dst);
+  let su: bool = is_unsigned_int_kind(src);
+  if du && !su { return true; } // signed -> unsigned always needs non-negative check
+  if !du && su { return db <= sb; } // unsigned -> signed: only wider destination is always safe
+  return db < sb; // same signedness: narrowing only
 }
 
 fn unsigned_peer_c_type(k: ir.TyKind) -> String {
@@ -305,13 +322,15 @@ fn emit_instr_int_cast_checked(pool: ir.TyPool, tid: i32, dst_ty: i32, src_ty: i
       _ => "0",
     };
 
-  let dst_is_unsigned: bool =
-    dst.kind == ir.TyKind.U8 || dst.kind == ir.TyKind.U16 || dst.kind == ir.TyKind.U32 || dst.kind == ir.TyKind.U64 || dst.kind == ir.TyKind.USize;
-  let src_is_unsigned: bool =
-    src.kind == ir.TyKind.U8 || src.kind == ir.TyKind.U16 || src.kind == ir.TyKind.U32 || src.kind == ir.TyKind.U64 || src.kind == ir.TyKind.USize;
+  let dst_is_unsigned: bool = is_unsigned_int_kind(dst.kind);
+  let src_is_unsigned: bool = is_unsigned_int_kind(src.kind);
   let src_is_float: bool = src.kind == ir.TyKind.F32 || src.kind == ir.TyKind.F64;
 
   let mut out: Vec[String] = Vec();
+  if !src_is_float && !int_cast_needs_runtime_check(dst.kind, src.kind) {
+    out.push("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, dst_ty)).concat(")").concat(c_value(v)).concat(";"));
+    return out;
+  }
   if src_is_float {
     if dst_is_unsigned {
       let line0: String = "  if (!isfinite((double)".concat(c_value(v)).concat(") || (double)").concat(c_value(v)).concat(" < 0.0 || (long double)").concat(c_value(v)).concat(" > (long double)").concat(dst_max).concat(") { vox_builtin_panic(").concat(c_str_lit(msg)).concat("); }");
