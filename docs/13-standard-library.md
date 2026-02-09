@@ -14,7 +14,7 @@
 
 当前 stage1 落地：
 
-- `std::prelude` 已提供默认 trait：`Eq`、`Show`。
+- `std::prelude` 已提供默认 trait：`Eq`、`Show`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
 - 未显式 import 时，函数名会回退到 `std/prelude`；trait 静态调用与 `impl Trait for ...` 也支持回退到 `std/prelude` 的公开 trait。
 
 重要：由于 Vox 的“临时借用”规则，标准库应优先提供“可长期保存的拥有型视图”（例如 `StrView`），避免 API 设计依赖 `&T` 返回值。
