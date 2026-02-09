@@ -429,7 +429,50 @@ fn const_local_from_value(name: String, v: EvalConstExprResult) -> ConstLocal {
   return ConstLocal { name: name, kind: v.kind, ty: v.ty, iv: v.iv, bv: v.bv, sv: v.sv };
 }
 
-struct ConstPatEvalResult { ok: bool, matched: bool, has_bind: bool, bind_name: String, err: String }
+struct ConstPatEvalResult {
+  ok: bool,
+  matched: bool,
+  has_bind: bool,
+  bind_name: String,
+  bind_kind: i32,
+  bind_ty: i32,
+  bind_iv: i64,
+  bind_bv: bool,
+  bind_sv: String,
+  err: String,
+}
+
+fn const_pat_err(msg: String) -> ConstPatEvalResult {
+  return ConstPatEvalResult {
+    ok: false, matched: false, has_bind: false, bind_name: "",
+    bind_kind: 0, bind_ty: -1, bind_iv: 0, bind_bv: false, bind_sv: "",
+    err: msg,
+  };
+}
+
+fn const_pat_nomatch() -> ConstPatEvalResult {
+  return ConstPatEvalResult {
+    ok: true, matched: false, has_bind: false, bind_name: "",
+    bind_kind: 0, bind_ty: -1, bind_iv: 0, bind_bv: false, bind_sv: "",
+    err: "",
+  };
+}
+
+fn const_pat_match_no_bind() -> ConstPatEvalResult {
+  return ConstPatEvalResult {
+    ok: true, matched: true, has_bind: false, bind_name: "",
+    bind_kind: 0, bind_ty: -1, bind_iv: 0, bind_bv: false, bind_sv: "",
+    err: "",
+  };
+}
+
+fn const_pat_match_bind(name: String, v: EvalConstExprResult) -> ConstPatEvalResult {
+  return ConstPatEvalResult {
+    ok: true, matched: true, has_bind: true, bind_name: name,
+    bind_kind: v.kind, bind_ty: v.ty, bind_iv: v.iv, bind_bv: v.bv, bind_sv: v.sv,
+    err: "",
+  };
+}
 
 fn const_find_enum_variant_idx(ctx: Ctx, ty: i32, vname: String) -> i32 {
   let base: i32 = strip_range(ctx, ty);
@@ -448,17 +491,18 @@ fn const_find_enum_variant_idx(ctx: Ctx, ty: i32, vname: String) -> i32 {
 fn const_match_int_pat(ctx: Ctx, scrut_ty: i32, scrut_iv: i64, text: String) -> ConstPatEvalResult {
   let base: i32 = strip_range(ctx, scrut_ty);
   if !is_int_like_ty(ctx, base) {
-    return ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const int pattern requires int scrutinee" };
+    return const_pat_err("const int pattern requires int scrutinee");
   }
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
   if t.kind == ir.TyKind.U64 || t.kind == ir.TyKind.USize {
     let pru: ParseU64DecResult = parse_u64_dec(text);
-    if !pru.ok { return ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const int pattern out of range" }; }
-    return ConstPatEvalResult { ok: true, matched: pru.val == scrut_iv, has_bind: false, bind_name: "", err: "" };
+    if !pru.ok { return const_pat_err("const int pattern out of range"); }
+    if pru.val == scrut_iv { return const_pat_match_no_bind(); }
+    return const_pat_nomatch();
   }
 
   let pr: ParseI64DecResult = parse_i64_dec(text);
-  if !pr.ok { return ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const int pattern out of range" }; }
+  if !pr.ok { return const_pat_err("const int pattern out of range"); }
   let v: i64 = pr.val;
   let ok_lit: bool = match t.kind {
     ir.TyKind.I8 => v >= -128 && v <= 127,
@@ -471,49 +515,111 @@ fn const_match_int_pat(ctx: Ctx, scrut_ty: i32, scrut_iv: i64, text: String) -> 
     ir.TyKind.ISize => true,
     _ => false,
   };
-  if !ok_lit { return ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const int pattern out of range" }; }
-  return ConstPatEvalResult { ok: true, matched: v == scrut_iv, has_bind: false, bind_name: "", err: "" };
+  if !ok_lit { return const_pat_err("const int pattern out of range"); }
+  if v == scrut_iv { return const_pat_match_no_bind(); }
+  return const_pat_nomatch();
+}
+
+fn const_payload_field_eval(scrut: EvalConstExprResult, f: ConstEnumPayloadField) -> EvalConstExprResult {
+  return EvalConstExprResult {
+    ok: true,
+    err: TcError.None,
+    kind: f.kind,
+    ty: f.ty,
+    iv: f.iv,
+    bv: f.bv,
+    sv: f.sv,
+    sigs: scrut.sigs,
+    states: scrut.states,
+  };
 }
 
 fn const_pat_matches(ctx: Ctx, scrut: EvalConstExprResult, pat: ast.Pat) -> ConstPatEvalResult {
   return match pat {
-    ast.Pat.Wild(_sp) => ConstPatEvalResult { ok: true, matched: true, has_bind: false, bind_name: "", err: "" },
-    ast.Pat.Bind(_sp, n) => ConstPatEvalResult { ok: true, matched: true, has_bind: true, bind_name: n, err: "" },
+    ast.Pat.Wild(_sp) => const_pat_match_no_bind(),
+    ast.Pat.Bind(_sp, n) => const_pat_match_bind(n, scrut),
     ast.Pat.Bool(_sp, b) => {
       if scrut.kind != const_kind_bool() {
-        ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const bool pattern requires bool scrutinee" }
+        const_pat_err("const bool pattern requires bool scrutinee")
       } else {
-        ConstPatEvalResult { ok: true, matched: scrut.bv == b, has_bind: false, bind_name: "", err: "" }
+        if scrut.bv == b { const_pat_match_no_bind() } else { const_pat_nomatch() }
       }
     },
     ast.Pat.Int(_sp, text) => {
       if scrut.kind != const_kind_int() {
-        ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const int pattern requires int scrutinee" }
+        const_pat_err("const int pattern requires int scrutinee")
       } else {
         const_match_int_pat(ctx, scrut.ty, scrut.iv, text)
       }
     },
     ast.Pat.Str(_sp, text) => {
       if scrut.kind != const_kind_str() {
-        ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const string pattern requires String scrutinee" }
+        const_pat_err("const string pattern requires String scrutinee")
       } else {
-        ConstPatEvalResult { ok: true, matched: scrut.sv == text, has_bind: false, bind_name: "", err: "" }
+        if scrut.sv == text { const_pat_match_no_bind() } else { const_pat_nomatch() }
       }
     },
     ast.Pat.EnumVariant(_sp, _enum_parts, vname, args) => {
       if scrut.kind != const_kind_enum() {
-        ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const enum pattern requires enum scrutinee" }
-      } else if args.len() != 0 {
-        ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const enum payload pattern is not supported yet" }
+        const_pat_err("const enum pattern requires enum scrutinee")
       } else {
         let vidx: i32 = const_find_enum_variant_idx(ctx, scrut.ty, vname);
         if vidx == -1 {
-          ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "unknown enum variant in const pattern" }
+          const_pat_err("unknown enum variant in const pattern")
+        } else if scrut.iv != (vidx as i64) {
+          const_pat_nomatch()
         } else {
-          ConstPatEvalResult { ok: true, matched: scrut.iv == (vidx as i64), has_bind: false, bind_name: "", err: "" }
+          let dec: ConstEnumPayloadDecode = const_enum_unpack(scrut.sv);
+          if !dec.ok {
+            const_pat_err("bad const enum payload encoding")
+          } else if dec.variant != vname {
+            const_pat_err("const enum payload variant mismatch")
+          } else if args.len() != dec.fields.len() {
+            const_pat_err("const enum pattern arity mismatch")
+          } else {
+            let mut out: ConstPatEvalResult = const_pat_match_no_bind();
+            let mut i: i32 = 0;
+            while i < args.len() {
+              let pr: ConstPatEvalResult = const_pat_matches(ctx, const_payload_field_eval(scrut, dec.fields.get(i)), args.get(i));
+              if !pr.ok { return pr; }
+              if !pr.matched { return const_pat_nomatch(); }
+              if pr.has_bind {
+                if out.has_bind {
+                  return const_pat_err("const enum payload pattern supports at most one bind");
+                }
+                out = pr;
+              }
+              i = i + 1;
+            }
+            out
+          }
         }
       }
     },
+  };
+}
+
+struct ConstToPayloadFieldResult { ok: bool, err: String, f: ConstEnumPayloadField }
+
+fn const_payload_field_from_eval(v: EvalConstExprResult) -> ConstToPayloadFieldResult {
+  let is_ok_kind: bool =
+    v.kind == const_kind_int() ||
+    v.kind == const_kind_bool() ||
+    v.kind == const_kind_str() ||
+    v.kind == const_kind_float() ||
+    v.kind == const_kind_enum();
+  if !is_ok_kind {
+    return ConstToPayloadFieldResult { ok: false, err: "const enum payload must be const value", f: ConstEnumPayloadField { kind: 0, ty: -1, iv: 0, bv: false, sv: "" } };
+  }
+  if v.kind == const_kind_enum() {
+    let dec: ConstEnumPayloadDecode = const_enum_unpack(v.sv);
+    if !dec.ok {
+      return ConstToPayloadFieldResult { ok: false, err: "bad const enum payload encoding", f: ConstEnumPayloadField { kind: 0, ty: -1, iv: 0, bv: false, sv: "" } };
+    }
+  }
+  return ConstToPayloadFieldResult {
+    ok: true, err: "",
+    f: ConstEnumPayloadField { kind: v.kind, ty: v.ty, iv: v.iv, bv: v.bv, sv: v.sv },
   };
 }
 
@@ -590,7 +696,8 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_str(), ty: ctx.ty_string, iv: 0, bv: false, sv: s, sigs: sigs0, states: states0 };
   }
 
-  // enum unit variant shorthand: `.None` (expected enum type required)
+  // enum variant shorthand: `.None` (unit) / `.Some(...)` (payload)
+  // expected enum type is required.
   if match n { ast.ExprNode.DotIdent(_name) => true, _ => false } {
     let vname: String = match n { ast.ExprNode.DotIdent(x) => x, _ => "" };
     if expected == -1 {
@@ -611,7 +718,7 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
       let v: EnumVariantSig = fe.sig.vars.get(vi);
       if v.name == vname {
         if v.fields.len() != 0 {
-          return EvalConstExprResult { ok: false, err: type_error(file, "const enum payload init is not supported yet"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+          return EvalConstExprResult { ok: false, err: type_error(file, "const enum payload requires call syntax"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
         }
         vidx = vi;
       }
@@ -620,7 +727,70 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     if vidx == -1 {
       return EvalConstExprResult { ok: false, err: type_error(file, "unknown enum variant in const expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
-    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_enum(), ty: eb, iv: vidx as i64, bv: false, sv: vname, sigs: sigs0, states: states0 };
+    let packed0: String = const_enum_pack(vname, Vec());
+    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_enum(), ty: eb, iv: vidx as i64, bv: false, sv: packed0, sigs: sigs0, states: states0 };
+  }
+
+  // enum payload ctor call in const: `.Some(x)` (expected enum type required).
+  if match n { ast.ExprNode.Call(_c, _ta, _args) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.Call(c, _ta, _args) => c, _ => -1 };
+    let args: Vec[i32] = match n { ast.ExprNode.Call(_c, _ta, as0) => as0, _ => Vec() };
+    let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+    if match cn { ast.ExprNode.DotIdent(_name) => true, _ => false } {
+      let vname2: String = match cn { ast.ExprNode.DotIdent(x) => x, _ => "" };
+      if expected == -1 {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const enum shorthand requires expected enum type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+      let eb2: i32 = strip_range(ctx, expected);
+      let et2: ir.Ty = ir.ty_pool_get(ctx.pool, eb2);
+      if et2.kind != ir.TyKind.Enum {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const enum shorthand requires expected enum type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+      let fe2: FindEnumResult = find_enum(ctx, ty_mod(et2), ty_name(et2));
+      if !fe2.found {
+        return EvalConstExprResult { ok: false, err: type_error(file, "unknown enum in const expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+
+      let mut vidx2: i32 = -1;
+      let mut want_fields: Vec[i32] = Vec();
+      let mut vi2: i32 = 0;
+      while vi2 < fe2.sig.vars.len() {
+        let v2: EnumVariantSig = fe2.sig.vars.get(vi2);
+        if v2.name == vname2 {
+          vidx2 = vi2;
+          want_fields = v2.fields;
+        }
+        vi2 = vi2 + 1;
+      }
+      if vidx2 == -1 {
+        return EvalConstExprResult { ok: false, err: type_error(file, "unknown enum variant in const expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+      if args.len() != want_fields.len() {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const enum payload arity mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+
+      let mut sigs2: Vec[ConstSig] = sigs0;
+      let mut states2: Vec[i32] = states0;
+      let mut payload: Vec[ConstEnumPayloadField] = Vec();
+      let mut ai: i32 = 0;
+      while ai < args.len() {
+        let want_ty: i32 = want_fields.get(ai);
+        let ar2: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs2, states2, cur_mod, imps, exprs, file, args.get(ai), want_ty, locals);
+        if !ar2.ok { return ar2; }
+        sigs2 = ar2.sigs;
+        states2 = ar2.states;
+
+        let fr: ConstToPayloadFieldResult = const_payload_field_from_eval(ar2);
+        if !fr.ok {
+          return EvalConstExprResult { ok: false, err: type_error(file, fr.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
+        }
+        payload.push(fr.f);
+        ai = ai + 1;
+      }
+
+      let packed: String = const_enum_pack(vname2, payload);
+      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_enum(), ty: eb2, iv: vidx2 as i64, bv: false, sv: packed, sigs: sigs2, states: states2 };
+    }
   }
 
   // identifier: must resolve to a const
@@ -776,7 +946,7 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     return eval_const_expr_in_mod_locals(ctx, w, items, cr.sigs, cr.states, cur_mod, imps, exprs, file, els, expected, locals);
   }
 
-  // match expr (const v0 subset: wildcard/bind/bool/int/string/enum-unit patterns).
+  // match expr (const v0 subset: wildcard/bind/bool/int/string/enum patterns).
   if match n { ast.ExprNode.Match(_scrut, _arms) => true, _ => false } {
     let scrut: i32 = match n { ast.ExprNode.Match(s, _as) => s, _ => -1 };
     let arms: Vec[ast.MatchArm] = match n { ast.ExprNode.Match(_s, as0) => as0, _ => Vec() };
@@ -797,7 +967,14 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
       if pr.matched {
         let mut arm_locals: Vec[ConstLocal] = locals;
         if pr.has_bind {
-          arm_locals.push(const_local_from_value(pr.bind_name, sr));
+          arm_locals.push(ConstLocal {
+            name: pr.bind_name,
+            kind: pr.bind_kind,
+            ty: pr.bind_ty,
+            iv: pr.bind_iv,
+            bv: pr.bind_bv,
+            sv: pr.bind_sv,
+          });
         }
         return eval_const_expr_in_mod_locals(ctx, w, items, sr.sigs, sr.states, cur_mod, imps, exprs, file, arm.expr, expected, arm_locals);
       }
@@ -1030,7 +1207,7 @@ fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig]
     ty == ctx.ty_f64 ||
     is_enum_ty(ctx, ty) ||
     is_int_scalar_kind(int_kind(ctx, ty));
-  if !ok_v0 { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "const type must be primitive/enum-unit in v0"), sigs: sigs, states: states }; }
+  if !ok_v0 { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "const type must be primitive/enum in v0"), sigs: sigs, states: states }; }
 
   // Evaluate init expression.
   let ev: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs, states, it.mod_path, imps, m.prog.exprs, it.decl.file, it.decl.init, ty);
