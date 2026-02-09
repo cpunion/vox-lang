@@ -5,6 +5,7 @@ import "typecheck" as tc
 struct GenExprResult { ok: bool, err: String, g: Gen, val: ir.Value, ty: i32 }
 struct TryEnumInfo { ok: bool, is_result: bool, ok_name: String, ok_idx: i32, ok_ty: i32, residual_name: String, residual_idx: i32, residual_ty: i32 }
 struct CurrentTryResult { found: bool, t: TryCtx }
+struct TryErrConvResult { ok: bool, err: String, need_call: bool, mod_path: String, fn_name: String, ret_ty: i32 }
 
 fn gen_expr(g0: Gen, id: i32, expected: i32) -> GenExprResult {
   let tr: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.imps, g0.exprs, g0.locals, id, expected);
@@ -115,6 +116,63 @@ fn try_enum_info(g0: Gen, ty0: i32) -> TryEnumInfo {
   return TryEnumInfo { ok: false, is_result: false, ok_name: "", ok_idx: -1, ok_ty: g0.ctx.ty_bad, residual_name: "", residual_idx: -1, residual_ty: g0.ctx.ty_bad };
 }
 
+fn try_impl_assoc_ty_ir(sig: tc.ImplSig, assoc: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < sig.assoc_types.len() {
+    let a: tc.ImplAssocTypeSig = sig.assoc_types.get(i);
+    if a.name == assoc { return a.ty; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn try_resolve_err_conv(g0: Gen, src_err_ty: i32, dst_err_ty: i32) -> TryErrConvResult {
+  if tc.assignable_to(g0.ctx, dst_err_ty, src_err_ty) {
+    return TryErrConvResult { ok: true, err: "", need_call: false, mod_path: "", fn_name: "", ret_ty: src_err_ty };
+  }
+
+  let prelude: String = "std/prelude";
+  let tf: tc.FindTraitResult = tc.find_trait(g0.ctx, prelude, "Into");
+  if !tf.found || !tc.vis_allows(tf.sig.vis, prelude, g0.mod_path) {
+    return TryErrConvResult { ok: false, err: "cannot propagate error: Err type mismatch", need_call: false, mod_path: "", fn_name: "", ret_ty: g0.ctx.ty_bad };
+  }
+
+  let fi: tc.FindImplForTyResult = tc.find_impl_for_ty(g0.ctx, prelude, "Into", tc.strip_range(g0.ctx, src_err_ty));
+  if fi.ambiguous {
+    let msg0: String = "cannot propagate error: Err type mismatch (ambiguous Into impls: ".concat(fi.candidates).concat(")");
+    return TryErrConvResult { ok: false, err: msg0, need_call: false, mod_path: "", fn_name: "", ret_ty: g0.ctx.ty_bad };
+  }
+  if !fi.found {
+    return TryErrConvResult { ok: false, err: "cannot propagate error: Err type mismatch", need_call: false, mod_path: "", fn_name: "", ret_ty: g0.ctx.ty_bad };
+  }
+
+  let im: tc.FindImplMethodResult = tc.find_impl_method(fi.sig, "into");
+  if !im.found {
+    return TryErrConvResult { ok: false, err: "cannot propagate error: Err type mismatch", need_call: false, mod_path: "", fn_name: "", ret_ty: g0.ctx.ty_bad };
+  }
+  if im.m.sig.type_params.len() != 0 {
+    return TryErrConvResult { ok: false, err: "cannot propagate error: Err type mismatch (generic Into method is unsupported in `?`)", need_call: false, mod_path: "", fn_name: "", ret_ty: g0.ctx.ty_bad };
+  }
+  if im.m.sig.params.len() != 1 {
+    return TryErrConvResult { ok: false, err: "cannot propagate error: Err type mismatch", need_call: false, mod_path: "", fn_name: "", ret_ty: g0.ctx.ty_bad };
+  }
+
+  let assoc_target: i32 = try_impl_assoc_ty_ir(fi.sig, "Target");
+  let via_ty: i32 = if assoc_target != -1 { assoc_target } else { im.m.sig.ret };
+  if !tc.assignable_to(g0.ctx, dst_err_ty, via_ty) {
+    return TryErrConvResult { ok: false, err: "cannot propagate error: Err type mismatch", need_call: false, mod_path: "", fn_name: "", ret_ty: g0.ctx.ty_bad };
+  }
+
+  return TryErrConvResult {
+    ok: true,
+    err: "",
+    need_call: true,
+    mod_path: fi.sig.mod_path,
+    fn_name: im.m.lowered_name,
+    ret_ty: via_ty,
+  };
+}
+
 fn gen_expr_try(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
   let mut g: Gen = g0;
   let ar: GenExprResult = gen_expr(g, a, -1);
@@ -174,11 +232,23 @@ fn gen_expr_try(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
     g = tr3.g;
     let err_tid: i32 = tr3.id;
     g = gen_emit(g, ir.Instr.EnumPayload(err_tid, src.residual_ty, ar.val, src.residual_name, 0));
+    let mut err_v: ir.Value = ir.v_temp(err_tid);
+    let cv: TryErrConvResult = try_resolve_err_conv(g, src.residual_ty, dst.residual_ty);
+    if !cv.ok { return GenExprResult { ok: false, err: cv.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    if cv.need_call {
+      let trc: GenNewIdResult = gen_new_temp(g);
+      g = trc.g;
+      let cv_tid: i32 = trc.id;
+      let mut cv_args: Vec[ir.Value] = Vec();
+      cv_args.push(err_v);
+      g = gen_emit(g, ir.Instr.Call(true, cv_tid, cv.ret_ty, qname(cv.mod_path, cv.fn_name), cv_args));
+      err_v = ir.v_temp(cv_tid);
+    }
     let tr4: GenNewIdResult = gen_new_temp(g);
     g = tr4.g;
     let ret_tid: i32 = tr4.id;
     let mut ps: Vec[ir.Value] = Vec();
-    ps.push(ir.v_temp(err_tid));
+    ps.push(err_v);
     g = gen_emit(g, ir.Instr.EnumInit(ret_tid, target_ret_ty, dst.residual_name, ps));
     rv = ir.v_temp(ret_tid);
   } else {

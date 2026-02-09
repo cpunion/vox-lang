@@ -188,7 +188,9 @@ return if ok { a } else { b };
   - 约束：
     - `?` 仅可用于 `Result/Option`。
     - 所在函数返回类型需与传播容器同类（`Result` 或 `Option`）。
-    - `Result` 的 `Err` 类型必须兼容函数返回的 `Err` 类型（当前不做 `into()` 自动转换）。
+    - `Result` 的 `Err` 类型规则：
+      - 若源 `Err` 可直接赋给目标 `Err`，则直接传播；
+      - 否则尝试 `std/prelude::Into`（源 `Err` 的 `Into::Target` 需兼容目标 `Err`，当前要求 `into` 为非泛型方法）。
 - `try { ... }`
   - 当前实现为块级传播边界：
     - 块内 `?` 失败仅提前结束 `try` 块并返回 `Err/None`，不会直接退出外层函数。

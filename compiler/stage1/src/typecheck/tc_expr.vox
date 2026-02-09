@@ -8,6 +8,7 @@ import "ir" as ir
 pub struct ExprTyResult { pub ok: bool, pub ty: i32, pub err: TcError }
 struct TryContainerInfo { ok: bool, is_result: bool, ok_ty: i32, residual_ty: i32 }
 struct VariantLookupFieldResult { found: bool, field_count: i32, field0: i32 }
+struct TryErrCompatResult { ok: bool, err: TcError }
 
 pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, id: i32, expected: i32) -> ExprTyResult {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
@@ -79,6 +80,53 @@ fn try_container_info(ctx: Ctx, ty0: i32) -> TryContainerInfo {
   return TryContainerInfo { ok: false, is_result: false, ok_ty: ctx.ty_bad, residual_ty: ctx.ty_bad };
 }
 
+fn try_impl_assoc_ty(sig: ImplSig, assoc: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < sig.assoc_types.len() {
+    let a: ImplAssocTypeSig = sig.assoc_types.get(i);
+    if a.name == assoc { return a.ty; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn try_result_err_compatible(ctx: Ctx, mod_path: String, sp: ast.Span, src_err_ty: i32, dst_err_ty: i32) -> TryErrCompatResult {
+  if assignable_to(ctx, dst_err_ty, src_err_ty) {
+    return TryErrCompatResult { ok: true, err: TcError.None };
+  }
+
+  let prelude: String = "std/prelude";
+  let tf: FindTraitResult = find_trait(ctx, prelude, "Into");
+  if !tf.found || !vis_allows(tf.sig.vis, prelude, mod_path) {
+    return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
+  }
+
+  let fi: FindImplForTyResult = find_impl_for_ty(ctx, prelude, "Into", strip_range(ctx, src_err_ty));
+  if fi.ambiguous {
+    let msg0: String = "cannot propagate error: Err type mismatch (ambiguous Into impls: ".concat(fi.candidates).concat(")");
+    return TryErrCompatResult { ok: false, err: type_error_at(sp, msg0) };
+  }
+  if !fi.found {
+    return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
+  }
+
+  let im: FindImplMethodResult = find_impl_method(fi.sig, "into");
+  if !im.found {
+    return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
+  }
+  if im.m.sig.type_params.len() != 0 {
+    return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch (generic Into method is unsupported in `?`)") };
+  }
+
+  let assoc_target: i32 = try_impl_assoc_ty(fi.sig, "Target");
+  let via_ty: i32 = if assoc_target != -1 { assoc_target } else { im.m.sig.ret };
+  if !assignable_to(ctx, dst_err_ty, via_ty) {
+    return TryErrCompatResult { ok: false, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
+  }
+
+  return TryErrCompatResult { ok: true, err: TcError.None };
+}
+
 fn select_try_target_ty(ctx: Ctx, l0: Locals, expected: i32) -> i32 {
   if expected != -1 {
     let ei: TryContainerInfo = try_container_info(ctx, expected);
@@ -143,9 +191,8 @@ fn tc_expr_try(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
   }
 
   if src.is_result {
-    if !assignable_to(ctx, dst.residual_ty, src.residual_ty) {
-      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "cannot propagate error: Err type mismatch") };
-    }
+    let cr: TryErrCompatResult = try_result_err_compatible(ctx, mod_path, sp, src.residual_ty, dst.residual_ty);
+    if !cr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: cr.err }; }
   }
 
   let out_ty: i32 = src.ok_ty;

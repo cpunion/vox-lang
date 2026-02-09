@@ -34,7 +34,9 @@ Stage1 当前实现（v0）：
 - 约束：
   - `?` 只能用于 `Result/Option`。
   - 所在函数返回类型也必须是对应容器类型（`Result` 对 `Result`，`Option` 对 `Option`）。
-  - `Result` 情况下，传播的 `Err` 类型需与函数返回的 `Err` 类型兼容（当前 v0 不做 `into()` 自动转换）。
+  - `Result` 情况下，传播的 `Err` 类型规则：
+    - 若源 `Err` 类型可直接赋给目标 `Err` 类型，则直接传播；
+    - 否则会尝试 `std/prelude::Into`：要求源 `Err` 类型存在 `impl Into`，且其 `Target` 可赋给目标 `Err` 类型（当前仅支持非泛型 `into` 方法）。
 
 ## `try {}` 块
 
