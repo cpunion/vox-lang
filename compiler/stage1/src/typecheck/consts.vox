@@ -560,11 +560,26 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     let is_shift: bool = match op { ast.BinaryOp.Shl => true, ast.BinaryOp.Shr => true, _ => false };
 
     if is_arith || is_bit || is_shift || is_cmp {
-      let lr2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, expected);
+      // For comparisons assigned to bool, infer operand type from lhs/rhs instead
+      // of forcing expected=bool into numeric subexpressions.
+      let is_cmp_bool_ctx: bool = is_cmp && expected == ctx.ty_bool;
+      let lhs_expected: i32 = if is_cmp_bool_ctx { -1 } else { expected };
+      let mut lr2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, lhs_expected);
+      if !lr2.ok && is_cmp_bool_ctx {
+        // Keep const-eval usable for literal-vs-literal int comparisons.
+        lr2 = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, ctx.ty_i32);
+      }
       if !lr2.ok { return lr2; }
-      let rr2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, lr2.sigs, lr2.states, cur_mod, imps, exprs, file, r, expected);
+
+      let rhs_expected: i32 =
+        if is_cmp_bool_ctx {
+          strip_range(ctx, lr2.ty)
+        } else {
+          expected
+        };
+      let rr2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, lr2.sigs, lr2.states, cur_mod, imps, exprs, file, r, rhs_expected);
       if !rr2.ok { return rr2; }
-      let out_ty: i32 = if expected != -1 { strip_range(ctx, expected) } else { strip_range(ctx, lr2.ty) };
+      let out_ty: i32 = if is_cmp { strip_range(ctx, lr2.ty) } else if expected != -1 { strip_range(ctx, expected) } else { strip_range(ctx, lr2.ty) };
       if strip_range(ctx, lr2.ty) != out_ty || strip_range(ctx, rr2.ty) != out_ty {
         return EvalConstExprResult { ok: false, err: type_error(file, "const numeric op type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
       }
@@ -573,7 +588,14 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
         if lr2.kind != const_kind_float() || rr2.kind != const_kind_float() || !is_float_scalar_ty(ctx, out_ty) {
           return EvalConstExprResult { ok: false, err: type_error(file, "const float op expects f32/f64"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
         }
-        return EvalConstExprResult { ok: false, err: type_error(file, "const float arithmetic/comparison not supported in v0"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+        let fr: ConstFloatBinaryEvalResult = const_float_binary_eval(op, lr2.sv, rr2.sv);
+        if !fr.ok {
+          return EvalConstExprResult { ok: false, err: type_error(file, fr.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+        }
+        if fr.is_bool {
+          return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: fr.out, sv: "", sigs: rr2.sigs, states: rr2.states };
+        }
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_float(), ty: out_ty, iv: 0, bv: false, sv: fr.text, sigs: rr2.sigs, states: rr2.states };
       }
 
       if lr2.kind != const_kind_int() || rr2.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const int op expects ints"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
