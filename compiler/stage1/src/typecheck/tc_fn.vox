@@ -1,20 +1,92 @@
 import "ast" as ast
 import "ir" as ir
 
+fn find_param_ty_idx_fn_body(ctx: Ctx, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Param && t.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn remap_tp_name_for_body(old_tps: Vec[String], new_tps: Vec[String], name: String) -> String {
+  let mut i: i32 = 0;
+  while i < old_tps.len() {
+    if old_tps.get(i) == name { return new_tps.get(i); }
+    i = i + 1;
+  }
+  return name;
+}
+
+fn remap_sig_for_body(ctx: Ctx, sig: FuncSig, src_method_tps: Vec[String]) -> FuncSig {
+  if src_method_tps.len() == 0 || src_method_tps.len() > sig.type_params.len() { return sig; }
+  let start: i32 = sig.type_params.len() - src_method_tps.len();
+
+  let mut old_tail: Vec[String] = Vec();
+  let mut new_tail: Vec[String] = Vec();
+  let mut out_tps: Vec[String] = Vec();
+  let mut subs: Vec[TySub] = Vec();
+
+  let mut i: i32 = 0;
+  while i < sig.type_params.len() {
+    let old: String = sig.type_params.get(i);
+    let nm: String = if i >= start { src_method_tps.get(i - start) } else { old };
+    out_tps.push(nm);
+    if i >= start && old != nm {
+      old_tail.push(old);
+      new_tail.push(nm);
+      let nty: i32 = find_param_ty_idx_fn_body(ctx, nm);
+      if nty != -1 { subs.push(TySub { name: old, ty: nty }); }
+    }
+    i = i + 1;
+  }
+
+  let mut out_params: Vec[i32] = Vec();
+  i = 0;
+  while i < sig.params.len() {
+    out_params.push(subst_ty(ctx, sig.params.get(i), subs));
+    i = i + 1;
+  }
+  let out_ret: i32 = subst_ty(ctx, sig.ret, subs);
+
+  let mut out_bounds: Vec[TypeParamBoundSig] = Vec();
+  i = 0;
+  while i < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(i);
+    out_bounds.push(TypeParamBoundSig {
+      type_param: remap_tp_name_for_body(old_tail, new_tail, b.type_param),
+      trait_mod_path: b.trait_mod_path,
+      trait_name: b.trait_name,
+    });
+    i = i + 1;
+  }
+
+  return FuncSig {
+    params: out_params,
+    ret: out_ret,
+    is_pub: sig.is_pub,
+    type_params: out_tps,
+    type_param_bounds: out_bounds,
+  };
+}
+
 fn typecheck_fn_with_sig(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, fnc: ast.FuncDecl, sig: FuncSig) -> TcResult {
+  let use_sig: FuncSig = remap_sig_for_body(ctx, sig, fnc.type_params);
   let mut l: Locals = locals_new();
-  l.type_params = sig.type_params;
-  l.type_param_bounds = sig.type_param_bounds;
-  l.fn_ret_ty = sig.ret;
+  l.type_params = use_sig.type_params;
+  l.type_param_bounds = use_sig.type_param_bounds;
+  l.fn_ret_ty = use_sig.ret;
   // params at depth 0
   let mut pi: i32 = 0;
   while pi < fnc.params.len() {
     let p: ast.Param = fnc.params.get(pi);
-    l = locals_decl(l, p.name, sig.params.get(pi), false);
+    l = locals_decl(l, p.name, use_sig.params.get(pi), false);
     pi = pi + 1;
   }
 
-  let r: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, l, sig.ret, fnc.body);
+  let r: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, l, use_sig.ret, fnc.body);
   if !r.ok {
     return TcResult { ok: false, err: r.err };
   }
