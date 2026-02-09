@@ -414,22 +414,37 @@ fn cast_const_int_checked(ctx: Ctx, file: String, from_ty: i32, to_ty: i32, v: i
   return CastConstResult { ok: true, err: TcError.None, v: wr_to2.v };
 }
 
-struct ConstPatEvalResult { ok: bool, matched: bool, err: String }
+struct ConstLocal { name: String, kind: i32, ty: i32, iv: i64, bv: bool, sv: String }
+
+fn const_find_local(locals: Vec[ConstLocal], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < locals.len() {
+    if locals.get(i).name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn const_local_from_value(name: String, v: EvalConstExprResult) -> ConstLocal {
+  return ConstLocal { name: name, kind: v.kind, ty: v.ty, iv: v.iv, bv: v.bv, sv: v.sv };
+}
+
+struct ConstPatEvalResult { ok: bool, matched: bool, has_bind: bool, bind_name: String, err: String }
 
 fn const_match_int_pat(ctx: Ctx, scrut_ty: i32, scrut_iv: i64, text: String) -> ConstPatEvalResult {
   let base: i32 = strip_range(ctx, scrut_ty);
   if !is_int_like_ty(ctx, base) {
-    return ConstPatEvalResult { ok: false, matched: false, err: "const int pattern requires int scrutinee" };
+    return ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const int pattern requires int scrutinee" };
   }
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
   if t.kind == ir.TyKind.U64 || t.kind == ir.TyKind.USize {
     let pru: ParseU64DecResult = parse_u64_dec(text);
-    if !pru.ok { return ConstPatEvalResult { ok: false, matched: false, err: "const int pattern out of range" }; }
-    return ConstPatEvalResult { ok: true, matched: pru.val == scrut_iv, err: "" };
+    if !pru.ok { return ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const int pattern out of range" }; }
+    return ConstPatEvalResult { ok: true, matched: pru.val == scrut_iv, has_bind: false, bind_name: "", err: "" };
   }
 
   let pr: ParseI64DecResult = parse_i64_dec(text);
-  if !pr.ok { return ConstPatEvalResult { ok: false, matched: false, err: "const int pattern out of range" }; }
+  if !pr.ok { return ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const int pattern out of range" }; }
   let v: i64 = pr.val;
   let ok_lit: bool = match t.kind {
     ir.TyKind.I8 => v >= -128 && v <= 127,
@@ -442,34 +457,34 @@ fn const_match_int_pat(ctx: Ctx, scrut_ty: i32, scrut_iv: i64, text: String) -> 
     ir.TyKind.ISize => true,
     _ => false,
   };
-  if !ok_lit { return ConstPatEvalResult { ok: false, matched: false, err: "const int pattern out of range" }; }
-  return ConstPatEvalResult { ok: true, matched: v == scrut_iv, err: "" };
+  if !ok_lit { return ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const int pattern out of range" }; }
+  return ConstPatEvalResult { ok: true, matched: v == scrut_iv, has_bind: false, bind_name: "", err: "" };
 }
 
 fn const_pat_matches(ctx: Ctx, scrut: EvalConstExprResult, pat: ast.Pat) -> ConstPatEvalResult {
   return match pat {
-    ast.Pat.Wild(_sp) => ConstPatEvalResult { ok: true, matched: true, err: "" },
-    ast.Pat.Bind(_sp, _n) => ConstPatEvalResult { ok: false, matched: false, err: "const match bind pattern is not supported yet" },
+    ast.Pat.Wild(_sp) => ConstPatEvalResult { ok: true, matched: true, has_bind: false, bind_name: "", err: "" },
+    ast.Pat.Bind(_sp, n) => ConstPatEvalResult { ok: true, matched: true, has_bind: true, bind_name: n, err: "" },
     ast.Pat.Int(_sp, text) => {
       if scrut.kind != const_kind_int() {
-        ConstPatEvalResult { ok: false, matched: false, err: "const int pattern requires int scrutinee" }
+        ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const int pattern requires int scrutinee" }
       } else {
         const_match_int_pat(ctx, scrut.ty, scrut.iv, text)
       }
     },
     ast.Pat.Str(_sp, text) => {
       if scrut.kind != const_kind_str() {
-        ConstPatEvalResult { ok: false, matched: false, err: "const string pattern requires String scrutinee" }
+        ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const string pattern requires String scrutinee" }
       } else {
-        ConstPatEvalResult { ok: true, matched: scrut.sv == text, err: "" }
+        ConstPatEvalResult { ok: true, matched: scrut.sv == text, has_bind: false, bind_name: "", err: "" }
       }
     },
-    ast.Pat.EnumVariant(_sp, _enum_parts, _vname, _args) => ConstPatEvalResult { ok: false, matched: false, err: "const enum pattern is not supported yet" },
+    ast.Pat.EnumVariant(_sp, _enum_parts, _vname, _args) => ConstPatEvalResult { ok: false, matched: false, has_bind: false, bind_name: "", err: "const enum pattern is not supported yet" },
   };
 }
 
 // Evaluate in a specific module's expr pool (const init expr ids are module-local).
-fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig], states0: Vec[i32], cur_mod: String, imps: Imports, exprs: ast.ExprPool, file: String, id: i32, expected: i32) -> EvalConstExprResult {
+fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig], states0: Vec[i32], cur_mod: String, imps: Imports, exprs: ast.ExprPool, file: String, id: i32, expected: i32, locals: Vec[ConstLocal]) -> EvalConstExprResult {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
 
   // literals
@@ -544,6 +559,15 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
   // identifier: must resolve to a const
   if match n { ast.ExprNode.Ident(_x) => true, _ => false } {
     let name: String = match n { ast.ExprNode.Ident(x) => x, _ => "" };
+    let li: i32 = const_find_local(locals, name);
+    if li != -1 {
+      let lv: ConstLocal = locals.get(li);
+      if expected != -1 && !assignable_to(ctx, expected, lv.ty) {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const local type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+      return EvalConstExprResult { ok: true, err: TcError.None, kind: lv.kind, ty: lv.ty, iv: lv.iv, bv: lv.bv, sv: lv.sv, sigs: sigs0, states: states0 };
+    }
+
     let ni: NamedConstImport = find_named_const(imps.named_consts, name);
     let want_mod: String = if ni.local != "" { ni.mod_path } else { cur_mod };
     let want_name: String = if ni.local != "" { ni.name } else { name };
@@ -590,13 +614,13 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     let op: ast.UnaryOp = match n { ast.ExprNode.Unary(o, _a) => o, _ => ast.UnaryOp.Not };
     let a: i32 = match n { ast.ExprNode.Unary(_o, x) => x, _ => -1 };
     if match op { ast.UnaryOp.Not => true, _ => false } {
-      let ar: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, ctx.ty_bool);
+      let ar: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, ctx.ty_bool, locals);
       if !ar.ok { return ar; }
       if ar.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const ! expects bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states }; }
       return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: !ar.bv, sv: "", sigs: ar.sigs, states: ar.states };
     }
     // neg
-    let ar2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, -1);
+    let ar2: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, -1, locals);
     if !ar2.ok { return ar2; }
     if ar2.kind == const_kind_float() {
       let out_tyf: i32 = if expected != -1 { strip_range(ctx, expected) } else { strip_range(ctx, ar2.ty) };
@@ -625,7 +649,7 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     if is_float_scalar_ty(c2, to_base) {
       let an_f: ast.ExprNode = ast.expr_pool_get(exprs, a);
       let eval_expected_f: i32 = if match an_f { ast.ExprNode.Float(_s) => true, _ => false } { to_base } else { -1 };
-      let ar_f: EvalConstExprResult = eval_const_expr_in_mod(c2, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, eval_expected_f);
+      let ar_f: EvalConstExprResult = eval_const_expr_in_mod_locals(c2, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, eval_expected_f, locals);
       if !ar_f.ok { return ar_f; }
       if ar_f.kind == const_kind_float() && is_float_scalar_ty(c2, ar_f.ty) {
         return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_float(), ty: to_base, iv: 0, bv: false, sv: float_norm_text(ar_f.sv), sigs: ar_f.sigs, states: ar_f.states };
@@ -643,7 +667,7 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
 
     let an: ast.ExprNode = ast.expr_pool_get(exprs, a);
     let eval_expected: i32 = if match an { ast.ExprNode.Int(_s) => true, _ => false } && is_unsigned_int_kind(tk) { to_base } else { -1 };
-    let ar: EvalConstExprResult = eval_const_expr_in_mod(c2, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, eval_expected);
+    let ar: EvalConstExprResult = eval_const_expr_in_mod_locals(c2, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, eval_expected, locals);
     if !ar.ok { return ar; }
     let mut v: i64 = 0;
     if ar.kind == const_kind_int() {
@@ -676,13 +700,13 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     let cnd: i32 = match n { ast.ExprNode.If(c, _t, _e) => c, _ => -1 };
     let thn: i32 = match n { ast.ExprNode.If(_c, t, _e) => t, _ => -1 };
     let els: i32 = match n { ast.ExprNode.If(_c, _t, e2) => e2, _ => -1 };
-    let cr: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, cnd, ctx.ty_bool);
+    let cr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, cnd, ctx.ty_bool, locals);
     if !cr.ok { return cr; }
     if cr.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const if cond must be bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: cr.sigs, states: cr.states }; }
     if cr.bv {
-      return eval_const_expr_in_mod(ctx, w, items, cr.sigs, cr.states, cur_mod, imps, exprs, file, thn, expected);
+      return eval_const_expr_in_mod_locals(ctx, w, items, cr.sigs, cr.states, cur_mod, imps, exprs, file, thn, expected, locals);
     }
-    return eval_const_expr_in_mod(ctx, w, items, cr.sigs, cr.states, cur_mod, imps, exprs, file, els, expected);
+    return eval_const_expr_in_mod_locals(ctx, w, items, cr.sigs, cr.states, cur_mod, imps, exprs, file, els, expected, locals);
   }
 
   // match expr (const v0 subset: wildcard/int/string patterns, no local bind env).
@@ -693,7 +717,7 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
       return EvalConstExprResult { ok: false, err: type_error(file, "const match requires at least one arm"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
 
-    let sr: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, scrut, -1);
+    let sr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, scrut, -1, locals);
     if !sr.ok { return sr; }
 
     let mut ai: i32 = 0;
@@ -704,7 +728,11 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
         return EvalConstExprResult { ok: false, err: type_error(file, pr.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sr.sigs, states: sr.states };
       }
       if pr.matched {
-        return eval_const_expr_in_mod(ctx, w, items, sr.sigs, sr.states, cur_mod, imps, exprs, file, arm.expr, expected);
+        let mut arm_locals: Vec[ConstLocal] = locals;
+        if pr.has_bind {
+          arm_locals.push(const_local_from_value(pr.bind_name, sr));
+        }
+        return eval_const_expr_in_mod_locals(ctx, w, items, sr.sigs, sr.states, cur_mod, imps, exprs, file, arm.expr, expected, arm_locals);
       }
       ai = ai + 1;
     }
@@ -720,7 +748,7 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
 
     let is_logic: bool = match op { ast.BinaryOp.AndAnd => true, ast.BinaryOp.OrOr => true, _ => false };
     if is_logic {
-      let lr: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, ctx.ty_bool);
+      let lr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, ctx.ty_bool, locals);
       if !lr.ok { return lr; }
       if lr.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const &&/|| expects bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: lr.sigs, states: lr.states }; }
       if match op { ast.BinaryOp.AndAnd => true, _ => false } && !lr.bv {
@@ -729,7 +757,7 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
       if match op { ast.BinaryOp.OrOr => true, _ => false } && lr.bv {
         return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: true, sv: "", sigs: lr.sigs, states: lr.states };
       }
-      let rr: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, lr.sigs, lr.states, cur_mod, imps, exprs, file, r, ctx.ty_bool);
+      let rr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, lr.sigs, lr.states, cur_mod, imps, exprs, file, r, ctx.ty_bool, locals);
       if !rr.ok { return rr; }
       if rr.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const &&/|| expects bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr.sigs, states: rr.states }; }
       let out: bool = if match op { ast.BinaryOp.AndAnd => true, _ => false } { lr.bv && rr.bv } else { lr.bv || rr.bv };
@@ -747,10 +775,10 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
       // of forcing expected=bool into numeric subexpressions.
       let is_cmp_bool_ctx: bool = is_cmp && expected == ctx.ty_bool;
       let lhs_expected: i32 = if is_cmp_bool_ctx { -1 } else { expected };
-      let mut lr2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, lhs_expected);
+      let mut lr2: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, lhs_expected, locals);
       if !lr2.ok && is_cmp_bool_ctx {
         // Keep const-eval usable for literal-vs-literal int comparisons.
-        lr2 = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, ctx.ty_i32);
+        lr2 = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, ctx.ty_i32, locals);
       }
       if !lr2.ok { return lr2; }
 
@@ -760,7 +788,7 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
         } else {
           expected
         };
-      let rr2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, lr2.sigs, lr2.states, cur_mod, imps, exprs, file, r, rhs_expected);
+      let rr2: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, lr2.sigs, lr2.states, cur_mod, imps, exprs, file, r, rhs_expected, locals);
       if !rr2.ok { return rr2; }
       let out_ty: i32 = if is_cmp { strip_range(ctx, lr2.ty) } else if expected != -1 { strip_range(ctx, expected) } else { strip_range(ctx, lr2.ty) };
       if strip_range(ctx, lr2.ty) != out_ty || strip_range(ctx, rr2.ty) != out_ty {
@@ -852,9 +880,9 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     }
 
     if is_eq {
-      let lr3: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, -1);
+      let lr3: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, -1, locals);
       if !lr3.ok { return lr3; }
-      let rr3: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, lr3.sigs, lr3.states, cur_mod, imps, exprs, file, r, -1);
+      let rr3: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, lr3.sigs, lr3.states, cur_mod, imps, exprs, file, r, -1, locals);
       if !rr3.ok { return rr3; }
 
       let lb: i32 = strip_range(ctx, lr3.ty);
@@ -887,6 +915,10 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
   }
 
   return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+}
+
+fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig], states0: Vec[i32], cur_mod: String, imps: Imports, exprs: ast.ExprPool, file: String, id: i32, expected: i32) -> EvalConstExprResult {
+  return eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, id, expected, Vec());
 }
 
 fn slice_parts(xs: Vec[String], lo: i32, hi: i32) -> Vec[String] {

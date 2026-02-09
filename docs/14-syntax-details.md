@@ -335,7 +335,7 @@ pub const NAME: String = "vox";
   - `expr as <int>`、`expr as f32/f64`（运行时与 const 场景均支持整数与浮点互转；`float -> int` 为 checked cast）
   - `+ - * / %`、`& | ^ << >>`、比较、`== !=`、`&& ||`
   - `if cond { a } else { b }`（cond 必须为常量 bool）
-  - `match`（当前 const 子集支持 `_`、整数字面量、字符串字面量 pattern；不支持 bind/enum pattern）
+  - `match`（当前 const 子集支持 `_`、bind、整数字面量、字符串字面量 pattern；不支持 enum pattern）
 - 整数运算语义与运行时保持一致：
   - `+ - *`、`& | ^`、`<< >>` 按目标整数位宽执行（wrapping）。
   - `/ %` 在除数为 `0` 时编译期报错。
