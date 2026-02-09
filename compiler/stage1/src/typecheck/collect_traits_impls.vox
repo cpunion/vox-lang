@@ -166,8 +166,88 @@ fn impl_decl_file(w: World, mod_path: String, decl_idx: i32) -> String {
   return m.prog.impls.get(decl_idx).file;
 }
 
+struct FindWorldTraitDeclResult { found: bool, is_pub: bool, file: String }
+
+fn find_world_trait_decl(w: World, mod_path: String, name: String) -> FindWorldTraitDeclResult {
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: WorldModule = w.mods.get(mi);
+    if m.path == mod_path {
+      let mut ti: i32 = 0;
+      while ti < m.prog.traits.len() {
+        let td: ast.TraitDecl = m.prog.traits.get(ti);
+        if td.name == name { return FindWorldTraitDeclResult { found: true, is_pub: td.is_pub, file: td.file }; }
+        ti = ti + 1;
+      }
+    }
+    mi = mi + 1;
+  }
+  return FindWorldTraitDeclResult { found: false, is_pub: false, file: "" };
+}
+
+fn find_trait_idx(ts: Vec[TraitSig], mod_path: String, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < ts.len() {
+    let t: TraitSig = ts.get(i);
+    if t.mod_path == mod_path && t.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn set_trait_sig(ctx: Ctx, idx: i32, sig: TraitSig) -> Ctx {
+  let mut c: Ctx = ctx;
+  let mut out: Vec[TraitSig] = Vec();
+  let mut i: i32 = 0;
+  while i < c.traits.len() {
+    if i == idx {
+      out.push(sig);
+    } else {
+      out.push(c.traits.get(i));
+    }
+    i = i + 1;
+  }
+  c.traits = out;
+  return c;
+}
+
+fn contains_i32_local(xs: Vec[i32], x: i32) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if xs.get(i) == x { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn trait_has_super_cycle(ctx: Ctx, start_idx: i32) -> bool {
+  let mut seen: Vec[i32] = Vec();
+  let mut work: Vec[i32] = Vec();
+  work.push(start_idx);
+  let mut wi: i32 = 0;
+  while wi < work.len() {
+    let cur: i32 = work.get(wi);
+    wi = wi + 1;
+    let ts: TraitSig = ctx.traits.get(cur);
+    let mut si: i32 = 0;
+    while si < ts.supers.len() {
+      let sup: TraitSuperSig = ts.supers.get(si);
+      let next: i32 = find_trait_idx(ctx.traits, sup.mod_path, sup.name);
+      if next == start_idx { return true; }
+      if next >= 0 && !contains_i32_local(seen, next) {
+        seen.push(next);
+        work.push(next);
+      }
+      si = si + 1;
+    }
+  }
+  return false;
+}
+
 fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
   let mut c: Ctx = ctx;
+
+  // Pass 1: register trait names/visibility so supertraits can forward-reference.
   let mut mi: i32 = 0;
   while mi < w.mods.len() {
     let m: WorldModule = w.mods.get(mi);
@@ -180,6 +260,21 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
       if has_trait_name(c, m.path, td.name) {
         return TcCtxResult { ok: false, err: type_error(td.file, "duplicate trait: ".concat(td.name)), ctx: c };
       }
+      c.traits.push(TraitSig { mod_path: m.path, name: td.name, is_pub: td.is_pub, supers: Vec(), methods: Vec() });
+      ti = ti + 1;
+    }
+    mi = mi + 1;
+  }
+
+  // Pass 2: resolve supertraits and method signatures.
+  mi = 0;
+  while mi < w.mods.len() {
+    let m: WorldModule = w.mods.get(mi);
+    let mut ti: i32 = 0;
+    while ti < m.prog.traits.len() {
+      let td: ast.TraitDecl = m.prog.traits.get(ti);
+      let idx: i32 = find_trait_idx(c.traits, m.path, td.name);
+      if idx < 0 { return TcCtxResult { ok: false, err: type_error(td.file, "internal: trait placeholder missing"), ctx: c }; }
 
       let ir: ImportsResult = build_imports(w, m.path, m.prog.imports, td.file);
       if !ir.ok { return TcCtxResult { ok: false, err: ir.err, ctx: c }; }
@@ -190,9 +285,9 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
       while si < td.supers.len() {
         let sr: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, td.supers.get(si));
         if !sr.ok { return TcCtxResult { ok: false, err: type_error(td.file, "bad supertrait path"), ctx: c }; }
-        let sf: FindTraitResult = find_trait(c, sr.mod_path, sr.name);
-        if !sf.found { return TcCtxResult { ok: false, err: type_error(td.file, "unknown supertrait"), ctx: c }; }
-        if sr.mod_path != m.path && !sf.sig.is_pub {
+        let sfw: FindWorldTraitDeclResult = find_world_trait_decl(w, sr.mod_path, sr.name);
+        if !sfw.found { return TcCtxResult { ok: false, err: type_error(td.file, "unknown supertrait"), ctx: c }; }
+        if sr.mod_path != m.path && !sfw.is_pub {
           return TcCtxResult { ok: false, err: type_error(td.file, "supertrait is private"), ctx: c };
         }
         if sr.mod_path == m.path && sr.name == td.name {
@@ -270,10 +365,22 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         fi = fi + 1;
       }
 
-      c.traits.push(TraitSig { mod_path: m.path, name: td.name, is_pub: td.is_pub, supers: supers, methods: ms });
+      c = set_trait_sig(c, idx, TraitSig { mod_path: m.path, name: td.name, is_pub: td.is_pub, supers: supers, methods: ms });
       ti = ti + 1;
     }
     mi = mi + 1;
+  }
+
+  // Reject supertrait cycles.
+  let mut ci: i32 = 0;
+  while ci < c.traits.len() {
+    if trait_has_super_cycle(c, ci) {
+      let ts: TraitSig = c.traits.get(ci);
+      let tdecl: FindWorldTraitDeclResult = find_world_trait_decl(w, ts.mod_path, ts.name);
+      let file: String = if tdecl.found { tdecl.file } else { "" };
+      return TcCtxResult { ok: false, err: type_error(file, "supertrait cycle detected: ".concat(ts.name)), ctx: c };
+    }
+    ci = ci + 1;
   }
   return TcCtxResult { ok: true, err: TcError.None, ctx: c };
 }
