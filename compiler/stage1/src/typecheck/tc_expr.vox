@@ -28,6 +28,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
 
     ast.ExprNode.Member(recv, name) => tc_expr_member(ctx, w, mod_path, imps, exprs, l0, recv, name, expected),
     ast.ExprNode.Call(callee, type_args, args) => tc_expr_call(ctx, w, mod_path, imps, exprs, l0, ast.expr_pool_span(exprs, id), callee, type_args, args, expected),
+    ast.ExprNode.TryBlock(bid) => tc_expr_try_block(ctx, w, mod_path, imps, exprs, l0, id, bid, expected),
     ast.ExprNode.Try(a) => tc_expr_try(ctx, w, mod_path, imps, exprs, l0, id, a, expected),
     ast.ExprNode.StructLit(ty_expr, fields) => tc_expr_struct_lit(ctx, w, mod_path, imps, exprs, l0, ty_expr, fields, expected),
     ast.ExprNode.Match(scrut, arms) => tc_expr_match(ctx, w, mod_path, imps, exprs, l0, scrut, arms, expected),
@@ -78,6 +79,45 @@ fn try_container_info(ctx: Ctx, ty0: i32) -> TryContainerInfo {
   return TryContainerInfo { ok: false, is_result: false, ok_ty: ctx.ty_bad, residual_ty: ctx.ty_bad };
 }
 
+fn select_try_target_ty(ctx: Ctx, l0: Locals, expected: i32) -> i32 {
+  if expected != -1 {
+    let ei: TryContainerInfo = try_container_info(ctx, expected);
+    if ei.ok { return expected; }
+  }
+  if l0.try_ret_ty != -1 {
+    let ti: TryContainerInfo = try_container_info(ctx, l0.try_ret_ty);
+    if ti.ok { return l0.try_ret_ty; }
+  }
+  if l0.fn_ret_ty != -1 {
+    let fi: TryContainerInfo = try_container_info(ctx, l0.fn_ret_ty);
+    if fi.ok { return l0.fn_ret_ty; }
+  }
+  return -1;
+}
+
+fn tc_expr_try_block(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, id: i32, bid: i32, expected: i32) -> ExprTyResult {
+  let sp: ast.Span = ast.expr_pool_span(exprs, id);
+  let target: i32 = select_try_target_ty(ctx, l0, expected);
+  if target == -1 {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "`try {}` requires expected Result/Option type") };
+  }
+  let ti: TryContainerInfo = try_container_info(ctx, target);
+
+  let mut l1: Locals = l0;
+  l1.try_ret_ty = target;
+  let br: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l1, bid, -1);
+  if !br.ok { return br; }
+  if br.ty == target {
+    if expected != -1 && !assignable_to(ctx, expected, target) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: target, err: TcError.None };
+  }
+  if !assignable_to(ctx, ti.ok_ty, br.ty) {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "`try {}` tail type incompatible with success payload type") };
+  }
+  if expected != -1 && !assignable_to(ctx, expected, target) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: target, err: TcError.None };
+}
+
 fn tc_expr_try(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, id: i32, a: i32, expected: i32) -> ExprTyResult {
   let sp: ast.Span = ast.expr_pool_span(exprs, id);
   let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, -1);
@@ -87,12 +127,13 @@ fn tc_expr_try(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
   if !src.ok {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "`?` requires Result[T, E] or Option[T]") };
   }
-  if l0.fn_ret_ty == -1 {
-    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "`?` can only be used inside function body") };
+  let target: i32 = if l0.try_ret_ty != -1 { l0.try_ret_ty } else { l0.fn_ret_ty };
+  if target == -1 {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "`?` can only be used inside function/try block") };
   }
-  let dst: TryContainerInfo = try_container_info(ctx, l0.fn_ret_ty);
+  let dst: TryContainerInfo = try_container_info(ctx, target);
   if !dst.ok {
-    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "function return type must be Result[T, E] or Option[T] when using `?`") };
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "propagation target type must be Result[T, E] or Option[T] when using `?`") };
   }
   if src.is_result != dst.is_result {
     if src.is_result {

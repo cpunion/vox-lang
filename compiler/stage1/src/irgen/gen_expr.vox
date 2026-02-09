@@ -4,6 +4,7 @@ import "typecheck" as tc
 
 struct GenExprResult { ok: bool, err: String, g: Gen, val: ir.Value, ty: i32 }
 struct TryEnumInfo { ok: bool, is_result: bool, ok_name: String, ok_idx: i32, ok_ty: i32, residual_name: String, residual_idx: i32, residual_ty: i32 }
+struct CurrentTryResult { found: bool, t: TryCtx }
 
 fn gen_expr(g0: Gen, id: i32, expected: i32) -> GenExprResult {
   let tr: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.imps, g0.exprs, g0.locals, id, expected);
@@ -26,10 +27,27 @@ fn gen_expr(g0: Gen, id: i32, expected: i32) -> GenExprResult {
     ast.ExprNode.If(c, t, e) => gen_expr_if(g0, c, t, e, tr.ty),
     ast.ExprNode.Member(recv, name) => gen_expr_member(g0, recv, name, tr.ty),
     ast.ExprNode.Call(callee, type_args, args) => gen_expr_call(g0, callee, type_args, args, tr.ty, expected),
+    ast.ExprNode.TryBlock(bid) => gen_expr_try_block(g0, bid, tr.ty),
     ast.ExprNode.Try(a) => gen_expr_try(g0, a, tr.ty),
     ast.ExprNode.StructLit(ty_expr, fields) => gen_expr_struct_lit(g0, ty_expr, fields, tr.ty),
     ast.ExprNode.Match(scrut, arms) => gen_expr_match(g0, scrut, arms, tr.ty),
   };
+}
+
+fn current_try(g0: Gen) -> CurrentTryResult {
+  if g0.tries.len() == 0 { return CurrentTryResult { found: false, t: TryCtx { ret_slot: -1, end_blk: "", ret_ty: -1 } }; }
+  return CurrentTryResult { found: true, t: g0.tries.get(g0.tries.len() - 1) };
+}
+
+fn try_stack_pop(v: Vec[TryCtx]) -> Vec[TryCtx] {
+  if v.len() == 0 { return v; }
+  let mut out: Vec[TryCtx] = Vec();
+  let mut i: i32 = 0;
+  while i < v.len() - 1 {
+    out.push(v.get(i));
+    i = i + 1;
+  }
+  return out;
 }
 
 fn find_variant_index(es: tc.EnumSig, name: String) -> i32 {
@@ -105,7 +123,9 @@ fn gen_expr_try(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
 
   let src: TryEnumInfo = try_enum_info(g, ar.ty);
   if !src.ok { return GenExprResult { ok: false, err: "`?` requires Result[T, E] or Option[T]", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-  let dst: TryEnumInfo = try_enum_info(g, g.ret_ty);
+  let ct: CurrentTryResult = current_try(g);
+  let target_ret_ty: i32 = if ct.found { ct.t.ret_ty } else { g.ret_ty };
+  let dst: TryEnumInfo = try_enum_info(g, target_ret_ty);
   if !dst.ok || src.is_result != dst.is_result {
     return GenExprResult { ok: false, err: "function return type incompatible with `?`", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
   }
@@ -159,21 +179,73 @@ fn gen_expr_try(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
     let ret_tid: i32 = tr4.id;
     let mut ps: Vec[ir.Value] = Vec();
     ps.push(ir.v_temp(err_tid));
-    g = gen_emit(g, ir.Instr.EnumInit(ret_tid, g.ret_ty, dst.residual_name, ps));
+    g = gen_emit(g, ir.Instr.EnumInit(ret_tid, target_ret_ty, dst.residual_name, ps));
     rv = ir.v_temp(ret_tid);
   } else {
     let tr5: GenNewIdResult = gen_new_temp(g);
     g = tr5.g;
     let ret_tid2: i32 = tr5.id;
-    g = gen_emit(g, ir.Instr.EnumInit(ret_tid2, g.ret_ty, dst.residual_name, Vec()));
+    g = gen_emit(g, ir.Instr.EnumInit(ret_tid2, target_ret_ty, dst.residual_name, Vec()));
     rv = ir.v_temp(ret_tid2);
   }
-  g = gen_term(g, ir.Term.Ret(true, rv));
+  if ct.found {
+    g = gen_emit(g, ir.Instr.Store(ct.t.ret_slot, rv));
+    g = gen_term(g, ir.Term.Br(ct.t.end_blk));
+  } else {
+    g = gen_term(g, ir.Term.Ret(true, rv));
+  }
 
   g = gen_set_block(g, end_idx_block);
   let tr6: GenNewIdResult = gen_new_temp(g);
   g = tr6.g;
   let out_tid: i32 = tr6.id;
+  g = gen_emit(g, ir.Instr.Load(out_tid, out_ty, out_slot));
+  return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(out_tid), ty: out_ty };
+}
+
+fn gen_expr_try_block(g0: Gen, bid: i32, out_ty: i32) -> GenExprResult {
+  let mut g: Gen = g0;
+  let dst: TryEnumInfo = try_enum_info(g, out_ty);
+  if !dst.ok { return GenExprResult { ok: false, err: "`try {}` requires Result/Option output type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+  let rs: GenNewIdResult = gen_new_slot(g);
+  g = rs.g;
+  let out_slot: i32 = rs.id;
+  g = gen_emit(g, ir.Instr.SlotDecl(out_slot, out_ty));
+
+  let base: i32 = g.blocks.len();
+  let bend: GenNewIdResult = gen_new_block(g, "tryblk_end_".concat(base.to_string()));
+  g = bend.g;
+  let end_idx: i32 = bend.id;
+  let end_name: String = g.blocks.get(end_idx).name;
+
+  let mut tries: Vec[TryCtx] = g.tries;
+  tries.push(TryCtx { ret_slot: out_slot, end_blk: end_name, ret_ty: out_ty });
+  g.tries = tries;
+  let br: GenExprResult = gen_expr(g, bid, -1);
+  if !br.ok { return br; }
+  g = br.g;
+  g.tries = try_stack_pop(g.tries);
+
+  if !g.blocks.get(g.cur).has_term {
+    if br.ty == out_ty {
+      g = gen_emit(g, ir.Instr.Store(out_slot, br.val));
+    } else {
+      let rt: GenNewIdResult = gen_new_temp(g);
+      g = rt.g;
+      let tid: i32 = rt.id;
+      let mut ps: Vec[ir.Value] = Vec();
+      ps.push(br.val);
+      g = gen_emit(g, ir.Instr.EnumInit(tid, out_ty, dst.ok_name, ps));
+      g = gen_emit(g, ir.Instr.Store(out_slot, ir.v_temp(tid)));
+    }
+    g = gen_term(g, ir.Term.Br(end_name));
+  }
+
+  g = gen_set_block(g, end_idx);
+  let rt2: GenNewIdResult = gen_new_temp(g);
+  g = rt2.g;
+  let out_tid: i32 = rt2.id;
   g = gen_emit(g, ir.Instr.Load(out_tid, out_ty, out_slot));
   return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(out_tid), ty: out_ty };
 }
