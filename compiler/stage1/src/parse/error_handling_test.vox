@@ -1,0 +1,76 @@
+import "std/testing" as t
+import "parse" as p
+import "ast" as ast
+
+fn parse_ok_eh(e: p.ParseError) -> bool {
+  return match e { p.ParseError.None => true, _ => false };
+}
+
+fn test_parse_question_desugars_to_match_return_err() -> () {
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, String] { return .Ok(1); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let v: i32 = get()?;\n")
+      .concat("  return .Ok(v);\n")
+      .concat("}");
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(parse_ok_eh(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(1);
+  let st0: ast.Stmt = f.body.stmts.get(0);
+  let exprs: ast.ExprPool = r.prog.exprs;
+  let is_match: bool = match st0 {
+    ast.Stmt.Let(_sp, _m, _n, _ha, _ty, id) =>
+      match ast.expr_pool_get(exprs, id) {
+        ast.ExprNode.Match(_scrut, arms) =>
+          arms.len() == 2 &&
+          match arms.get(0).pat { ast.Pat.EnumVariant(_sp2, _ep, vn, _args) => vn == "Ok", _ => false } &&
+          match arms.get(1).pat { ast.Pat.EnumVariant(_sp3, _ep2, vn2, _args2) => vn2 == "Err", _ => false } &&
+          match ast.expr_pool_get(exprs, arms.get(1).expr) {
+            ast.ExprNode.Block(b) =>
+              b.stmts.len() == 1 &&
+              match b.stmts.get(0) { ast.Stmt.Return(_rsp, has_expr, _eid) => has_expr, _ => false },
+            _ => false,
+          },
+        _ => false,
+      },
+    _ => false,
+  };
+  t.assert(is_match);
+}
+
+fn test_parse_try_block_as_expr_block_smoke() -> () {
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, String] { return .Ok(1); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let r: Result[i32, String] = try {\n")
+      .concat("    let v: i32 = get()?;\n")
+      .concat("    .Ok(v)\n")
+      .concat("  };\n")
+      .concat("  return r;\n")
+      .concat("}");
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(parse_ok_eh(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(1);
+  let st0: ast.Stmt = f.body.stmts.get(0);
+  let exprs: ast.ExprPool = r.prog.exprs;
+  let is_try_block: bool = match st0 {
+    ast.Stmt.Let(_sp, _m, _n, _ha, _ty, id) =>
+      match ast.expr_pool_get(exprs, id) {
+        ast.ExprNode.Block(b) =>
+          b.stmts.len() == 1 &&
+          b.has_tail &&
+          match b.stmts.get(0) {
+            ast.Stmt.Let(_lsp, _lm, _ln, _lha, _lty, lid) =>
+              match ast.expr_pool_get(exprs, lid) { ast.ExprNode.Match(_s, _a) => true, _ => false },
+            _ => false,
+          },
+        _ => false,
+      },
+    _ => false,
+  };
+  t.assert(is_try_block);
+}
