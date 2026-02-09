@@ -23,6 +23,48 @@ func TestUntypedIntConstraint(t *testing.T) {
 	}
 }
 
+func TestI16U16Smoke(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main() -> i32 {
+  let a: i16 = -5;
+  let b: u16 = 7;
+  let x: i32 = (a as i32) + (b as i32);
+  return x;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestI16LiteralOutOfRangeRejected(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main() -> i32 {
+  let a: i16 = 40000;
+  return a as i32;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "integer literal out of range for i16") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected out of range error, got: %+v", tdiags.Items)
+	}
+}
+
 func TestQualifiedCallRequiresImport(t *testing.T) {
 	f := source.NewFile("src/main.vox", `fn main() -> i32 { return dep.one(); }`)
 	prog, pdiags := parser.Parse(f)

@@ -17,6 +17,10 @@ func cType(t ir.Type) string {
 		return "int8_t"
 	case ir.TU8:
 		return "uint8_t"
+	case ir.TI16:
+		return "int16_t"
+	case ir.TU16:
+		return "uint16_t"
 	case ir.TI32:
 		return "int32_t"
 	case ir.TU32:

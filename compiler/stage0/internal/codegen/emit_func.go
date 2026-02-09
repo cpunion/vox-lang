@@ -584,7 +584,7 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 
 func isIntType(t ir.Type) bool {
 	switch t.K {
-	case ir.TI8, ir.TU8, ir.TI32, ir.TU32, ir.TI64, ir.TU64, ir.TUSize:
+	case ir.TI8, ir.TU8, ir.TI16, ir.TU16, ir.TI32, ir.TU32, ir.TI64, ir.TU64, ir.TUSize:
 		return true
 	default:
 		return false
@@ -595,6 +595,8 @@ func intBits(k ir.TypeKind) int {
 	switch k {
 	case ir.TI8, ir.TU8:
 		return 8
+	case ir.TI16, ir.TU16:
+		return 16
 	case ir.TI32, ir.TU32:
 		return 32
 	case ir.TI64, ir.TU64, ir.TUSize:
@@ -606,7 +608,7 @@ func intBits(k ir.TypeKind) int {
 
 func intSigned(k ir.TypeKind) bool {
 	switch k {
-	case ir.TI8, ir.TI32, ir.TI64:
+	case ir.TI8, ir.TI16, ir.TI32, ir.TI64:
 		return true
 	default:
 		return false
@@ -617,6 +619,8 @@ func intMinMacro(k ir.TypeKind) string {
 	switch k {
 	case ir.TI8:
 		return "INT8_MIN"
+	case ir.TI16:
+		return "INT16_MIN"
 	case ir.TI32:
 		return "INT32_MIN"
 	case ir.TI64:
@@ -630,6 +634,8 @@ func intMaxMacro(k ir.TypeKind) string {
 	switch k {
 	case ir.TI8:
 		return "INT8_MAX"
+	case ir.TI16:
+		return "INT16_MAX"
 	case ir.TI32:
 		return "INT32_MAX"
 	case ir.TI64:
@@ -643,6 +649,8 @@ func uintMaxMacro(k ir.TypeKind) string {
 	switch k {
 	case ir.TU8:
 		return "UINT8_MAX"
+	case ir.TU16:
+		return "UINT16_MAX"
 	case ir.TU32:
 		return "UINT32_MAX"
 	case ir.TU64, ir.TUSize:
@@ -656,6 +664,8 @@ func cUnsignedType(t ir.Type) (string, error) {
 	switch t.K {
 	case ir.TI8, ir.TU8:
 		return "uint8_t", nil
+	case ir.TI16, ir.TU16:
+		return "uint16_t", nil
 	case ir.TI32, ir.TU32:
 		return "uint32_t", nil
 	case ir.TI64, ir.TU64, ir.TUSize:
@@ -770,6 +780,8 @@ func intSignedMin(bits int) int64 {
 	switch bits {
 	case 8:
 		return -128
+	case 16:
+		return -32768
 	case 32:
 		return -2147483648
 	case 64:
@@ -783,6 +795,8 @@ func intSignedMax(bits int) int64 {
 	switch bits {
 	case 8:
 		return 127
+	case 16:
+		return 32767
 	case 32:
 		return 2147483647
 	case 64:
@@ -796,6 +810,8 @@ func intUnsignedMax(bits int) uint64 {
 	switch bits {
 	case 8:
 		return 255
+	case 16:
+		return 65535
 	case 32:
 		return 4294967295
 	case 64:

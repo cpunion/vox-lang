@@ -246,13 +246,13 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			want := expected
 			// Unary - only makes sense for signed integers (or untyped ints which default to i64).
 			wantBase := stripRange(want)
-			if wantBase.K != TyI8 && wantBase.K != TyI32 && wantBase.K != TyI64 {
+			if wantBase.K != TyUntypedInt && !isSignedIntType(wantBase) {
 				want = Type{K: TyI64}
 			}
 			ty := c.checkExpr(e.Expr, want)
 			ty = c.forceIntType(e.Expr, ty, expected)
 			base := stripRange(ty)
-			if base.K != TyI8 && base.K != TyI32 && base.K != TyI64 && base.K != TyUntypedInt {
+			if base.K != TyUntypedInt && !isSignedIntType(base) {
 				c.errorAt(e.S, "operator - expects signed int")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
@@ -348,7 +348,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			// Enum equality is only supported when comparing against a unit variant value
 			// (e.g. `x == E.None`), which lowers to a tag comparison.
 			switch l.K {
-			case TyBad, TyBool, TyI8, TyU8, TyI32, TyU32, TyI64, TyU64, TyUSize, TyString:
+			case TyBad, TyBool, TyI8, TyU8, TyI16, TyU16, TyI32, TyU32, TyI64, TyU64, TyUSize, TyString:
 				// ok
 			case TyEnum:
 				if !c.isEnumUnitValue(e.Left) && !c.isEnumUnitValue(e.Right) {
@@ -1478,11 +1478,11 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 		}
 		kind := ToStrBad
 		switch baseTy.K {
-		case TyI8, TyI32:
+		case TyI8, TyI16, TyI32:
 			kind = ToStrI32
 		case TyI64:
 			kind = ToStrI64
-		case TyU8, TyU32, TyU64, TyUSize:
+		case TyU8, TyU16, TyU32, TyU64, TyUSize:
 			kind = ToStrU64
 		case TyBool:
 			kind = ToStrBool

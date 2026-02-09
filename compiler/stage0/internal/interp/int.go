@@ -15,7 +15,7 @@ func stripRange(t typecheck.Type) typecheck.Type {
 
 func isIntType(t typecheck.Type) bool {
 	switch t.K {
-	case typecheck.TyI8, typecheck.TyU8, typecheck.TyI32, typecheck.TyU32, typecheck.TyI64, typecheck.TyU64, typecheck.TyUSize, typecheck.TyUntypedInt:
+	case typecheck.TyI8, typecheck.TyU8, typecheck.TyI16, typecheck.TyU16, typecheck.TyI32, typecheck.TyU32, typecheck.TyI64, typecheck.TyU64, typecheck.TyUSize, typecheck.TyUntypedInt:
 		return true
 	default:
 		return false
@@ -24,7 +24,7 @@ func isIntType(t typecheck.Type) bool {
 
 func isSignedIntType(t typecheck.Type) bool {
 	switch t.K {
-	case typecheck.TyI8, typecheck.TyI32, typecheck.TyI64, typecheck.TyUntypedInt:
+	case typecheck.TyI8, typecheck.TyI16, typecheck.TyI32, typecheck.TyI64, typecheck.TyUntypedInt:
 		return true
 	default:
 		return false
@@ -35,6 +35,8 @@ func intBitWidth(t typecheck.Type) int {
 	switch t.K {
 	case typecheck.TyI8, typecheck.TyU8:
 		return 8
+	case typecheck.TyI16, typecheck.TyU16:
+		return 16
 	case typecheck.TyI32, typecheck.TyU32:
 		return 32
 	case typecheck.TyI64, typecheck.TyU64, typecheck.TyUSize, typecheck.TyUntypedInt:
@@ -65,6 +67,8 @@ func intSigned(bits uint64, t typecheck.Type) int64 {
 	switch t.K {
 	case typecheck.TyI8:
 		return int64(int8(bits))
+	case typecheck.TyI16:
+		return int64(int16(bits))
 	case typecheck.TyI32:
 		return int64(int32(bits))
 	default:
@@ -77,6 +81,8 @@ func intMinSigned(t typecheck.Type) int64 {
 	switch t.K {
 	case typecheck.TyI8:
 		return -128
+	case typecheck.TyI16:
+		return -32768
 	case typecheck.TyI32:
 		return -2147483648
 	default:
@@ -89,6 +95,8 @@ func intMaxSigned(t typecheck.Type) int64 {
 	switch t.K {
 	case typecheck.TyI8:
 		return 127
+	case typecheck.TyI16:
+		return 32767
 	case typecheck.TyI32:
 		return 2147483647
 	default:
@@ -101,6 +109,8 @@ func intMaxUnsigned(t typecheck.Type) uint64 {
 	switch t.K {
 	case typecheck.TyU8:
 		return 255
+	case typecheck.TyU16:
+		return 65535
 	case typecheck.TyU32:
 		return 4294967295
 	default:

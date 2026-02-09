@@ -14,6 +14,8 @@ const (
 	TyBool
 	TyI8
 	TyU8
+	TyI16
+	TyU16
 	TyI32
 	TyU32
 	TyI64

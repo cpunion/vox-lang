@@ -17,6 +17,10 @@ func (t Type) String() string {
 		return "i8"
 	case TyU8:
 		return "u8"
+	case TyI16:
+		return "i16"
+	case TyU16:
+		return "u16"
 	case TyI32:
 		return "i32"
 	case TyU32:
@@ -125,7 +129,7 @@ func isRangeOf(t Type, base Kind) bool {
 
 func isIntType(t Type) bool {
 	switch t.K {
-	case TyI8, TyU8, TyI32, TyU32, TyI64, TyU64, TyUSize:
+	case TyI8, TyU8, TyI16, TyU16, TyI32, TyU32, TyI64, TyU64, TyUSize:
 		return true
 	default:
 		return false
@@ -142,16 +146,18 @@ func isIntLikeType(t Type) bool {
 	return isIntType(t)
 }
 
-func isSignedIntType(t Type) bool { return t.K == TyI8 || t.K == TyI32 || t.K == TyI64 }
+func isSignedIntType(t Type) bool { return t.K == TyI8 || t.K == TyI16 || t.K == TyI32 || t.K == TyI64 }
 
 func isUnsignedIntType(t Type) bool {
-	return t.K == TyU8 || t.K == TyU32 || t.K == TyU64 || t.K == TyUSize
+	return t.K == TyU8 || t.K == TyU16 || t.K == TyU32 || t.K == TyU64 || t.K == TyUSize
 }
 
 func intBitWidth(t Type) int {
 	switch t.K {
 	case TyI8, TyU8:
 		return 8
+	case TyI16, TyU16:
+		return 16
 	case TyI32, TyU32:
 		return 32
 	case TyI64, TyU64:
@@ -171,6 +177,10 @@ func intMinMax(t Type) (min int64, max uint64, ok bool) {
 		return -128, 127, true
 	case TyU8:
 		return 0, 255, true
+	case TyI16:
+		return -32768, 32767, true
+	case TyU16:
+		return 0, 65535, true
 	case TyI32:
 		return -2147483648, 2147483647, true
 	case TyU32:

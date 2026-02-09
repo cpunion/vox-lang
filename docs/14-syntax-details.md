@@ -70,14 +70,14 @@
 Stage0 为了保持实现范围可控，对相等运算符有额外约束：
 
 - `bool/<int>/String`：支持完整 `==`/`!=`。
-  - 其中 `<int>` 指整数标量类型：`i8/u8/i32/u32/i64/u64/usize`。
+  - 其中 `<int>` 指整数标量类型：`i8/u8/i16/u16/i32/u32/i64/u64/usize`。
 - `enum`：仅支持与 **unit variant**（无 payload 的构造子值）比较，例如 `x == E.None`。
   - 该比较降低为 `enum_tag(x) == tag(E.None)`。
   - 不支持 `E.A(1) == E.A(2)` 这类 payload 比较（Stage1 再引入更完整的机制）。
 
 ## 整数算术（Stage0/Stage1 v0，已定）
 
-对整数标量类型（`i8/u8/i32/u32/i64/u64/usize`），当前语义约束为：
+对整数标量类型（`i8/u8/i16/u16/i32/u32/i64/u64/usize`），当前语义约束为：
 
 - `+ - *`：wrapping（按位宽截断），不 panic。
 - `/ %`：
@@ -170,7 +170,7 @@ type Small = @range(-5..=5) i32;
 
 Stage0/Stage1 v0 当前实现限制：
 
-- `T` 仅支持整数类型（当前 stage0 实现：`i8/u8/i32/u32/i64/u64/usize`）。
+- `T` 仅支持整数类型（当前 stage0 实现：`i8/u8/i16/u16/i32/u32/i64/u64/usize`）。
 - `lo/hi` 仅支持十进制整数字面量（允许前缀 `-`）。
 
 ## 枚举构造子点前缀简写（已定）

@@ -40,6 +40,8 @@ func cIntConst(x *ir.ConstInt) string {
 	switch x.Ty.K {
 	case ir.TI8:
 		s = strconv.FormatInt(int64(int8(x.Bits)), 10)
+	case ir.TI16:
+		s = strconv.FormatInt(int64(int16(x.Bits)), 10)
 	case ir.TI32:
 		s = strconv.FormatInt(int64(int32(x.Bits)), 10)
 	case ir.TI64:
@@ -52,6 +54,10 @@ func cIntConst(x *ir.ConstInt) string {
 		return "INT8_C(" + s + ")"
 	case ir.TU8:
 		return "UINT8_C(" + s + ")"
+	case ir.TI16:
+		return "INT16_C(" + s + ")"
+	case ir.TU16:
+		return "UINT16_C(" + s + ")"
 	case ir.TI32:
 		return "INT32_C(" + s + ")"
 	case ir.TU32:

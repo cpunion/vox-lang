@@ -330,12 +330,33 @@ func astTypeFromType(t Type, at source.Span) ast.Type {
 		return &ast.UnitType{S: at}
 	case TyBool:
 		return &ast.NamedType{Parts: []string{"bool"}, S: at}
+	case TyI8:
+		return &ast.NamedType{Parts: []string{"i8"}, S: at}
+	case TyU8:
+		return &ast.NamedType{Parts: []string{"u8"}, S: at}
+	case TyI16:
+		return &ast.NamedType{Parts: []string{"i16"}, S: at}
+	case TyU16:
+		return &ast.NamedType{Parts: []string{"u16"}, S: at}
 	case TyI32:
 		return &ast.NamedType{Parts: []string{"i32"}, S: at}
+	case TyU32:
+		return &ast.NamedType{Parts: []string{"u32"}, S: at}
 	case TyI64:
 		return &ast.NamedType{Parts: []string{"i64"}, S: at}
+	case TyU64:
+		return &ast.NamedType{Parts: []string{"u64"}, S: at}
+	case TyUSize:
+		return &ast.NamedType{Parts: []string{"usize"}, S: at}
 	case TyString:
 		return &ast.NamedType{Parts: []string{"String"}, S: at}
+	case TyParam:
+		return &ast.NamedType{Parts: []string{t.Name}, S: at}
+	case TyRange:
+		if t.Base == nil {
+			return &ast.RangeType{Lo: 0, Hi: 0, Base: &ast.NamedType{Parts: []string{"i64"}, S: at}, S: at}
+		}
+		return &ast.RangeType{Lo: t.Lo, Hi: t.Hi, Base: astTypeFromType(*t.Base, at), S: at}
 	case TyStruct, TyEnum:
 		// Qualified name format: "<pkg>::<mod.path>::<Name>" or "<Name>".
 		// Convert mod.path to segments for type path syntax.

@@ -90,6 +90,10 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 			return Type{K: TyI8}
 		case "u8":
 			return Type{K: TyU8}
+		case "i16":
+			return Type{K: TyI16}
+		case "u16":
+			return Type{K: TyU16}
 		case "i32":
 			return Type{K: TyI32}
 		case "u32":

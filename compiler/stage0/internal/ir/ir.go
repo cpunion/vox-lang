@@ -15,6 +15,8 @@ const (
 	TBool
 	TI8
 	TU8
+	TI16
+	TU16
 	TI32
 	TU32
 	TI64
@@ -44,6 +46,10 @@ func (t Type) String() string {
 		return "i8"
 	case TU8:
 		return "u8"
+	case TI16:
+		return "i16"
+	case TU16:
+		return "u16"
 	case TI32:
 		return "i32"
 	case TU32:
@@ -170,11 +176,13 @@ func (c *ConstInt) fmtString() string {
 	switch c.Ty.K {
 	case TI8:
 		return fmt.Sprintf("%d", int64(int8(c.Bits)))
+	case TI16:
+		return fmt.Sprintf("%d", int64(int16(c.Bits)))
 	case TI32:
 		return fmt.Sprintf("%d", int64(int32(c.Bits)))
 	case TI64:
 		return fmt.Sprintf("%d", int64(c.Bits))
-	case TU8, TU32, TU64, TUSize:
+	case TU8, TU16, TU32, TU64, TUSize:
 		return strconv.FormatUint(c.Bits, 10)
 	default:
 		// Keep formatting stable even if type info is missing.
