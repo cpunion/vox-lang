@@ -417,10 +417,11 @@ fn cast_const_int_checked(ctx: Ctx, file: String, from_ty: i32, to_ty: i32, v: i
 struct ConstLocal { name: String, kind: i32, ty: i32, iv: i64, bv: bool, sv: String }
 
 fn const_find_local(locals: Vec[ConstLocal], name: String) -> i32 {
-  let mut i: i32 = 0;
-  while i < locals.len() {
+  // Block const evaluation allows shadowing; resolve from innermost binding.
+  let mut i: i32 = locals.len() - 1;
+  while i >= 0 {
     if locals.get(i).name == name { return i; }
-    i = i + 1;
+    i = i - 1;
   }
   return -1;
 }
@@ -779,6 +780,67 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     }
     let s: String = match n { ast.ExprNode.Str(x) => x, _ => "" };
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_str(), ty: ctx.ty_string, iv: 0, bv: false, sv: s, sigs: sigs0, states: states0 };
+  }
+  if match n { ast.ExprNode.Block(_b) => true, _ => false } {
+    let b: ast.ExprBlock = match n { ast.ExprNode.Block(x) => x, _ => ast.ExprBlock { stmts: Vec(), has_tail: false, tail: -1 } };
+    let mut sigs1: Vec[ConstSig] = sigs0;
+    let mut states1: Vec[i32] = states0;
+    let mut locals1: Vec[ConstLocal] = locals;
+
+    let mut si: i32 = 0;
+    while si < b.stmts.len() {
+      let st: ast.Stmt = b.stmts.get(si);
+
+      if match st { ast.Stmt.Let(_sp, _m, _name, _ha, _ann, _init) => true, _ => false } {
+        let is_mut: bool = match st { ast.Stmt.Let(_sp, m, _name, _ha, _ann, _init) => m, _ => false };
+        if is_mut {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const block does not support let mut"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs1, states: states1 };
+        }
+
+        let name: String = match st { ast.Stmt.Let(_sp, _m, x, _ha, _ann, _init) => x, _ => "" };
+        let has_ann: bool = match st { ast.Stmt.Let(_sp, _m, _name, ha, _ann, _init) => ha, _ => false };
+        let ann: ast.TypeName = match st { ast.Stmt.Let(_sp, _m, _name, _ha, t, _init) => t, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+        let init: i32 = match st { ast.Stmt.Let(_sp, _m, _name, _ha, _ann, x) => x, _ => -1 };
+
+        let mut want: i32 = -1;
+        if has_ann {
+          let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), ann);
+          if !tr.ok {
+            return EvalConstExprResult { ok: false, err: type_error(file, "const let type annotation resolve failed"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs1, states: states1 };
+          }
+          want = tr.idx;
+        }
+
+        let vr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs1, states1, cur_mod, imps, exprs, file, init, want, locals1);
+        if !vr.ok { return vr; }
+        sigs1 = vr.sigs;
+        states1 = vr.states;
+        if has_ann && !assignable_to(ctx, want, vr.ty) {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const let type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs1, states: states1 };
+        }
+
+        locals1.push(const_local_from_value(name, vr));
+        si = si + 1;
+        continue;
+      }
+
+      if match st { ast.Stmt.Expr(_sp, _id2) => true, _ => false } {
+        let exid: i32 = match st { ast.Stmt.Expr(_sp, x) => x, _ => -1 };
+        let er: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs1, states1, cur_mod, imps, exprs, file, exid, -1, locals1);
+        if !er.ok { return er; }
+        sigs1 = er.sigs;
+        states1 = er.states;
+        si = si + 1;
+        continue;
+      }
+
+      return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const block statement"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs1, states: states1 };
+    }
+
+    if !b.has_tail {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const block requires tail expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs1, states: states1 };
+    }
+    return eval_const_expr_in_mod_locals(ctx, w, items, sigs1, states1, cur_mod, imps, exprs, file, b.tail, expected, locals1);
   }
 
   // enum variant shorthand: `.None` (unit) / `.Some(...)` (payload)
