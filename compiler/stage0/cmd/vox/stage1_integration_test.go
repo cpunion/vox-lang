@@ -235,6 +235,66 @@ pub fn assert(cond: bool) -> () { prelude.assert(cond); }
 	}
 }
 
+func TestStage1CliArgumentValidation(t *testing.T) {
+	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("fn main() -> i32 { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	// Unknown command should fail with non-zero code.
+	cmdUnknown := exec.Command(stage1Bin, "nope", filepath.Join(root, "out"))
+	cmdUnknown.Dir = root
+	bUnknown, err := cmdUnknown.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected unknown command to fail")
+	}
+	if !strings.Contains(string(bUnknown), "unknown command") {
+		t.Fatalf("expected unknown command output, got:\n%s", string(bUnknown))
+	}
+
+	// Unknown driver value should fail.
+	cmdDriver := exec.Command(stage1Bin, "build", "--driver=bad", filepath.Join(root, "out"), "src/main.vox")
+	cmdDriver.Dir = root
+	bDriver, err := cmdDriver.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected unknown driver to fail")
+	}
+	if !strings.Contains(string(bDriver), "unknown driver") {
+		t.Fatalf("expected unknown driver output, got:\n%s", string(bDriver))
+	}
+
+	// Missing source list should fail for emit-c/build.
+	cmdEmitMissing := exec.Command(stage1Bin, "emit-c", filepath.Join(root, "out.c"))
+	cmdEmitMissing.Dir = root
+	bEmit, err := cmdEmitMissing.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected emit-c missing sources to fail")
+	}
+	if !strings.Contains(string(bEmit), "missing sources") {
+		t.Fatalf("expected missing sources output (emit-c), got:\n%s", string(bEmit))
+	}
+
+	cmdBuildMissing := exec.Command(stage1Bin, "build", filepath.Join(root, "out"))
+	cmdBuildMissing.Dir = root
+	bBuild, err := cmdBuildMissing.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected build missing sources to fail")
+	}
+	if !strings.Contains(string(bBuild), "missing sources") {
+		t.Fatalf("expected missing sources output (build), got:\n%s", string(bBuild))
+	}
+}
+
 func TestStage1ToolchainBuildsWithTransitivePathDeps(t *testing.T) {
 	// 1) Build the stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
