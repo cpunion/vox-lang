@@ -210,6 +210,68 @@ fn subst_self_in_sig(ctx: Ctx, sig: FuncSig, recv_ty: i32) -> FuncSig {
   return FuncSig { params: ps, ret: rr, is_pub: sig.is_pub, type_params: sig.type_params, type_param_bounds: sig.type_param_bounds };
 }
 
+struct AssocProjSubsResult { ok: bool, err: TcError, subs: Vec[TySub] }
+
+fn impl_assoc_ty(sig: ImplSig, assoc: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < sig.assoc_types.len() {
+    let a: ImplAssocTypeSig = sig.assoc_types.get(i);
+    if a.name == assoc { return a.ty; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn add_assoc_proj_subs(ctx: Ctx, l0: Locals, call_sp: ast.Span, sig: FuncSig, subs0: Vec[TySub]) -> AssocProjSubsResult {
+  let mut subs: Vec[TySub] = subs0;
+  let mut bi: i32 = 0;
+  while bi < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(bi);
+    let ty0: i32 = subs_lookup(subs, b.type_param);
+    if ty0 == -1 {
+      bi = bi + 1;
+      continue;
+    }
+    let ty1: i32 = strip_range(ctx, ty0);
+    let tt: ir.Ty = ir.ty_pool_get(ctx.pool, ty1);
+    if tt.kind == ir.TyKind.Param && locals_has_type_param_bound(ctx, l0, tt.name, b.trait_mod_path, b.trait_name) {
+      bi = bi + 1;
+      continue;
+    }
+    let fi: FindImplForTyResult = find_impl_for_ty(ctx, b.trait_mod_path, b.trait_name, ty1);
+    if fi.ambiguous || !fi.found {
+      bi = bi + 1;
+      continue;
+    }
+
+    let tf: FindTraitResult = find_trait(ctx, b.trait_mod_path, b.trait_name);
+    if !tf.found {
+      bi = bi + 1;
+      continue;
+    }
+    let mut ai: i32 = 0;
+    while ai < tf.sig.assoc_types.len() {
+      let an: String = tf.sig.assoc_types.get(ai).name;
+      let aty: i32 = impl_assoc_ty(fi.sig, an);
+      if aty != -1 {
+        let key: String = b.type_param.concat(".").concat(an);
+        let cur: i32 = subs_lookup(subs, key);
+        if cur == -1 {
+          subs.push(TySub { name: key, ty: aty });
+        } else {
+          if cur != aty {
+            let msg: String = "ambiguous associated type projection at call: ".concat(key);
+            return AssocProjSubsResult { ok: false, err: type_error_at(call_sp, msg), subs: subs };
+          }
+        }
+      }
+      ai = ai + 1;
+    }
+    bi = bi + 1;
+  }
+  return AssocProjSubsResult { ok: true, err: TcError.None, subs: subs };
+}
+
 fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, call_sp: ast.Span, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {
   // Method calls: `recv.method(...)` for built-in types.
   let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
@@ -619,6 +681,10 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: a
     }
     bi = bi + 1;
   }
+
+  let asr: AssocProjSubsResult = add_assoc_proj_subs(ctx, l0, call_sp, sig, subs);
+  if !asr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: asr.err }; }
+  subs = asr.subs;
 
   let out_ty: i32 = subst_ty(ctx, sig.ret, subs);
   if out_ty == ctx.ty_bad { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }

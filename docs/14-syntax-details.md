@@ -49,6 +49,7 @@
 - `impl` 方法的泛型参数名按位置匹配 trait 方法（名称可不同）
 - `impl` 需为 trait 中每个关联类型给出绑定：`impl Iter for I { type Item = i32; ... }`
 - 支持在类型位置引用 `Self.Assoc`（trait/impl 方法签名）以及 `T.Assoc`（泛型签名，`T` 为类型参数）。
+- `T.Assoc` 约束规则：`T` 的 trait bounds 中必须且只能有一个 trait 声明该关联类型，否则报错（unknown/ambiguous projection）。
 
 ## 运算符优先级
 
