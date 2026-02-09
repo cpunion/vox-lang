@@ -493,6 +493,83 @@ fn const_find_enum_variant_idx(ctx: Ctx, ty: i32, vname: String) -> i32 {
   return -1;
 }
 
+struct ConstFindVariantResult { ok: bool, idx: i32, fields: Vec[i32] }
+
+fn const_find_enum_variant(ctx: Ctx, enum_ty: i32, vname: String) -> ConstFindVariantResult {
+  let base: i32 = strip_range(ctx, enum_ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind != ir.TyKind.Enum { return ConstFindVariantResult { ok: false, idx: -1, fields: Vec() }; }
+  let fe: FindEnumResult = find_enum(ctx, ty_mod(t), ty_name(t));
+  if !fe.found { return ConstFindVariantResult { ok: false, idx: -1, fields: Vec() }; }
+  let mut i: i32 = 0;
+  while i < fe.sig.vars.len() {
+    let v: EnumVariantSig = fe.sig.vars.get(i);
+    if v.name == vname { return ConstFindVariantResult { ok: true, idx: i, fields: v.fields }; }
+    i = i + 1;
+  }
+  return ConstFindVariantResult { ok: false, idx: -1, fields: Vec() };
+}
+
+struct ConstResolveEnumCtorResult { ok: bool, err: String, enum_ty: i32, variant: String, vidx: i32, fields: Vec[i32] }
+
+fn const_resolve_enum_ctor(ctx: Ctx, cur_mod: String, imps: Imports, parts: Vec[String], expected: i32) -> ConstResolveEnumCtorResult {
+  if expected == -1 {
+    return ConstResolveEnumCtorResult { ok: false, err: "const enum shorthand requires expected enum type", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+  }
+  let eb: i32 = strip_range(ctx, expected);
+  let et: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
+  if et.kind != ir.TyKind.Enum {
+    return ConstResolveEnumCtorResult { ok: false, err: "const enum shorthand requires expected enum type", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+  }
+  let want_mod: String = ty_mod(et);
+  let want_name: String = ty_name(et);
+
+  if parts.len() == 0 || parts.len() > 3 {
+    return ConstResolveEnumCtorResult { ok: false, err: "bad enum ctor path in const expression", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+  }
+
+  let mut enum_mod: String = want_mod;
+  let mut enum_name: String = want_name;
+  let mut vname: String = "";
+
+  if parts.len() == 1 {
+    vname = parts.get(0);
+  } else if parts.len() == 2 {
+    enum_mod = cur_mod;
+    enum_name = parts.get(0);
+    let nt: NamedTypeImport = find_named_type(imps.named_types, enum_name);
+    if nt.local != "" {
+      if nt.kind != named_type_kind_enum() {
+        return ConstResolveEnumCtorResult { ok: false, err: "unknown enum in const expression", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+      }
+      enum_mod = nt.mod_path;
+      enum_name = nt.name;
+    }
+    vname = parts.get(1);
+  } else {
+    enum_mod = find_alias(imps.aliases, parts.get(0));
+    if enum_mod == "" {
+      return ConstResolveEnumCtorResult { ok: false, err: "unknown module qualifier", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+    }
+    enum_name = parts.get(1);
+    vname = parts.get(2);
+  }
+
+  let fe2: FindEnumResult = find_enum(ctx, enum_mod, enum_name);
+  if !fe2.found {
+    return ConstResolveEnumCtorResult { ok: false, err: "unknown enum in const expression", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+  }
+  if enum_mod != want_mod || enum_name != want_name {
+    return ConstResolveEnumCtorResult { ok: false, err: "const enum ctor type mismatch", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+  }
+
+  let fv: ConstFindVariantResult = const_find_enum_variant(ctx, eb, vname);
+  if !fv.ok {
+    return ConstResolveEnumCtorResult { ok: false, err: "unknown enum variant in const expression", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+  }
+  return ConstResolveEnumCtorResult { ok: true, err: "", enum_ty: eb, variant: vname, vidx: fv.idx, fields: fv.fields };
+}
+
 fn const_match_int_pat(ctx: Ctx, scrut_ty: i32, scrut_iv: i64, text: String) -> ConstPatEvalResult {
   let base: i32 = strip_range(ctx, scrut_ty);
   if !is_int_like_ty(ctx, base) {
@@ -708,72 +785,50 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
   // expected enum type is required.
   if match n { ast.ExprNode.DotIdent(_name) => true, _ => false } {
     let vname: String = match n { ast.ExprNode.DotIdent(x) => x, _ => "" };
-    if expected == -1 {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const enum shorthand requires expected enum type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    let mut parts0: Vec[String] = Vec();
+    parts0.push(vname);
+    let cr0: ConstResolveEnumCtorResult = const_resolve_enum_ctor(ctx, cur_mod, imps, parts0, expected);
+    if !cr0.ok {
+      return EvalConstExprResult { ok: false, err: type_error(file, cr0.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
-    let eb: i32 = strip_range(ctx, expected);
-    let et: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
-    if et.kind != ir.TyKind.Enum {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const enum shorthand requires expected enum type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    if cr0.fields.len() != 0 {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const enum payload requires call syntax"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
-    let fe: FindEnumResult = find_enum(ctx, ty_mod(et), ty_name(et));
-    if !fe.found {
-      return EvalConstExprResult { ok: false, err: type_error(file, "unknown enum in const expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
-    }
-    let mut vidx: i32 = -1;
-    let mut vi: i32 = 0;
-    while vi < fe.sig.vars.len() {
-      let v: EnumVariantSig = fe.sig.vars.get(vi);
-      if v.name == vname {
-        if v.fields.len() != 0 {
-          return EvalConstExprResult { ok: false, err: type_error(file, "const enum payload requires call syntax"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
-        }
-        vidx = vi;
-      }
-      vi = vi + 1;
-    }
-    if vidx == -1 {
-      return EvalConstExprResult { ok: false, err: type_error(file, "unknown enum variant in const expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
-    }
-    let packed0: String = const_enum_pack(vname, Vec());
-    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_enum(), ty: eb, iv: vidx as i64, bv: false, sv: packed0, sigs: sigs0, states: states0 };
+    let packed0: String = const_enum_pack(cr0.variant, Vec());
+    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_enum(), ty: cr0.enum_ty, iv: cr0.vidx as i64, bv: false, sv: packed0, sigs: sigs0, states: states0 };
   }
 
-  // enum payload ctor call in const: `.Some(x)` (expected enum type required).
+  // enum ctor call in const: `.Some(x)` / `E.Some(x)` / `alias.E.Some(x)`.
   if match n { ast.ExprNode.Call(_c, _ta, _args) => true, _ => false } {
     let callee: i32 = match n { ast.ExprNode.Call(c, _ta, _args) => c, _ => -1 };
+    let type_args: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, ta, _args) => ta, _ => Vec() };
     let args: Vec[i32] = match n { ast.ExprNode.Call(_c, _ta, as0) => as0, _ => Vec() };
     let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+    let mut parts2: Vec[String] = Vec();
+    let mut is_ctor: bool = false;
     if match cn { ast.ExprNode.DotIdent(_name) => true, _ => false } {
       let vname2: String = match cn { ast.ExprNode.DotIdent(x) => x, _ => "" };
-      if expected == -1 {
-        return EvalConstExprResult { ok: false, err: type_error(file, "const enum shorthand requires expected enum type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      parts2.push(vname2);
+      is_ctor = true;
+    } else if match cn { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+      let recv2: i32 = match cn { ast.ExprNode.Member(r2, _name2) => r2, _ => -1 };
+      let name2: String = match cn { ast.ExprNode.Member(_r2, n2) => n2, _ => "" };
+      let pr2: ExprPartsResult = expr_parts_member(exprs, recv2, name2);
+      if pr2.ok {
+        parts2 = pr2.parts;
+        is_ctor = true;
       }
-      let eb2: i32 = strip_range(ctx, expected);
-      let et2: ir.Ty = ir.ty_pool_get(ctx.pool, eb2);
-      if et2.kind != ir.TyKind.Enum {
-        return EvalConstExprResult { ok: false, err: type_error(file, "const enum shorthand requires expected enum type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
-      }
-      let fe2: FindEnumResult = find_enum(ctx, ty_mod(et2), ty_name(et2));
-      if !fe2.found {
-        return EvalConstExprResult { ok: false, err: type_error(file, "unknown enum in const expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
-      }
+    }
 
-      let mut vidx2: i32 = -1;
-      let mut want_fields: Vec[i32] = Vec();
-      let mut vi2: i32 = 0;
-      while vi2 < fe2.sig.vars.len() {
-        let v2: EnumVariantSig = fe2.sig.vars.get(vi2);
-        if v2.name == vname2 {
-          vidx2 = vi2;
-          want_fields = v2.fields;
-        }
-        vi2 = vi2 + 1;
+    if is_ctor {
+      if type_args.len() != 0 {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const enum ctor does not accept type args"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
       }
-      if vidx2 == -1 {
-        return EvalConstExprResult { ok: false, err: type_error(file, "unknown enum variant in const expression"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      let cr2: ConstResolveEnumCtorResult = const_resolve_enum_ctor(ctx, cur_mod, imps, parts2, expected);
+      if !cr2.ok {
+        return EvalConstExprResult { ok: false, err: type_error(file, cr2.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
       }
-      if args.len() != want_fields.len() {
+      if args.len() != cr2.fields.len() {
         return EvalConstExprResult { ok: false, err: type_error(file, "const enum payload arity mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
       }
 
@@ -782,7 +837,7 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
       let mut payload: Vec[ConstEnumPayloadField] = Vec();
       let mut ai: i32 = 0;
       while ai < args.len() {
-        let want_ty: i32 = want_fields.get(ai);
+        let want_ty: i32 = cr2.fields.get(ai);
         let ar2: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs2, states2, cur_mod, imps, exprs, file, args.get(ai), want_ty, locals);
         if !ar2.ok { return ar2; }
         sigs2 = ar2.sigs;
@@ -796,8 +851,8 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
         ai = ai + 1;
       }
 
-      let packed: String = const_enum_pack(vname2, payload);
-      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_enum(), ty: eb2, iv: vidx2 as i64, bv: false, sv: packed, sigs: sigs2, states: states2 };
+      let packed: String = const_enum_pack(cr2.variant, payload);
+      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_enum(), ty: cr2.enum_ty, iv: cr2.vidx as i64, bv: false, sv: packed, sigs: sigs2, states: states2 };
     }
   }
 
@@ -829,7 +884,8 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     return EvalConstExprResult { ok: true, err: TcError.None, kind: cs.kind, ty: cs.ty, iv: cs.iv, bv: cs.bv, sv: cs.sv, sigs: rr.sigs, states: rr.states };
   }
 
-  // module-qualified const: `alias.NAME` / `alias.mod.NAME`
+  // module-qualified const or enum unit value:
+  // `alias.NAME` / `alias.mod.NAME` / `E.A` / `alias.E.A`
   if match n { ast.ExprNode.Member(_r, _name) => true, _ => false } {
     let recv: i32 = match n { ast.ExprNode.Member(r, _name) => r, _ => -1 };
     let mname: String = match n { ast.ExprNode.Member(_r, x) => x, _ => "" };
@@ -838,20 +894,33 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     let parts: Vec[String] = pr.parts;
     if parts.len() < 2 { return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const member path"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let base: String = find_alias(imps.aliases, parts.get(0));
-    if base == "" { return EvalConstExprResult { ok: false, err: type_error(file, "unknown module qualifier"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
-    let extra: Vec[String] = slice_parts(parts, 1, parts.len() - 1);
-    let want_mod: String = if extra.len() == 0 { base } else { join_mod_path(base, extra) };
-    let want_name: String = parts.get(parts.len() - 1);
-    let idx2: i32 = const_find_item(items, want_mod, want_name);
-    if idx2 == -1 { return EvalConstExprResult { ok: false, err: type_error(file, "unknown const: ".concat(const_qname(want_mod, want_name))), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
-    let rr2: ResolveConstResult = resolve_const(ctx, w, items, sigs0, states0, idx2);
-    if !rr2.ok { return EvalConstExprResult { ok: false, err: rr2.err, kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
-    let cs2: ConstSig = rr2.sigs.get(idx2);
-    if want_mod != cur_mod && !cs2.is_pub { return EvalConstExprResult { ok: false, err: type_error(file, "const is private: ".concat(const_qname(want_mod, want_name))), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
-    if expected != -1 && !assignable_to(ctx, expected, cs2.ty) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+    if base != "" {
+      let extra: Vec[String] = slice_parts(parts, 1, parts.len() - 1);
+      let want_mod: String = if extra.len() == 0 { base } else { join_mod_path(base, extra) };
+      let want_name: String = parts.get(parts.len() - 1);
+      let idx2: i32 = const_find_item(items, want_mod, want_name);
+      if idx2 != -1 {
+        let rr2: ResolveConstResult = resolve_const(ctx, w, items, sigs0, states0, idx2);
+        if !rr2.ok { return EvalConstExprResult { ok: false, err: rr2.err, kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
+        let cs2: ConstSig = rr2.sigs.get(idx2);
+        if want_mod != cur_mod && !cs2.is_pub { return EvalConstExprResult { ok: false, err: type_error(file, "const is private: ".concat(const_qname(want_mod, want_name))), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
+        if expected != -1 && !assignable_to(ctx, expected, cs2.ty) {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+        }
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: cs2.kind, ty: cs2.ty, iv: cs2.iv, bv: cs2.bv, sv: cs2.sv, sigs: rr2.sigs, states: rr2.states };
+      }
     }
-    return EvalConstExprResult { ok: true, err: TcError.None, kind: cs2.kind, ty: cs2.ty, iv: cs2.iv, bv: cs2.bv, sv: cs2.sv, sigs: rr2.sigs, states: rr2.states };
+
+    // Fallback to enum unit value path when const lookup does not match.
+    let cr3: ConstResolveEnumCtorResult = const_resolve_enum_ctor(ctx, cur_mod, imps, parts, expected);
+    if !cr3.ok {
+      return EvalConstExprResult { ok: false, err: type_error(file, cr3.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    if cr3.fields.len() != 0 {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const enum payload requires call syntax"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    let packed3: String = const_enum_pack(cr3.variant, Vec());
+    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_enum(), ty: cr3.enum_ty, iv: cr3.vidx as i64, bv: false, sv: packed3, sigs: sigs0, states: states0 };
   }
 
   // unary

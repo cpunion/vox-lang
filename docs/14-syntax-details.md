@@ -345,6 +345,7 @@ pub const NAME: String = "vox";
 - 浮点常量（`f32/f64`）在 v0 支持：字面量、常量引用、`-x`、`f32 <-> f64 as`、`+ - * /`、`< <= > >=`、`== !=`。
 - 浮点常量的 `/` 在除数为 `0.0`（或规范化后为 `0.0`）时报错：`const division by zero`。
 - 不支持在 const 初始化中调用普通函数、构造 struct；支持 enum 变体构造（含 payload），例如 `const X: E = .A(1)`。
+  - 也支持限定路径写法：`const X: E = E.A(1)`、`const X: dep.E = dep.E.A(1)`。
 
 可见性与导入（Stage0/Stage1 v0）：
 
