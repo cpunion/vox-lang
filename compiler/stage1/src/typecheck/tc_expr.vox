@@ -12,6 +12,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
 
   let r: ExprTyResult = match n {
     ast.ExprNode.Int(text) => tc_expr_int(ctx, ast.expr_pool_span(exprs, id), text, expected),
+    ast.ExprNode.Float(text) => tc_expr_float(ctx, ast.expr_pool_span(exprs, id), text, expected),
     ast.ExprNode.Str(_) => tc_expr_str(ctx, expected),
     ast.ExprNode.Bool(_) => tc_expr_bool(ctx, expected),
     ast.ExprNode.Ident(name) => tc_expr_ident(ctx, mod_path, imps, l0, name, expected),
@@ -53,7 +54,17 @@ fn tc_expr_as(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.Ex
   if !ar.ok { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
 
   let from_ty: i32 = ar.ty;
-  // Stage1 v0: numeric casts between integer scalars and refined range ints.
+  // Stage1 v0:
+  // - int-like <-> int-like (existing behavior; ranges allowed on int side)
+  // - f32 <-> f64
+  let from_float: bool = is_float_ty(c2, from_ty);
+  let to_float: bool = is_float_ty(c2, to_ty);
+  if from_float || to_float {
+    if !from_float || !to_float { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
+    if expected != -1 && !assignable_to(c2, expected, to_ty) { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: to_ty, err: TcError.None };
+  }
+
   if !is_int_like_ty(c2, from_ty) || !is_int_like_ty(c2, to_ty) { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
   let from_base: i32 = strip_range(c2, from_ty);
   let to_base: i32 = strip_range(c2, to_ty);
@@ -206,6 +217,18 @@ fn tc_expr_int(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyRes
   return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal out of range") };
 }
 
+fn tc_expr_float(ctx: Ctx, sp: ast.Span, _text: String, expected: i32) -> ExprTyResult {
+  // Float literal inference:
+  // - expected f32/f64 => use expected
+  // - otherwise default to f64
+  if expected != -1 {
+    if expected == ctx.ty_f32 { return ExprTyResult { ok: true, ty: ctx.ty_f32, err: TcError.None }; }
+    if expected == ctx.ty_f64 { return ExprTyResult { ok: true, ty: ctx.ty_f64, err: TcError.None }; }
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "float literal requires expected f32/f64") };
+  }
+  return ExprTyResult { ok: true, ty: ctx.ty_f64, err: TcError.None };
+}
+
 fn tc_expr_str(ctx: Ctx, expected: i32) -> ExprTyResult {
   if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
@@ -244,6 +267,9 @@ fn tc_expr_unary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   }
   let mut a_expected: i32 = -1;
   if expected != -1 {
+    if is_float_ty(ctx, expected) {
+      a_expected = strip_range(ctx, expected);
+    }
     let eb: i32 = strip_range(ctx, expected);
     let et: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
     let ok: bool = match et.kind { ir.TyKind.I8 => true, ir.TyKind.I16 => true, ir.TyKind.I32 => true, ir.TyKind.I64 => true, ir.TyKind.ISize => true, _ => false };
@@ -251,6 +277,11 @@ fn tc_expr_unary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   }
   let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, a_expected);
   if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if is_float_ty(ctx, ar.ty) {
+    let outf: i32 = strip_range(ctx, ar.ty);
+    if expected != -1 && !assignable_to(ctx, expected, outf) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: outf, err: TcError.None };
+  }
   // Negation: `-x` is an integer op; ranges widen to base.
   let out: i32 = strip_range(ctx, ar.ty);
   let ot: ir.Ty = ir.ty_pool_get(ctx.pool, out);
@@ -336,52 +367,48 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   let is_eq: bool = match op { ast.BinaryOp.Eq => true, ast.BinaryOp.Ne => true, _ => false };
   let is_logic: bool = match op { ast.BinaryOp.AndAnd => true, ast.BinaryOp.OrOr => true, _ => false };
 
-  // Use the result expected type as a hint for operand typing when it is an int type.
+  // Use the result expected type as a hint for operand typing when it is a numeric type.
   // This matters for cases like `0 - some_i64` where `0` would otherwise default to i32.
-  let mut want_int: i32 = -1;
+  let mut want_numeric: i32 = -1;
   if expected != -1 {
-    let et: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
-    let is_int: bool = match et.kind {
-      ir.TyKind.I8 => true,
-      ir.TyKind.U8 => true,
-      ir.TyKind.I16 => true,
-      ir.TyKind.U16 => true,
-      ir.TyKind.I32 => true,
-      ir.TyKind.U32 => true,
-      ir.TyKind.I64 => true,
-      ir.TyKind.U64 => true,
-      ir.TyKind.ISize => true,
-      ir.TyKind.USize => true,
-      ir.TyKind.Range => true,
-      _ => false,
-    };
-    if is_int { want_int = strip_range(ctx, expected); }
+    let eb: i32 = strip_range(ctx, expected);
+    if is_int_like_ty(ctx, eb) || is_float_ty(ctx, eb) { want_numeric = eb; }
   }
-  let l_expected: i32 = if is_logic { ctx.ty_bool } else { want_int };
-  let r_expected0: i32 = if is_logic { ctx.ty_bool } else { want_int };
+  let l_expected: i32 = if is_logic { ctx.ty_bool } else { want_numeric };
+  let r_expected0: i32 = if is_logic { ctx.ty_bool } else { want_numeric };
 
   let mut lr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, l, l_expected);
   if !lr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let mut rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, r, r_expected0);
   if !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
-  // If one side is an int literal that defaulted to `i32`, but the other side is a different
-  // scalar int type, re-typecheck the literal using that scalar type.
+  // If one side is a numeric literal that defaulted to the wrong width, re-typecheck it
+  // using the other side's scalar type.
   if (is_cmp || is_eq || !is_logic) && strip_range(ctx, lr.ty) != strip_range(ctx, rr.ty) {
     let l_is_lit: bool = match ast.expr_pool_get(exprs, l) {
       ast.ExprNode.Int(_s) => true,
+      ast.ExprNode.Float(_s) => true,
       ast.ExprNode.Unary(op0, a0) => {
         if op0 == ast.UnaryOp.Neg {
-          match ast.expr_pool_get(exprs, a0) { ast.ExprNode.Int(_s2) => true, _ => false }
+          match ast.expr_pool_get(exprs, a0) {
+            ast.ExprNode.Int(_s2) => true,
+            ast.ExprNode.Float(_s2) => true,
+            _ => false,
+          }
         } else { false }
       },
       _ => false,
     };
     let r_is_lit: bool = match ast.expr_pool_get(exprs, r) {
       ast.ExprNode.Int(_s) => true,
+      ast.ExprNode.Float(_s) => true,
       ast.ExprNode.Unary(op0, a0) => {
         if op0 == ast.UnaryOp.Neg {
-          match ast.expr_pool_get(exprs, a0) { ast.ExprNode.Int(_s2) => true, _ => false }
+          match ast.expr_pool_get(exprs, a0) {
+            ast.ExprNode.Int(_s2) => true,
+            ast.ExprNode.Float(_s2) => true,
+            _ => false,
+          }
         } else { false }
       },
       _ => false,
@@ -389,9 +416,9 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
 
     let lbase0: i32 = strip_range(ctx, lr.ty);
     let rbase0: i32 = strip_range(ctx, rr.ty);
-    if l_is_lit && is_int_like_ty(ctx, rbase0) {
+    if l_is_lit && (is_int_like_ty(ctx, rbase0) || is_float_ty(ctx, rbase0)) {
       lr = tc_expr(ctx, w, mod_path, imps, exprs, l0, l, rbase0);
-    } else if r_is_lit && is_int_like_ty(ctx, lbase0) {
+    } else if r_is_lit && (is_int_like_ty(ctx, lbase0) || is_float_ty(ctx, lbase0)) {
       rr = tc_expr(ctx, w, mod_path, imps, exprs, l0, r, lbase0);
     }
     if !lr.ok || !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
@@ -404,8 +431,12 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   }
 
   if is_cmp {
-    if !is_int_like_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if strip_range(ctx, rr.ty) != strip_range(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let lbase: i32 = strip_range(ctx, lr.ty);
+    let rbase: i32 = strip_range(ctx, rr.ty);
+    if lbase != rbase { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if !is_int_like_ty(ctx, lbase) && !is_float_ty(ctx, lbase) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+    }
     if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
   }
@@ -430,6 +461,8 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
         ir.TyKind.U64 => true,
         ir.TyKind.ISize => true,
         ir.TyKind.USize => true,
+        ir.TyKind.F32 => true,
+        ir.TyKind.F64 => true,
         _ => false,
       };
     if !ok_prim {
@@ -446,9 +479,26 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   }
 
   // arithmetic
-  if !is_int_like_ty(ctx, lr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let out: i32 = strip_range(ctx, lr.ty);
-  if strip_range(ctx, rr.ty) != out { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  let rbase: i32 = strip_range(ctx, rr.ty);
+  if rbase != out { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+  let int_only: bool = match op {
+    ast.BinaryOp.Mod => true,
+    ast.BinaryOp.BitAnd => true,
+    ast.BinaryOp.BitOr => true,
+    ast.BinaryOp.BitXor => true,
+    ast.BinaryOp.Shl => true,
+    ast.BinaryOp.Shr => true,
+    _ => false,
+  };
+  if int_only {
+    if !is_int_like_ty(ctx, out) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  } else {
+    if !is_int_like_ty(ctx, out) && !is_float_ty(ctx, out) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+    }
+  }
   if expected != -1 && !assignable_to(ctx, expected, out) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: out, err: TcError.None };
 }
