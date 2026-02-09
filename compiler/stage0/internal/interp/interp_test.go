@@ -108,6 +108,33 @@ fn main() -> i32 {
 	}
 }
 
+func TestInterpNameLookupCacheRespectsShadowing(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+  let x: i32 = 1;
+  {
+    let x: i32 = 2;
+    assert(x == 2);
+  }
+  return x;
+}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
+func TestInterpNameLookupCacheRespectsParamShadowing(t *testing.T) {
+	out := runMain(t, `fn f(x: i32) -> i32 {
+  return x;
+}
+fn main() -> i32 {
+  let x: i32 = 7;
+  return f(3) * 10 + x;
+}`)
+	if out != "37" {
+		t.Fatalf("expected 37, got %q", out)
+	}
+}
+
 func TestInterpEnumCtorAndMatch(t *testing.T) {
 	out := runMain(t, `enum E { A(i32), B(String), None }
 fn main() -> i32 {
