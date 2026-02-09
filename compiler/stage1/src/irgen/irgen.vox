@@ -94,13 +94,13 @@ fn find_mod(w: tc.World, path: String) -> FindModResult {
   return FindModResult { found: false, m: tc.WorldModule { path: "", prog: ast.Program { imports: Vec(), types: Vec(), consts: Vec(), structs: Vec(), enums: Vec(), traits: Vec(), impls: Vec(), funcs: Vec(), exprs: ast.expr_pool() } } };
 }
 
-struct FindFuncDeclResult { found: bool, fd: ast.FuncDecl }
+struct FindFuncDeclResult { found: bool, mod_path: String, fd: ast.FuncDecl }
 
 fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDeclResult {
   let mut i: i32 = 0;
   while i < m.prog.funcs.len() {
     let fd: ast.FuncDecl = m.prog.funcs.get(i);
-    if fd.name == name && fd.type_params.len() != 0 { return FindFuncDeclResult { found: true, fd: fd }; }
+    if fd.name == name && fd.type_params.len() != 0 { return FindFuncDeclResult { found: true, mod_path: m.path, fd: fd }; }
     i = i + 1;
   }
 
@@ -115,11 +115,25 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
         let mut mi: i32 = 0;
         while mi < isg.methods.len() {
           let ms: tc.ImplMethodSig = isg.methods.get(mi);
-          if ms.lowered_name == name && !ms.from_default && ms.sig.type_params.len() != 0 {
-            let mdi: i32 = find_impl_method_decl_idx(id, ms.name);
-            if mdi != -1 {
-              let md: ast.FuncDecl = id.methods.get(mdi);
-              if md.type_params.len() != 0 { return FindFuncDeclResult { found: true, fd: md }; }
+          if ms.lowered_name == name && ms.sig.type_params.len() != 0 {
+            if ms.from_default {
+              let fd0: ast.FuncDecl = ast.FuncDecl {
+                file: ms.default_file,
+                is_pub: false,
+                name: ms.lowered_name,
+                type_params: ms.sig.type_params,
+                type_param_bounds: Vec(),
+                params: synth_params(ms.default_params),
+                ret: dummy_type_name(),
+                body: ms.default_body,
+              };
+              return FindFuncDeclResult { found: true, mod_path: ms.default_mod_path, fd: fd0 };
+            } else {
+              let mdi: i32 = find_impl_method_decl_idx(id, ms.name);
+              if mdi != -1 {
+                let md: ast.FuncDecl = id.methods.get(mdi);
+                if md.type_params.len() != 0 { return FindFuncDeclResult { found: true, mod_path: m.path, fd: md }; }
+              }
             }
           }
           mi = mi + 1;
@@ -130,7 +144,7 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
     ii = ii + 1;
   }
 
-  return FindFuncDeclResult { found: false, fd: ast.FuncDecl { file: "", is_pub: false, name: "", type_params: Vec(), type_param_bounds: Vec(), params: Vec(), ret: ast.TypeName { parts: Vec(), args: Vec() }, body: ast.Block { stmts: Vec() } } };
+  return FindFuncDeclResult { found: false, mod_path: "", fd: ast.FuncDecl { file: "", is_pub: false, name: "", type_params: Vec(), type_param_bounds: Vec(), params: Vec(), ret: ast.TypeName { parts: Vec(), args: Vec() }, body: ast.Block { stmts: Vec() } } };
 }
 
 struct FindImplSigResult { found: bool, sig: tc.ImplSig }
@@ -348,12 +362,18 @@ pub fn generate_world(w: tc.World) -> GenResult {
       // Generic instantiation task.
       let fr: FindFuncDeclResult = find_generic_func(br.ctx, m2, t.base_name);
       if !fr.found { return err0(p, "missing generic fn for instantiation"); }
-      let ar: tc.ImportsResult = tc.build_imports(w, t.mod_path, m2.prog.imports, fr.fd.file);
+      let mut bmod: tc.WorldModule = m2;
+      if fr.mod_path != t.mod_path {
+        let fm2: FindModResult = find_mod(w, fr.mod_path);
+        if !fm2.found { return err0(p, "missing module for generic body"); }
+        bmod = fm2.m;
+      }
+      let ar: tc.ImportsResult = tc.build_imports(w, bmod.path, bmod.prog.imports, fr.fd.file);
       if !ar.ok { return err0(p, tc.tc_error_to_string(ar.err)); }
       imps = ar.imps;
       want_name = qname(t.mod_path, t.inst_name);
       if has_str(emitted, want_name) { ti = ti + 1; continue; }
-      r = gen_func_inst(ctx, w, t.mod_path, imps, m2.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs);
+      r = gen_func_impl(ctx, w, bmod.path, t.mod_path, imps, bmod.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs);
     }
 
     if !r.ok { return err0(p, r.err); }
