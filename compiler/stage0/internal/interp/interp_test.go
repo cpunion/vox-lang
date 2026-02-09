@@ -95,6 +95,19 @@ fn main() -> i32 {
 	}
 }
 
+func TestInterpStructCopyDoesNotAliasFieldWrites(t *testing.T) {
+	out := runMain(t, `struct S { x: i32 }
+fn main() -> i32 {
+  let mut a: S = S { x: 1 };
+  let mut b: S = a;
+  b.x = 2;
+  return a.x * 10 + b.x;
+}`)
+	if out != "12" {
+		t.Fatalf("expected 12, got %q", out)
+	}
+}
+
 func TestInterpEnumCtorAndMatch(t *testing.T) {
 	out := runMain(t, `enum E { A(i32), B(String), None }
 fn main() -> i32 {
@@ -237,6 +250,33 @@ func TestInterpVecPushLenGet(t *testing.T) {
 	// 41 + 1 + 2
 	if out != "44" {
 		t.Fatalf("expected 44, got %q", out)
+	}
+}
+
+func TestInterpVecCopyDoesNotAliasPush(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+  let mut a: Vec[i32] = Vec();
+  a.push(1);
+  let mut b: Vec[i32] = a;
+  b.push(2);
+  return a.len() * 10 + b.len();
+}`)
+	if out != "12" {
+		t.Fatalf("expected 12, got %q", out)
+	}
+}
+
+func TestInterpStructFieldVecCopyDoesNotAliasPush(t *testing.T) {
+	out := runMain(t, `struct S { items: Vec[i32] }
+fn main() -> i32 {
+  let mut a: S = S { items: Vec() };
+  a.items.push(1);
+  let mut b: S = a;
+  b.items.push(2);
+  return a.items.len() * 10 + b.items.len();
+}`)
+	if out != "12" {
+		t.Fatalf("expected 12, got %q", out)
 	}
 }
 

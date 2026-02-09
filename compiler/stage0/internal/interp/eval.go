@@ -69,10 +69,11 @@ func (rt *Runtime) evalStmt(st ast.Stmt) (Value, error) {
 			return unit(), fmt.Errorf("unknown variable: %s", s.Recv)
 		}
 		recv := fr[s.Recv]
-		if recv.K != VStruct || recv.M == nil {
+		if recv.K != VStruct || recv.St == nil {
 			return unit(), fmt.Errorf("field assignment requires struct receiver")
 		}
-		recv.M[s.Field] = cloneValue(v)
+		recv = ensureStructUnique(recv)
+		recv.St.Fields[s.Field] = cloneValue(v)
 		fr[s.Recv] = recv
 		return unit(), nil
 	case *ast.ReturnStmt:
@@ -410,7 +411,7 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			vc := rt.prog.VecCalls[e]
 			switch vc.Kind {
 			case typecheck.VecCallNew:
-				return Value{K: VVec, A: nil}, nil
+				return newVecValue(nil), nil
 			case typecheck.VecCallPush:
 				if len(e.Args) != 1 {
 					return unit(), fmt.Errorf("Vec.push expects 1 arg")
@@ -425,10 +426,11 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 						return unit(), fmt.Errorf("unknown variable: %s", vc.RecvName)
 					}
 					recv := fr[vc.RecvName]
-					if recv.K != VVec {
+					if recv.K != VVec || recv.Vc == nil {
 						return unit(), fmt.Errorf("Vec.push requires vec receiver")
 					}
-					recv.A = append(recv.A, cloneValue(v))
+					recv = ensureVecUnique(recv)
+					recv.Vc.Elems = append(recv.Vc.Elems, cloneValue(v))
 					fr[vc.RecvName] = recv
 					return unit(), nil
 				}
@@ -447,18 +449,20 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 					return unit(), fmt.Errorf("unknown variable: %s", base.Name)
 				}
 				sv := fr[base.Name]
-				if sv.K != VStruct {
+				if sv.K != VStruct || sv.St == nil {
 					return unit(), fmt.Errorf("Vec.push field receiver must be a struct")
 				}
-				fv, ok := sv.M[mem.Name]
+				sv = ensureStructUnique(sv)
+				fv, ok := sv.St.Fields[mem.Name]
 				if !ok {
 					return unit(), fmt.Errorf("unknown field: %s", mem.Name)
 				}
-				if fv.K != VVec {
+				if fv.K != VVec || fv.Vc == nil {
 					return unit(), fmt.Errorf("Vec.push requires vec receiver")
 				}
-				fv.A = append(fv.A, cloneValue(v))
-				sv.M[mem.Name] = fv
+				fv = ensureVecUnique(fv)
+				fv.Vc.Elems = append(fv.Vc.Elems, cloneValue(v))
+				sv.St.Fields[mem.Name] = fv
 				fr[base.Name] = sv
 				return unit(), nil
 			case typecheck.VecCallLen:
@@ -476,10 +480,10 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 					}
 					recv = fr[vc.RecvName]
 				}
-				if recv.K != VVec {
+				if recv.K != VVec || recv.Vc == nil {
 					return unit(), fmt.Errorf("Vec.len requires vec receiver")
 				}
-				return Value{K: VInt, I: uint64(len(recv.A))}, nil
+				return Value{K: VInt, I: uint64(len(recv.Vc.Elems))}, nil
 			case typecheck.VecCallGet:
 				if len(e.Args) != 1 {
 					return unit(), fmt.Errorf("Vec.get expects 1 arg")
@@ -506,13 +510,13 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 					}
 					recv = fr[vc.RecvName]
 				}
-				if recv.K != VVec {
+				if recv.K != VVec || recv.Vc == nil {
 					return unit(), fmt.Errorf("Vec.get requires vec receiver")
 				}
-				if idx < 0 || idx >= len(recv.A) {
+				if idx < 0 || idx >= len(recv.Vc.Elems) {
 					return unit(), fmt.Errorf("Vec.get index out of bounds")
 				}
-				return cloneValue(recv.A[idx]), nil
+				return cloneValue(recv.Vc.Elems[idx]), nil
 			case typecheck.VecCallJoin:
 				if len(e.Args) != 1 {
 					return unit(), fmt.Errorf("Vec.join expects 1 arg")
@@ -538,12 +542,12 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 					}
 					recv = fr[vc.RecvName]
 				}
-				if recv.K != VVec {
+				if recv.K != VVec || recv.Vc == nil {
 					return unit(), fmt.Errorf("Vec.join requires vec receiver")
 				}
 				// Stage0: Vec.join is only supported for Vec[String].
 				var b strings.Builder
-				for i, it := range recv.A {
+				for i, it := range recv.Vc.Elems {
 					if it.K != VString {
 						return unit(), fmt.Errorf("Vec.join expects Vec[String]")
 					}
@@ -756,10 +760,10 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		if err != nil {
 			return unit(), err
 		}
-		if recv.K != VStruct || recv.M == nil {
+		if recv.K != VStruct || recv.St == nil {
 			return unit(), fmt.Errorf("member access requires struct receiver")
 		}
-		v, ok := recv.M[e.Name]
+		v, ok := recv.St.Fields[e.Name]
 		if !ok {
 			return unit(), fmt.Errorf("unknown field: %s", e.Name)
 		}
@@ -779,7 +783,7 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			}
 			m[init.Name] = cloneValue(v)
 		}
-		return Value{K: VStruct, M: m}, nil
+		return newStructValue(m), nil
 	case *ast.MatchExpr:
 		sv, err := rt.evalExpr(e.Scrutinee)
 		if err != nil {

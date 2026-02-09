@@ -20,7 +20,7 @@ func (rt *Runtime) callToolIntrinsic(name string, args []Value) (Value, bool, er
 		for _, a := range rt.args {
 			out = append(out, Value{K: VString, S: a})
 		}
-		return Value{K: VVec, A: out}, true, nil
+		return newVecValue(out), true, nil
 	case "__exe_path":
 		if len(args) != 0 {
 			return unit(), true, fmt.Errorf("__exe_path expects ()")
@@ -104,7 +104,7 @@ func (rt *Runtime) callToolIntrinsic(name string, args []Value) (Value, bool, er
 		for _, p := range paths {
 			out = append(out, Value{K: VString, S: p})
 		}
-		return Value{K: VVec, A: out}, true, nil
+		return newVecValue(out), true, nil
 	default:
 		return unit(), false, nil
 	}

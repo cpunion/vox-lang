@@ -13,42 +13,74 @@ const (
 )
 
 type Value struct {
-	K ValueKind
-	I uint64 // integer raw bits (interpreted by static type at use site)
-	B bool
-	S string
-	M map[string]Value // VStruct fields
-	E string           // VEnum qualified enum name
-	T int              // VEnum tag
-	P []Value          // VEnum payload fields (nil/empty when no payload)
-	A []Value          // VVec elements
+	K  ValueKind
+	I  uint64 // integer raw bits (interpreted by static type at use site)
+	B  bool
+	S  string
+	St *StructData // VStruct fields (copy-on-write container)
+	E  string      // VEnum qualified enum name
+	T  int         // VEnum tag
+	P  []Value     // VEnum payload fields (nil/empty when no payload)
+	Vc *VecData    // VVec elements (copy-on-write container)
+}
+
+type StructData struct {
+	shared bool
+	Fields map[string]Value
+}
+
+type VecData struct {
+	shared bool
+	Elems  []Value
 }
 
 func unit() Value { return Value{K: VUnit} }
 
+func newStructValue(fields map[string]Value) Value {
+	return Value{K: VStruct, St: &StructData{shared: false, Fields: fields}}
+}
+
+func newVecValue(elems []Value) Value {
+	return Value{K: VVec, Vc: &VecData{shared: false, Elems: elems}}
+}
+
+func ensureStructUnique(v Value) Value {
+	if v.K != VStruct || v.St == nil || !v.St.shared {
+		return v
+	}
+	next := make(map[string]Value, len(v.St.Fields))
+	for k, fv := range v.St.Fields {
+		next[k] = cloneValue(fv)
+	}
+	return newStructValue(next)
+}
+
+func ensureVecUnique(v Value) Value {
+	if v.K != VVec || v.Vc == nil || !v.Vc.shared {
+		return v
+	}
+	next := make([]Value, 0, len(v.Vc.Elems))
+	for _, e := range v.Vc.Elems {
+		next = append(next, cloneValue(e))
+	}
+	return newVecValue(next)
+}
+
 func cloneValue(v Value) Value {
 	switch v.K {
 	case VStruct:
-		out := Value{K: VStruct, M: map[string]Value{}}
-		for k, fv := range v.M {
-			out.M[k] = cloneValue(fv)
+		if v.St != nil {
+			v.St.shared = true
 		}
-		return out
+		return v
 	case VEnum:
-		out := Value{K: VEnum, E: v.E, T: v.T}
-		if len(v.P) != 0 {
-			out.P = make([]Value, 0, len(v.P))
-			for _, pv := range v.P {
-				out.P = append(out.P, cloneValue(pv))
-			}
-		}
-		return out
+		// Enum payload is immutable in stage0; shallow copy is enough.
+		return v
 	case VVec:
-		out := Value{K: VVec, A: make([]Value, 0, len(v.A))}
-		for _, e := range v.A {
-			out.A = append(out.A, cloneValue(e))
+		if v.Vc != nil {
+			v.Vc.shared = true
 		}
-		return out
+		return v
 	default:
 		return v
 	}
