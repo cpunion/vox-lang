@@ -341,6 +341,28 @@ fn main() -> i32 {
 	}
 }
 
+func TestConstU64MaxAddWraps(t *testing.T) {
+	out := runMain(t, `const A: u64 = 18446744073709551615
+const B: u64 = A + 1
+fn main() -> i32 {
+  if B == 0 { return 1; } else { return 0; }
+}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
+func TestConstU64ComparisonUsesUnsignedOrder(t *testing.T) {
+	out := runMain(t, `const A: u64 = 18446744073709551615
+const B: bool = A > 1
+fn main() -> i32 {
+  if B { return 1; } else { return 0; }
+}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
 func TestShiftCountOutOfRangePanics(t *testing.T) {
 	_, err := runMainErr(t, `fn main() -> i32 {
   let x: i32 = 1 << 32;

@@ -732,6 +732,71 @@ fn main() -> i32 { return N as i32; }`)
 	}
 }
 
+func TestConstDeclU64MaxLiteralTypechecks(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const N: u64 = 18446744073709551615
+fn main() -> i32 { return if N == N { 1 } else { 0 }; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestConstDeclU64MaxAddWrapsTypechecks(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const A: u64 = 18446744073709551615
+const B: u64 = A + 1
+fn main() -> i32 { return if B == 0 { 1 } else { 0 }; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestConstDeclU64ComparisonUsesUnsignedOrder(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const A: u64 = 18446744073709551615
+const B: bool = A > 1
+fn main() -> i32 { return if B { 1 } else { 0 }; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestConstDeclU64ToI64CastOverflowRejected(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const A: u64 = 18446744073709551615
+const B: i64 = A as i64
+fn main() -> i32 { return B as i32; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "const expression: int cast overflow") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected const cast overflow error, got: %+v", tdiags.Items)
+	}
+}
+
 func TestConstImportAliasAccessRequiresPub(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "dep" as d

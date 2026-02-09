@@ -201,9 +201,6 @@ func constUintBitsForType(v int64, t Type) (uint64, bool) {
 	if !isUnsignedIntType(bt) {
 		return 0, false
 	}
-	if (bt.K == TyU64 || bt.K == TyUSize) && v < 0 {
-		return 0, false
-	}
 	return constTruncBits(uint64(v), constBitWidth(bt)), true
 }
 
@@ -216,12 +213,68 @@ func constIntValueFromBits(bits uint64, t Type) (int64, bool) {
 		return 0, false
 	}
 	u := constTruncBits(bits, constBitWidth(bt))
-	if bt.K == TyU64 || bt.K == TyUSize {
-		if u > uint64(^uint64(0)>>1) {
+	return int64(u), true
+}
+
+func constCastIntChecked(v int64, from, to Type) (int64, bool) {
+	from = stripRange(from)
+	to = stripRange(to)
+	if !isIntType(from) || !isIntType(to) {
+		return 0, false
+	}
+
+	fromBits := constTruncBits(uint64(v), constBitWidth(from))
+	toW := constBitWidth(to)
+	toMin, toMax, ok := intMinMax(to)
+	if !ok {
+		return 0, false
+	}
+
+	if from.K == TyUntypedInt || isSignedIntType(from) {
+		x := constIntSigned(fromBits, from)
+		if isSignedIntType(to) {
+			if x < toMin || x > int64(toMax) {
+				return 0, false
+			}
+			return int64(constTruncBits(uint64(x), toW)), true
+		}
+		if x < 0 || uint64(x) > toMax {
 			return 0, false
 		}
+		return int64(constTruncBits(uint64(x), toW)), true
 	}
-	return int64(u), true
+
+	u := fromBits
+	if isSignedIntType(to) {
+		if u > uint64(int64(toMax)) {
+			return 0, false
+		}
+		return int64(constTruncBits(u, toW)), true
+	}
+	if u > toMax {
+		return 0, false
+	}
+	return int64(constTruncBits(u, toW)), true
+}
+
+func constRangeContains(v int64, rng Type) bool {
+	if rng.K != TyRange || rng.Base == nil {
+		return false
+	}
+	base := stripRange(*rng.Base)
+	if !isIntType(base) {
+		return false
+	}
+	bits := constTruncBits(uint64(v), constBitWidth(base))
+	if isSignedIntType(base) {
+		x := constIntSigned(bits, base)
+		return x >= rng.Lo && x <= rng.Hi
+	}
+	if rng.Lo < 0 || rng.Hi < 0 {
+		return false
+	}
+	u := bits
+	return u >= uint64(rng.Lo) && u <= uint64(rng.Hi)
 }
 
 func constExpectedScalarInt(expected Type) (Type, bool) {
@@ -288,7 +341,7 @@ func (c *checker) evalConstExprWithExpected(ex ast.Expr, file *source.File, expe
 	switch e := ex.(type) {
 	case *ast.IntLit:
 		u, err := strconv.ParseUint(e.Text, 10, 64)
-		if err != nil || u > uint64(^uint64(0)>>1) {
+		if err != nil {
 			c.errorAt(e.S, "invalid integer literal")
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
@@ -305,11 +358,15 @@ func (c *checker) evalConstExprWithExpected(ex ast.Expr, file *source.File, expe
 				}
 				return ConstValue{K: ConstInt, I64: int64(u)}, want
 			}
-			if int64(u) < min || u > max {
+			if u > max || int64(u) < min {
 				c.errorAt(e.S, "const integer out of range for "+want.String())
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
 			}
 			return ConstValue{K: ConstInt, I64: int64(u)}, want
+		}
+		if u > uint64(^uint64(0)>>1) {
+			c.errorAt(e.S, "invalid integer literal")
+			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 		return ConstValue{K: ConstInt, I64: int64(u)}, Type{K: TyUntypedInt}
 	case *ast.BoolLit:
@@ -414,8 +471,7 @@ func (c *checker) evalConstExprWithExpected(ex ast.Expr, file *source.File, expe
 			fromBase = Type{K: TyI64}
 		}
 
-		min, max, ok := intMinMax(toBase)
-		if !ok {
+		if _, _, ok := intMinMax(toBase); !ok {
 			c.errorAt(e.S, "const expression: bad int type in cast")
 			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
@@ -424,46 +480,15 @@ func (c *checker) evalConstExprWithExpected(ex ast.Expr, file *source.File, expe
 			msg = "const expression: i64 to i32 overflow"
 		}
 
-		out := v.I64
-		if isUnsignedIntType(fromBase) {
-			if v.I64 < 0 {
-				c.errorAt(e.S, msg)
-				return ConstValue{K: ConstBad}, Type{K: TyBad}
-			}
-			u := uint64(v.I64)
-			if isUnsignedIntType(toBase) {
-				if u > max {
-					c.errorAt(e.S, msg)
-					return ConstValue{K: ConstBad}, Type{K: TyBad}
-				}
-				out = int64(u)
-			} else {
-				if u > max {
-					c.errorAt(e.S, msg)
-					return ConstValue{K: ConstBad}, Type{K: TyBad}
-				}
-				out = int64(u)
-			}
-		} else {
-			// from signed
-			if isUnsignedIntType(toBase) {
-				if v.I64 < 0 || uint64(v.I64) > max {
-					c.errorAt(e.S, msg)
-					return ConstValue{K: ConstBad}, Type{K: TyBad}
-				}
-				out = int64(uint64(v.I64))
-			} else {
-				if v.I64 < min || v.I64 > int64(max) {
-					c.errorAt(e.S, msg)
-					return ConstValue{K: ConstBad}, Type{K: TyBad}
-				}
-				out = v.I64
-			}
+		out, okCast := constCastIntChecked(v.I64, fromBase, toBase)
+		if !okCast {
+			c.errorAt(e.S, msg)
+			return ConstValue{K: ConstBad}, Type{K: TyBad}
 		}
 
 		// Range bounds check (if any).
 		if to.K == TyRange {
-			if out < to.Lo || out > to.Hi {
+			if !constRangeContains(out, to) {
 				c.errorAt(e.S, "const expression: range check failed")
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
 			}
