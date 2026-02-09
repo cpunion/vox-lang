@@ -453,10 +453,10 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseBlock()
 	case lexer.TokenIdent:
 		// assignment or expr stmt
-		if p.peekN(1).Kind == lexer.TokenDot && p.peekN(2).Kind == lexer.TokenIdent && p.peekN(3).Kind == lexer.TokenEq {
+		if p.peekN(1).Kind == lexer.TokenDot && p.peekN(2).Kind == lexer.TokenIdent && isAssignOpKind(p.peekN(3).Kind) {
 			return p.parseFieldAssign()
 		}
-		if p.peekN(1).Kind == lexer.TokenEq {
+		if isAssignOpKind(p.peekN(1).Kind) {
 			return p.parseAssign()
 		}
 	}
@@ -490,9 +490,28 @@ func (p *Parser) parseLet() ast.Stmt {
 
 func (p *Parser) parseAssign() ast.Stmt {
 	nameTok := p.expect(lexer.TokenIdent, "expected name")
-	eq := p.expect(lexer.TokenEq, "expected `=`")
-	_ = eq
-	ex := p.parseExpr(0)
+	opTok := p.peek()
+	if !isAssignOpKind(opTok.Kind) {
+		opTok = p.expect(lexer.TokenEq, "expected assignment operator")
+	} else {
+		p.advance()
+	}
+	rhs := p.parseExpr(0)
+	ex := rhs
+	if opTok.Kind != lexer.TokenEq {
+		op, ok := assignOpToBinary(opTok.Kind)
+		if !ok {
+			p.errorHere("unsupported compound assignment operator")
+		} else {
+			lhs := &ast.IdentExpr{Name: nameTok.Lexeme, S: nameTok.Span}
+			ex = &ast.BinaryExpr{
+				Op:    op,
+				Left:  lhs,
+				Right: rhs,
+				S:     joinSpan(nameTok.Span, rhs.Span()),
+			}
+		}
+	}
 	semi := p.expect(lexer.TokenSemicolon, "expected `;`")
 	return &ast.AssignStmt{Name: nameTok.Lexeme, Expr: ex, S: joinSpan(nameTok.Span, semi.Span)}
 }
@@ -501,8 +520,33 @@ func (p *Parser) parseFieldAssign() ast.Stmt {
 	recvTok := p.expect(lexer.TokenIdent, "expected name")
 	p.expect(lexer.TokenDot, "expected `.`")
 	fieldTok := p.expect(lexer.TokenIdent, "expected field name")
-	p.expect(lexer.TokenEq, "expected `=`")
-	ex := p.parseExpr(0)
+	opTok := p.peek()
+	if !isAssignOpKind(opTok.Kind) {
+		opTok = p.expect(lexer.TokenEq, "expected assignment operator")
+	} else {
+		p.advance()
+	}
+	rhs := p.parseExpr(0)
+	ex := rhs
+	if opTok.Kind != lexer.TokenEq {
+		op, ok := assignOpToBinary(opTok.Kind)
+		if !ok {
+			p.errorHere("unsupported compound assignment operator")
+		} else {
+			recv := &ast.IdentExpr{Name: recvTok.Lexeme, S: recvTok.Span}
+			lhs := &ast.MemberExpr{
+				Recv: recv,
+				Name: fieldTok.Lexeme,
+				S:    joinSpan(recvTok.Span, fieldTok.Span),
+			}
+			ex = &ast.BinaryExpr{
+				Op:    op,
+				Left:  lhs,
+				Right: rhs,
+				S:     joinSpan(recvTok.Span, rhs.Span()),
+			}
+		}
+	}
 	semi := p.expect(lexer.TokenSemicolon, "expected `;`")
 	return &ast.FieldAssignStmt{
 		Recv:  recvTok.Lexeme,
@@ -756,8 +800,8 @@ func (p *Parser) parseBlockExpr(lbrace lexer.Token) ast.Expr {
 				// Allow assignment statements inside expression blocks, but preserve the ability
 				// to use an identifier expression as the tail value (`{ x }`).
 				// Only route to parseStmt when the lookahead makes it unambiguously an assignment.
-				if p.peekN(1).Kind == lexer.TokenEq ||
-					(p.peekN(1).Kind == lexer.TokenDot && p.peekN(2).Kind == lexer.TokenIdent && p.peekN(3).Kind == lexer.TokenEq) {
+				if isAssignOpKind(p.peekN(1).Kind) ||
+					(p.peekN(1).Kind == lexer.TokenDot && p.peekN(2).Kind == lexer.TokenIdent && isAssignOpKind(p.peekN(3).Kind)) {
 					st := p.parseStmt()
 					if st != nil {
 						stmts = append(stmts, st)
@@ -1189,6 +1233,44 @@ func tokenOpString(k lexer.Kind) string {
 		return "!"
 	default:
 		return ""
+	}
+}
+
+func isAssignOpKind(k lexer.Kind) bool {
+	switch k {
+	case lexer.TokenEq,
+		lexer.TokenPlusEq, lexer.TokenMinusEq, lexer.TokenStarEq, lexer.TokenSlashEq, lexer.TokenPercentEq,
+		lexer.TokenAmpEq, lexer.TokenPipeEq, lexer.TokenCaretEq, lexer.TokenLtLtEq, lexer.TokenGtGtEq:
+		return true
+	default:
+		return false
+	}
+}
+
+func assignOpToBinary(k lexer.Kind) (string, bool) {
+	switch k {
+	case lexer.TokenPlusEq:
+		return "+", true
+	case lexer.TokenMinusEq:
+		return "-", true
+	case lexer.TokenStarEq:
+		return "*", true
+	case lexer.TokenSlashEq:
+		return "/", true
+	case lexer.TokenPercentEq:
+		return "%", true
+	case lexer.TokenAmpEq:
+		return "&", true
+	case lexer.TokenPipeEq:
+		return "|", true
+	case lexer.TokenCaretEq:
+		return "^", true
+	case lexer.TokenLtLtEq:
+		return "<<", true
+	case lexer.TokenGtGtEq:
+		return ">>", true
+	default:
+		return "", false
 	}
 }
 

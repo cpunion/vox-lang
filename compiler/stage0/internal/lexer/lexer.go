@@ -194,20 +194,43 @@ func (lx *lexer) lexPunct() {
 	case '@':
 		lx.emit(TokenAt, "@", start, lx.pos)
 	case '+':
-		lx.emit(TokenPlus, "+", start, lx.pos)
+		if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
+			lx.pos++
+			lx.emit(TokenPlusEq, "+=", start, lx.pos)
+		} else {
+			lx.emit(TokenPlus, "+", start, lx.pos)
+		}
 	case '-':
 		if lx.pos < len(lx.input) && lx.input[lx.pos] == '>' {
 			lx.pos++
 			lx.emit(TokenArrow, "->", start, lx.pos)
+		} else if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
+			lx.pos++
+			lx.emit(TokenMinusEq, "-=", start, lx.pos)
 		} else {
 			lx.emit(TokenMinus, "-", start, lx.pos)
 		}
 	case '*':
-		lx.emit(TokenStar, "*", start, lx.pos)
+		if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
+			lx.pos++
+			lx.emit(TokenStarEq, "*=", start, lx.pos)
+		} else {
+			lx.emit(TokenStar, "*", start, lx.pos)
+		}
 	case '/':
-		lx.emit(TokenSlash, "/", start, lx.pos)
+		if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
+			lx.pos++
+			lx.emit(TokenSlashEq, "/=", start, lx.pos)
+		} else {
+			lx.emit(TokenSlash, "/", start, lx.pos)
+		}
 	case '%':
-		lx.emit(TokenPercent, "%", start, lx.pos)
+		if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
+			lx.pos++
+			lx.emit(TokenPercentEq, "%=", start, lx.pos)
+		} else {
+			lx.emit(TokenPercent, "%", start, lx.pos)
+		}
 	case '!':
 		if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
 			lx.pos++
@@ -231,7 +254,12 @@ func (lx *lexer) lexPunct() {
 			lx.emit(TokenLtEq, "<=", start, lx.pos)
 		} else if lx.pos < len(lx.input) && lx.input[lx.pos] == '<' {
 			lx.pos++
-			lx.emit(TokenLtLt, "<<", start, lx.pos)
+			if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
+				lx.pos++
+				lx.emit(TokenLtLtEq, "<<=", start, lx.pos)
+			} else {
+				lx.emit(TokenLtLt, "<<", start, lx.pos)
+			}
 		} else {
 			lx.emit(TokenLt, "<", start, lx.pos)
 		}
@@ -241,7 +269,12 @@ func (lx *lexer) lexPunct() {
 			lx.emit(TokenGtEq, ">=", start, lx.pos)
 		} else if lx.pos < len(lx.input) && lx.input[lx.pos] == '>' {
 			lx.pos++
-			lx.emit(TokenGtGt, ">>", start, lx.pos)
+			if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
+				lx.pos++
+				lx.emit(TokenGtGtEq, ">>=", start, lx.pos)
+			} else {
+				lx.emit(TokenGtGt, ">>", start, lx.pos)
+			}
 		} else {
 			lx.emit(TokenGt, ">", start, lx.pos)
 		}
@@ -249,6 +282,9 @@ func (lx *lexer) lexPunct() {
 		if lx.pos < len(lx.input) && lx.input[lx.pos] == '&' {
 			lx.pos++
 			lx.emit(TokenAndAnd, "&&", start, lx.pos)
+		} else if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
+			lx.pos++
+			lx.emit(TokenAmpEq, "&=", start, lx.pos)
 		} else {
 			lx.emit(TokenAmp, "&", start, lx.pos)
 		}
@@ -256,11 +292,19 @@ func (lx *lexer) lexPunct() {
 		if lx.pos < len(lx.input) && lx.input[lx.pos] == '|' {
 			lx.pos++
 			lx.emit(TokenOrOr, "||", start, lx.pos)
+		} else if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
+			lx.pos++
+			lx.emit(TokenPipeEq, "|=", start, lx.pos)
 		} else {
 			lx.emit(TokenPipe, "|", start, lx.pos)
 		}
 	case '^':
-		lx.emit(TokenCaret, "^", start, lx.pos)
+		if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
+			lx.pos++
+			lx.emit(TokenCaretEq, "^=", start, lx.pos)
+		} else {
+			lx.emit(TokenCaret, "^", start, lx.pos)
+		}
 	case '"':
 		lx.pos-- // back to opening
 		lx.lexString()

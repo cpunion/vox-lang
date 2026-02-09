@@ -305,6 +305,22 @@ func TestBitwiseAndShiftOps(t *testing.T) {
 	}
 }
 
+func TestCompoundAssignOps(t *testing.T) {
+	out := runMain(t, `struct S { x: i32 }
+fn main() -> i32 {
+  let mut x: i32 = 1;
+  x += 2;     // 3
+  x *= 3;     // 9
+  x >>= 1;    // 4
+  let mut s: S = S { x: 6 };
+  s.x &= 3;   // 2
+  return x + s.x;
+}`)
+	if out != "6" {
+		t.Fatalf("expected 6, got %q", out)
+	}
+}
+
 func TestShiftCountOutOfRangePanics(t *testing.T) {
 	_, err := runMainErr(t, `fn main() -> i32 {
   let x: i32 = 1 << 32;

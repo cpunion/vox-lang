@@ -328,6 +328,62 @@ func TestParseIfExprWithBlockBranches(t *testing.T) {
 	}
 }
 
+func TestParseCompoundAssignStmt(t *testing.T) {
+	f := source.NewFile("test.vox", `fn main() -> i32 {
+  let mut x: i32 = 1;
+  x += 2;
+  return x;
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	body := prog.Funcs[0].Body
+	if len(body.Stmts) < 2 {
+		t.Fatalf("expected at least 2 stmts")
+	}
+	as, ok := body.Stmts[1].(*ast.AssignStmt)
+	if !ok {
+		t.Fatalf("expected assign stmt, got %T", body.Stmts[1])
+	}
+	be, ok := as.Expr.(*ast.BinaryExpr)
+	if !ok || be.Op != "+" {
+		t.Fatalf("expected desugared binary +, got %T", as.Expr)
+	}
+	lhs, ok := be.Left.(*ast.IdentExpr)
+	if !ok || lhs.Name != "x" {
+		t.Fatalf("expected lhs ident x, got %T", be.Left)
+	}
+}
+
+func TestParseCompoundFieldAssignStmt(t *testing.T) {
+	f := source.NewFile("test.vox", `struct S { x: i32 }
+fn main() -> i32 {
+  let mut s: S = S { x: 1 };
+  s.x <<= 1;
+  return s.x;
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	body := prog.Funcs[0].Body
+	if len(body.Stmts) < 2 {
+		t.Fatalf("expected at least 2 stmts")
+	}
+	as, ok := body.Stmts[1].(*ast.FieldAssignStmt)
+	if !ok {
+		t.Fatalf("expected field assign stmt, got %T", body.Stmts[1])
+	}
+	be, ok := as.Expr.(*ast.BinaryExpr)
+	if !ok || be.Op != "<<" {
+		t.Fatalf("expected desugared binary <<, got %T", as.Expr)
+	}
+	if _, ok := be.Left.(*ast.MemberExpr); !ok {
+		t.Fatalf("expected lhs member expr, got %T", be.Left)
+	}
+}
+
 func TestParseMatchArmWithBlockExpr(t *testing.T) {
 	f := source.NewFile("test.vox", `enum E { A(i32), None }
 fn main() -> i32 {

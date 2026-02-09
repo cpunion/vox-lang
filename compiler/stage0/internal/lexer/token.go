@@ -54,10 +54,15 @@ const (
 
 	// Operators
 	TokenPlus
+	TokenPlusEq
 	TokenMinus
+	TokenMinusEq
 	TokenStar
+	TokenStarEq
 	TokenSlash
+	TokenSlashEq
 	TokenPercent
+	TokenPercentEq
 	TokenBang
 	TokenEq
 	TokenEqEq
@@ -65,13 +70,18 @@ const (
 	TokenLt
 	TokenLtEq
 	TokenLtLt
+	TokenLtLtEq
 	TokenGt
 	TokenGtEq
 	TokenGtGt
+	TokenGtGtEq
 	TokenAmp
+	TokenAmpEq
 	TokenCaret
+	TokenCaretEq
 	TokenAndAnd
 	TokenPipe
+	TokenPipeEq
 	TokenOrOr
 	TokenArrow
 	TokenFatArrow

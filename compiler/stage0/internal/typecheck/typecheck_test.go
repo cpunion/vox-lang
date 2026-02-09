@@ -98,6 +98,26 @@ func TestTypecheckBitwiseAndShiftSmoke(t *testing.T) {
 	}
 }
 
+func TestTypecheckCompoundAssignSmoke(t *testing.T) {
+	f := source.NewFile("src/main.vox", `struct S { x: i32 }
+fn main() -> i32 {
+  let mut x: i32 = 1;
+  x += 2;
+  x <<= 1;
+  let mut s: S = S { x: 3 };
+  s.x |= 1;
+  return x + s.x;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestTypecheckBitwiseRejectsBool(t *testing.T) {
 	f := source.NewFile("src/main.vox", `fn main() -> i32 {
   let a: bool = true;

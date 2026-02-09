@@ -23,7 +23,7 @@ func TestLexKeywordsAndPunct(t *testing.T) {
 // keywords
 fn let mut return if else true false type const static import pub match as from while break continue
 // punct/op
-(){}[] , ; : :: . .. ..= @ + - * / % ! = == != < <= << > >= >> & && | || ^ ->
+(){}[] , ; : :: . .. ..= @ + += - -= * *= / /= % %= ! = == != < <= << <<= > >= >> >>= & &= && | |= || ^ ^= ->
 // string
 "a\nb\t\"c\"\\"
 `)
@@ -99,6 +99,23 @@ func TestLexShiftAndCaretTokens(t *testing.T) {
 	}
 	if toks[2].Kind != TokenCaret {
 		t.Fatalf("expected TokenCaret, got %v", toks[2].Kind)
+	}
+}
+
+func TestLexCompoundAssignTokens(t *testing.T) {
+	f := source.NewFile("test.vox", `+= -= *= /= %= &= |= ^= <<= >>=`)
+	toks := Lex(f)
+	if len(toks) < 11 {
+		t.Fatalf("expected at least 11 tokens, got %d", len(toks))
+	}
+	want := []Kind{
+		TokenPlusEq, TokenMinusEq, TokenStarEq, TokenSlashEq, TokenPercentEq,
+		TokenAmpEq, TokenPipeEq, TokenCaretEq, TokenLtLtEq, TokenGtGtEq,
+	}
+	for i := 0; i < len(want); i++ {
+		if toks[i].Kind != want[i] {
+			t.Fatalf("token %d: expected %v, got %v", i, want[i], toks[i].Kind)
+		}
 	}
 }
 
