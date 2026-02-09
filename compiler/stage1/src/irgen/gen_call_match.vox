@@ -62,7 +62,12 @@ fn gen_call_trait_static(g0: Gen, trait_mod: String, trait_name: String, method:
   if !ar0.ok { return GenExprResult { ok: false, err: tc.tc_error_to_string(ar0.err), g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
   let recv_ty: i32 = tc.strip_range(g0.ctx, ar0.ty);
 
-  let fi: tc.FindImplResult = tc.find_impl(g0.ctx, trait_mod, trait_name, recv_ty);
+  let fi: tc.FindImplForTyResult = tc.find_impl_for_ty(g0.ctx, trait_mod, trait_name, recv_ty);
+  if fi.ambiguous {
+    let recv0: String = tc.ty_inst_str(g0.ctx, recv_ty);
+    let msg0: String = "ambiguous impl for trait call: ".concat(trait_name).concat(" for ").concat(recv0).concat(" (candidates: ").concat(fi.candidates).concat(")");
+    return GenExprResult { ok: false, err: msg0, g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+  }
   if !fi.found {
     let recv: String = tc.ty_inst_str(g0.ctx, recv_ty);
     let cands: String = tc.trait_impl_candidates_text(g0.ctx, trait_mod, trait_name);
@@ -316,7 +321,7 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
     let want0: i32 = tc.subst_ty(g.ctx, sig.params.get(i2), subs);
     if want0 == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad generic arg type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
     let want_t: ir.Ty = ir.ty_pool_get(g.ctx.pool, want0);
-    let want: i32 = if want_t.kind == ir.TyKind.Param { -1 } else { want0 };
+    let want: i32 = if want_t.kind == ir.TyKind.Param || tc.ty_has_param(g.ctx, want0) { -1 } else { want0 };
     let er2: GenExprResult = gen_expr(g, args.get(i2), want);
     if !er2.ok { return er2; }
     g = er2.g;
@@ -342,7 +347,11 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
     let ty0: i32 = subs_lookup(subs, b.type_param);
     if ty0 == -1 { return GenExprResult { ok: false, err: "unbound type param in trait bound", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
     let ty1: i32 = tc.strip_range(g.ctx, ty0);
-    let fi: tc.FindImplResult = tc.find_impl(g.ctx, b.trait_mod_path, b.trait_name, ty1);
+    let fi: tc.FindImplForTyResult = tc.find_impl_for_ty(g.ctx, b.trait_mod_path, b.trait_name, ty1);
+    if fi.ambiguous {
+      let msg0: String = "type argument ".concat(tc.ty_inst_str(g.ctx, ty1)).concat(" has ambiguous impls for trait ").concat(b.trait_name).concat(" (candidates: ").concat(fi.candidates).concat(")");
+      return GenExprResult { ok: false, err: msg0, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
     if !fi.found {
       let cands2: String = tc.trait_impl_candidates_text(g.ctx, b.trait_mod_path, b.trait_name);
       let msg: String = "type argument ".concat(tc.ty_inst_str(g.ctx, ty1)).concat(" does not satisfy trait bound ").concat(b.type_param).concat(": ").concat(b.trait_name).concat(" (available impls: ").concat(cands2).concat(")");

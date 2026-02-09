@@ -82,6 +82,56 @@ pub fn find_impl(ctx: Ctx, trait_mod: String, trait_name: String, for_ty: i32) -
   return FindImplResult { found: false, sig: ImplSig { mod_path: "", decl_idx: -1, trait_mod_path: "", trait_name: "", for_ty: -1, methods: Vec() } };
 }
 
+pub struct FindImplForTyResult {
+  pub found: bool,
+  pub ambiguous: bool,
+  pub candidates: String,
+  pub sig: ImplSig,
+}
+
+fn impl_match_candidates_text(ctx: Ctx, trait_mod: String, trait_name: String, recv_ty: i32) -> String {
+  let mut out: String = "";
+  let mut n: i32 = 0;
+  let mut i: i32 = 0;
+  while i < ctx.impls.len() {
+    let isg: ImplSig = ctx.impls.get(i);
+    if isg.trait_mod_path == trait_mod && isg.trait_name == trait_name {
+      let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
+      if ur.ok {
+        if n > 0 { out = out.concat(", "); }
+        out = out.concat(ty_inst_str(ctx, isg.for_ty));
+        n = n + 1;
+        if n >= 8 { return out.concat(", ..."); }
+      }
+    }
+    i = i + 1;
+  }
+  if n == 0 { return "<none>"; }
+  return out;
+}
+
+pub fn find_impl_for_ty(ctx: Ctx, trait_mod: String, trait_name: String, recv_ty: i32) -> FindImplForTyResult {
+  let mut found: bool = false;
+  let mut out: ImplSig = ImplSig { mod_path: "", decl_idx: -1, trait_mod_path: "", trait_name: "", for_ty: -1, methods: Vec() };
+  let mut i: i32 = 0;
+  while i < ctx.impls.len() {
+    let isg: ImplSig = ctx.impls.get(i);
+    if isg.trait_mod_path == trait_mod && isg.trait_name == trait_name {
+      let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
+      if ur.ok {
+        if found {
+          let cands: String = impl_match_candidates_text(ctx, trait_mod, trait_name, recv_ty);
+          return FindImplForTyResult { found: false, ambiguous: true, candidates: cands, sig: out };
+        }
+        found = true;
+        out = isg;
+      }
+    }
+    i = i + 1;
+  }
+  return FindImplForTyResult { found: found, ambiguous: false, candidates: "", sig: out };
+}
+
 pub struct FindImplMethodResult { pub found: bool, pub m: ImplMethodSig }
 pub fn find_impl_method(isg: ImplSig, name: String) -> FindImplMethodResult {
   let mut i: i32 = 0;
@@ -141,7 +191,8 @@ pub fn find_trait_dispatch_method(ctx: Ctx, cur_mod: String, recv_ty: i32, name:
   let mut i: i32 = 0;
   while i < ctx.impls.len() {
     let isg: ImplSig = ctx.impls.get(i);
-    if isg.for_ty != recv_ty { i = i + 1; continue; }
+    let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
+    if !ur.ok { i = i + 1; continue; }
     let mf: FindImplMethodResult = find_impl_method(isg, name);
     if !mf.found { i = i + 1; continue; }
     let tf: FindTraitResult = find_trait(ctx, isg.trait_mod_path, isg.trait_name);

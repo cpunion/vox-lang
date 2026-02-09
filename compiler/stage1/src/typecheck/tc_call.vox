@@ -474,7 +474,7 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: a
   while i < args.len() {
     let want0: i32 = subst_ty(ctx, sig.params.get(i), subs);
     let want_t: ir.Ty = ir.ty_pool_get(ctx.pool, want0);
-    let want: i32 = if want_t.kind == ir.TyKind.Param { -1 } else { want0 };
+    let want: i32 = if want_t.kind == ir.TyKind.Param || ty_has_param(ctx, want0) { -1 } else { want0 };
     let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want);
     if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     let ur2: UnifyResult = unify_ty(ctx, sig.params.get(i), ar.ty, subs);
@@ -498,7 +498,12 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: a
     let ty0: i32 = subs_lookup(subs, b.type_param);
     if ty0 == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     let ty1: i32 = strip_range(ctx, ty0);
-    let fi: FindImplResult = find_impl(ctx, b.trait_mod_path, b.trait_name, ty1);
+    let fi: FindImplForTyResult = find_impl_for_ty(ctx, b.trait_mod_path, b.trait_name, ty1);
+    if fi.ambiguous {
+      let tname0: String = ty_inst_str(ctx, ty1);
+      let msg0: String = "type argument ".concat(tname0).concat(" has ambiguous impls for trait ").concat(b.trait_name).concat(" (candidates: ").concat(fi.candidates).concat(")");
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg0) };
+    }
     if !fi.found {
       let tt: ir.Ty = ir.ty_pool_get(ctx.pool, ty1);
       if tt.kind == ir.TyKind.Param {
@@ -551,7 +556,12 @@ fn tc_call_trait_static(ctx: Ctx, w: World, cur_mod: String, imps: Imports, expr
     return tc_call_func_sig(ctx, w, cur_mod, imps, exprs, l0, call_sp, trait_mod, msig, type_args, args, expected);
   }
 
-  let fi: FindImplResult = find_impl(ctx, trait_mod, trait_name, recv_ty);
+  let fi: FindImplForTyResult = find_impl_for_ty(ctx, trait_mod, trait_name, recv_ty);
+  if fi.ambiguous {
+    let recv0: String = ty_inst_str(ctx, recv_ty);
+    let msg0: String = "ambiguous impl for trait call: ".concat(trait_name).concat(" for ").concat(recv0).concat(" (candidates: ").concat(fi.candidates).concat(")");
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg0) };
+  }
   if !fi.found {
     let recv: String = ty_inst_str(ctx, recv_ty);
     let cands2: String = trait_impl_candidates_text(ctx, trait_mod, trait_name);
