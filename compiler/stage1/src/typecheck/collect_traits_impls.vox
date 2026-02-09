@@ -89,6 +89,24 @@ fn trait_method_exists(ms: Vec[TraitMethodSig], name: String) -> bool {
   return false;
 }
 
+fn trait_assoc_type_exists(as0: Vec[TraitAssocTypeSig], name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < as0.len() {
+    if as0.get(i).name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn impl_assoc_type_exists(as0: Vec[ImplAssocTypeSig], name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < as0.len() {
+    if as0.get(i).name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn trait_method_param_names(ps: Vec[ast.Param]) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   let mut i: i32 = 0;
@@ -301,7 +319,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
       if has_trait_name(c, m.path, td.name) {
         return TcCtxResult { ok: false, err: type_error(td.file, "duplicate trait: ".concat(td.name)), ctx: c };
       }
-      c.traits.push(TraitSig { mod_path: m.path, name: td.name, is_pub: td.is_pub, supers: Vec(), methods: Vec() });
+      c.traits.push(TraitSig { mod_path: m.path, name: td.name, is_pub: td.is_pub, supers: Vec(), assoc_types: Vec(), methods: Vec() });
       ti = ti + 1;
     }
     mi = mi + 1;
@@ -340,12 +358,26 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         si = si + 1;
       }
 
+      let mut assocs: Vec[TraitAssocTypeSig] = Vec();
+      let mut ai: i32 = 0;
+      while ai < td.assoc_types.len() {
+        let ad: ast.TraitAssocTypeDecl = td.assoc_types.get(ai);
+        if trait_assoc_type_exists(assocs, ad.name) {
+          return TcCtxResult { ok: false, err: type_error(td.file, "duplicate trait associated type: ".concat(ad.name)), ctx: c };
+        }
+        assocs.push(TraitAssocTypeSig { name: ad.name });
+        ai = ai + 1;
+      }
+
       let mut ms: Vec[TraitMethodSig] = Vec();
       let mut fi: i32 = 0;
       while fi < td.methods.len() {
         let md: ast.TraitMethodDecl = td.methods.get(fi);
         if trait_method_exists(ms, md.name) {
           return TcCtxResult { ok: false, err: type_error(td.file, "duplicate trait method: ".concat(md.name)), ctx: c };
+        }
+        if trait_assoc_type_exists(assocs, md.name) {
+          return TcCtxResult { ok: false, err: type_error(td.file, "trait method conflicts with associated type: ".concat(md.name)), ctx: c };
         }
 
         let tps_self: Vec[String] = vec_self_tps(md.type_params);
@@ -406,7 +438,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         fi = fi + 1;
       }
 
-      c = set_trait_sig(c, idx, TraitSig { mod_path: m.path, name: td.name, is_pub: td.is_pub, supers: supers, methods: ms });
+      c = set_trait_sig(c, idx, TraitSig { mod_path: m.path, name: td.name, is_pub: td.is_pub, supers: supers, assoc_types: assocs, methods: ms });
       ti = ti + 1;
     }
     mi = mi + 1;
@@ -496,6 +528,33 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           }
         }
         di = di + 1;
+      }
+
+      let mut impl_assocs: Vec[ImplAssocTypeSig] = Vec();
+      let mut ai2: i32 = 0;
+      while ai2 < id.assoc_types.len() {
+        let ad2: ast.ImplAssocTypeBinding = id.assoc_types.get(ai2);
+        if impl_assoc_type_exists(impl_assocs, ad2.name) {
+          return TcCtxResult { ok: false, err: type_error(id.file, "duplicate impl associated type: ".concat(ad2.name)), ctx: c };
+        }
+        if !trait_assoc_type_exists(tf.sig.assoc_types, ad2.name) {
+          return TcCtxResult { ok: false, err: type_error(id.file, "impl associated type not in trait: ".concat(ad2.name)), ctx: c };
+        }
+        let ar2: ResolveTyResult = resolve_type(c, w, m.path, imps, id.type_params, ad2.ty);
+        c = ar2.ctx;
+        if !ar2.ok {
+          return TcCtxResult { ok: false, err: type_error(id.file, "impl associated type resolve failed: ".concat(ad2.name)), ctx: c };
+        }
+        impl_assocs.push(ImplAssocTypeSig { name: ad2.name, ty: ar2.idx });
+        ai2 = ai2 + 1;
+      }
+      let mut ai3: i32 = 0;
+      while ai3 < tf.sig.assoc_types.len() {
+        let ta: TraitAssocTypeSig = tf.sig.assoc_types.get(ai3);
+        if !impl_assoc_type_exists(impl_assocs, ta.name) {
+          return TcCtxResult { ok: false, err: type_error(id.file, "impl missing associated type: ".concat(ta.name)), ctx: c };
+        }
+        ai3 = ai3 + 1;
       }
 
       let mut ims: Vec[ImplMethodSig] = Vec();
@@ -655,6 +714,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         trait_mod_path: trr.mod_path,
         trait_name: trr.name,
         for_ty: for_ty,
+        assoc_types: impl_assocs,
         methods: ims,
       });
       ii = ii + 1;

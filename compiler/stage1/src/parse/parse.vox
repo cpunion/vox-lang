@@ -122,6 +122,8 @@ struct ParseTypeResult { p: Parser, ty: ast.TypeName }
 		struct ParseTraitResult { p: Parser, t: ast.TraitDecl }
 		struct ParseImplResult { p: Parser, i: ast.ImplDecl }
 		struct ParseTraitMethodResult { p: Parser, m: ast.TraitMethodDecl }
+		struct ParseTraitAssocTypeResult { p: Parser, a: ast.TraitAssocTypeDecl }
+		struct ParseImplAssocTypeResult { p: Parser, a: ast.ImplAssocTypeBinding }
 		struct ParseTypeAliasResult { p: Parser, t: ast.TypeAliasDecl }
 		struct ParseConstResult { p: Parser, c: ast.ConstDecl }
 		struct ParseProgramResult { p: Parser, prog: ast.Program }
@@ -1475,6 +1477,42 @@ fn parse_trait_method_decl(p: Parser) -> ParseTraitMethodResult {
   };
 }
 
+fn parse_trait_assoc_type_decl(p: Parser) -> ParseTraitAssocTypeResult {
+  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwType);
+  let r2: ParseIdentResult = parse_ident(ar1.p);
+  let mut q: Parser = r2.p;
+  if kind_is(peek_kind(q), lex.TokenKind.Semicolon) {
+    let ar3: AdvanceResult = advance(q);
+    q = ar3.p;
+  } else {
+    let mut qq: Parser = q;
+    let at: i32 = peek(q).start;
+    qq.has_err = true;
+    qq.err = ParseError.UnexpectedToken(lex.TokenKind.Semicolon, peek_kind(q), at);
+    q = qq;
+  }
+  return ParseTraitAssocTypeResult { p: q, a: ast.TraitAssocTypeDecl { name: r2.name } };
+}
+
+fn parse_impl_assoc_type_binding(p: Parser) -> ParseImplAssocTypeResult {
+  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwType);
+  let r2: ParseIdentResult = parse_ident(ar1.p);
+  let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.Eq);
+  let r4: ParseTypeResult = parse_type_name(ar3.p);
+  let mut q: Parser = r4.p;
+  if kind_is(peek_kind(q), lex.TokenKind.Semicolon) {
+    let ar5: AdvanceResult = advance(q);
+    q = ar5.p;
+  } else {
+    let mut qq: Parser = q;
+    let at: i32 = peek(q).start;
+    qq.has_err = true;
+    qq.err = ParseError.UnexpectedToken(lex.TokenKind.Semicolon, peek_kind(q), at);
+    q = qq;
+  }
+  return ParseImplAssocTypeResult { p: q, a: ast.ImplAssocTypeBinding { name: r2.name, ty: r4.ty } };
+}
+
 fn parse_trait_decl(p: Parser, is_pub: bool) -> ParseTraitResult {
   let ar1: AdvanceResult = expect(p, lex.TokenKind.KwTrait);
   let r2: ParseIdentResult = parse_ident(ar1.p);
@@ -1497,12 +1535,19 @@ fn parse_trait_decl(p: Parser, is_pub: bool) -> ParseTraitResult {
   }
   let ar3: AdvanceResult = expect(q0, lex.TokenKind.LBrace);
   let mut q: Parser = ar3.p;
+  let mut assocs: Vec[ast.TraitAssocTypeDecl] = Vec();
   let mut ms: Vec[ast.TraitMethodDecl] = Vec();
   if !kind_is(peek_kind(q), lex.TokenKind.RBrace) {
     while !q.has_err {
-      let mr: ParseTraitMethodResult = parse_trait_method_decl(q);
-      q = mr.p;
-      ms.push(mr.m);
+      if kind_is(peek_kind(q), lex.TokenKind.KwType) {
+        let ar: ParseTraitAssocTypeResult = parse_trait_assoc_type_decl(q);
+        q = ar.p;
+        assocs.push(ar.a);
+      } else {
+        let mr: ParseTraitMethodResult = parse_trait_method_decl(q);
+        q = mr.p;
+        ms.push(mr.m);
+      }
       if kind_is(peek_kind(q), lex.TokenKind.Comma) {
         let ar4: AdvanceResult = advance(q);
         q = ar4.p;
@@ -1514,7 +1559,10 @@ fn parse_trait_decl(p: Parser, is_pub: bool) -> ParseTraitResult {
     }
   }
   let ar5: AdvanceResult = expect(q, lex.TokenKind.RBrace);
-  return ParseTraitResult { p: ar5.p, t: ast.TraitDecl { file: p.file, is_pub: is_pub, name: r2.name, supers: supers, methods: ms } };
+  return ParseTraitResult {
+    p: ar5.p,
+    t: ast.TraitDecl { file: p.file, is_pub: is_pub, name: r2.name, supers: supers, assoc_types: assocs, methods: ms },
+  };
 }
 
 fn parse_impl_decl(p: Parser) -> ParseImplResult {
@@ -1533,14 +1581,32 @@ fn parse_impl_decl(p: Parser) -> ParseImplResult {
   let fr: ParseTypeResult = parse_type_name(ar2.p);
   let ar3: AdvanceResult = expect(fr.p, lex.TokenKind.LBrace);
   let mut q: Parser = ar3.p;
+  let mut assoc_types: Vec[ast.ImplAssocTypeBinding] = Vec();
   let mut methods: Vec[ast.FuncDecl] = Vec();
   while !q.has_err && !kind_is(peek_kind(q), lex.TokenKind.RBrace) && !kind_is(peek_kind(q), lex.TokenKind.Eof) {
-    let r: ParseFnResult = parse_fn_decl(q, false);
-    q = r.p;
-    methods.push(r.f);
+    if kind_is(peek_kind(q), lex.TokenKind.KwType) {
+      let ar: ParseImplAssocTypeResult = parse_impl_assoc_type_binding(q);
+      q = ar.p;
+      assoc_types.push(ar.a);
+    } else {
+      let r: ParseFnResult = parse_fn_decl(q, false);
+      q = r.p;
+      methods.push(r.f);
+    }
   }
   let ar4: AdvanceResult = expect(q, lex.TokenKind.RBrace);
-  return ParseImplResult { p: ar4.p, i: ast.ImplDecl { file: p.file, type_params: tps, type_param_bounds: tpbs, trait_name: tr.ty, for_ty: fr.ty, methods: methods } };
+  return ParseImplResult {
+    p: ar4.p,
+    i: ast.ImplDecl {
+      file: p.file,
+      type_params: tps,
+      type_param_bounds: tpbs,
+      trait_name: tr.ty,
+      for_ty: fr.ty,
+      assoc_types: assoc_types,
+      methods: methods,
+    },
+  };
 }
 
 fn parse_type_alias_decl(p: Parser, is_pub: bool) -> ParseTypeAliasResult {

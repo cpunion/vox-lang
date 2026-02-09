@@ -43,9 +43,12 @@
 - trait 方法声明（无默认实现）：`trait Eq { fn eq(a: Self, b: Self) -> bool; }`
 - trait 方法可带泛型参数与约束：`trait Wrap { fn wrap[T: Eq](x: Self, v: T) -> T where T: Show; }`
 - trait 方法默认实现：`trait Show { fn show(x: Self) -> String { return "x"; } }`
+- 关联类型声明（v0 最小支持）：`trait Iter { type Item; fn next(x: Self) -> i32; }`
 - supertrait：`trait Child: Parent + Other { ... }`
 - `impl` 可省略带默认实现的方法（同模块/跨模块 trait 均可继承默认实现）
 - `impl` 方法的泛型参数名按位置匹配 trait 方法（名称可不同）
+- `impl` 需为 trait 中每个关联类型给出绑定：`impl Iter for I { type Item = i32; ... }`
+- v0 限制：暂不支持在类型位置引用 `Self.Assoc`（当前先做声明与绑定校验，后续再接入类型解析）。
 
 ## 运算符优先级
 
