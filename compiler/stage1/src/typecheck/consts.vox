@@ -93,6 +93,64 @@ fn int_kind(ctx: Ctx, ty: i32) -> ir.TyKind {
   return t.kind;
 }
 
+fn is_float_scalar_ty(ctx: Ctx, ty: i32) -> bool {
+  let b: i32 = strip_range(ctx, ty);
+  return b == ctx.ty_f32 || b == ctx.ty_f64;
+}
+
+fn is_digit_byte(b: i32) -> bool { return b >= 48 && b <= 57; }
+
+fn float_norm_text(s0: String) -> String {
+  // Canonical form used for const float equality:
+  // - optional leading '-'
+  // - at least one digit before dot
+  // - at least one digit after dot
+  // - trim leading zeros in integer part and trailing zeros in fraction
+  let mut s: String = s0;
+  let mut neg: bool = false;
+  if s.len() > 0 && s.byte_at(0) == 45 { // '-'
+    neg = true;
+    s = s.slice(1, s.len());
+  }
+
+  let mut dot: i32 = -1;
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == 46 { dot = i; }
+    i = i + 1;
+  }
+  if dot == -1 {
+    // Best-effort fallback for non-literal forms.
+    if neg { return "-".concat(s).concat(".0"); }
+    return s.concat(".0");
+  }
+
+  let mut intp: String = s.slice(0, dot);
+  let mut frac: String = s.slice(dot + 1, s.len());
+
+  // trim int leading zeros
+  let mut ii: i32 = 0;
+  while ii < intp.len() && intp.byte_at(ii) == 48 { ii = ii + 1; }
+  if ii >= intp.len() { intp = "0"; } else { intp = intp.slice(ii, intp.len()); }
+
+  // trim frac trailing zeros
+  let mut fj: i32 = frac.len() - 1;
+  while fj >= 0 && frac.byte_at(fj) == 48 { fj = fj - 1; }
+  if fj < 0 { frac = "0"; } else { frac = frac.slice(0, fj + 1); }
+
+  let mut out: String = intp.concat(".").concat(frac);
+  if out == "0.0" { return "0.0"; }
+  if neg { out = "-".concat(out); }
+  return out;
+}
+
+fn float_neg_text(s: String) -> String {
+  let n: String = float_norm_text(s);
+  if n == "0.0" { return n; }
+  if n.len() > 0 && n.byte_at(0) == 45 { return n.slice(1, n.len()); }
+  return "-".concat(n);
+}
+
 fn signed_min_of_kind(k: ir.TyKind) -> i64 {
   if k == ir.TyKind.I8 { return -128; }
   if k == ir.TyKind.I16 { return -32768; }
@@ -319,6 +377,17 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: ctx.ty_i64, iv: v2, bv: false, sv: "", sigs: sigs0, states: states0 };
   }
+  if match n { ast.ExprNode.Float(_v) => true, _ => false } {
+    let s: String = match n { ast.ExprNode.Float(x) => x, _ => "" };
+    let mut out_ty: i32 = ctx.ty_f64;
+    if expected != -1 {
+      let eb: i32 = strip_range(ctx, expected);
+      if eb != expected { return EvalConstExprResult { ok: false, err: type_error(file, "const float requires expected scalar f32/f64"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+      if !is_float_scalar_ty(ctx, eb) { return EvalConstExprResult { ok: false, err: type_error(file, "const float requires expected f32/f64"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+      out_ty = eb;
+    }
+    return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_float(), ty: out_ty, iv: 0, bv: false, sv: float_norm_text(s), sigs: sigs0, states: states0 };
+  }
   if match n { ast.ExprNode.Bool(_v) => true, _ => false } {
     if expected != ctx.ty_bool { return EvalConstExprResult { ok: false, err: type_error(file, "const bool requires expected bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let b: bool = match n { ast.ExprNode.Bool(x) => x, _ => false };
@@ -387,7 +456,13 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     // neg
     let ar2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, -1);
     if !ar2.ok { return ar2; }
-    if ar2.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const - expects int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: ar2.sigs, states: ar2.states }; }
+    if ar2.kind == const_kind_float() {
+      let out_tyf: i32 = if expected != -1 { strip_range(ctx, expected) } else { strip_range(ctx, ar2.ty) };
+      if !is_float_scalar_ty(ctx, out_tyf) { return EvalConstExprResult { ok: false, err: type_error(file, "const - expects float or signed int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: ar2.sigs, states: ar2.states }; }
+      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_float(), ty: out_tyf, iv: 0, bv: false, sv: float_neg_text(ar2.sv), sigs: ar2.sigs, states: ar2.states };
+    }
+
+    if ar2.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const - expects float or signed int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: ar2.sigs, states: ar2.states }; }
     let out_ty: i32 = if expected != -1 { strip_range(ctx, expected) } else { strip_range(ctx, ar2.ty) };
     let k: ir.TyKind = int_kind(ctx, out_ty);
     if !is_signed_int_kind(k) { return EvalConstExprResult { ok: false, err: type_error(file, "const - expects signed int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: ar2.sigs, states: ar2.states }; }
@@ -405,8 +480,19 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     if !tr.ok { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: unknown cast type"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let to: i32 = tr.idx;
     let to_base: i32 = strip_range(c2, to);
+    if is_float_scalar_ty(c2, to_base) {
+      let an_f: ast.ExprNode = ast.expr_pool_get(exprs, a);
+      let eval_expected_f: i32 = if match an_f { ast.ExprNode.Float(_s) => true, _ => false } { to_base } else { -1 };
+      let ar_f: EvalConstExprResult = eval_const_expr_in_mod(c2, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, eval_expected_f);
+      if !ar_f.ok { return ar_f; }
+      if ar_f.kind != const_kind_float() || !is_float_scalar_ty(c2, ar_f.ty) {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const expression: cast expects float"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar_f.sigs, states: ar_f.states };
+      }
+      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_float(), ty: to_base, iv: 0, bv: false, sv: float_norm_text(ar_f.sv), sigs: ar_f.sigs, states: ar_f.states };
+    }
+
     let tk: ir.TyKind = int_kind(c2, to_base);
-    if !is_int_scalar_kind(tk) { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: cast target must be int or @range(..) int"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !is_int_scalar_kind(tk) { return EvalConstExprResult { ok: false, err: type_error(file, "const expression: cast target must be int/@range int or f32/f64"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
 
     let an: ast.ExprNode = ast.expr_pool_get(exprs, a);
     let eval_expected: i32 = if match an { ast.ExprNode.Int(_s) => true, _ => false } && is_unsigned_int_kind(tk) { to_base } else { -1 };
@@ -478,12 +564,19 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
       if !lr2.ok { return lr2; }
       let rr2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, lr2.sigs, lr2.states, cur_mod, imps, exprs, file, r, expected);
       if !rr2.ok { return rr2; }
-      if lr2.kind != const_kind_int() || rr2.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const int op expects ints"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
-
       let out_ty: i32 = if expected != -1 { strip_range(ctx, expected) } else { strip_range(ctx, lr2.ty) };
       if strip_range(ctx, lr2.ty) != out_ty || strip_range(ctx, rr2.ty) != out_ty {
-        return EvalConstExprResult { ok: false, err: type_error(file, "const int op type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+        return EvalConstExprResult { ok: false, err: type_error(file, "const numeric op type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
       }
+
+      if lr2.kind == const_kind_float() || rr2.kind == const_kind_float() {
+        if lr2.kind != const_kind_float() || rr2.kind != const_kind_float() || !is_float_scalar_ty(ctx, out_ty) {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const float op expects f32/f64"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+        }
+        return EvalConstExprResult { ok: false, err: type_error(file, "const float arithmetic/comparison not supported in v0"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+      }
+
+      if lr2.kind != const_kind_int() || rr2.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const int op expects ints"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
       let k: ir.TyKind = int_kind(ctx, out_ty);
       if !is_int_scalar_kind(k) { return EvalConstExprResult { ok: false, err: type_error(file, "const int op expects int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }
 
@@ -567,6 +660,9 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
       if is_int_like_ty(ctx, lb) {
         if lr3.kind != const_kind_int() || rr3.kind != const_kind_int() { return EvalConstExprResult { ok: false, err: type_error(file, "const ==/!= expects int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr3.sigs, states: rr3.states }; }
         eq = lr3.iv == rr3.iv;
+      } else if is_float_scalar_ty(ctx, lb) {
+        if lr3.kind != const_kind_float() || rr3.kind != const_kind_float() { return EvalConstExprResult { ok: false, err: type_error(file, "const ==/!= expects float"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr3.sigs, states: rr3.states }; }
+        eq = float_norm_text(lr3.sv) == float_norm_text(rr3.sv);
       } else if lb == ctx.ty_bool {
         if lr3.kind != const_kind_bool() || rr3.kind != const_kind_bool() { return EvalConstExprResult { ok: false, err: type_error(file, "const ==/!= expects bool"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr3.sigs, states: rr3.states }; }
         eq = lr3.bv == rr3.bv;
@@ -626,6 +722,8 @@ fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig]
   let ok_v0: bool =
     ty == ctx.ty_bool ||
     ty == ctx.ty_string ||
+    ty == ctx.ty_f32 ||
+    ty == ctx.ty_f64 ||
     is_int_scalar_kind(int_kind(ctx, ty));
   if !ok_v0 { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "const type must be primitive in v0"), sigs: sigs, states: states }; }
 

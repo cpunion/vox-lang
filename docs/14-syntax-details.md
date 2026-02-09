@@ -312,10 +312,10 @@ pub const NAME: String = "vox";
 - `const` 必须在顶层声明（不支持在函数内声明 const）。
 - 必须写明类型注解：`const X: T = ...`
 - 初始化表达式必须是 **const expression**（常量表达式），目前仅支持：
-  - 字面量：`123` / `true` / `"txt"`
+  - 字面量：`123` / `1.5` / `true` / `"txt"`
   - 其他常量引用（含跨模块的 `import` 访问）
   - `-x` / `!x`
-  - `expr as <int>`（显式整数转换；在 const 表达式中溢出一定会在编译期报错）
+  - `expr as <int>`、`expr as f32/f64`（仅支持 `f32 <-> f64` 浮点转换；整数与浮点之间的 const cast 暂不支持）
   - `+ - * / %`、`& | ^ << >>`、比较、`== !=`、`&& ||`
   - `if cond { a } else { b }`（cond 必须为常量 bool）
 - 整数运算语义与运行时保持一致：
@@ -323,6 +323,8 @@ pub const NAME: String = "vox";
   - `/ %` 在除数为 `0` 时编译期报错。
   - 有符号整数在 `MIN / -1` 与 `MIN % -1` 时编译期报错（`division overflow`）。
   - `<< >>` 的移位位数必须在 `[0, bit_width(T)-1]`，否则编译期报错。
+- 浮点常量（`f32/f64`）在 v0 支持：字面量、常量引用、`-x`、`f32 <-> f64 as`、`== !=`。
+  - 浮点的 `+ - * /` 与比较（`< <= > >=`）在 const-eval 中暂不支持（后续补齐）。
 - 不支持在 const 初始化中调用函数、构造 struct/enum、`match` 等（后续由 `comptime` 统一解决）。
 
 可见性与导入（Stage0/Stage1 v0）：
