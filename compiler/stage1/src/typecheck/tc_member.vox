@@ -1,6 +1,19 @@
 import "ast" as ast
 import "ir" as ir
 
+fn find_enum_for_member(ctx: Ctx, enum_mod: String, enum_name: String, expected: i32) -> FindEnumResult {
+  let fe0: FindEnumResult = find_enum(ctx, enum_mod, enum_name);
+  if fe0.found { return fe0; }
+  if expected == -1 || !is_enum_ty(ctx, expected) { return fe0; }
+
+  let et: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
+  if ty_mod(et) != enum_mod { return fe0; }
+  let fe1: FindEnumResult = find_enum(ctx, enum_mod, ty_name(et));
+  if !fe1.found { return fe0; }
+  if fe1.sig.base_name == enum_name || fe1.sig.name == enum_name { return fe1; }
+  return fe0;
+}
+
 fn tc_expr_member(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv: i32, name: String, expected: i32) -> ExprTyResult {
   // 1) Field access: `value.field`
   let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv, -1);
@@ -65,7 +78,7 @@ fn tc_expr_member(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   }
   let var_name: String = if parts.len() == 2 { parts.get(1) } else { parts.get(2) };
 
-  let fe: FindEnumResult = find_enum(ctx, enum_mod, enum_name);
+  let fe: FindEnumResult = find_enum_for_member(ctx, enum_mod, enum_name, expected);
   if !fe.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   let es: EnumSig = fe.sig;
   if es.mod_path != mod_path && !es.is_pub { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
@@ -76,7 +89,7 @@ fn tc_expr_member(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
     if v.name == var_name {
       // Only unit variants are values without a call: `E.None`.
       if v.fields.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-      let ty_idx: i32 = find_enum_ty_idx(ctx, enum_mod, enum_name);
+      let ty_idx: i32 = find_enum_ty_idx(ctx, enum_mod, es.name);
       if ty_idx == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       if expected != -1 && !assignable_to(ctx, expected, ty_idx) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       return ExprTyResult { ok: true, ty: ty_idx, err: TcError.None };

@@ -146,6 +146,7 @@ fn typename_is0(tn: ast.TypeName, s: String) -> bool {
 }
 
 pub struct ResolveTyResult { pub ctx: Ctx, pub ok: bool, pub idx: i32 }
+pub struct TypeBind { pub name: String, pub ty: i32 }
 
 fn find_type_alias(type_aliases: Vec[TypeAliasSig], mod_path: String, name: String) -> TypeAliasSig {
   let mut i: i32 = 0;
@@ -164,11 +165,124 @@ pub fn intern_vec(ctx: Ctx, elem: i32) -> ResolveTyResult {
   return ResolveTyResult { ctx: c, ok: true, idx: r.idx };
 }
 
-pub fn resolve_type(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_params: Vec[String], tn: ast.TypeName) -> ResolveTyResult {
+fn find_type_bind(binds: Vec[TypeBind], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < binds.len() {
+    let b: TypeBind = binds.get(i);
+    if b.name == name { return b.ty; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn binds_from_args(type_params: Vec[String], arg_tys: Vec[i32]) -> Vec[TypeBind] {
+  let mut out: Vec[TypeBind] = Vec();
+  let mut i: i32 = 0;
+  while i < type_params.len() {
+    out.push(TypeBind { name: type_params.get(i), ty: arg_tys.get(i) });
+    i = i + 1;
+  }
+  return out;
+}
+
+fn subs_from_args(type_params: Vec[String], arg_tys: Vec[i32]) -> Vec[TySub] {
+  let mut out: Vec[TySub] = Vec();
+  let mut i: i32 = 0;
+  while i < type_params.len() {
+    out.push(TySub { name: type_params.get(i), ty: arg_tys.get(i) });
+    i = i + 1;
+  }
+  return out;
+}
+
+struct FindStructDeclResult { found: bool, d: ast.StructDecl }
+struct FindEnumDeclResult { found: bool, d: ast.EnumDecl }
+
+fn find_struct_decl_in_mod(m: WorldModule, name: String) -> FindStructDeclResult {
+  let mut i: i32 = 0;
+  while i < m.prog.structs.len() {
+    let d: ast.StructDecl = m.prog.structs.get(i);
+    if d.name == name { return FindStructDeclResult { found: true, d: d }; }
+    i = i + 1;
+  }
+  return FindStructDeclResult {
+    found: false,
+    d: ast.StructDecl { file: "", is_pub: false, name: "", type_params: Vec(), fields: Vec() },
+  };
+}
+
+fn find_enum_decl_in_mod(m: WorldModule, name: String) -> FindEnumDeclResult {
+  let mut i: i32 = 0;
+  while i < m.prog.enums.len() {
+    let d: ast.EnumDecl = m.prog.enums.get(i);
+    if d.name == name { return FindEnumDeclResult { found: true, d: d }; }
+    i = i + 1;
+  }
+  return FindEnumDeclResult {
+    found: false,
+    d: ast.EnumDecl { file: "", is_pub: false, name: "", type_params: Vec(), variants: Vec() },
+  };
+}
+
+fn nominal_intern_struct(ctx0: Ctx, mod_path: String, name: String) -> ResolveTyResult {
+  let mut c: Ctx = ctx0;
+  let ir1: InternResult = intern_ty(c, ir.ty_struct(mod_path, name));
+  c = ir1.ctx;
+  let iv0: InternResult = intern_ty(c, ir.ty_vec(ir1.idx)); c = iv0.ctx;
+  let iv1: InternResult = intern_ty(c, ir.ty_vec(iv0.idx)); c = iv1.ctx;
+  return ResolveTyResult { ctx: c, ok: true, idx: ir1.idx };
+}
+
+fn nominal_intern_enum(ctx0: Ctx, mod_path: String, name: String) -> ResolveTyResult {
+  let mut c: Ctx = ctx0;
+  let ir1: InternResult = intern_ty(c, ir.ty_enum(mod_path, name));
+  c = ir1.ctx;
+  let iv0: InternResult = intern_ty(c, ir.ty_vec(ir1.idx)); c = iv0.ctx;
+  let iv1: InternResult = intern_ty(c, ir.ty_vec(iv0.idx)); c = iv1.ctx;
+  return ResolveTyResult { ctx: c, ok: true, idx: ir1.idx };
+}
+
+fn set_struct_fields(ctx0: Ctx, mod_path: String, name: String, fields: Vec[StructFieldSig]) -> Ctx {
+  let mut c: Ctx = ctx0;
+  let mut out: Vec[StructSig] = Vec();
+  let mut i: i32 = 0;
+  while i < c.structs.len() {
+    let s: StructSig = c.structs.get(i);
+    if s.mod_path == mod_path && s.name == name {
+      out.push(StructSig { mod_path: s.mod_path, name: s.name, base_name: s.base_name, is_pub: s.is_pub, fields: fields });
+    } else {
+      out.push(s);
+    }
+    i = i + 1;
+  }
+  c.structs = out;
+  return c;
+}
+
+fn set_enum_vars(ctx0: Ctx, mod_path: String, name: String, vars: Vec[EnumVariantSig]) -> Ctx {
+  let mut c: Ctx = ctx0;
+  let mut out: Vec[EnumSig] = Vec();
+  let mut i: i32 = 0;
+  while i < c.enums.len() {
+    let e: EnumSig = c.enums.get(i);
+    if e.mod_path == mod_path && e.name == name {
+      out.push(EnumSig { mod_path: e.mod_path, name: e.name, base_name: e.base_name, is_pub: e.is_pub, vars: vars });
+    } else {
+      out.push(e);
+    }
+    i = i + 1;
+  }
+  c.enums = out;
+  return c;
+}
+
+fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_params: Vec[String], binds: Vec[TypeBind], tn: ast.TypeName) -> ResolveTyResult {
   let mut c: Ctx = ctx;
   // type param (generic function): `T`
   if tn.parts.len() == 1 && tn.args.len() == 0 {
     let name0: String = tn.parts.get(0);
+    let bty: i32 = find_type_bind(binds, name0);
+    if bty != -1 { return ResolveTyResult { ctx: c, ok: true, idx: bty }; }
     let mut i0: i32 = 0;
     while i0 < type_params.len() {
       if type_params.get(i0) == name0 {
@@ -206,7 +320,7 @@ pub fn resolve_type(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_par
     let hi: i64 = pr_hi.val;
     if lo > hi { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
 
-    let br: ResolveTyResult = resolve_type(c, w, cur_mod, imps, type_params, tn.args.get(0));
+    let br: ResolveTyResult = resolve_type_bound(c, w, cur_mod, imps, type_params, binds, tn.args.get(0));
     c = br.ctx;
     if !br.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     let bt: ir.Ty = ir.ty_pool_get(c.pool, br.idx);
@@ -241,7 +355,7 @@ pub fn resolve_type(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_par
 
   // Vec[T]
   if tn.parts.len() == 1 && tn.parts.get(0) == "Vec" && tn.args.len() == 1 {
-    let r0: ResolveTyResult = resolve_type(c, w, cur_mod, imps, type_params, tn.args.get(0));
+    let r0: ResolveTyResult = resolve_type_bound(c, w, cur_mod, imps, type_params, binds, tn.args.get(0));
     c = r0.ctx;
     if !r0.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     let ir0: InternResult = intern_ty(c, ir.ty_vec(r0.idx));
@@ -272,14 +386,10 @@ pub fn resolve_type(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_par
   } else {
     return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
   }
-  if tn.args.len() != 0 {
-    // stage1 typecheck v0: no generic nominal types yet
-    return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
-  }
-
   // Type aliases (type-only).
   let ta: TypeAliasSig = find_type_alias(c.type_aliases, mod_path, name);
   if ta.name != "" {
+    if tn.args.len() != 0 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     if mod_path != cur_mod && !ta.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     return ResolveTyResult { ctx: c, ok: true, idx: ta.ty };
   }
@@ -291,36 +401,116 @@ pub fn resolve_type(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_par
   }
   let m: WorldModule = w.mods.get(fm.idx);
   // struct
-  let mut i: i32 = 0;
-    while i < m.prog.structs.len() {
-      let sd: ast.StructDecl = m.prog.structs.get(i);
-      if sd.name == name {
-        if mod_path != cur_mod && !sd.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
-        let ir1: InternResult = intern_ty(c, ir.ty_struct(mod_path, name));
-        c = ir1.ctx;
-        // Pre-intern `Vec[Struct]` and `Vec[Vec[Struct]]` so generics can build collections.
-        let iv0: InternResult = intern_ty(c, ir.ty_vec(ir1.idx)); c = iv0.ctx;
-        let iv1: InternResult = intern_ty(c, ir.ty_vec(iv0.idx)); c = iv1.ctx;
-        return ResolveTyResult { ctx: c, ok: true, idx: ir1.idx };
-      }
-      i = i + 1;
+  let fsd: FindStructDeclResult = find_struct_decl_in_mod(m, name);
+  if fsd.found {
+    let sd: ast.StructDecl = fsd.d;
+    if mod_path != cur_mod && !sd.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    if sd.type_params.len() == 0 {
+      if tn.args.len() != 0 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      return nominal_intern_struct(c, mod_path, sd.name);
     }
+    if tn.args.len() != sd.type_params.len() { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+
+    let mut arg_tys: Vec[i32] = Vec();
+    let mut ai: i32 = 0;
+    while ai < tn.args.len() {
+      let ar: ResolveTyResult = resolve_type_bound(c, w, cur_mod, imps, type_params, binds, tn.args.get(ai));
+      c = ar.ctx;
+      if !ar.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      arg_tys.push(ar.idx);
+      ai = ai + 1;
+    }
+
+    let subs: Vec[TySub] = subs_from_args(sd.type_params, arg_tys);
+    let inst: String = inst_name(c, sd.name, sd.type_params, subs);
+    let fs: FindStructResult = find_struct(c, mod_path, inst);
+    if fs.found { return nominal_intern_struct(c, mod_path, inst); }
+
+    // Insert placeholder first so recursive references can resolve.
+    c.structs.push(StructSig { mod_path: mod_path, name: inst, base_name: sd.name, is_pub: sd.is_pub, fields: Vec() });
+    let ir_self: ResolveTyResult = nominal_intern_struct(c, mod_path, inst);
+    c = ir_self.ctx;
+
+    let ir0: ImportsResult = build_imports(w, mod_path, m.prog.imports, sd.file);
+    if !ir0.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let imps0: Imports = ir0.imps;
+    let binds0: Vec[TypeBind] = binds_from_args(sd.type_params, arg_tys);
+
+    let mut fields: Vec[StructFieldSig] = Vec();
+    let mut fi: i32 = 0;
+    while fi < sd.fields.len() {
+      let fd: ast.FieldDecl = sd.fields.get(fi);
+      let rr: ResolveTyResult = resolve_type_bound(c, w, mod_path, imps0, sd.type_params, binds0, fd.ty);
+      c = rr.ctx;
+      if !rr.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      fields.push(StructFieldSig { name: fd.name, ty: rr.idx, is_pub: fd.is_pub });
+      fi = fi + 1;
+    }
+    c = set_struct_fields(c, mod_path, inst, fields);
+    return ResolveTyResult { ctx: c, ok: true, idx: ir_self.idx };
+  }
+
   // enum
-  i = 0;
-    while i < m.prog.enums.len() {
-      let ed: ast.EnumDecl = m.prog.enums.get(i);
-      if ed.name == name {
-        if mod_path != cur_mod && !ed.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
-        let ir2: InternResult = intern_ty(c, ir.ty_enum(mod_path, name));
-        c = ir2.ctx;
-        // Pre-intern `Vec[Enum]` and `Vec[Vec[Enum]]`.
-        let iv0: InternResult = intern_ty(c, ir.ty_vec(ir2.idx)); c = iv0.ctx;
-        let iv1: InternResult = intern_ty(c, ir.ty_vec(iv0.idx)); c = iv1.ctx;
-        return ResolveTyResult { ctx: c, ok: true, idx: ir2.idx };
-      }
-      i = i + 1;
+  let fed: FindEnumDeclResult = find_enum_decl_in_mod(m, name);
+  if fed.found {
+    let ed: ast.EnumDecl = fed.d;
+    if mod_path != cur_mod && !ed.is_pub { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    if ed.type_params.len() == 0 {
+      if tn.args.len() != 0 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      return nominal_intern_enum(c, mod_path, ed.name);
     }
+    if tn.args.len() != ed.type_params.len() { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+
+    let mut arg_tys: Vec[i32] = Vec();
+    let mut ai: i32 = 0;
+    while ai < tn.args.len() {
+      let ar: ResolveTyResult = resolve_type_bound(c, w, cur_mod, imps, type_params, binds, tn.args.get(ai));
+      c = ar.ctx;
+      if !ar.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      arg_tys.push(ar.idx);
+      ai = ai + 1;
+    }
+
+    let subs: Vec[TySub] = subs_from_args(ed.type_params, arg_tys);
+    let inst: String = inst_name(c, ed.name, ed.type_params, subs);
+    let fe: FindEnumResult = find_enum(c, mod_path, inst);
+    if fe.found { return nominal_intern_enum(c, mod_path, inst); }
+
+    // Insert placeholder first so recursive references can resolve.
+    c.enums.push(EnumSig { mod_path: mod_path, name: inst, base_name: ed.name, is_pub: ed.is_pub, vars: Vec() });
+    let ir_self: ResolveTyResult = nominal_intern_enum(c, mod_path, inst);
+    c = ir_self.ctx;
+
+    let ir0: ImportsResult = build_imports(w, mod_path, m.prog.imports, ed.file);
+    if !ir0.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let imps0: Imports = ir0.imps;
+    let binds0: Vec[TypeBind] = binds_from_args(ed.type_params, arg_tys);
+
+    let mut vars: Vec[EnumVariantSig] = Vec();
+    let mut vi: i32 = 0;
+    while vi < ed.variants.len() {
+      let vd: ast.EnumVariantDecl = ed.variants.get(vi);
+      let mut ftys: Vec[i32] = Vec();
+      let mut fi: i32 = 0;
+      while fi < vd.fields.len() {
+        let tr: ResolveTyResult = resolve_type_bound(c, w, mod_path, imps0, ed.type_params, binds0, vd.fields.get(fi));
+        c = tr.ctx;
+        if !tr.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+        ftys.push(tr.idx);
+        fi = fi + 1;
+      }
+      vars.push(EnumVariantSig { name: vd.name, fields: ftys });
+      vi = vi + 1;
+    }
+    c = set_enum_vars(c, mod_path, inst, vars);
+    return ResolveTyResult { ctx: c, ok: true, idx: ir_self.idx };
+  }
+
   return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
+}
+
+pub fn resolve_type(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_params: Vec[String], tn: ast.TypeName) -> ResolveTyResult {
+  return resolve_type_bound(ctx, w, cur_mod, imps, type_params, Vec(), tn);
 }
 
 pub fn is_vec_ty(ctx: Ctx, ty_idx: i32) -> bool {

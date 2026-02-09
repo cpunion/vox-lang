@@ -17,7 +17,7 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   if arms.len() == 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
   // Enum metadata for exhaustiveness checks and enum variant patterns.
-  let mut es: EnumSig = EnumSig { mod_path: "", name: "", is_pub: false, vars: Vec() };
+  let mut es: EnumSig = EnumSig { mod_path: "", name: "", base_name: "", is_pub: false, vars: Vec() };
   if is_enum {
     let et: ir.Ty = ir.ty_pool_get(ctx.pool, scrut_base);
     let fe: FindEnumResult = find_enum(ctx, ty_mod(et), ty_name(et));
@@ -430,18 +430,18 @@ fn tc_pat(ctx: Ctx, mod_path: String, imps: Imports, scrut_ty: i32, scrut_t: ir.
 fn tc_pat_enum(ctx: Ctx, mod_path: String, imps: Imports, scrut_t: ir.Ty, enum_parts: Vec[String], var_name: String, args: Vec[ast.Pat], l0: Locals) -> PatLocalsResult {
   let is_enum: bool = match scrut_t.kind { ir.TyKind.Enum => true, _ => false };
   if !is_enum { return PatLocalsResult { ok: false, locals: l0 }; }
+  let scrut_mod: String = ty_mod(scrut_t);
+  let scrut_name: String = ty_name(scrut_t);
+  let fse: FindEnumResult = find_enum(ctx, scrut_mod, scrut_name);
+  if !fse.found { return PatLocalsResult { ok: false, locals: l0 }; }
+  let ses: EnumSig = fse.sig;
 
   // Shorthand: `.Variant(...)` uses the scrutinee enum type.
   if enum_parts.len() == 0 {
-    let enum_mod0: String = ty_mod(scrut_t);
-    let enum_name0: String = ty_name(scrut_t);
-    let fe0: FindEnumResult = find_enum(ctx, enum_mod0, enum_name0);
-    if !fe0.found { return PatLocalsResult { ok: false, locals: l0 }; }
-    let es0: EnumSig = fe0.sig;
-    if enum_mod0 != mod_path && !es0.is_pub { return PatLocalsResult { ok: false, locals: l0 }; }
+    if scrut_mod != mod_path && !ses.is_pub { return PatLocalsResult { ok: false, locals: l0 }; }
     let mut vi0: i32 = 0;
-    while vi0 < es0.vars.len() {
-      let v0: EnumVariantSig = es0.vars.get(vi0);
+    while vi0 < ses.vars.len() {
+      let v0: EnumVariantSig = ses.vars.get(vi0);
       if v0.name == var_name {
         if v0.fields.len() != args.len() { return PatLocalsResult { ok: false, locals: l0 }; }
         let mut l: Locals = l0;
@@ -481,16 +481,13 @@ fn tc_pat_enum(ctx: Ctx, mod_path: String, imps: Imports, scrut_t: ir.Ty, enum_p
   }
 
   // Pattern enum must match scrutinee enum type.
-  if ty_mod(scrut_t) != enum_mod || ty_name(scrut_t) != enum_name { return PatLocalsResult { ok: false, locals: l0 }; }
-
-  let fe: FindEnumResult = find_enum(ctx, enum_mod, enum_name);
-  if !fe.found { return PatLocalsResult { ok: false, locals: l0 }; }
-  let es: EnumSig = fe.sig;
-  if enum_mod != mod_path && !es.is_pub { return PatLocalsResult { ok: false, locals: l0 }; }
+  if scrut_mod != enum_mod { return PatLocalsResult { ok: false, locals: l0 }; }
+  if enum_name != scrut_name && enum_name != ses.base_name { return PatLocalsResult { ok: false, locals: l0 }; }
+  if enum_mod != mod_path && !ses.is_pub { return PatLocalsResult { ok: false, locals: l0 }; }
 
   let mut vi: i32 = 0;
-  while vi < es.vars.len() {
-    let v: EnumVariantSig = es.vars.get(vi);
+  while vi < ses.vars.len() {
+    let v: EnumVariantSig = ses.vars.get(vi);
     if v.name == var_name {
       if v.fields.len() != args.len() { return PatLocalsResult { ok: false, locals: l0 }; }
       let mut l: Locals = l0;
