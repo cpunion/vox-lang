@@ -432,46 +432,51 @@ fn const_local_from_value(name: String, v: EvalConstExprResult) -> ConstLocal {
 struct ConstPatEvalResult {
   ok: bool,
   matched: bool,
-  has_bind: bool,
-  bind_name: String,
-  bind_kind: i32,
-  bind_ty: i32,
-  bind_iv: i64,
-  bind_bv: bool,
-  bind_sv: String,
+  binds: Vec[ConstLocal],
   err: String,
 }
 
 fn const_pat_err(msg: String) -> ConstPatEvalResult {
   return ConstPatEvalResult {
-    ok: false, matched: false, has_bind: false, bind_name: "",
-    bind_kind: 0, bind_ty: -1, bind_iv: 0, bind_bv: false, bind_sv: "",
+    ok: false, matched: false, binds: Vec(),
     err: msg,
   };
 }
 
 fn const_pat_nomatch() -> ConstPatEvalResult {
   return ConstPatEvalResult {
-    ok: true, matched: false, has_bind: false, bind_name: "",
-    bind_kind: 0, bind_ty: -1, bind_iv: 0, bind_bv: false, bind_sv: "",
+    ok: true, matched: false, binds: Vec(),
     err: "",
   };
 }
 
 fn const_pat_match_no_bind() -> ConstPatEvalResult {
   return ConstPatEvalResult {
-    ok: true, matched: true, has_bind: false, bind_name: "",
-    bind_kind: 0, bind_ty: -1, bind_iv: 0, bind_bv: false, bind_sv: "",
+    ok: true, matched: true, binds: Vec(),
     err: "",
   };
 }
 
 fn const_pat_match_bind(name: String, v: EvalConstExprResult) -> ConstPatEvalResult {
+  let mut bs: Vec[ConstLocal] = Vec();
+  bs.push(const_local_from_value(name, v));
   return ConstPatEvalResult {
-    ok: true, matched: true, has_bind: true, bind_name: name,
-    bind_kind: v.kind, bind_ty: v.ty, bind_iv: v.iv, bind_bv: v.bv, bind_sv: v.sv,
+    ok: true, matched: true, binds: bs,
     err: "",
   };
+}
+
+fn const_pat_match_with_binds(bs: Vec[ConstLocal]) -> ConstPatEvalResult {
+  return ConstPatEvalResult { ok: true, matched: true, binds: bs, err: "" };
+}
+
+fn const_bind_name_exists(bs: Vec[ConstLocal], name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < bs.len() {
+    if bs.get(i).name == name { return true; }
+    i = i + 1;
+  }
+  return false;
 }
 
 fn const_find_enum_variant_idx(ctx: Ctx, ty: i32, vname: String) -> i32 {
@@ -577,21 +582,24 @@ fn const_pat_matches(ctx: Ctx, scrut: EvalConstExprResult, pat: ast.Pat) -> Cons
           } else if args.len() != dec.fields.len() {
             const_pat_err("const enum pattern arity mismatch")
           } else {
-            let mut out: ConstPatEvalResult = const_pat_match_no_bind();
+            let mut bs: Vec[ConstLocal] = Vec();
             let mut i: i32 = 0;
             while i < args.len() {
               let pr: ConstPatEvalResult = const_pat_matches(ctx, const_payload_field_eval(scrut, dec.fields.get(i)), args.get(i));
               if !pr.ok { return pr; }
               if !pr.matched { return const_pat_nomatch(); }
-              if pr.has_bind {
-                if out.has_bind {
-                  return const_pat_err("const enum payload pattern supports at most one bind");
+              let mut bi: i32 = 0;
+              while bi < pr.binds.len() {
+                let b: ConstLocal = pr.binds.get(bi);
+                if const_bind_name_exists(bs, b.name) {
+                  return const_pat_err("duplicate bind in const pattern: ".concat(b.name));
                 }
-                out = pr;
+                bs.push(b);
+                bi = bi + 1;
               }
               i = i + 1;
             }
-            out
+            const_pat_match_with_binds(bs)
           }
         }
       }
@@ -966,15 +974,10 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
       }
       if pr.matched {
         let mut arm_locals: Vec[ConstLocal] = locals;
-        if pr.has_bind {
-          arm_locals.push(ConstLocal {
-            name: pr.bind_name,
-            kind: pr.bind_kind,
-            ty: pr.bind_ty,
-            iv: pr.bind_iv,
-            bv: pr.bind_bv,
-            sv: pr.bind_sv,
-          });
+        let mut bi2: i32 = 0;
+        while bi2 < pr.binds.len() {
+          arm_locals.push(pr.binds.get(bi2));
+          bi2 = bi2 + 1;
         }
         return eval_const_expr_in_mod_locals(ctx, w, items, sr.sigs, sr.states, cur_mod, imps, exprs, file, arm.expr, expected, arm_locals);
       }
