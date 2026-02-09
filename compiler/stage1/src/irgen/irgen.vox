@@ -96,13 +96,40 @@ fn find_mod(w: tc.World, path: String) -> FindModResult {
 
 struct FindFuncDeclResult { found: bool, fd: ast.FuncDecl }
 
-fn find_generic_func(m: tc.WorldModule, name: String) -> FindFuncDeclResult {
+fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDeclResult {
   let mut i: i32 = 0;
   while i < m.prog.funcs.len() {
     let fd: ast.FuncDecl = m.prog.funcs.get(i);
     if fd.name == name && fd.type_params.len() != 0 { return FindFuncDeclResult { found: true, fd: fd }; }
     i = i + 1;
   }
+
+  // Generic impl methods are looked up by lowered impl symbol name.
+  let mut ii: i32 = 0;
+  while ii < m.prog.impls.len() {
+    let id: ast.ImplDecl = m.prog.impls.get(ii);
+    let mut si: i32 = 0;
+    while si < ctx.impls.len() {
+      let isg: tc.ImplSig = ctx.impls.get(si);
+      if isg.mod_path == m.path && isg.decl_idx == ii {
+        let mut mi: i32 = 0;
+        while mi < isg.methods.len() {
+          let ms: tc.ImplMethodSig = isg.methods.get(mi);
+          if ms.lowered_name == name && !ms.from_default && ms.sig.type_params.len() != 0 {
+            let mdi: i32 = find_impl_method_decl_idx(id, ms.name);
+            if mdi != -1 {
+              let md: ast.FuncDecl = id.methods.get(mdi);
+              if md.type_params.len() != 0 { return FindFuncDeclResult { found: true, fd: md }; }
+            }
+          }
+          mi = mi + 1;
+        }
+      }
+      si = si + 1;
+    }
+    ii = ii + 1;
+  }
+
   return FindFuncDeclResult { found: false, fd: ast.FuncDecl { file: "", is_pub: false, name: "", type_params: Vec(), type_param_bounds: Vec(), params: Vec(), ret: ast.TypeName { parts: Vec(), args: Vec() }, body: ast.Block { stmts: Vec() } } };
 }
 
@@ -214,7 +241,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
       fi = fi + 1;
     }
 
-    // Impl methods are always monomorphic in v0; lower them as normal function tasks.
+    // Impl methods: monomorphic ones are lowered eagerly; generic ones are monomorphized on-demand.
     let mut ii: i32 = 0;
     while ii < m.prog.impls.len() {
       let id: ast.ImplDecl = m.prog.impls.get(ii);
@@ -224,6 +251,10 @@ pub fn generate_world(w: tc.World) -> GenResult {
       let mut msi: i32 = 0;
       while msi < ir0.sig.methods.len() {
         let mr0: tc.ImplMethodSig = ir0.sig.methods.get(msi);
+        if mr0.sig.type_params.len() != 0 {
+          msi = msi + 1;
+          continue;
+        }
         let mut mdi: i32 = -1;
         if !mr0.from_default {
           mdi = find_impl_method_decl_idx(id, mr0.name);
@@ -315,7 +346,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
       r = gen_func_impl(ctx, w, body_mod_path, t.mod_path, imps, body_exprs, md, t.impl_name, t.impl_sig, Vec());
     } else {
       // Generic instantiation task.
-      let fr: FindFuncDeclResult = find_generic_func(m2, t.base_name);
+      let fr: FindFuncDeclResult = find_generic_func(br.ctx, m2, t.base_name);
       if !fr.found { return err0(p, "missing generic fn for instantiation"); }
       let ar: tc.ImportsResult = tc.build_imports(w, t.mod_path, m2.prog.imports, fr.fd.file);
       if !ar.ok { return err0(p, tc.tc_error_to_string(ar.err)); }

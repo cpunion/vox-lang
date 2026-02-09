@@ -9,6 +9,16 @@ fn vec_self() -> Vec[String] {
   return v;
 }
 
+fn vec_self_tps(tps: Vec[String]) -> Vec[String] {
+  let mut v: Vec[String] = vec_self();
+  let mut i: i32 = 0;
+  while i < tps.len() {
+    v.push(tps.get(i));
+    i = i + 1;
+  }
+  return v;
+}
+
 fn resolve_trait_ref(ctx: Ctx, _w: World, cur_mod: String, imps: Imports, tn: ast.TypeName) -> ResolveTraitRefResult {
   if tn.args.len() != 0 { return ResolveTraitRefResult { ok: false, mod_path: "", name: "" }; }
   if tn.parts.len() == 1 {
@@ -124,7 +134,13 @@ fn trait_method_sig_for(ctx: Ctx, ms: TraitMethodSig, for_ty: i32) -> FuncSig {
     i = i + 1;
   }
   let ret: i32 = subst_ty(ctx, ms.sig.ret, subs);
-  return FuncSig { params: ps, ret: ret, is_pub: false, type_params: Vec(), type_param_bounds: Vec() };
+  return FuncSig {
+    params: ps,
+    ret: ret,
+    is_pub: false,
+    type_params: ms.sig.type_params,
+    type_param_bounds: ms.sig.type_param_bounds,
+  };
 }
 
 fn impl_decl_file(w: World, mod_path: String, decl_idx: i32) -> String {
@@ -181,11 +197,12 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
           return TcCtxResult { ok: false, err: type_error(td.file, "duplicate trait method: ".concat(md.name)), ctx: c };
         }
 
+        let tps_self: Vec[String] = vec_self_tps(md.type_params);
         let mut ps: Vec[i32] = Vec();
         let mut pi: i32 = 0;
         while pi < md.params.len() {
           let pr: ast.Param = md.params.get(pi);
-          let tr: ResolveTyResult = resolve_type(c, w, m.path, imps, vec_self(), pr.ty);
+          let tr: ResolveTyResult = resolve_type(c, w, m.path, imps, tps_self, pr.ty);
           c = tr.ctx;
           if !tr.ok {
             return TcCtxResult { ok: false, err: type_error(td.file, "type resolve failed in trait method param"), ctx: c };
@@ -193,14 +210,42 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
           ps.push(tr.idx);
           pi = pi + 1;
         }
-        let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, vec_self(), md.ret);
+        let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, tps_self, md.ret);
         c = rr.ctx;
         if !rr.ok {
           return TcCtxResult { ok: false, err: type_error(td.file, "type resolve failed in trait method ret"), ctx: c };
         }
+
+        let mut tbs: Vec[TypeParamBoundSig] = Vec();
+        let mut bi: i32 = 0;
+        while bi < md.type_param_bounds.len() {
+          let bdecl: ast.TypeParamBoundsDecl = md.type_param_bounds.get(bi);
+          if !contains_str_local(md.type_params, bdecl.name) {
+            return TcCtxResult { ok: false, err: type_error(td.file, "unknown type param in trait method bound: ".concat(bdecl.name)), ctx: c };
+          }
+          let mut bj: i32 = 0;
+          while bj < bdecl.bounds.len() {
+            let rtr: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, bdecl.bounds.get(bj));
+            if !rtr.ok {
+              return TcCtxResult { ok: false, err: type_error(td.file, "bad trait method bound"), ctx: c };
+            }
+            let tf2: FindTraitResult = find_trait(c, rtr.mod_path, rtr.name);
+            if !tf2.found {
+              return TcCtxResult { ok: false, err: type_error(td.file, "unknown trait in method bound"), ctx: c };
+            }
+            if rtr.mod_path != m.path && !tf2.sig.is_pub {
+              return TcCtxResult { ok: false, err: type_error(td.file, "trait method bound refers to private trait"), ctx: c };
+            }
+            if !has_bound_sig(tbs, bdecl.name, rtr.mod_path, rtr.name) {
+              tbs.push(TypeParamBoundSig { type_param: bdecl.name, trait_mod_path: rtr.mod_path, trait_name: rtr.name });
+            }
+            bj = bj + 1;
+          }
+          bi = bi + 1;
+        }
         ms.push(TraitMethodSig {
           name: md.name,
-          sig: FuncSig { params: ps, ret: rr.idx, is_pub: true, type_params: Vec(), type_param_bounds: Vec() },
+          sig: FuncSig { params: ps, ret: rr.idx, is_pub: true, type_params: md.type_params, type_param_bounds: tbs },
           has_default: md.has_body,
           default_mod_path: m.path,
           default_file: td.file,
@@ -269,6 +314,9 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           if !tms.has_default {
             return TcCtxResult { ok: false, err: type_error(id.file, "impl missing trait method: ".concat(tms.name)), ctx: c };
           }
+          if tms.sig.type_params.len() != 0 {
+            return TcCtxResult { ok: false, err: type_error(id.file, "generic default trait method not supported in v0"), ctx: c };
+          }
 
           let want0: FuncSig = trait_method_sig_for(c, tms, for_ty);
           let lowered0: String = fresh_impl_lowered_name(c, m.path, tf.sig, tms.name, c.impls.len() * 1000 + 500 + tm);
@@ -291,11 +339,53 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         }
 
         let md: ast.FuncDecl = id.methods.get(mdi);
-        if md.type_params.len() != 0 {
-          return TcCtxResult { ok: false, err: type_error(md.file, "impl method generic params not supported in v0"), ctx: c };
+        let want: FuncSig = trait_method_sig_for(c, tms, for_ty);
+        if md.type_params.len() != want.type_params.len() {
+          return TcCtxResult { ok: false, err: type_error(md.file, "impl method type param count mismatch"), ctx: c };
+        }
+        let mut tpi: i32 = 0;
+        while tpi < md.type_params.len() {
+          if md.type_params.get(tpi) != want.type_params.get(tpi) {
+            return TcCtxResult { ok: false, err: type_error(md.file, "impl method type param name mismatch"), ctx: c };
+          }
+          tpi = tpi + 1;
         }
 
-        let want: FuncSig = trait_method_sig_for(c, tms, for_ty);
+        let mut got_tbs: Vec[TypeParamBoundSig] = Vec();
+        let mut bi2: i32 = 0;
+        while bi2 < md.type_param_bounds.len() {
+          let bdecl2: ast.TypeParamBoundsDecl = md.type_param_bounds.get(bi2);
+          if !contains_str_local(md.type_params, bdecl2.name) {
+            return TcCtxResult { ok: false, err: type_error(md.file, "unknown type param in impl method bound: ".concat(bdecl2.name)), ctx: c };
+          }
+          let mut bj2: i32 = 0;
+          while bj2 < bdecl2.bounds.len() {
+            let rtr2: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, bdecl2.bounds.get(bj2));
+            if !rtr2.ok { return TcCtxResult { ok: false, err: type_error(md.file, "bad impl method bound"), ctx: c }; }
+            let tf3: FindTraitResult = find_trait(c, rtr2.mod_path, rtr2.name);
+            if !tf3.found { return TcCtxResult { ok: false, err: type_error(md.file, "unknown trait in impl method bound"), ctx: c }; }
+            if rtr2.mod_path != m.path && !tf3.sig.is_pub {
+              return TcCtxResult { ok: false, err: type_error(md.file, "impl method bound refers to private trait"), ctx: c };
+            }
+            if !has_bound_sig(got_tbs, bdecl2.name, rtr2.mod_path, rtr2.name) {
+              got_tbs.push(TypeParamBoundSig { type_param: bdecl2.name, trait_mod_path: rtr2.mod_path, trait_name: rtr2.name });
+            }
+            bj2 = bj2 + 1;
+          }
+          bi2 = bi2 + 1;
+        }
+        if got_tbs.len() != want.type_param_bounds.len() {
+          return TcCtxResult { ok: false, err: type_error(md.file, "impl method type param bounds mismatch"), ctx: c };
+        }
+        let mut bi3: i32 = 0;
+        while bi3 < got_tbs.len() {
+          let b: TypeParamBoundSig = got_tbs.get(bi3);
+          if !has_bound_sig(want.type_param_bounds, b.type_param, b.trait_mod_path, b.trait_name) {
+            return TcCtxResult { ok: false, err: type_error(md.file, "impl method type param bounds mismatch"), ctx: c };
+          }
+          bi3 = bi3 + 1;
+        }
+
         if md.params.len() != want.params.len() {
           return TcCtxResult { ok: false, err: type_error(md.file, "impl method param count mismatch"), ctx: c };
         }
@@ -303,13 +393,13 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let mut pi: i32 = 0;
         while pi < md.params.len() {
           let pr: ast.Param = md.params.get(pi);
-          let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), pr.ty);
+          let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, md.type_params, pr.ty);
           c = rr.ctx;
           if !rr.ok { return TcCtxResult { ok: false, err: type_error(md.file, "impl method param type resolve failed"), ctx: c }; }
           if rr.idx != want.params.get(pi) { return TcCtxResult { ok: false, err: type_error(md.file, "impl method param type mismatch"), ctx: c }; }
           pi = pi + 1;
         }
-        let ret_r: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), md.ret);
+        let ret_r: ResolveTyResult = resolve_type(c, w, m.path, imps, md.type_params, md.ret);
         c = ret_r.ctx;
         if !ret_r.ok { return TcCtxResult { ok: false, err: type_error(md.file, "impl method ret type resolve failed"), ctx: c }; }
         if ret_r.idx != want.ret { return TcCtxResult { ok: false, err: type_error(md.file, "impl method ret type mismatch"), ctx: c }; }
