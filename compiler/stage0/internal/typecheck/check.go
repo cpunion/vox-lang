@@ -1192,7 +1192,7 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 
 	// Primitive to_string.
 	baseTy := stripRange(recvTy)
-	if baseTy.K == TyI32 || baseTy.K == TyI64 || baseTy.K == TyBool {
+	if isIntType(baseTy) || baseTy.K == TyBool {
 		if method != "to_string" {
 			return Type{K: TyBad}, false
 		}
@@ -1206,10 +1206,12 @@ func (c *checker) tryIntrinsicMethodCall(ex ast.Expr, call *ast.CallExpr, me *as
 		}
 		kind := ToStrBad
 		switch baseTy.K {
-		case TyI32:
+		case TyI8, TyI32:
 			kind = ToStrI32
 		case TyI64:
 			kind = ToStrI64
+		case TyU8, TyU32, TyU64, TyUSize:
+			kind = ToStrU64
 		case TyBool:
 			kind = ToStrBool
 		}

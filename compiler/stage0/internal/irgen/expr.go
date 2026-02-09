@@ -443,6 +443,8 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 					g.emit(&ir.I32ToStr{Dst: tmp, V: tmpv})
 				case typecheck.ToStrI64:
 					g.emit(&ir.I64ToStr{Dst: tmp, V: tmpv})
+				case typecheck.ToStrU64:
+					g.emit(&ir.U64ToStr{Dst: tmp, V: tmpv})
 				case typecheck.ToStrBool:
 					g.emit(&ir.BoolToStr{Dst: tmp, V: tmpv})
 				default:
@@ -463,6 +465,8 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 				g.emit(&ir.I32ToStr{Dst: tmp, V: rv})
 			case typecheck.ToStrI64:
 				g.emit(&ir.I64ToStr{Dst: tmp, V: rv})
+			case typecheck.ToStrU64:
+				g.emit(&ir.U64ToStr{Dst: tmp, V: rv})
 			case typecheck.ToStrBool:
 				g.emit(&ir.BoolToStr{Dst: tmp, V: rv})
 			default:

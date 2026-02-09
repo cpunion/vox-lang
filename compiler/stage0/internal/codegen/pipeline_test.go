@@ -713,9 +713,12 @@ func TestPipelineEscapeCAndToStringCompilesAndRuns(t *testing.T) {
   let e: String = s.escape_c(); // "a\\nb"
   let n: i32 = 42;
   let x: String = n.to_string(); // "42"
+  let u: u64 = 42;
+  let y: String = u.to_string(); // "42"
   // e: len 4 + byte_at(1) '\\'(92) = 96
   // x: len 2 + byte_at(0) '4'(52) = 54
-  return e.len() + e.byte_at(1) + x.len() + x.byte_at(0);
+  // y: len 2 + byte_at(0) '4'(52) = 54
+  return e.len() + e.byte_at(1) + x.len() + x.byte_at(0) + y.len() + y.byte_at(0);
 }`),
 	})
 	irp, err := irgen.Generate(checked)
@@ -743,8 +746,8 @@ func TestPipelineEscapeCAndToStringCompilesAndRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run failed: %v\n%s", err, string(out))
 	}
-	if got := strings.TrimSpace(string(out)); got != "150" {
-		t.Fatalf("expected output 150, got %q", got)
+	if got := strings.TrimSpace(string(out)); got != "204" {
+		t.Fatalf("expected output 204, got %q", got)
 	}
 }
 

@@ -236,7 +236,8 @@ Stage0 的 `String` 在 C 后端中当前降低为 `const char*`，并提供最�
 ```
 %t0 = i32_to_str 123
 %t1 = i64_to_str 123
-%t2 = bool_to_str true
+%t2 = u64_to_str 123
+%t3 = bool_to_str true
 ```
 
 ## 6. 终结指令（terminator）

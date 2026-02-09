@@ -604,6 +604,16 @@ func (i *I64ToStr) fmtString() string {
 	return fmt.Sprintf("%s = i64_to_str %s", i.Dst.fmtString(), i.V.fmtString())
 }
 
+type U64ToStr struct {
+	Dst *Temp
+	V   Value
+}
+
+func (*U64ToStr) instrNode() {}
+func (i *U64ToStr) fmtString() string {
+	return fmt.Sprintf("%s = u64_to_str %s", i.Dst.fmtString(), i.V.fmtString())
+}
+
 type BoolToStr struct {
 	Dst *Temp
 	V   Value

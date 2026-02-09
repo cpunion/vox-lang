@@ -144,6 +144,16 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 	out.WriteString("  return out;\n")
 	out.WriteString("}\n\n")
 
+	out.WriteString("static const char* vox_u64_to_string(uint64_t v) {\n")
+	out.WriteString("  char buf[32];\n")
+	out.WriteString("  int n = snprintf(buf, sizeof(buf), \"%\" PRIu64, v);\n")
+	out.WriteString("  if (n < 0) { fprintf(stderr, \"format failed\\n\"); exit(1); }\n")
+	out.WriteString("  char* out = (char*)malloc((size_t)n + 1);\n")
+	out.WriteString("  if (!out) { fprintf(stderr, \"out of memory\\n\"); exit(1); }\n")
+	out.WriteString("  memcpy(out, buf, (size_t)n + 1);\n")
+	out.WriteString("  return out;\n")
+	out.WriteString("}\n\n")
+
 	out.WriteString("static const char* vox_bool_to_string(bool v) {\n")
 	out.WriteString("  return v ? \"true\" : \"false\";\n")
 	out.WriteString("}\n\n")

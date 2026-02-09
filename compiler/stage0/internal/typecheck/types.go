@@ -173,6 +173,7 @@ const (
 	ToStrBad ToStrKind = iota
 	ToStrI32
 	ToStrI64
+	ToStrU64
 	ToStrBool
 )
 

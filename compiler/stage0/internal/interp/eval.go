@@ -610,6 +610,11 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 					return unit(), fmt.Errorf("to_string expects int receiver")
 				}
 				return Value{K: VString, S: strconv.FormatInt(int64(recv.I), 10)}, nil
+			case typecheck.ToStrU64:
+				if recv.K != VInt {
+					return unit(), fmt.Errorf("to_string expects int receiver")
+				}
+				return Value{K: VString, S: strconv.FormatUint(uint64(recv.I), 10)}, nil
 			case typecheck.ToStrBool:
 				if recv.K != VBool {
 					return unit(), fmt.Errorf("to_string expects bool receiver")

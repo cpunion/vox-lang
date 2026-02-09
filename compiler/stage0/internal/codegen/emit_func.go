@@ -68,6 +68,8 @@ func emitFunc(out *bytes.Buffer, p *ir.Program, f *ir.Func) error {
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
 			case *ir.I64ToStr:
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
+			case *ir.U64ToStr:
+				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
 			case *ir.BoolToStr:
 				tempTypes[i.Dst.ID] = ir.Type{K: ir.TString}
 			case *ir.Call:
@@ -446,6 +448,13 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		out.WriteString("  ")
 		out.WriteString(cTempName(i.Dst.ID))
 		out.WriteString(" = vox_i64_to_string(")
+		out.WriteString(cValue(i.V))
+		out.WriteString(");\n")
+		return nil
+	case *ir.U64ToStr:
+		out.WriteString("  ")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(" = vox_u64_to_string(")
 		out.WriteString(cValue(i.V))
 		out.WriteString(");\n")
 		return nil
