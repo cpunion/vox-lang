@@ -235,11 +235,20 @@ fn parse_type_name(p: Parser) -> ParseTypeResult {
       return ParseTypeResult { p: q, ty: ast.TypeName { parts: Vec(), args: Vec() } };
     }
     let ar1: AdvanceResult = expect(q, lex.TokenKind.LParen);
-    let arlo: AdvanceResult = expect(ar1.p, lex.TokenKind.Int);
-    let lo_s: String = lexeme(arlo.p, arlo.tok);
+    let mut q2: Parser = ar1.p;
+    let mut lo_neg: bool = false;
+    if kind_is(peek_kind(q2), lex.TokenKind.Minus) { lo_neg = true; let arx: AdvanceResult = advance(q2); q2 = arx.p; }
+    let arlo: AdvanceResult = expect(q2, lex.TokenKind.Int);
+    let mut lo_s: String = lexeme(arlo.p, arlo.tok);
+    if lo_neg { lo_s = "-".concat(lo_s); }
+
     let ardd: AdvanceResult = expect(arlo.p, lex.TokenKind.DotDotEq);
-    let arhi: AdvanceResult = expect(ardd.p, lex.TokenKind.Int);
-    let hi_s: String = lexeme(arhi.p, arhi.tok);
+    let mut q3: Parser = ardd.p;
+    let mut hi_neg: bool = false;
+    if kind_is(peek_kind(q3), lex.TokenKind.Minus) { hi_neg = true; let ary: AdvanceResult = advance(q3); q3 = ary.p; }
+    let arhi: AdvanceResult = expect(q3, lex.TokenKind.Int);
+    let mut hi_s: String = lexeme(arhi.p, arhi.tok);
+    if hi_neg { hi_s = "-".concat(hi_s); }
     let ar2: AdvanceResult = expect(arhi.p, lex.TokenKind.RParen);
     let trb: ParseTypeResult = parse_type_name(ar2.p);
     let mut parts: Vec[String] = Vec();
@@ -725,6 +734,14 @@ fn parse_if_expr(p: Parser) -> ParseExprResult {
 fn parse_pat(p: Parser) -> ParsePatResult {
   let sp0: ast.Span = span_at(p, peek(p).start);
   let k: lex.TokenKind = peek_kind(p);
+  // Negative integer pattern: `-123`
+  if kind_is(k, lex.TokenKind.Minus) && kind_is(peek2_kind(p), lex.TokenKind.Int) {
+    let ar0: AdvanceResult = advance(p);
+    let ar1: AdvanceResult = expect(ar0.p, lex.TokenKind.Int);
+    let tok: lex.Token = ar1.tok;
+    let text: String = "-".concat(lexeme(ar1.p, tok));
+    return ParsePatResult { p: ar1.p, pat: ast.Pat.Int(sp0, text) };
+  }
   if kind_is(k, lex.TokenKind.Int) {
     let ar1: AdvanceResult = advance(p);
     let tok: lex.Token = ar1.tok;
@@ -740,15 +757,15 @@ fn parse_pat(p: Parser) -> ParsePatResult {
     let ar0: AdvanceResult = advance(p);
     let r0: ParseIdentResult = parse_ident(ar0.p);
     let mut q: Parser = r0.p;
-    let mut binders: Vec[String] = Vec();
+    let mut args: Vec[ast.Pat] = Vec();
     if kind_is(peek_kind(q), lex.TokenKind.LParen) {
       let ar3: AdvanceResult = advance(q);
       q = ar3.p;
       if !kind_is(peek_kind(q), lex.TokenKind.RParen) {
         while !q.has_err {
-          let br: ParseIdentResult = parse_ident(q);
-          q = br.p;
-          binders.push(br.name);
+          let pr: ParsePatResult = parse_pat(q);
+          q = pr.p;
+          args.push(pr.pat);
           if kind_is(peek_kind(q), lex.TokenKind.Comma) {
             let ar4: AdvanceResult = advance(q);
             q = ar4.p;
@@ -761,7 +778,7 @@ fn parse_pat(p: Parser) -> ParsePatResult {
       let ar5: AdvanceResult = expect(q, lex.TokenKind.RParen);
       q = ar5.p;
     }
-    return ParsePatResult { p: q, pat: ast.Pat.EnumVariant(sp0, Vec(), r0.name, binders) };
+    return ParsePatResult { p: q, pat: ast.Pat.EnumVariant(sp0, Vec(), r0.name, args) };
   }
 
   // Wildcard: `_`
@@ -782,16 +799,16 @@ fn parse_pat(p: Parser) -> ParsePatResult {
       parts.push(r2.name);
     }
 
-    // optional binders: (x, y, ...)
-    let mut binders: Vec[String] = Vec();
+    // optional payload patterns: (p0, p1, ...)
+    let mut args: Vec[ast.Pat] = Vec();
     if kind_is(peek_kind(q), lex.TokenKind.LParen) {
       let ar3: AdvanceResult = advance(q);
       q = ar3.p;
       if !kind_is(peek_kind(q), lex.TokenKind.RParen) {
         while !q.has_err {
-          let br: ParseIdentResult = parse_ident(q);
-          q = br.p;
-          binders.push(br.name);
+          let pr: ParsePatResult = parse_pat(q);
+          q = pr.p;
+          args.push(pr.pat);
           if kind_is(peek_kind(q), lex.TokenKind.Comma) {
             let ar4: AdvanceResult = advance(q);
             q = ar4.p;
@@ -816,10 +833,10 @@ fn parse_pat(p: Parser) -> ParsePatResult {
         enum_parts.push(parts.get(i));
         i = i + 1;
       }
-      return ParsePatResult { p: q, pat: ast.Pat.EnumVariant(sp0, enum_parts, variant, binders) };
+      return ParsePatResult { p: q, pat: ast.Pat.EnumVariant(sp0, enum_parts, variant, args) };
     }
 
-    if binders.len() != 0 {
+    if args.len() != 0 {
       // `x(...)` with no path doesn't exist in this subset.
       let mut qq: Parser = q;
       let at: i32 = peek(p).start;

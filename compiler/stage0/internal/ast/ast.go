@@ -385,7 +385,7 @@ func (p *WildPat) Span() source.Span { return p.S }
 type VariantPat struct {
 	TypeParts []string // enum type path segments
 	Variant   string
-	Binds     []string // payload binders (arity 0..N)
+	Args      []Pattern // payload patterns (arity 0..N)
 	S         source.Span
 }
 

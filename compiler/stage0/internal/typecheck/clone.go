@@ -102,11 +102,9 @@ func clonePat(p ast.Pattern) ast.Pattern {
 		cp := *x
 		return &cp
 	case *ast.VariantPat:
-		cp := &ast.VariantPat{
-			TypeParts: append([]string{}, x.TypeParts...),
-			Variant:   x.Variant,
-			Binds:     append([]string{}, x.Binds...),
-			S:         x.S,
+		cp := &ast.VariantPat{TypeParts: append([]string{}, x.TypeParts...), Variant: x.Variant, S: x.S}
+		for _, a := range x.Args {
+			cp.Args = append(cp.Args, clonePat(a))
 		}
 		return cp
 	default:

@@ -124,10 +124,30 @@ fn main() -> i32 { return 0; }`)
 	}
 }
 
+func TestParseRangeTypeAliasDeclNegativeBounds(t *testing.T) {
+	f := source.NewFile("test.vox", `type Small = @range(-5..=5) i32
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Types) != 1 {
+		t.Fatalf("expected 1 type alias, got %d", len(prog.Types))
+	}
+	td := prog.Types[0]
+	rt, ok := td.Type.(*ast.RangeType)
+	if !ok {
+		t.Fatalf("expected RangeType, got %#v", td.Type)
+	}
+	if rt.Lo != -5 || rt.Hi != 5 {
+		t.Fatalf("unexpected bounds: %#v", rt)
+	}
+}
+
 func TestParseConstDecl(t *testing.T) {
 	f := source.NewFile("test.vox", `const N: i32 = 10
-pub const M: i64 = 20;
-fn main() -> i32 { return 0; }`)
+	pub const M: i64 = 20;
+	fn main() -> i32 { return 0; }`)
 	prog, diags := Parse(f)
 	if diags != nil && len(diags.Items) > 0 {
 		t.Fatalf("unexpected diags: %+v", diags.Items)

@@ -842,7 +842,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 		return c.setExprType(ex, thenTy)
-	case *ast.MatchExpr:
+		case *ast.MatchExpr:
 		scrutTy := c.checkExpr(e.Scrutinee, Type{K: TyBad})
 		scrutBase := stripRange(scrutTy)
 		isEnum := scrutBase.K == TyEnum
@@ -863,79 +863,95 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		}
 
 		resultTy := expected
-		seenVariants := map[string]bool{}
-		hasWild := false
+			// Coverage approximation for exhaustiveness:
+			// - wildcard/bind arm covers all.
+			// - a variant arm covers that variant fully iff all payload patterns are wild/bind.
+			seenVariantFull := map[string]bool{}
+			hasWild := false
 
-		for _, arm := range e.Arms {
-			c.pushScope()
-			switch p := arm.Pat.(type) {
-			case *ast.WildPat:
-				hasWild = true
-			case *ast.BindPat:
-				// Always matches, but introduces a name for the scrutinee.
-				hasWild = true
-				if p.Name != "" {
-					c.scopeTop()[p.Name] = varInfo{ty: scrutTy, mutable: false}
-				}
-			case *ast.IntPat:
-				if !isInt {
-					c.errorAt(p.S, "integer pattern only allowed when scrutinee is int (stage0)")
-				} else {
-					u, err := strconv.ParseUint(p.Text, 10, 64)
-					if err != nil {
-						c.errorAt(p.S, "invalid integer literal in pattern")
+			for _, arm := range e.Arms {
+				c.pushScope()
+				switch p := arm.Pat.(type) {
+				case *ast.WildPat:
+					hasWild = true
+				case *ast.BindPat:
+					// Always matches, but introduces a name for the scrutinee.
+					hasWild = true
+					if p.Name != "" {
+						c.scopeTop()[p.Name] = varInfo{ty: scrutTy, mutable: false}
+					}
+				case *ast.IntPat:
+					if !isInt {
+						c.errorAt(p.S, "integer pattern only allowed when scrutinee is int (stage0)")
 					} else {
-						base := scrutBase
-						if base.K == TyUntypedInt {
-							base = Type{K: TyI64}
-						}
-						_, max, ok := intMinMax(base)
-						if ok && u > max {
-							c.errorAt(p.S, "integer pattern out of range for "+base.String())
+						i64v, err := strconv.ParseInt(p.Text, 10, 64)
+						if err != nil {
+							c.errorAt(p.S, "invalid integer literal in pattern")
+						} else {
+							base := scrutBase
+							if base.K == TyUntypedInt {
+								base = Type{K: TyI64}
+							}
+							min, max, ok := intMinMax(base)
+							if ok {
+								if i64v < min {
+									c.errorAt(p.S, "integer pattern out of range for "+base.String())
+								} else if i64v >= 0 && uint64(i64v) > max {
+									c.errorAt(p.S, "integer pattern out of range for "+base.String())
+								}
+							} else {
+								c.errorAt(p.S, "integer pattern out of range for "+base.String())
+							}
 						}
 					}
-				}
-			case *ast.StrPat:
-				if !isStr {
-					c.errorAt(p.S, "string pattern only allowed when scrutinee is String (stage0)")
-				}
-			case *ast.VariantPat:
-				if !isEnum {
-					c.errorAt(p.S, "enum variant pattern only allowed when scrutinee is enum (stage0)")
-					break
-				}
-				if c.curFn == nil || c.curFn.Span.File == nil {
-					c.errorAt(arm.S, "internal error: missing file for match")
-					break
-				}
-				pty := scrutTy
-				psig := esig
-				ok := true
-				if len(p.TypeParts) != 0 {
-					pty, psig, ok = c.resolveEnumByParts(c.curFn.Span.File, p.TypeParts, p.S)
-					if ok && !sameType(scrutTy, pty) {
-						c.errorAt(p.S, "pattern enum type does not match scrutinee")
+				case *ast.StrPat:
+					if !isStr {
+						c.errorAt(p.S, "string pattern only allowed when scrutinee is String (stage0)")
 					}
+				case *ast.VariantPat:
+					if !isEnum {
+						c.errorAt(p.S, "enum variant pattern only allowed when scrutinee is enum (stage0)")
+						break
+					}
+					if c.curFn == nil || c.curFn.Span.File == nil {
+						c.errorAt(arm.S, "internal error: missing file for match")
+						break
+					}
+					pty := scrutTy
+					psig := esig
+					ok := true
+					if len(p.TypeParts) != 0 {
+						pty, psig, ok = c.resolveEnumByParts(c.curFn.Span.File, p.TypeParts, p.S)
+						if ok && !sameType(scrutTy, pty) {
+							c.errorAt(p.S, "pattern enum type does not match scrutinee")
+						}
+					}
+					vidx, vok := psig.VariantIndex[p.Variant]
+					if !vok {
+						c.errorAt(p.S, "unknown variant: "+p.Variant)
+						break
+					}
+					v := psig.Variants[vidx]
+					if len(p.Args) != len(v.Fields) {
+						c.errorAt(p.S, fmt.Sprintf("wrong number of variant pattern args: expected %d, got %d", len(v.Fields), len(p.Args)))
+					}
+					fullCover := true
+					for i := 0; i < len(p.Args) && i < len(v.Fields); i++ {
+						arg := p.Args[i]
+						// Only wild/bind cover the whole variant payload space.
+						switch arg.(type) {
+						case *ast.WildPat, *ast.BindPat:
+						default:
+							fullCover = false
+						}
+						c.checkMatchPat(arg, v.Fields[i])
+					}
+					if fullCover {
+						seenVariantFull[p.Variant] = true
+					}
+				default:
+					c.errorAt(arm.S, "unsupported pattern (stage0)")
 				}
-				vidx, vok := psig.VariantIndex[p.Variant]
-				if !vok {
-					c.errorAt(p.S, "unknown variant: "+p.Variant)
-					break
-				}
-				if seenVariants[p.Variant] {
-					c.errorAt(p.S, "duplicate match arm for variant: "+p.Variant)
-				}
-				seenVariants[p.Variant] = true
-				v := psig.Variants[vidx]
-				if len(p.Binds) != len(v.Fields) {
-					c.errorAt(p.S, fmt.Sprintf("wrong number of binders: expected %d, got %d", len(v.Fields), len(p.Binds)))
-				}
-				for i := 0; i < len(p.Binds) && i < len(v.Fields); i++ {
-					c.scopeTop()[p.Binds[i]] = varInfo{ty: v.Fields[i], mutable: false}
-				}
-			default:
-				c.errorAt(arm.S, "unsupported pattern (stage0)")
-			}
 
 			armTy := c.checkExpr(arm.Expr, resultTy)
 			if resultTy.K == TyBad {
@@ -958,24 +974,112 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			c.popScope()
 		}
 
-		if isEnum {
-			if !hasWild {
-				for _, v := range esig.Variants {
-					if !seenVariants[v.Name] {
-						c.errorAt(e.S, "non-exhaustive match, missing variant: "+v.Name)
+			if isEnum {
+				if !hasWild {
+					for _, v := range esig.Variants {
+						if !seenVariantFull[v.Name] {
+							c.errorAt(e.S, "non-exhaustive match, missing catch-all arm for variant: "+v.Name)
+						}
 					}
 				}
+			} else {
+				// Non-enum scrutinee: require a wildcard/bind arm for exhaustiveness.
+				if !hasWild {
+					c.errorAt(e.S, "non-exhaustive match, missing wildcard arm `_`")
+				}
 			}
-		} else {
-			// Non-enum scrutinee: require a wildcard/bind arm for exhaustiveness.
-			if !hasWild {
-				c.errorAt(e.S, "non-exhaustive match, missing wildcard arm `_`")
-			}
-		}
-		return c.setExprType(ex, resultTy)
+			return c.setExprType(ex, resultTy)
 	default:
 		c.errorAt(ex.Span(), "unsupported expression")
 		return c.setExprType(ex, Type{K: TyBad})
+	}
+}
+
+func (c *checker) checkMatchPat(p ast.Pattern, expected Type) {
+	switch x := p.(type) {
+	case *ast.WildPat:
+		return
+	case *ast.BindPat:
+		if x.Name != "" && x.Name != "_" {
+			c.scopeTop()[x.Name] = varInfo{ty: expected, mutable: false}
+		}
+		return
+	case *ast.IntPat:
+		base := stripRange(expected)
+		if base.K == TyUntypedInt {
+			base = Type{K: TyI64}
+		}
+		if !isIntType(base) {
+			c.errorAt(x.S, "integer pattern only allowed on int fields (stage0)")
+			return
+		}
+		i64v, err := strconv.ParseInt(x.Text, 10, 64)
+		if err != nil {
+			c.errorAt(x.S, "invalid integer literal in pattern")
+			return
+		}
+		min, max, ok := intMinMax(base)
+		if !ok {
+			c.errorAt(x.S, "invalid integer type in pattern")
+			return
+		}
+		if i64v < min {
+			c.errorAt(x.S, "integer pattern out of range for "+base.String())
+			return
+		}
+		if i64v >= 0 && uint64(i64v) > max {
+			c.errorAt(x.S, "integer pattern out of range for "+base.String())
+			return
+		}
+		return
+	case *ast.StrPat:
+		if stripRange(expected).K != TyString {
+			c.errorAt(x.S, "string pattern only allowed on String fields (stage0)")
+		}
+		return
+	case *ast.VariantPat:
+		want := stripRange(expected)
+		if want.K != TyEnum {
+			c.errorAt(x.S, "enum variant pattern only allowed on enum fields (stage0)")
+			return
+		}
+		if c.curFn == nil || c.curFn.Span.File == nil {
+			c.errorAt(x.S, "internal error: missing file for match pattern")
+			return
+		}
+		// Resolve enum type for pattern.
+		pty := want
+		psig, ok := c.enumSigs[want.Name]
+		if !ok {
+			c.errorAt(x.S, "unknown enum type: "+want.Name)
+			return
+		}
+		if len(x.TypeParts) != 0 {
+			pty2, psig2, ok2 := c.resolveEnumByParts(c.curFn.Span.File, x.TypeParts, x.S)
+			if !ok2 {
+				return
+			}
+			pty = pty2
+			psig = psig2
+			if !sameType(want, pty) {
+				c.errorAt(x.S, "pattern enum type does not match expected field type")
+			}
+		}
+		vidx, vok := psig.VariantIndex[x.Variant]
+		if !vok {
+			c.errorAt(x.S, "unknown variant: "+x.Variant)
+			return
+		}
+		v := psig.Variants[vidx]
+		if len(x.Args) != len(v.Fields) {
+			c.errorAt(x.S, fmt.Sprintf("wrong number of variant pattern args: expected %d, got %d", len(v.Fields), len(x.Args)))
+		}
+		for i := 0; i < len(x.Args) && i < len(v.Fields); i++ {
+			c.checkMatchPat(x.Args[i], v.Fields[i])
+		}
+		return
+	default:
+		c.errorAt(p.Span(), "unsupported pattern (stage0)")
 	}
 }
 

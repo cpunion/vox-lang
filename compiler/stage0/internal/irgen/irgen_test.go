@@ -96,12 +96,13 @@ fn main() -> i32 {
 
 func TestLowerMatchIntAndStrPatterns(t *testing.T) {
 	f1 := source.NewFile("src/main.vox", `fn main(x: i32) -> i32 {
-  return match x {
-    0 => 1,
-    1 => 2,
-    _ => 3,
-  };
-}`)
+	  return match x {
+	    -1 => 0,
+	    0 => 1,
+	    1 => 2,
+	    _ => 3,
+	  };
+	}`)
 	prog, pdiags := parser.Parse(f1)
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		t.Fatalf("parse diags: %+v", pdiags.Items)
@@ -110,17 +111,20 @@ func TestLowerMatchIntAndStrPatterns(t *testing.T) {
 	if tdiags != nil && len(tdiags.Items) > 0 {
 		t.Fatalf("type diags: %+v", tdiags.Items)
 	}
-	_, err := Generate(checked)
+	irp, err := Generate(checked)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(irp.Format(), "-1") {
+		t.Fatalf("expected IR to contain -1 const for negative int pattern; got:\n%s", irp.Format())
+	}
 
 	f2 := source.NewFile("src/main.vox", `fn main(s: String) -> i32 {
-  return match s {
-    "a" => 1,
-    _ => 0,
-  };
-}`)
+	  return match s {
+	    "a" => 1,
+	    _ => 0,
+	  };
+	}`)
 	prog, pdiags = parser.Parse(f2)
 	if pdiags != nil && len(pdiags.Items) > 0 {
 		t.Fatalf("parse diags: %+v", pdiags.Items)
@@ -132,6 +136,44 @@ func TestLowerMatchIntAndStrPatterns(t *testing.T) {
 	_, err = Generate(checked)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLowerMatchNestedVariantPatterns(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum O { Some(i32), None }
+enum R { Ok(O), Err(i32) }
+fn main(x: R) -> i32 {
+  return match x {
+    R.Ok(O.Some(v)) => v,
+    R.Ok(O.None) => 0,
+    // Stage0: exhaustiveness checking is variant-based; require a catch-all arm per variant.
+    R.Ok(_o) => 0,
+    R.Err(_) => -1,
+  };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	irp, err := Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := irp.Format()
+	if strings.Count(s, "enum_tag") < 2 {
+		t.Fatalf("expected nested enum patterns to use enum_tag checks; got:\n%s", s)
+	}
+	if strings.Count(s, "enum_payload") < 2 {
+		t.Fatalf("expected nested enum patterns to use enum_payload extraction; got:\n%s", s)
+	}
+	for _, sub := range []string{" Ok ", " Some ", " None ", " Err "} {
+		if !strings.Contains(s, sub) {
+			t.Fatalf("expected IR to mention variant %q; got:\n%s", sub, s)
+		}
 	}
 }
 

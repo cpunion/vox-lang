@@ -15,6 +15,30 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
 
   if arms.len() == 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
+  // Enum metadata for exhaustiveness checks and enum variant patterns.
+  let mut es: EnumSig = EnumSig { mod_path: "", name: "", is_pub: false, vars: Vec() };
+  if is_enum {
+    let et: ir.Ty = ir.ty_pool_get(ctx.pool, scrut_base);
+    let fe: FindEnumResult = find_enum(ctx, ty_mod(et), ty_name(et));
+    if !fe.found {
+      let sp: ast.Span = ast.expr_pool_span(exprs, scrut);
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "unknown enum in match") };
+    }
+    es = fe.sig;
+  }
+
+  // Stage0/Stage1 v0 exhaustiveness approximation:
+  // - Any top-level wildcard/bind arm makes the match exhaustive.
+  // - Otherwise:
+  //   - enum scrutinee: require a catch-all arm per variant (payload args are all wild/bind).
+  //   - non-enum scrutinee: require a wildcard/bind arm.
+  let mut has_wild: bool = false;
+  let mut seen_full: Vec[bool] = Vec();
+  if is_enum {
+    let mut i: i32 = 0;
+    while i < es.vars.len() { seen_full.push(false); i = i + 1; }
+  }
+
   let mut out_ty: i32 = expected;
   let mut ai: i32 = 0;
   while ai < arms.len() {
@@ -22,6 +46,42 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
     let lr: Locals = locals_enter(l0);
     let pr: PatLocalsResult = tc_pat(ctx, mod_path, imps, sr.ty, scrut_t, arm.pat, lr);
     if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+    // Track exhaustiveness coverage (after tc_pat validates the pattern).
+    if match arm.pat { ast.Pat.Wild(_sp) => true, ast.Pat.Bind(_sp, _n) => true, _ => false } {
+      has_wild = true;
+    } else {
+      if is_enum {
+        if match arm.pat { ast.Pat.EnumVariant(_sp, _ep, _vn, _args) => true, _ => false } {
+          let vn: String = match arm.pat { ast.Pat.EnumVariant(_sp, _ep, vname, _args) => vname, _ => "" };
+          let args: Vec[ast.Pat] = match arm.pat { ast.Pat.EnumVariant(_sp, _ep, _vname, a) => a, _ => Vec() };
+          let mut full: bool = true;
+          let mut pi: i32 = 0;
+          while pi < args.len() {
+            let ap: ast.Pat = args.get(pi);
+            if !match ap { ast.Pat.Wild(_s) => true, ast.Pat.Bind(_s, _n) => true, _ => false } { full = false; }
+            pi = pi + 1;
+          }
+          if full {
+            // Find the variant index and mark it.
+            let mut vi: i32 = 0;
+            while vi < es.vars.len() {
+              if es.vars.get(vi).name == vn {
+                // Update bool vec element.
+                let mut newv: Vec[bool] = Vec();
+                let mut j: i32 = 0;
+                while j < seen_full.len() {
+                  if j == vi { newv.push(true); } else { newv.push(seen_full.get(j)); }
+                  j = j + 1;
+                }
+                seen_full = newv;
+              }
+              vi = vi + 1;
+            }
+          }
+        }
+      }
+    }
 
     let want: i32 = out_ty;
     let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, pr.locals, arm.expr, want);
@@ -42,6 +102,25 @@ fn tc_expr_match(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
     }
 
     ai = ai + 1;
+  }
+
+  // Exhaustiveness errors.
+  if is_enum {
+    if !has_wild {
+      let mut vi: i32 = 0;
+      while vi < es.vars.len() {
+        if !seen_full.get(vi) {
+          let sp: ast.Span = ast.expr_pool_span(exprs, scrut);
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "non-exhaustive match, missing catch-all arm for variant: ".concat(es.vars.get(vi).name)) };
+        }
+        vi = vi + 1;
+      }
+    }
+  } else {
+    if !has_wild {
+      let sp: ast.Span = ast.expr_pool_span(exprs, scrut);
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "non-exhaustive match, missing wildcard arm `_`") };
+    }
   }
 
   if out_ty == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
@@ -65,14 +144,14 @@ fn tc_pat(ctx: Ctx, mod_path: String, imps: Imports, scrut_ty: i32, scrut_t: ir.
         } else {
           let v: i64 = pr.val;
           let ok_lit: bool = match scrut_t.kind {
-            ir.TyKind.I8 => v <= 127,
-            ir.TyKind.U8 => v <= 255,
-            ir.TyKind.I32 => v <= 2147483647,
-            ir.TyKind.U32 => v <= 4294967295,
+            ir.TyKind.I8 => v >= -128 && v <= 127,
+            ir.TyKind.U8 => v >= 0 && v <= 255,
+            ir.TyKind.I32 => v >= -2147483648 && v <= 2147483647,
+            ir.TyKind.U32 => v >= 0 && v <= 4294967295,
             ir.TyKind.I64 => true,
-            // Stage1 v0: pattern literals are parsed as i64 decimals; allow those for u64/usize too.
-            ir.TyKind.U64 => true,
-            ir.TyKind.USize => true,
+            // Stage1 v0: pattern literals are parsed as i64 decimals; allow non-negative values for u64/usize too.
+            ir.TyKind.U64 => v >= 0,
+            ir.TyKind.USize => v >= 0,
             _ => false,
           };
           if !ok_lit { PatLocalsResult { ok: false, locals: l0 } }
@@ -81,11 +160,11 @@ fn tc_pat(ctx: Ctx, mod_path: String, imps: Imports, scrut_ty: i32, scrut_t: ir.
       }
     },
     ast.Pat.Str(_sp, _) => if strip_range(ctx, scrut_ty) == ctx.ty_string { PatLocalsResult { ok: true, locals: l0 } } else { PatLocalsResult { ok: false, locals: l0 } },
-    ast.Pat.EnumVariant(_sp, enum_parts, var_name, binders) => tc_pat_enum(ctx, mod_path, imps, scrut_t, enum_parts, var_name, binders, l0),
+    ast.Pat.EnumVariant(_sp, enum_parts, var_name, args) => tc_pat_enum(ctx, mod_path, imps, scrut_t, enum_parts, var_name, args, l0),
   };
 }
 
-fn tc_pat_enum(ctx: Ctx, mod_path: String, imps: Imports, scrut_t: ir.Ty, enum_parts: Vec[String], var_name: String, binders: Vec[String], l0: Locals) -> PatLocalsResult {
+fn tc_pat_enum(ctx: Ctx, mod_path: String, imps: Imports, scrut_t: ir.Ty, enum_parts: Vec[String], var_name: String, args: Vec[ast.Pat], l0: Locals) -> PatLocalsResult {
   let is_enum: bool = match scrut_t.kind { ir.TyKind.Enum => true, _ => false };
   if !is_enum { return PatLocalsResult { ok: false, locals: l0 }; }
 
@@ -101,11 +180,16 @@ fn tc_pat_enum(ctx: Ctx, mod_path: String, imps: Imports, scrut_t: ir.Ty, enum_p
     while vi0 < es0.vars.len() {
       let v0: EnumVariantSig = es0.vars.get(vi0);
       if v0.name == var_name {
-        if v0.fields.len() != binders.len() { return PatLocalsResult { ok: false, locals: l0 }; }
+        if v0.fields.len() != args.len() { return PatLocalsResult { ok: false, locals: l0 }; }
         let mut l: Locals = l0;
         let mut bi: i32 = 0;
-        while bi < binders.len() {
-          l = locals_decl(l, binders.get(bi), v0.fields.get(bi), false);
+        while bi < args.len() && bi < v0.fields.len() {
+          let fty: i32 = v0.fields.get(bi);
+          let fbase: i32 = strip_range(ctx, fty);
+          let ft: ir.Ty = ir.ty_pool_get(ctx.pool, fbase);
+          let pr: PatLocalsResult = tc_pat(ctx, mod_path, imps, fty, ft, args.get(bi), l);
+          if !pr.ok { return PatLocalsResult { ok: false, locals: l0 }; }
+          l = pr.locals;
           bi = bi + 1;
         }
         return PatLocalsResult { ok: true, locals: l };
@@ -145,11 +229,16 @@ fn tc_pat_enum(ctx: Ctx, mod_path: String, imps: Imports, scrut_t: ir.Ty, enum_p
   while vi < es.vars.len() {
     let v: EnumVariantSig = es.vars.get(vi);
     if v.name == var_name {
-      if v.fields.len() != binders.len() { return PatLocalsResult { ok: false, locals: l0 }; }
+      if v.fields.len() != args.len() { return PatLocalsResult { ok: false, locals: l0 }; }
       let mut l: Locals = l0;
       let mut bi: i32 = 0;
-      while bi < binders.len() {
-        l = locals_decl(l, binders.get(bi), v.fields.get(bi), false);
+      while bi < args.len() && bi < v.fields.len() {
+        let fty: i32 = v.fields.get(bi);
+        let fbase: i32 = strip_range(ctx, fty);
+        let ft: ir.Ty = ir.ty_pool_get(ctx.pool, fbase);
+        let pr: PatLocalsResult = tc_pat(ctx, mod_path, imps, fty, ft, args.get(bi), l);
+        if !pr.ok { return PatLocalsResult { ok: false, locals: l0 }; }
+        l = pr.locals;
         bi = bi + 1;
       }
       return PatLocalsResult { ok: true, locals: l };

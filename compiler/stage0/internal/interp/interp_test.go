@@ -145,8 +145,18 @@ func TestInterpMatchIntPatterns(t *testing.T) {
 
 func TestInterpMatchI64Patterns(t *testing.T) {
 	out := runMain(t, `fn main() -> i32 {
-	  let x: i64 = 3000000000;
-	  return match x { 3000000000 => 1, _ => 0 };
+		  let x: i64 = 3000000000;
+		  return match x { 3000000000 => 1, _ => 0 };
+		}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
+func TestInterpMatchNegativeIntPattern(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+	  let x: i32 = -1;
+	  return match x { -1 => 1, _ => 0 };
 	}`)
 	if out != "1" {
 		t.Fatalf("expected 1, got %q", out)
@@ -155,19 +165,52 @@ func TestInterpMatchI64Patterns(t *testing.T) {
 
 func TestInterpMatchStringPatterns(t *testing.T) {
 	out := runMain(t, `fn main() -> i32 {
-	  let s: String = "a";
-	  return match s { "a" => 1, _ => 0 };
-	}`)
+		  let s: String = "a";
+		  return match s { "a" => 1, _ => 0 };
+		}`)
 	if out != "1" {
 		t.Fatalf("expected 1, got %q", out)
 	}
 }
 
+func TestInterpMatchNestedVariantPatterns(t *testing.T) {
+	out := runMain(t, `enum O { Some(i32), None }
+enum R { Ok(O), Err(i32) }
+fn main() -> i32 {
+  let x: R = R.Ok(O.Some(5));
+  return match x {
+    R.Ok(O.Some(v)) => v,
+    R.Ok(O.None) => 0,
+    // Stage0: exhaustiveness checking is variant-based; require a catch-all arm per variant.
+    R.Ok(_o) => 0,
+    R.Err(_) => -1,
+  };
+}`)
+	if out != "5" {
+		t.Fatalf("expected 5, got %q", out)
+	}
+}
+
+func TestInterpMatchMultipleArmsSameVariant(t *testing.T) {
+	out := runMain(t, `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = E.A(0);
+  return match x {
+    E.A(1) => 1,
+    E.A(v) => v,
+    E.None => -1,
+  };
+}`)
+	if out != "0" {
+		t.Fatalf("expected 0, got %q", out)
+	}
+}
+
 func TestInterpMatchBindPattern(t *testing.T) {
 	out := runMain(t, `fn main() -> i32 {
-	  let x: i32 = 41;
-	  return match x { v => v + 1 };
-	}`)
+		  let x: i32 = 41;
+		  return match x { v => v + 1 };
+		}`)
 	if out != "42" {
 		t.Fatalf("expected 42, got %q", out)
 	}

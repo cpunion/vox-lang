@@ -2,11 +2,251 @@ package irgen
 
 import (
 	"fmt"
+	"strconv"
 
 	"voxlang/internal/ast"
 	"voxlang/internal/ir"
 	"voxlang/internal/typecheck"
 )
+
+func truncBits(u uint64, w int) uint64 {
+	if w >= 64 || w <= 0 {
+		return u
+	}
+	return u & ((uint64(1) << uint64(w)) - 1)
+}
+
+func isIntType(t typecheck.Type) bool {
+	switch t.K {
+	case typecheck.TyI8, typecheck.TyU8, typecheck.TyI32, typecheck.TyU32, typecheck.TyI64, typecheck.TyU64, typecheck.TyUSize:
+		return true
+	default:
+		return false
+	}
+}
+
+func isIntLikeType(t typecheck.Type) bool {
+	if t.K == typecheck.TyUntypedInt {
+		return true
+	}
+	if t.K == typecheck.TyRange && t.Base != nil {
+		return isIntType(*t.Base)
+	}
+	return isIntType(t)
+}
+
+func isUnsignedIntType(t typecheck.Type) bool {
+	switch t.K {
+	case typecheck.TyU8, typecheck.TyU32, typecheck.TyU64, typecheck.TyUSize:
+		return true
+	default:
+		return false
+	}
+}
+
+func intBitWidth(t typecheck.Type) int {
+	switch t.K {
+	case typecheck.TyI8, typecheck.TyU8:
+		return 8
+	case typecheck.TyI32, typecheck.TyU32:
+		return 32
+	case typecheck.TyI64, typecheck.TyU64, typecheck.TyUSize, typecheck.TyUntypedInt:
+		return 64
+	default:
+		return 0
+	}
+}
+
+func intConstBitsForType(text string, ty typecheck.Type) (uint64, error) {
+	base := ty
+	if base.K == typecheck.TyRange && base.Base != nil {
+		base = *base.Base
+	}
+	if !isIntLikeType(base) || base.K == typecheck.TyUntypedInt {
+		return 0, fmt.Errorf("expected int type")
+	}
+	i64v, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid int literal")
+	}
+	// v0 limitation: literals/pattern literals live in int64 syntax.
+	if isUnsignedIntType(base) && i64v < 0 {
+		return 0, fmt.Errorf("negative int literal for unsigned type")
+	}
+	w := intBitWidth(base)
+	return truncBits(uint64(i64v), w), nil
+}
+
+func enumSigForTy(p *typecheck.CheckedProgram, ty typecheck.Type) (typecheck.EnumSig, bool) {
+	base := ty
+	if base.K == typecheck.TyRange && base.Base != nil {
+		base = *base.Base
+	}
+	if base.K != typecheck.TyEnum {
+		return typecheck.EnumSig{}, false
+	}
+	es, ok := p.EnumSigs[base.Name]
+	return es, ok
+}
+
+func (g *gen) genPatTest(pat ast.Pattern, v ir.Value, vTy typecheck.Type, succ, fail *ir.Block) error {
+	switch p := pat.(type) {
+	case *ast.WildPat, *ast.BindPat:
+		g.term(&ir.Br{Target: succ.Name})
+		return nil
+	case *ast.IntPat:
+		base := vTy
+		if base.K == typecheck.TyRange && base.Base != nil {
+			base = *base.Base
+		}
+		if base.K == typecheck.TyUntypedInt {
+			base = typecheck.Type{K: typecheck.TyI64}
+		}
+		if !isIntLikeType(base) {
+			return fmt.Errorf("int pattern requires int scrutinee")
+		}
+		cmpTy, err := g.irTypeFromChecked(base)
+		if err != nil {
+			return err
+		}
+		bits, err := intConstBitsForType(p.Text, base)
+		if err != nil {
+			return err
+		}
+		cmpTmp := g.newTemp()
+		g.emit(&ir.Cmp{Dst: cmpTmp, Op: ir.CmpEq, Ty: cmpTy, A: v, B: &ir.ConstInt{Ty: cmpTy, Bits: bits}})
+		g.term(&ir.CondBr{Cond: cmpTmp, Then: succ.Name, Else: fail.Name})
+		return nil
+	case *ast.StrPat:
+		if vTy.K != typecheck.TyString {
+			return fmt.Errorf("string pattern requires String scrutinee")
+		}
+		s, err := unquoteUnescape(p.Text)
+		if err != nil {
+			return err
+		}
+		cmpTmp := g.newTemp()
+		g.emit(&ir.Cmp{Dst: cmpTmp, Op: ir.CmpEq, Ty: ir.Type{K: ir.TString}, A: v, B: &ir.ConstStr{S: s}})
+		g.term(&ir.CondBr{Cond: cmpTmp, Then: succ.Name, Else: fail.Name})
+		return nil
+	case *ast.VariantPat:
+		es, ok := enumSigForTy(g.p, vTy)
+		if !ok {
+			return fmt.Errorf("enum variant pattern requires enum scrutinee")
+		}
+		tag, ok := es.VariantIndex[p.Variant]
+		if !ok {
+			return fmt.Errorf("unknown variant: %s", p.Variant)
+		}
+		// Check tag first.
+		tagTmp := g.newTemp()
+		g.emit(&ir.EnumTag{Dst: tagTmp, Recv: v})
+		cmpTmp := g.newTemp()
+		g.emit(&ir.Cmp{
+			Dst: cmpTmp,
+			Op:  ir.CmpEq,
+			Ty:  ir.Type{K: ir.TI32},
+			A:   tagTmp,
+			B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: uint64(tag)},
+		})
+
+		// Payload checks (if any) run in a separate block.
+		if len(p.Args) == 0 {
+			g.term(&ir.CondBr{Cond: cmpTmp, Then: succ.Name, Else: fail.Name})
+			return nil
+		}
+
+		payloadStart := g.newBlock(fmt.Sprintf("match_pat_payload_%d", len(g.blocks)))
+		g.term(&ir.CondBr{Cond: cmpTmp, Then: payloadStart.Name, Else: fail.Name})
+		g.setBlock(payloadStart)
+
+		vdecl := es.Variants[tag]
+		// Arity mismatch should have been rejected by typecheck; keep lowering defensive.
+		n := len(p.Args)
+		if n > len(vdecl.Fields) {
+			n = len(vdecl.Fields)
+		}
+		cur := payloadStart
+		for i := 0; i < n; i++ {
+			// Extract payload field.
+			fty, err := g.irTypeFromChecked(vdecl.Fields[i])
+			if err != nil {
+				return err
+			}
+			ftmp := g.newTemp()
+			g.emit(&ir.EnumPayload{Dst: ftmp, Ty: fty, Recv: v, Variant: p.Variant, Index: i})
+
+			nextOK := succ
+			if i != n-1 {
+				nextOK = g.newBlock(fmt.Sprintf("match_pat_ok_%d", len(g.blocks)))
+			}
+			// genPatTest terminates the current block.
+			if err := g.genPatTest(p.Args[i], ftmp, vdecl.Fields[i], nextOK, fail); err != nil {
+				return err
+			}
+			if i != n-1 {
+				g.setBlock(nextOK)
+				cur = nextOK
+				_ = cur
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported pattern in IR gen")
+	}
+}
+
+func (g *gen) genPatBinds(pat ast.Pattern, v ir.Value, vTy typecheck.Type) error {
+	switch p := pat.(type) {
+	case *ast.WildPat:
+		return nil
+	case *ast.IntPat, *ast.StrPat:
+		return nil
+	case *ast.BindPat:
+		if p.Name == "" || p.Name == "_" {
+			return nil
+		}
+		irty, err := g.irTypeFromChecked(vTy)
+		if err != nil {
+			return err
+		}
+		slot := g.newSlot()
+		g.slotTypes[slot.ID] = irty
+		g.emit(&ir.SlotDecl{Slot: slot, Ty: irty})
+		g.emit(&ir.Store{Slot: slot, Val: v})
+		g.declare(p.Name, slot)
+		return nil
+	case *ast.VariantPat:
+		es, ok := enumSigForTy(g.p, vTy)
+		if !ok {
+			return fmt.Errorf("enum variant bind requires enum value")
+		}
+		tag, ok := es.VariantIndex[p.Variant]
+		if !ok {
+			return fmt.Errorf("unknown variant: %s", p.Variant)
+		}
+		vdecl := es.Variants[tag]
+		n := len(p.Args)
+		if n > len(vdecl.Fields) {
+			n = len(vdecl.Fields)
+		}
+		for i := 0; i < n; i++ {
+			fty := vdecl.Fields[i]
+			irty, err := g.irTypeFromChecked(fty)
+			if err != nil {
+				return err
+			}
+			ftmp := g.newTemp()
+			g.emit(&ir.EnumPayload{Dst: ftmp, Ty: irty, Recv: v, Variant: p.Variant, Index: i})
+			if err := g.genPatBinds(p.Args[i], ftmp, fty); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported pattern bind in IR gen")
+	}
+}
 
 func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	// Evaluate scrutinee once.
@@ -20,25 +260,18 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 	if scrutBase.K == typecheck.TyRange && scrutBase.Base != nil {
 		scrutBase = *scrutBase.Base
 	}
-	isEnum := scrutTy.K == typecheck.TyEnum
+	isEnum := scrutBase.K == typecheck.TyEnum
 	isInt := scrutBase.K == typecheck.TyI8 ||
 		scrutBase.K == typecheck.TyU8 ||
 		scrutBase.K == typecheck.TyI32 ||
 		scrutBase.K == typecheck.TyU32 ||
 		scrutBase.K == typecheck.TyI64 ||
 		scrutBase.K == typecheck.TyU64 ||
-		scrutBase.K == typecheck.TyUSize
+		scrutBase.K == typecheck.TyUSize ||
+		scrutBase.K == typecheck.TyUntypedInt
 	isStr := scrutTy.K == typecheck.TyString
 	if !isEnum && !isInt && !isStr {
 		return nil, fmt.Errorf("match scrutinee must be enum/int/String")
-	}
-	var es typecheck.EnumSig
-	var tagTmp *ir.Temp
-	if isEnum {
-		es = g.p.EnumSigs[scrutTy.Name]
-		// Extract tag.
-		tagTmp = g.newTemp()
-		g.emit(&ir.EnumTag{Dst: tagTmp, Recv: scrut})
 	}
 
 	resTyChecked := g.p.ExprTypes[m]
@@ -63,153 +296,37 @@ func (g *gen) genMatchExpr(m *ast.MatchExpr) (ir.Value, error) {
 
 	endBlk := g.newBlock(fmt.Sprintf("match_end_%d", len(g.blocks)))
 
-	// Prepare arm blocks.
-	type armInfo struct {
-		arm       ast.MatchArm
-		blk       *ir.Block
-		variant   string
-		tag       *int
-		bindScrut string
-		intPat    *uint64
-		strPat    *string
-		binds     []string
-		bindTys   []typecheck.Type
-	}
-	var arms []armInfo
-	var wildBlk *ir.Block
+	// Generate arm decision chain in source order.
+	curDecide := g.curBlock
+	armBlks := make([]*ir.Block, 0, len(m.Arms))
 
-	for _, a := range m.Arms {
-		info := armInfo{arm: a, blk: g.newBlock(fmt.Sprintf("match_arm_%d", len(g.blocks)))}
-		switch p := a.Pat.(type) {
-		case *ast.WildPat:
-			wildBlk = info.blk
-		case *ast.BindPat:
-			wildBlk = info.blk
-			info.bindScrut = p.Name
-		case *ast.IntPat:
-			if !isInt {
-				return nil, fmt.Errorf("int pattern requires int scrutinee")
-			}
-			v := parseUint64(p.Text)
-			info.intPat = &v
-		case *ast.StrPat:
-			if !isStr {
-				return nil, fmt.Errorf("string pattern requires String scrutinee")
-			}
-			s, err := unquoteUnescape(p.Text)
-			if err != nil {
-				return nil, err
-			}
-			info.strPat = &s
-		case *ast.VariantPat:
-			if !isEnum {
-				return nil, fmt.Errorf("enum variant pattern requires enum scrutinee")
-			}
-			t := es.VariantIndex[p.Variant]
-			info.variant = p.Variant
-			info.tag = &t
-			if len(p.Binds) != 0 {
-				fields := es.Variants[t].Fields
-				n := len(p.Binds)
-				if n > len(fields) {
-					n = len(fields)
-				}
-				info.binds = append([]string{}, p.Binds[:n]...)
-				for i := 0; i < n; i++ {
-					info.bindTys = append(info.bindTys, fields[i])
-				}
-			}
-		default:
-			return nil, fmt.Errorf("unsupported pattern in IR gen")
+	for _, arm := range m.Arms {
+		armBlk := g.newBlock(fmt.Sprintf("match_arm_%d", len(g.blocks)))
+		armBlks = append(armBlks, armBlk)
+		next := g.newBlock(fmt.Sprintf("match_decide_%d", len(g.blocks)))
+
+		g.setBlock(curDecide)
+		if err := g.genPatTest(arm.Pat, scrut, scrutTy, armBlk, next); err != nil {
+			return nil, err
 		}
-		arms = append(arms, info)
+		curDecide = next
 	}
 
-	// Decision chain starting from current block.
-	for i := 0; i < len(arms); i++ {
-		info := arms[i]
-		if info.tag == nil && info.intPat == nil && info.strPat == nil {
-			continue
-		}
-		nextDecide := g.newBlock(fmt.Sprintf("match_decide_%d", len(g.blocks)))
-		cmpTmp := g.newTemp()
-		if info.tag != nil {
-			g.emit(&ir.Cmp{
-				Dst: cmpTmp,
-				Op:  ir.CmpEq,
-				Ty:  ir.Type{K: ir.TI32},
-				A:   tagTmp,
-				B:   &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: uint64(*info.tag)},
-			})
-			g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
-		} else if info.intPat != nil {
-			cmpTy, err := g.irTypeFromChecked(scrutBase)
-			if err != nil {
-				return nil, err
-			}
-			g.emit(&ir.Cmp{
-				Dst: cmpTmp,
-				Op:  ir.CmpEq,
-				Ty:  cmpTy,
-				A:   scrut,
-				B:   &ir.ConstInt{Ty: cmpTy, Bits: *info.intPat},
-			})
-			g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
-		} else {
-			g.emit(&ir.Cmp{
-				Dst: cmpTmp,
-				Op:  ir.CmpEq,
-				Ty:  ir.Type{K: ir.TString},
-				A:   scrut,
-				B:   &ir.ConstStr{S: *info.strPat},
-			})
-			g.term(&ir.CondBr{Cond: cmpTmp, Then: info.blk.Name, Else: nextDecide.Name})
-		}
-		g.setBlock(nextDecide)
-	}
-
-	// Default branch.
-	if wildBlk != nil {
-		g.term(&ir.Br{Target: wildBlk.Name})
-	} else {
-		g.term(&ir.Br{Target: endBlk.Name})
-	}
+	// Fallthrough default: should be unreachable for well-typed exhaustive matches.
+	g.setBlock(curDecide)
+	g.term(&ir.Br{Target: endBlk.Name})
 
 	// Arm blocks.
-	scrutIRTy, err := g.irTypeFromChecked(scrutTy)
-	if err != nil {
-		return nil, err
-	}
-	for _, info := range arms {
-		g.setBlock(info.blk)
+	for i, arm := range m.Arms {
+		g.setBlock(armBlks[i])
 		g.pushScope()
 
-		if info.bindScrut != "" {
-			slot := g.newSlot()
-			g.slotTypes[slot.ID] = scrutIRTy
-			g.emit(&ir.SlotDecl{Slot: slot, Ty: scrutIRTy})
-			g.emit(&ir.Store{Slot: slot, Val: scrut})
-			g.declare(info.bindScrut, slot)
+		// Bindings for this arm (after successful pattern tests).
+		if err := g.genPatBinds(arm.Pat, scrut, scrutTy); err != nil {
+			return nil, err
 		}
 
-		for i := 0; i < len(info.binds) && i < len(info.bindTys); i++ {
-			pty, err := g.irTypeFromChecked(info.bindTys[i])
-			if err != nil {
-				return nil, err
-			}
-			tmp := g.newTemp()
-			if !isEnum {
-				return nil, fmt.Errorf("enum payload only valid for enum scrutinee")
-			}
-			g.emit(&ir.EnumPayload{Dst: tmp, Ty: pty, Recv: scrut, Variant: info.variant, Index: i})
-			slot := g.newSlot()
-			g.slotTypes[slot.ID] = pty
-			g.emit(&ir.SlotDecl{Slot: slot, Ty: pty})
-			g.emit(&ir.Store{Slot: slot, Val: tmp})
-			g.declare(info.binds[i], slot)
-		}
-
-		v, err := g.genExpr(info.arm.Expr)
+		v, err := g.genExpr(arm.Expr)
 		if err != nil {
 			return nil, err
 		}

@@ -710,100 +710,31 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			m[init.Name] = cloneValue(v)
 		}
 		return Value{K: VStruct, M: m}, nil
-	case *ast.MatchExpr:
-		sv, err := rt.evalExpr(e.Scrutinee)
-		if err != nil {
-			return unit(), err
-		}
-		// Enum metadata is only needed when matching enum variant patterns.
-		var es typecheck.EnumSig
-		hasEnumSig := false
-		if sv.K == VEnum {
-			ety := rt.prog.ExprTypes[e.Scrutinee]
-			if ety.K != typecheck.TyEnum {
-				ety = typecheck.Type{K: typecheck.TyEnum, Name: sv.E}
+		case *ast.MatchExpr:
+			sv, err := rt.evalExpr(e.Scrutinee)
+			if err != nil {
+				return unit(), err
 			}
-			sig, ok := rt.prog.EnumSigs[ety.Name]
-			if !ok {
-				return unit(), fmt.Errorf("unknown enum: %s", ety.Name)
-			}
-			es = sig
-			hasEnumSig = true
-		}
-		scrutTy := stripRange(rt.prog.ExprTypes[e.Scrutinee])
-		for _, arm := range e.Arms {
-			switch p := arm.Pat.(type) {
-			case *ast.WildPat:
-				return rt.evalExpr(arm.Expr)
-			case *ast.BindPat:
-				// Bind pattern always matches and binds the scrutinee to Name.
+			scrutTy := stripRange(rt.prog.ExprTypes[e.Scrutinee])
+			for _, arm := range e.Arms {
 				rt.pushFrame()
-				rt.frame()[p.Name] = cloneValue(sv)
-				v, err := rt.evalExpr(arm.Expr)
-				rt.popFrame()
-				return v, err
-			case *ast.IntPat:
-				if sv.K != VInt || !isIntType(scrutTy) {
-					continue
-				}
-				var n uint64
-				for i := 0; i < len(p.Text); i++ {
-					n = n*10 + uint64(p.Text[i]-'0')
-				}
-				patBits, err := castIntChecked(n, typecheck.Type{K: typecheck.TyI64}, scrutTy)
+				ok, err := rt.matchPat(arm.Pat, sv, scrutTy)
 				if err != nil {
-					continue
+					rt.popFrame()
+					return unit(), err
 				}
-				if truncBits(sv.I, intBitWidth(scrutTy)) != patBits {
-					continue
+				if ok {
+					v, err := rt.evalExpr(arm.Expr)
+					rt.popFrame()
+					return v, err
 				}
-				return rt.evalExpr(arm.Expr)
-			case *ast.StrPat:
-				if sv.K != VString {
-					continue
-				}
-				s, err := strconv.Unquote(p.Text)
-				if err != nil {
-					return unit(), fmt.Errorf("invalid string pattern")
-				}
-				if sv.S != s {
-					continue
-				}
-				return rt.evalExpr(arm.Expr)
-			case *ast.VariantPat:
-				if sv.K != VEnum {
-					continue
-				}
-				if !hasEnumSig {
-					return unit(), fmt.Errorf("internal: missing enum sig for match")
-				}
-				tag, ok := es.VariantIndex[p.Variant]
-				if !ok {
-					return unit(), fmt.Errorf("unknown variant: %s", p.Variant)
-				}
-				if sv.T != tag {
-					continue
-				}
-				rt.pushFrame()
-				for i := 0; i < len(p.Binds); i++ {
-					if i < len(sv.P) {
-						rt.frame()[p.Binds[i]] = cloneValue(sv.P[i])
-					} else {
-						rt.frame()[p.Binds[i]] = unit()
-					}
-				}
-				v, err := rt.evalExpr(arm.Expr)
 				rt.popFrame()
-				return v, err
-			default:
-				return unit(), fmt.Errorf("unsupported pattern")
 			}
+			return unit(), fmt.Errorf("non-exhaustive match")
+		default:
+			return unit(), fmt.Errorf("unsupported expr")
 		}
-		return unit(), fmt.Errorf("non-exhaustive match")
-	default:
-		return unit(), fmt.Errorf("unsupported expr")
 	}
-}
 
 func interpCalleeParts(ex ast.Expr) ([]string, bool) {
 	switch e := ex.(type) {

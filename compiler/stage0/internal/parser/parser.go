@@ -577,25 +577,41 @@ func (p *Parser) parseType() ast.Type {
 	}
 
 	// range: @range(lo..=hi) Base
-	if p.match(lexer.TokenAt) {
-		atTok := p.prev()
-		kw := p.expect(lexer.TokenIdent, "expected `range` after `@`")
-		if kw.Kind == lexer.TokenIdent && kw.Lexeme != "range" {
-			p.errorAt(kw.Span, "unknown type directive: @"+kw.Lexeme)
-		}
-		p.expect(lexer.TokenLParen, "expected `(` after `@range`")
-		loTok := p.expect(lexer.TokenInt, "expected integer lower bound in @range")
-		p.expect(lexer.TokenDotDotEq, "expected `..=` in @range bounds")
-		hiTok := p.expect(lexer.TokenInt, "expected integer upper bound in @range")
-		rp := p.expect(lexer.TokenRParen, "expected `)` after @range bounds")
+		if p.match(lexer.TokenAt) {
+			atTok := p.prev()
+			kw := p.expect(lexer.TokenIdent, "expected `range` after `@`")
+			if kw.Kind == lexer.TokenIdent && kw.Lexeme != "range" {
+				p.errorAt(kw.Span, "unknown type directive: @"+kw.Lexeme)
+			}
+			p.expect(lexer.TokenLParen, "expected `(` after `@range`")
+			loNeg := false
+			if p.match(lexer.TokenMinus) {
+				loNeg = true
+			}
+			loTok := p.expect(lexer.TokenInt, "expected integer lower bound in @range")
+			p.expect(lexer.TokenDotDotEq, "expected `..=` in @range bounds")
+			hiNeg := false
+			if p.match(lexer.TokenMinus) {
+				hiNeg = true
+			}
+			hiTok := p.expect(lexer.TokenInt, "expected integer upper bound in @range")
+			rp := p.expect(lexer.TokenRParen, "expected `)` after @range bounds")
 
-		lo, _ := strconv.ParseInt(loTok.Lexeme, 10, 64)
-		hi, _ := strconv.ParseInt(hiTok.Lexeme, 10, 64)
-		base := p.parseType()
-		end := rp.Span
-		if base != nil {
-			end = base.Span()
-		}
+			loText := loTok.Lexeme
+			if loNeg {
+				loText = "-" + loText
+			}
+			hiText := hiTok.Lexeme
+			if hiNeg {
+				hiText = "-" + hiText
+			}
+			lo, _ := strconv.ParseInt(loText, 10, 64)
+			hi, _ := strconv.ParseInt(hiText, 10, 64)
+			base := p.parseType()
+			end := rp.Span
+			if base != nil {
+				end = base.Span()
+			}
 		return &ast.RangeType{Lo: lo, Hi: hi, Base: base, S: joinSpan(atTok.Span, end)}
 	}
 
@@ -726,21 +742,35 @@ func (p *Parser) parseBlockExpr(lbrace lexer.Token) ast.Expr {
 		// But we must still allow statement `if` without `else`, which stage1 code uses.
 		if p.peek().Kind == lexer.TokenIf && p.ifExprHasElseAhead() {
 			// fallthrough to expression parsing below
-		} else {
-			switch p.peek().Kind {
-			case lexer.TokenLet, lexer.TokenIf, lexer.TokenWhile, lexer.TokenLBrace:
-			st := p.parseStmt()
-			if st != nil {
-				stmts = append(stmts, st)
 			} else {
+				switch p.peek().Kind {
+				case lexer.TokenLet, lexer.TokenIf, lexer.TokenWhile, lexer.TokenLBrace:
+				st := p.parseStmt()
+				if st != nil {
+					stmts = append(stmts, st)
+				} else {
+					p.advance()
+				}
+				continue
+				case lexer.TokenIdent:
+					// Allow assignment statements inside expression blocks, but preserve the ability
+					// to use an identifier expression as the tail value (`{ x }`).
+					// Only route to parseStmt when the lookahead makes it unambiguously an assignment.
+					if p.peekN(1).Kind == lexer.TokenEq ||
+						(p.peekN(1).Kind == lexer.TokenDot && p.peekN(2).Kind == lexer.TokenIdent && p.peekN(3).Kind == lexer.TokenEq) {
+						st := p.parseStmt()
+						if st != nil {
+							stmts = append(stmts, st)
+						} else {
+							p.advance()
+						}
+						continue
+					}
+				case lexer.TokenReturn, lexer.TokenBreak, lexer.TokenContinue:
+				// These are legal statements generally, but block expressions are used as subexpressions.
+				// Keep stage0 IR gen simple by rejecting top-level terminators here.
+				p.errorHere("`return`/`break`/`continue` are not allowed in expression blocks (stage0)")
 				p.advance()
-			}
-			continue
-			case lexer.TokenReturn, lexer.TokenBreak, lexer.TokenContinue:
-			// These are legal statements generally, but block expressions are used as subexpressions.
-			// Keep stage0 IR gen simple by rejecting top-level terminators here.
-			p.errorHere("`return`/`break`/`continue` are not allowed in expression blocks (stage0)")
-			p.advance()
 			continue
 			}
 		}
@@ -913,15 +943,12 @@ func (p *Parser) parsePattern() ast.Pattern {
 		start := p.advance()
 		id := p.expect(lexer.TokenIdent, "expected identifier after `.`")
 		endSpan := id.Span
-		binds := []string{}
+		var args []ast.Pattern
 		if p.match(lexer.TokenLParen) {
 			if !p.at(lexer.TokenRParen) {
 				for {
-					b := p.expect(lexer.TokenIdent, "expected binder name")
-					if b.Kind == lexer.TokenIdent {
-						binds = append(binds, b.Lexeme)
-					}
-					if p.match(lexer.TokenComma) {
+					args = append(args, p.parsePattern())
+					if p.match(lexer.TokenComma) && !p.at(lexer.TokenRParen) {
 						continue
 					}
 					break
@@ -934,9 +961,20 @@ func (p *Parser) parsePattern() ast.Pattern {
 		if id.Kind == lexer.TokenIdent {
 			name = id.Lexeme
 		}
-		return &ast.VariantPat{TypeParts: nil, Variant: name, Binds: binds, S: joinSpan(start.Span, endSpan)}
+		return &ast.VariantPat{TypeParts: nil, Variant: name, Args: args, S: joinSpan(start.Span, endSpan)}
 	}
 	start := p.peek()
+	if p.at(lexer.TokenMinus) {
+		// Negative integer pattern: `-123`
+		minus := p.advance()
+		tok := p.expect(lexer.TokenInt, "expected integer literal after `-`")
+		text := ""
+		endSpan := tok.Span
+		if tok.Kind == lexer.TokenInt {
+			text = "-" + tok.Lexeme
+		}
+		return &ast.IntPat{Text: text, S: joinSpan(minus.Span, endSpan)}
+	}
 	id := p.expect(lexer.TokenIdent, "expected pattern")
 	parts := []string{}
 	if id.Kind == lexer.TokenIdent {
@@ -950,15 +988,12 @@ func (p *Parser) parsePattern() ast.Pattern {
 		}
 		endSpan = n.Span
 	}
-	binds := []string{}
+	var args []ast.Pattern
 	if p.match(lexer.TokenLParen) {
 		if !p.at(lexer.TokenRParen) {
 			for {
-				b := p.expect(lexer.TokenIdent, "expected binder name")
-				if b.Kind == lexer.TokenIdent {
-					binds = append(binds, b.Lexeme)
-				}
-				if p.match(lexer.TokenComma) {
+				args = append(args, p.parsePattern())
+				if p.match(lexer.TokenComma) && !p.at(lexer.TokenRParen) {
 					continue
 				}
 				break
@@ -970,8 +1005,8 @@ func (p *Parser) parsePattern() ast.Pattern {
 	if len(parts) < 2 {
 		// Bind pattern: `name` always matches and binds the scrutinee to `name`.
 		// `_` is handled earlier as WildPat.
-		if len(binds) != 0 {
-			p.errorAt(start.Span, "bind pattern does not take payload binders")
+		if len(args) != 0 {
+			p.errorAt(start.Span, "bind pattern does not take payload patterns")
 		}
 		name := ""
 		if len(parts) == 1 {
@@ -979,7 +1014,7 @@ func (p *Parser) parsePattern() ast.Pattern {
 		}
 		return &ast.BindPat{Name: name, S: joinSpan(start.Span, endSpan)}
 	}
-	return &ast.VariantPat{TypeParts: parts[:len(parts)-1], Variant: parts[len(parts)-1], Binds: binds, S: joinSpan(start.Span, endSpan)}
+	return &ast.VariantPat{TypeParts: parts[:len(parts)-1], Variant: parts[len(parts)-1], Args: args, S: joinSpan(start.Span, endSpan)}
 }
 
 func (p *Parser) parsePostfix(ex ast.Expr, allowStructLit bool) ast.Expr {

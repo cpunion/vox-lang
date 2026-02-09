@@ -158,6 +158,7 @@ type Value = I32: i32 | Str: String;
 
 ```vox
 type Tiny = @range(0..=3) i32;
+type Small = @range(-5..=5) i32;
 ```
 
 范围类型在运行时的检查语义（已定）：
@@ -170,7 +171,7 @@ type Tiny = @range(0..=3) i32;
 Stage0/Stage1 v0 当前实现限制：
 
 - `T` 仅支持整数类型（当前 stage0 实现：`i8/u8/i32/u32/i64/u64/usize`）。
-- `lo/hi` 仅支持十进制整数字面量。
+- `lo/hi` 仅支持十进制整数字面量（允许前缀 `-`）。
 
 ## 枚举构造子点前缀简写（已定）
 
@@ -194,10 +195,36 @@ Stage0/Stage1 目前支持的 `match` pattern 形态：
 
 - `_`：wildcard
 - `name`：绑定模式（bind），总是匹配，并把 scrutinee 绑定到 `name`
-- `123`：整数字面量（仅当 scrutinee 是整数类型）
+- `123` / `-123`：整数字面量（仅当 scrutinee 是整数类型）
 - `"txt"`：字符串字面量（仅当 scrutinee 是 `String`）
-- `Enum.Variant(...)`：枚举 variant pattern
-- `.Variant(...)`：枚举 variant pattern（点前缀简写；当枚举类型可由上下文确定时）
+- `Enum.Variant(p0, p1, ...)`：枚举 variant pattern（payload 位置是 pattern，可递归）
+- `.Variant(p0, p1, ...)`：枚举 variant pattern（点前缀简写；当枚举类型可由上下文确定时）
+
+示例：
+
+```vox
+match x {
+  .Some(0) => 0,
+  .Some(v) => v,
+  .None => -1,
+}
+```
+
+递归 payload pattern：
+
+```vox
+match r {
+  .Ok(.Some(v)) => v,
+  .Ok(.None) => 0,
+  .Err(_) => -1,
+}
+```
+
+穷尽性（Stage0/Stage1 v0 的近似规则，已实现）：
+
+- 若存在 `_` 或 `name` 这种“总是匹配”的 arm，则视为穷尽。
+- 否则：对每个 enum variant，必须至少有一个“catch-all arm”，其 payload pattern 全是 `_` 或绑定模式（例如 `.Some(_)` / `.Some(x)`），以覆盖该 variant 的剩余情况。
+  - 允许同一个 variant 出现多个 arm：先写更具体的 payload pattern，再写该 variant 的 catch-all arm。
 
 ## 类型别名（type alias）
 

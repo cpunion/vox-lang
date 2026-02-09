@@ -716,6 +716,55 @@ fn main() -> i32 {
 	}
 }
 
+func TestMatchAllowsMultipleArmsPerVariantWithCatchAll(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = E.A(1);
+  return match x {
+    E.A(0) => 0,
+    E.A(v) => v,
+    E.None => -1,
+  };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestMatchRequiresVariantCatchAllWhenNoWildcardOrBind(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum E { A(i32), None }
+fn main() -> i32 {
+  let x: E = E.A(1);
+  return match x {
+    E.A(0) => 0,
+    E.None => 0,
+  };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "non-exhaustive match, missing catch-all arm for variant: A" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected catch-all diagnostic, got: %+v", tdiags.Items)
+	}
+}
+
 func TestPubVisibilityForCrossModuleAccess(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "a"
