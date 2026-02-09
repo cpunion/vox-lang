@@ -96,15 +96,14 @@
 - `a && b`：先求值 `a`；若 `a == false`，则 `b` **不会**被求值，结果为 `false`。
 - `a || b`：先求值 `a`；若 `a == true`，则 `b` **不会**被求值，结果为 `true`。
 
-## 相等（`==`/`!=`，Stage0 约束）
+## 相等（`==`/`!=`，Stage1 约束）
 
-Stage0 为了保持实现范围可控，对相等运算符有额外约束：
+Stage1 当前对相等运算符的约束：
 
 - `bool/<int>/f32/f64/String`：支持完整 `==`/`!=`。
   - 其中 `<int>` 指整数标量类型：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`。
-- `enum`：仅支持与 **unit variant**（无 payload 的构造子值）比较，例如 `x == E.None`。
-  - 该比较降低为 `enum_tag(x) == tag(E.None)`。
-  - 不支持 `E.A(1) == E.A(2)` 这类 payload 比较（Stage1 再引入更完整的机制）。
+- `enum`：支持同类型枚举的 `==`/`!=`，包含 payload 比较（先比 tag，再按 variant 逐字段比较）。
+  - payload 字段类型也必须是可比较类型（基础标量、`String`、或同样满足条件的 `enum`）。
 
 ## 浮点字面量（Stage0/Stage1 v0）
 

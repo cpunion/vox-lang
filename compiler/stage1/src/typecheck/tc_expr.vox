@@ -327,6 +327,44 @@ fn enum_unit_tag_in_enum(ctx: Ctx, enum_ty: i32, var_name: String) -> i32 {
   return -1;
 }
 
+fn contains_str_tc_expr(xs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if xs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn eq_ty_capable(ctx: Ctx, ty: i32, seen0: Vec[String]) -> bool {
+  let base: i32 = strip_range(ctx, ty);
+  if base == ctx.ty_bool || base == ctx.ty_string { return true; }
+  if is_int_like_ty(ctx, base) || is_float_ty(ctx, base) { return true; }
+
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind != ir.TyKind.Enum { return false; }
+
+  let qn: String = ty_mod(t).concat("::").concat(ty_name(t));
+  if contains_str_tc_expr(seen0, qn) { return true; }
+  let mut seen: Vec[String] = seen0;
+  seen.push(qn);
+
+  let fe: FindEnumResult = find_enum(ctx, ty_mod(t), ty_name(t));
+  if !fe.found { return false; }
+  let es: EnumSig = fe.sig;
+  let mut vi: i32 = 0;
+  while vi < es.vars.len() {
+    let v: EnumVariantSig = es.vars.get(vi);
+    let mut fi: i32 = 0;
+    while fi < v.fields.len() {
+      if !eq_ty_capable(ctx, v.fields.get(fi), seen) { return false; }
+      fi = fi + 1;
+    }
+    vi = vi + 1;
+  }
+  return true;
+}
+
 fn is_enum_unit_value(ctx: Ctx, mod_path: String, imps: Imports, exprs: ast.ExprPool, id: i32, enum_ty: i32) -> bool {
   if !is_enum_ty(ctx, enum_ty) { return false; }
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
@@ -496,10 +534,9 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
         if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
         return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
       }
-      // Stage0 parity: enum equality is only allowed against unit variant values (lowers to tag compare).
+      // Enum payload equality: recursively allow enums whose payload fields are also equality-capable.
       if is_enum_ty(ctx, lbase) {
-        let ok_unit: bool = is_enum_unit_value(ctx, mod_path, imps, exprs, l, lbase) || is_enum_unit_value(ctx, mod_path, imps, exprs, r, lbase);
-        if !ok_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        if !eq_ty_capable(ctx, lbase, Vec()) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       } else {
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
       }
