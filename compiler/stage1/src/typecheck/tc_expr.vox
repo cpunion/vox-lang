@@ -217,10 +217,25 @@ fn tc_expr_int(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyRes
   return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal out of range") };
 }
 
-fn tc_expr_float(ctx: Ctx, sp: ast.Span, _text: String, expected: i32) -> ExprTyResult {
+fn tc_expr_float(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyResult {
   // Float literal inference:
-  // - expected f32/f64 => use expected
+  // - explicit suffix (`f32`/`f64`) => fixed literal type
+  // - otherwise expected f32/f64 => use expected
   // - otherwise default to f64
+  let suf: i32 = float_suffix_kind_text(text);
+  if suf == 32 || suf == 64 {
+    let lit_ty: i32 = if suf == 32 { ctx.ty_f32 } else { ctx.ty_f64 };
+    if expected != -1 {
+      let eb: i32 = strip_range(ctx, expected);
+      if eb != expected || !is_float_ty(ctx, eb) {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "float literal requires expected f32/f64") };
+      }
+      if eb != lit_ty {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "float suffix conflicts with expected type") };
+      }
+    }
+    return ExprTyResult { ok: true, ty: lit_ty, err: TcError.None };
+  }
   if expected != -1 {
     if expected == ctx.ty_f32 { return ExprTyResult { ok: true, ty: ctx.ty_f32, err: TcError.None }; }
     if expected == ctx.ty_f64 { return ExprTyResult { ok: true, ty: ctx.ty_f64, err: TcError.None }; }
@@ -466,6 +481,18 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
         _ => false,
       };
     if !ok_prim {
+      // Generic type parameter equality is allowed when the type param is
+      // explicitly bounded by Eq (local trait or prelude fallback).
+      if lt.kind == ir.TyKind.Param {
+        let tp: String = lt.name;
+        let prelude: String = "std/prelude";
+        let has_eq: bool =
+          locals_has_type_param_bound(ctx, l0, tp, mod_path, "Eq") ||
+          locals_has_type_param_bound(ctx, l0, tp, prelude, "Eq");
+        if !has_eq { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
+      }
       // Stage0 parity: enum equality is only allowed against unit variant values (lowers to tag compare).
       if is_enum_ty(ctx, lbase) {
         let ok_unit: bool = is_enum_unit_value(ctx, mod_path, imps, exprs, l, lbase) || is_enum_unit_value(ctx, mod_path, imps, exprs, r, lbase);

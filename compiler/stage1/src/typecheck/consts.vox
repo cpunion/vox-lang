@@ -100,17 +100,82 @@ fn is_float_scalar_ty(ctx: Ctx, ty: i32) -> bool {
 
 fn is_digit_byte(b: i32) -> bool { return b >= 48 && b <= 57; }
 
+struct ParseSignedI32Result { ok: bool, val: i32 }
+
+fn zeros_text(n: i32) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < n {
+    out = out.concat("0");
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn float_suffix_kind_text(s: String) -> i32 {
+  // 0 = none, 32 = f32, 64 = f64
+  if s.len() < 3 { return 0; }
+  if s.byte_at(s.len() - 3) != 102 { return 0; } // 'f'
+  let b1: i32 = s.byte_at(s.len() - 2);
+  let b2: i32 = s.byte_at(s.len() - 1);
+  if b1 == 51 && b2 == 50 { return 32; } // f32
+  if b1 == 54 && b2 == 52 { return 64; } // f64
+  return 0;
+}
+
+pub fn float_strip_suffix_text(s: String) -> String {
+  let k: i32 = float_suffix_kind_text(s);
+  if k == 0 { return s; }
+  return s.slice(0, s.len() - 3);
+}
+
+fn parse_signed_i32_dec(s: String) -> ParseSignedI32Result {
+  if s.len() == 0 { return ParseSignedI32Result { ok: false, val: 0 }; }
+  let mut i: i32 = 0;
+  let mut neg: bool = false;
+  if s.byte_at(0) == 45 { neg = true; i = 1; } else if s.byte_at(0) == 43 { i = 1; }
+  if i >= s.len() { return ParseSignedI32Result { ok: false, val: 0 }; }
+  let ds: String = s.slice(i, s.len());
+  let pr: ParseI32DecResult = parse_i32_dec(ds);
+  if !pr.ok { return ParseSignedI32Result { ok: false, val: 0 }; }
+  if neg { return ParseSignedI32Result { ok: true, val: 0 - pr.val }; }
+  return ParseSignedI32Result { ok: true, val: pr.val };
+}
+
 fn float_norm_text(s0: String) -> String {
   // Canonical form used for const float equality:
   // - optional leading '-'
   // - at least one digit before dot
   // - at least one digit after dot
-  // - trim leading zeros in integer part and trailing zeros in fraction
-  let mut s: String = s0;
+  // - trim leading zeros in integer part and trailing zeros in fraction.
+  // Also accepts exponent (`1e3`, `1.2e-3`) and suffix (`f32`/`f64`).
+  let mut s: String = float_strip_suffix_text(s0);
   let mut neg: bool = false;
   if s.len() > 0 && s.byte_at(0) == 45 { // '-'
     neg = true;
     s = s.slice(1, s.len());
+  }
+
+  // Split exponent part if present.
+  let mut exp_shift: i32 = 0;
+  let mut epos: i32 = -1;
+  let mut ei: i32 = 0;
+  while ei < s.len() {
+    let b: i32 = s.byte_at(ei);
+    if b == 101 || b == 69 { // 'e' / 'E'
+      epos = ei;
+      ei = s.len();
+    } else {
+      ei = ei + 1;
+    }
+  }
+  if epos != -1 {
+    let expt: String = s.slice(epos + 1, s.len());
+    let pr: ParseSignedI32Result = parse_signed_i32_dec(expt);
+    if pr.ok {
+      exp_shift = pr.val;
+      s = s.slice(0, epos);
+    }
   }
 
   let mut dot: i32 = -1;
@@ -119,14 +184,29 @@ fn float_norm_text(s0: String) -> String {
     if s.byte_at(i) == 46 { dot = i; }
     i = i + 1;
   }
-  if dot == -1 {
-    // Best-effort fallback for non-literal forms.
-    if neg { return "-".concat(s).concat(".0"); }
-    return s.concat(".0");
-  }
+  let mut intp: String = "";
+  let mut frac: String = "";
+  if dot == -1 { intp = s; } else { intp = s.slice(0, dot); frac = s.slice(dot + 1, s.len()); }
+  if intp.len() == 0 { intp = "0"; }
 
-  let mut intp: String = s.slice(0, dot);
-  let mut frac: String = s.slice(dot + 1, s.len());
+  // Re-scale by exponent by moving decimal point.
+  let mut digits: String = intp.concat(frac);
+  if digits.len() == 0 { digits = "0"; }
+  let shift: i32 = exp_shift - frac.len();
+  if shift >= 0 {
+    intp = digits.concat(zeros_text(shift));
+    frac = "0";
+  } else {
+    let split: i32 = digits.len() + shift; // shift is negative
+    if split <= 0 {
+      intp = "0";
+      frac = zeros_text(0 - split).concat(digits);
+    } else {
+      intp = digits.slice(0, split);
+      frac = digits.slice(split, digits.len());
+    }
+  }
+  if frac.len() == 0 { frac = "0"; }
 
   // trim int leading zeros
   let mut ii: i32 = 0;
@@ -379,11 +459,15 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
   }
   if match n { ast.ExprNode.Float(_v) => true, _ => false } {
     let s: String = match n { ast.ExprNode.Float(x) => x, _ => "" };
-    let mut out_ty: i32 = ctx.ty_f64;
+    let suf: i32 = float_suffix_kind_text(s);
+    let mut out_ty: i32 = if suf == 32 { ctx.ty_f32 } else { ctx.ty_f64 };
     if expected != -1 {
       let eb: i32 = strip_range(ctx, expected);
       if eb != expected { return EvalConstExprResult { ok: false, err: type_error(file, "const float requires expected scalar f32/f64"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
       if !is_float_scalar_ty(ctx, eb) { return EvalConstExprResult { ok: false, err: type_error(file, "const float requires expected f32/f64"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+      if (suf == 32 && eb != ctx.ty_f32) || (suf == 64 && eb != ctx.ty_f64) {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const float suffix conflicts with expected type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
       out_ty = eb;
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_float(), ty: out_ty, iv: 0, bv: false, sv: float_norm_text(s), sigs: sigs0, states: states0 };
