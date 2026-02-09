@@ -208,7 +208,7 @@ impl Display for Point {
 - `where` 子句支持复杂约束
 - supertrait：`trait B: A { ... }`
 - coherence/orphan（MVP）：`impl Trait for Type` 要求 `Trait` 或 `Type` 至少一个在当前模块本地定义
-- trait default method（MVP）：允许在 trait 中给方法提供默认实现；同模块 `impl` 可省略该方法
+- trait default method（MVP）：允许在 trait 中给方法提供默认实现；`impl` 可省略该方法（同模块/跨模块均支持）
 - 关联类型、GAT、HRTB 等高级能力暂缓引入，优先保证可实现性与诊断质量
 
 ## 类型推断（草案）

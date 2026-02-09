@@ -43,7 +43,7 @@
 - trait 方法声明（无默认实现）：`trait Eq { fn eq(a: Self, b: Self) -> bool; }`
 - trait 方法默认实现：`trait Show { fn show(x: Self) -> String { return "x"; } }`
 - supertrait：`trait Child: Parent + Other { ... }`
-- `impl` 可省略带默认实现的方法（当前仅支持同模块 trait 的默认实现继承）
+- `impl` 可省略带默认实现的方法（同模块/跨模块 trait 均可继承默认实现）
 
 ## 运算符优先级
 
