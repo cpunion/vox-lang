@@ -82,6 +82,159 @@ dep = { path = "dep_pkg" }
 	}
 }
 
+func TestStage1ToolchainEmitCAndBuildCommands(t *testing.T) {
+	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("fn main() -> i32 { return 7; }\n"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	// emit-c should write C source successfully.
+	outC := filepath.Join(root, "out.c")
+	emit := exec.Command(stage1Bin, "emit-c", outC, "src/main.vox")
+	emit.Dir = root
+	if b, err := emit.CombinedOutput(); err != nil {
+		t.Fatalf("stage1 emit-c failed: %v\n%s", err, string(b))
+	}
+	csrc, err := os.ReadFile(outC)
+	if err != nil {
+		t.Fatalf("read emitted C: %v", err)
+	}
+	if !strings.Contains(string(csrc), "vox_fn_mmain") {
+		t.Fatalf("unexpected emitted C content:\n%s", string(csrc))
+	}
+
+	// build (default user driver): running binary prints main return value.
+	outUser := filepath.Join(root, "out_user")
+	buildUser := exec.Command(stage1Bin, "build", outUser, "src/main.vox")
+	buildUser.Dir = root
+	if b, err := buildUser.CombinedOutput(); err != nil {
+		t.Fatalf("stage1 build failed: %v\n%s", err, string(b))
+	}
+	runUser := exec.Command(outUser)
+	runUser.Dir = root
+	out, err := runUser.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run user binary failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "7" {
+		t.Fatalf("unexpected user driver output: %q", got)
+	}
+
+	// build --driver=tool: running binary should be quiet and return exit code.
+	outTool := filepath.Join(root, "out_tool")
+	buildTool := exec.Command(stage1Bin, "build", "--driver=tool", outTool, "src/main.vox")
+	buildTool.Dir = root
+	if b, err := buildTool.CombinedOutput(); err != nil {
+		t.Fatalf("stage1 build --driver=tool failed: %v\n%s", err, string(b))
+	}
+	runTool := exec.Command(outTool)
+	runTool.Dir = root
+	out2, err := runTool.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected non-zero exit status for tool binary")
+	}
+	ee, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("expected *exec.ExitError, got %T: %v", err, err)
+	}
+	if ee.ExitCode() != 7 {
+		t.Fatalf("unexpected tool driver exit code: %d", ee.ExitCode())
+	}
+	if got := strings.TrimSpace(string(out2)); got != "" {
+		t.Fatalf("expected no stdout for tool driver, got: %q", got)
+	}
+}
+
+func TestStage1ToolchainBuildPkgAndTestPkgUseLocalStd(t *testing.T) {
+	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
+	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
+	if err != nil {
+		t.Fatalf("build stage1 failed: %v", err)
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src", "std", "prelude"), 0o755); err != nil {
+		t.Fatalf("mkdir prelude: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "src", "std", "testing"), 0o755); err != nil {
+		t.Fatalf("mkdir testing: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "tests"), 0o755); err != nil {
+		t.Fatalf("mkdir tests: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+
+	// Local std/prelude defines a marker not present in embedded prelude.
+	// If build-pkg incorrectly injects embedded std, this program will fail to typecheck.
+	preludeAssert := `pub fn assert(cond: bool) -> () { if !cond { panic("assertion failed"); } }
+pub fn marker() -> i32 { return 11; }
+`
+	if err := os.WriteFile(filepath.Join(root, "src", "std", "prelude", "assert.vox"), []byte(preludeAssert), 0o644); err != nil {
+		t.Fatalf("write local prelude: %v", err)
+	}
+	localTesting := `import "std/prelude" as prelude
+pub fn assert(cond: bool) -> () { prelude.assert(cond); }
+`
+	if err := os.WriteFile(filepath.Join(root, "src", "std", "testing", "testing.vox"), []byte(localTesting), 0o644); err != nil {
+		t.Fatalf("write local testing: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("import \"std/prelude\" as prelude\nfn main() -> i32 { return prelude.marker(); }\n"), 0o644); err != nil {
+		t.Fatalf("write main: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tests", "basic.vox"), []byte("import \"std/testing\" as t\nfn test_local_std() -> () { t.assert(true); }\n"), 0o644); err != nil {
+		t.Fatalf("write test: %v", err)
+	}
+
+	// build-pkg should use local std and produce a runnable binary.
+	outBin := filepath.Join(root, "out")
+	build := exec.Command(stage1Bin, "build-pkg", outBin)
+	build.Dir = root
+	if b, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("stage1 build-pkg failed: %v\n%s", err, string(b))
+	}
+	run := exec.Command(outBin)
+	run.Dir = root
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run built binary failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "11" {
+		t.Fatalf("unexpected output: %q", got)
+	}
+
+	// test-pkg should also use local std/testing and run tests successfully.
+	testCmd := exec.Command(stage1Bin, "test-pkg", outBin)
+	testCmd.Dir = root
+	tb, err := testCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage1 test-pkg failed: %v\n%s", err, string(tb))
+	}
+	ts := string(tb)
+	if !strings.Contains(ts, "[OK] tests::test_local_std") {
+		t.Fatalf("missing test ok line:\n%s", ts)
+	}
+	if !strings.Contains(ts, "[test] 1 passed, 0 failed") {
+		t.Fatalf("unexpected test summary:\n%s", ts)
+	}
+}
+
 func TestStage1ToolchainBuildsWithTransitivePathDeps(t *testing.T) {
 	// 1) Build the stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
