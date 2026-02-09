@@ -67,6 +67,22 @@ fn is_signed_int_kind(k: ir.TyKind) -> bool {
   return match k { ir.TyKind.I8 => true, ir.TyKind.I16 => true, ir.TyKind.I32 => true, ir.TyKind.I64 => true, ir.TyKind.ISize => true, _ => false };
 }
 
+fn int_bits_of_kind(k: ir.TyKind) -> i64 {
+  return match k {
+    ir.TyKind.I8 => 8,
+    ir.TyKind.U8 => 8,
+    ir.TyKind.I16 => 16,
+    ir.TyKind.U16 => 16,
+    ir.TyKind.I32 => 32,
+    ir.TyKind.U32 => 32,
+    ir.TyKind.I64 => 64,
+    ir.TyKind.U64 => 64,
+    ir.TyKind.ISize => 64,
+    ir.TyKind.USize => 64,
+    _ => 0,
+  };
+}
+
 fn int_kind(ctx: Ctx, ty: i32) -> ir.TyKind {
   let base: i32 = strip_range(ctx, ty);
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
@@ -330,8 +346,10 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
     let is_cmp: bool = match op { ast.BinaryOp.Lt => true, ast.BinaryOp.Le => true, ast.BinaryOp.Gt => true, ast.BinaryOp.Ge => true, _ => false };
     let is_eq: bool = match op { ast.BinaryOp.Eq => true, ast.BinaryOp.Ne => true, _ => false };
     let is_arith: bool = match op { ast.BinaryOp.Add => true, ast.BinaryOp.Sub => true, ast.BinaryOp.Mul => true, ast.BinaryOp.Div => true, ast.BinaryOp.Mod => true, _ => false };
+    let is_bit: bool = match op { ast.BinaryOp.BitAnd => true, ast.BinaryOp.BitOr => true, ast.BinaryOp.BitXor => true, _ => false };
+    let is_shift: bool = match op { ast.BinaryOp.Shl => true, ast.BinaryOp.Shr => true, _ => false };
 
-    if is_arith || is_cmp {
+    if is_arith || is_bit || is_shift || is_cmp {
       let lr2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, l, expected);
       if !lr2.ok { return lr2; }
       let rr2: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, lr2.sigs, lr2.states, cur_mod, imps, exprs, file, r, expected);
@@ -370,13 +388,24 @@ fn eval_const_expr_in_mod(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[
           return EvalConstExprResult { ok: false, err: type_error(file, "const division overflow"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
         }
       }
+      if is_shift {
+        let wbits: i64 = int_bits_of_kind(k);
+        if rr2.iv < 0 || rr2.iv >= wbits {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const shift count out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+        }
+      }
 
       let raw: i64 = match op {
         ast.BinaryOp.Add => lr2.iv + rr2.iv,
         ast.BinaryOp.Sub => lr2.iv - rr2.iv,
         ast.BinaryOp.Mul => lr2.iv * rr2.iv,
         ast.BinaryOp.Div => lr2.iv / rr2.iv,
-        _ => lr2.iv % rr2.iv,
+        ast.BinaryOp.Mod => lr2.iv % rr2.iv,
+        ast.BinaryOp.BitAnd => lr2.iv & rr2.iv,
+        ast.BinaryOp.BitOr => lr2.iv | rr2.iv,
+        ast.BinaryOp.BitXor => lr2.iv ^ rr2.iv,
+        ast.BinaryOp.Shl => lr2.iv << rr2.iv,
+        _ => lr2.iv >> rr2.iv,
       };
       let wr: WrapResult = wrap_value_for_type(ctx, file, out_ty, raw);
       if !wr.ok { return EvalConstExprResult { ok: false, err: wr.err, kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states }; }

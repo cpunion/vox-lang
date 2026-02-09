@@ -710,6 +710,109 @@ func emitIntBinOp(out *bytes.Buffer, i *ir.BinOp) error {
 		out.WriteString(", &_r, sizeof(_r));\n")
 		out.WriteString("  }\n")
 		return nil
+	case ir.OpBitAnd, ir.OpBitOr, ir.OpBitXor:
+		// Bitwise ops operate on raw bits for all integer types.
+		ut, err := cUnsignedType(i.Ty)
+		if err != nil {
+			return err
+		}
+		out.WriteString("  {\n")
+		out.WriteString("    ")
+		out.WriteString(ut)
+		out.WriteString(" _a; memcpy(&_a, &")
+		out.WriteString(cValue(i.A))
+		out.WriteString(", sizeof(_a));\n")
+		out.WriteString("    ")
+		out.WriteString(ut)
+		out.WriteString(" _b; memcpy(&_b, &")
+		out.WriteString(cValue(i.B))
+		out.WriteString(", sizeof(_b));\n")
+		out.WriteString("    ")
+		out.WriteString(ut)
+		out.WriteString(" _r = _a ")
+		out.WriteString(stringToCOp(string(i.Op)))
+		out.WriteString(" _b;\n")
+		out.WriteString("    memcpy(&")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(", &_r, sizeof(_r));\n")
+		out.WriteString("  }\n")
+		return nil
+	case ir.OpShl, ir.OpShr:
+		// Shift ops on raw bits; panic on invalid shift counts.
+		bits := intBits(i.Ty.K)
+		if bits == 0 {
+			return fmt.Errorf("unsupported int type for shift: %s", i.Ty.String())
+		}
+		ut, err := cUnsignedType(i.Ty)
+		if err != nil {
+			return err
+		}
+		out.WriteString("  {\n")
+		out.WriteString("    ")
+		out.WriteString(ut)
+		out.WriteString(" _a; memcpy(&_a, &")
+		out.WriteString(cValue(i.A))
+		out.WriteString(", sizeof(_a));\n")
+		if intSigned(i.Ty.K) {
+			out.WriteString("    int64_t _sh = (int64_t)")
+			out.WriteString(cValue(i.B))
+			out.WriteString(";\n")
+			out.WriteString("    if (_sh < 0 || _sh >= ")
+			out.WriteString(strconv.Itoa(bits))
+			out.WriteString(") { vox_builtin_panic(\"shift count out of range\"); }\n")
+			out.WriteString("    uint64_t _n = (uint64_t)_sh;\n")
+		} else {
+			out.WriteString("    uint64_t _n = (uint64_t)")
+			out.WriteString(cValue(i.B))
+			out.WriteString(";\n")
+			out.WriteString("    if (_n >= ")
+			out.WriteString(strconv.Itoa(bits))
+			out.WriteString(") { vox_builtin_panic(\"shift count out of range\"); }\n")
+		}
+		if i.Op == ir.OpShl {
+			out.WriteString("    ")
+			out.WriteString(ut)
+			out.WriteString(" _r = (")
+			out.WriteString(ut)
+			out.WriteString(")(_a << _n);\n")
+		} else if intSigned(i.Ty.K) {
+			out.WriteString("    ")
+			out.WriteString(ut)
+			out.WriteString(" _r;\n")
+			out.WriteString("    if (_n == 0) {\n")
+			out.WriteString("      _r = _a;\n")
+			out.WriteString("    } else if ((_a & ((")
+			out.WriteString(ut)
+			out.WriteString(")1 << ")
+			out.WriteString(strconv.Itoa(bits - 1))
+			out.WriteString(")) != 0) {\n")
+			out.WriteString("      ")
+			out.WriteString(ut)
+			out.WriteString(" _m = ~(((")
+			out.WriteString(ut)
+			out.WriteString(")~(")
+			out.WriteString(ut)
+			out.WriteString(")0) >> _n);\n")
+			out.WriteString("      _r = (")
+			out.WriteString(ut)
+			out.WriteString(")((_a >> _n) | _m);\n")
+			out.WriteString("    } else {\n")
+			out.WriteString("      _r = (")
+			out.WriteString(ut)
+			out.WriteString(")(_a >> _n);\n")
+			out.WriteString("    }\n")
+		} else {
+			out.WriteString("    ")
+			out.WriteString(ut)
+			out.WriteString(" _r = (")
+			out.WriteString(ut)
+			out.WriteString(")(_a >> _n);\n")
+		}
+		out.WriteString("    memcpy(&")
+		out.WriteString(cTempName(i.Dst.ID))
+		out.WriteString(", &_r, sizeof(_r));\n")
+		out.WriteString("  }\n")
+		return nil
 	case ir.OpDiv, ir.OpMod:
 		// Division/modulo: check divide-by-zero; signed MIN/-1 overflows.
 		if intSigned(i.Ty.K) {

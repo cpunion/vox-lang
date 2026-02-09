@@ -330,7 +330,7 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 
 		// int ops
 		isInt := func(t Type) bool { bt := stripRange(t); return bt.K == TyUntypedInt || isIntType(bt) }
-		if e.Op == "+" || e.Op == "-" || e.Op == "*" || e.Op == "/" || e.Op == "%" {
+		if e.Op == "+" || e.Op == "-" || e.Op == "*" || e.Op == "/" || e.Op == "%" || e.Op == "&" || e.Op == "|" || e.Op == "^" || e.Op == "<<" || e.Op == ">>" {
 			if !isInt(lty) || !isInt(rty) {
 				c.errorAt(e.S, "const expression: arithmetic expects ints")
 				return ConstValue{K: ConstBad}, Type{K: TyBad}
@@ -355,6 +355,24 @@ func (c *checker) evalConstExpr(ex ast.Expr, file *source.File) (ConstValue, Typ
 					return ConstValue{K: ConstBad}, Type{K: TyBad}
 				}
 				out = lv.I64 % rv.I64
+			case "&":
+				out = lv.I64 & rv.I64
+			case "|":
+				out = lv.I64 | rv.I64
+			case "^":
+				out = lv.I64 ^ rv.I64
+			case "<<":
+				if rv.I64 < 0 || rv.I64 >= 64 {
+					c.errorAt(e.S, "const expression: shift count out of range")
+					return ConstValue{K: ConstBad}, Type{K: TyBad}
+				}
+				out = lv.I64 << uint(rv.I64)
+			case ">>":
+				if rv.I64 < 0 || rv.I64 >= 64 {
+					c.errorAt(e.S, "const expression: shift count out of range")
+					return ConstValue{K: ConstBad}, Type{K: TyBad}
+				}
+				out = lv.I64 >> uint(rv.I64)
 			}
 			return ConstValue{K: ConstInt, I64: out}, Type{K: TyUntypedInt}
 		}

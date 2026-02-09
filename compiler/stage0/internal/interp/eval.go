@@ -250,7 +250,7 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			return unit(), err
 		}
 		switch e.Op {
-		case "+", "-", "*", "/", "%", "<", "<=", ">", ">=":
+		case "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>", "<", "<=", ">", ">=":
 			if l.K != VInt || r.K != VInt {
 				return unit(), fmt.Errorf("binary op %s expects ints", e.Op)
 			}
@@ -294,6 +294,37 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 					return Value{K: VInt, I: truncBits(uint64(a%b), w)}, nil
 				}
 				return Value{K: VInt, I: truncBits(ua%ub, w)}, nil
+			case "&":
+				return Value{K: VInt, I: truncBits(ua&ub, w)}, nil
+			case "|":
+				return Value{K: VInt, I: truncBits(ua|ub, w)}, nil
+			case "^":
+				return Value{K: VInt, I: truncBits(ua^ub, w)}, nil
+			case "<<":
+				if isSignedIntType(ty) {
+					n := intSigned(ub, ty)
+					if n < 0 || n >= int64(w) {
+						return unit(), fmt.Errorf("shift count out of range")
+					}
+					return Value{K: VInt, I: truncBits(ua<<uint(n), w)}, nil
+				}
+				if ub >= uint64(w) {
+					return unit(), fmt.Errorf("shift count out of range")
+				}
+				return Value{K: VInt, I: truncBits(ua<<uint(ub), w)}, nil
+			case ">>":
+				if isSignedIntType(ty) {
+					n := intSigned(ub, ty)
+					if n < 0 || n >= int64(w) {
+						return unit(), fmt.Errorf("shift count out of range")
+					}
+					a := intSigned(ua, ty)
+					return Value{K: VInt, I: truncBits(uint64(a>>uint(n)), w)}, nil
+				}
+				if ub >= uint64(w) {
+					return unit(), fmt.Errorf("shift count out of range")
+				}
+				return Value{K: VInt, I: truncBits(ua>>uint(ub), w)}, nil
 			case "<":
 				if isSignedIntType(ty) {
 					return Value{K: VBool, B: intSigned(ua, ty) < intSigned(ub, ty)}, nil
@@ -710,31 +741,31 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 			m[init.Name] = cloneValue(v)
 		}
 		return Value{K: VStruct, M: m}, nil
-		case *ast.MatchExpr:
-			sv, err := rt.evalExpr(e.Scrutinee)
+	case *ast.MatchExpr:
+		sv, err := rt.evalExpr(e.Scrutinee)
+		if err != nil {
+			return unit(), err
+		}
+		scrutTy := stripRange(rt.prog.ExprTypes[e.Scrutinee])
+		for _, arm := range e.Arms {
+			rt.pushFrame()
+			ok, err := rt.matchPat(arm.Pat, sv, scrutTy)
 			if err != nil {
+				rt.popFrame()
 				return unit(), err
 			}
-			scrutTy := stripRange(rt.prog.ExprTypes[e.Scrutinee])
-			for _, arm := range e.Arms {
-				rt.pushFrame()
-				ok, err := rt.matchPat(arm.Pat, sv, scrutTy)
-				if err != nil {
-					rt.popFrame()
-					return unit(), err
-				}
-				if ok {
-					v, err := rt.evalExpr(arm.Expr)
-					rt.popFrame()
-					return v, err
-				}
+			if ok {
+				v, err := rt.evalExpr(arm.Expr)
 				rt.popFrame()
+				return v, err
 			}
-			return unit(), fmt.Errorf("non-exhaustive match")
-		default:
-			return unit(), fmt.Errorf("unsupported expr")
+			rt.popFrame()
 		}
+		return unit(), fmt.Errorf("non-exhaustive match")
+	default:
+		return unit(), fmt.Errorf("unsupported expr")
 	}
+}
 
 func interpCalleeParts(ex ast.Expr) ([]string, bool) {
 	switch e := ex.(type) {

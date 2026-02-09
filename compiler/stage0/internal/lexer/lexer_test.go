@@ -23,7 +23,7 @@ func TestLexKeywordsAndPunct(t *testing.T) {
 // keywords
 fn let mut return if else true false type const static import pub match as from while break continue
 // punct/op
-(){}[] , ; : :: . .. ..= @ + - * / % ! = == != < <= > >= && | || ->
+(){}[] , ; : :: . .. ..= @ + - * / % ! = == != < <= << > >= >> & && | || ^ ->
 // string
 "a\nb\t\"c\"\\"
 `)
@@ -63,14 +63,14 @@ fn let mut return if else true false type const static import pub match as from 
 	}
 }
 
-func TestLexSingleAmpersandIsBad(t *testing.T) {
+func TestLexSingleAmpersandIsToken(t *testing.T) {
 	f := source.NewFile("test.vox", `&`)
 	toks := Lex(f)
 	if len(toks) < 2 {
 		t.Fatalf("expected at least 2 tokens")
 	}
-	if toks[0].Kind != TokenBad {
-		t.Fatalf("expected TokenBad for single &, got %v", toks[0].Kind)
+	if toks[0].Kind != TokenAmp {
+		t.Fatalf("expected TokenAmp for single &, got %v", toks[0].Kind)
 	}
 }
 
@@ -82,6 +82,23 @@ func TestLexSinglePipeIsToken(t *testing.T) {
 	}
 	if toks[0].Kind != TokenPipe {
 		t.Fatalf("expected TokenPipe for single |, got %v", toks[0].Kind)
+	}
+}
+
+func TestLexShiftAndCaretTokens(t *testing.T) {
+	f := source.NewFile("test.vox", `<< >> ^`)
+	toks := Lex(f)
+	if len(toks) < 4 {
+		t.Fatalf("expected at least 4 tokens")
+	}
+	if toks[0].Kind != TokenLtLt {
+		t.Fatalf("expected TokenLtLt, got %v", toks[0].Kind)
+	}
+	if toks[1].Kind != TokenGtGt {
+		t.Fatalf("expected TokenGtGt, got %v", toks[1].Kind)
+	}
+	if toks[2].Kind != TokenCaret {
+		t.Fatalf("expected TokenCaret, got %v", toks[2].Kind)
 	}
 }
 

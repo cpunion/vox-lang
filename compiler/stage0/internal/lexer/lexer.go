@@ -229,6 +229,9 @@ func (lx *lexer) lexPunct() {
 		if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
 			lx.pos++
 			lx.emit(TokenLtEq, "<=", start, lx.pos)
+		} else if lx.pos < len(lx.input) && lx.input[lx.pos] == '<' {
+			lx.pos++
+			lx.emit(TokenLtLt, "<<", start, lx.pos)
 		} else {
 			lx.emit(TokenLt, "<", start, lx.pos)
 		}
@@ -236,6 +239,9 @@ func (lx *lexer) lexPunct() {
 		if lx.pos < len(lx.input) && lx.input[lx.pos] == '=' {
 			lx.pos++
 			lx.emit(TokenGtEq, ">=", start, lx.pos)
+		} else if lx.pos < len(lx.input) && lx.input[lx.pos] == '>' {
+			lx.pos++
+			lx.emit(TokenGtGt, ">>", start, lx.pos)
 		} else {
 			lx.emit(TokenGt, ">", start, lx.pos)
 		}
@@ -244,7 +250,7 @@ func (lx *lexer) lexPunct() {
 			lx.pos++
 			lx.emit(TokenAndAnd, "&&", start, lx.pos)
 		} else {
-			lx.emit(TokenBad, string(ch), start, lx.pos)
+			lx.emit(TokenAmp, "&", start, lx.pos)
 		}
 	case '|':
 		if lx.pos < len(lx.input) && lx.input[lx.pos] == '|' {
@@ -253,6 +259,8 @@ func (lx *lexer) lexPunct() {
 		} else {
 			lx.emit(TokenPipe, "|", start, lx.pos)
 		}
+	case '^':
+		lx.emit(TokenCaret, "^", start, lx.pos)
 	case '"':
 		lx.pos-- // back to opening
 		lx.lexString()

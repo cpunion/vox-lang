@@ -495,6 +495,53 @@ func TestParseAsExprBindsTighterThanPlus(t *testing.T) {
 	}
 }
 
+func TestParsePrecedenceShiftLowerThanAdd(t *testing.T) {
+	f := source.NewFile("test.vox", `fn main() -> i32 { return 1 + 2 << 3; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	ret, ok := prog.Funcs[0].Body.Stmts[0].(*ast.ReturnStmt)
+	if !ok || ret.Expr == nil {
+		t.Fatalf("expected return stmt with expr")
+	}
+	sh, ok := ret.Expr.(*ast.BinaryExpr)
+	if !ok || sh.Op != "<<" {
+		t.Fatalf("expected top-level <<, got %T", ret.Expr)
+	}
+	add, ok := sh.Left.(*ast.BinaryExpr)
+	if !ok || add.Op != "+" {
+		t.Fatalf("expected left child +, got %T", sh.Left)
+	}
+	if _, ok := sh.Right.(*ast.IntLit); !ok {
+		t.Fatalf("expected right child int, got %T", sh.Right)
+	}
+}
+
+func TestParsePrecedenceBitwiseChain(t *testing.T) {
+	f := source.NewFile("test.vox", `fn main() -> i32 { return 1 | 2 ^ 3 & 4; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	ret, ok := prog.Funcs[0].Body.Stmts[0].(*ast.ReturnStmt)
+	if !ok || ret.Expr == nil {
+		t.Fatalf("expected return stmt with expr")
+	}
+	or, ok := ret.Expr.(*ast.BinaryExpr)
+	if !ok || or.Op != "|" {
+		t.Fatalf("expected top-level |, got %T", ret.Expr)
+	}
+	xor, ok := or.Right.(*ast.BinaryExpr)
+	if !ok || xor.Op != "^" {
+		t.Fatalf("expected rhs ^, got %T", or.Right)
+	}
+	and, ok := xor.Right.(*ast.BinaryExpr)
+	if !ok || and.Op != "&" {
+		t.Fatalf("expected rhs &, got %T", xor.Right)
+	}
+}
+
 func TestParseGenericFuncAndExplicitTypeArgsCall(t *testing.T) {
 	f := source.NewFile("test.vox", `fn id[T](x: T) -> T { return x; }
 fn main() -> i32 { return id[i32](1); }`)

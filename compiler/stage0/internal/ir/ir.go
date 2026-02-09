@@ -232,11 +232,16 @@ func (i *Const) fmtString() string {
 type BinOpKind string
 
 const (
-	OpAdd BinOpKind = "add"
-	OpSub BinOpKind = "sub"
-	OpMul BinOpKind = "mul"
-	OpDiv BinOpKind = "div"
-	OpMod BinOpKind = "mod"
+	OpAdd    BinOpKind = "add"
+	OpSub    BinOpKind = "sub"
+	OpMul    BinOpKind = "mul"
+	OpDiv    BinOpKind = "div"
+	OpMod    BinOpKind = "mod"
+	OpBitAnd BinOpKind = "bitand"
+	OpBitOr  BinOpKind = "bitor"
+	OpBitXor BinOpKind = "bitxor"
+	OpShl    BinOpKind = "shl"
+	OpShr    BinOpKind = "shr"
 )
 
 type BinOp struct {

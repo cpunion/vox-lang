@@ -64,7 +64,7 @@ IR v0 只定义 stage0 必需类型：
 %t1 = const bool true
 ```
 
-### 5.2 算术
+### 5.2 整数运算
 
 ```
 %t2 = add i64 %t0 %t1
@@ -72,7 +72,18 @@ IR v0 只定义 stage0 必需类型：
 %t4 = mul i64 %t0 %t1
 %t5 = div i64 %t0 %t1
 %t6 = mod i64 %t0 %t1
+%t7 = bitand i64 %t0 %t1
+%t8 = bitor i64 %t0 %t1
+%t9 = bitxor i64 %t0 %t1
+%t10 = shl i64 %t0 %t1
+%t11 = shr i64 %t0 %t1
 ```
+
+说明：
+
+- `add/sub/mul`：wrapping（按位宽截断）。
+- `div/mod`：除零必须 panic；有符号 `MIN / -1` 与 `MIN % -1` 必须 panic。
+- `shl/shr`：移位位数越界必须 panic（`shift count out of range`）。
 
 ### 5.3 比较
 

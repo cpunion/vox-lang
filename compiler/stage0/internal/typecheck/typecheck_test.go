@@ -81,6 +81,51 @@ func TestISizeSmoke(t *testing.T) {
 	}
 }
 
+func TestTypecheckBitwiseAndShiftSmoke(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main() -> i32 {
+  let a: i32 = 6 & 3;
+  let b: i32 = 1 << 4;
+  let c: i32 = b >> 2;
+  return (a | c) ^ 1;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestTypecheckBitwiseRejectsBool(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main() -> i32 {
+  let a: bool = true;
+  let b: bool = false;
+  let x: bool = a & b;
+  if x { return 1; }
+  return 0;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "binary integer ops require same type") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected integer op type error, got: %+v", tdiags.Items)
+	}
+}
+
 func TestQualifiedCallRequiresImport(t *testing.T) {
 	f := source.NewFile("src/main.vox", `fn main() -> i32 { return dep.one(); }`)
 	prog, pdiags := parser.Parse(f)

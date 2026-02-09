@@ -114,6 +114,16 @@ func stringToCOp(op string) string {
 		return "/"
 	case "mod":
 		return "%"
+	case "bitand":
+		return "&"
+	case "bitor":
+		return "|"
+	case "bitxor":
+		return "^"
+	case "shl":
+		return "<<"
+	case "shr":
+		return ">>"
 	default:
 		return op
 	}

@@ -293,6 +293,28 @@ fn main() -> i32 {
 	}
 }
 
+func TestBitwiseAndShiftOps(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+  let a: i32 = 6 & 3;     // 2
+  let b: i32 = 1 << 4;    // 16
+  let c: i32 = b >> 2;    // 4
+  return (a | c) ^ 1;     // (2|4)^1 = 7
+}`)
+	if out != "7" {
+		t.Fatalf("expected 7, got %q", out)
+	}
+}
+
+func TestShiftCountOutOfRangePanics(t *testing.T) {
+	_, err := runMainErr(t, `fn main() -> i32 {
+  let x: i32 = 1 << 32;
+  return x;
+}`)
+	if err == "" || err != "shift count out of range" {
+		t.Fatalf("expected shift count out of range, got %q", err)
+	}
+}
+
 func TestAsCastI64ToI32Checked(t *testing.T) {
 	out := runMain(t, `fn main() -> i32 {
   let x: i64 = 41;

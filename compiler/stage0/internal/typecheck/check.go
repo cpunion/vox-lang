@@ -296,7 +296,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		return c.setExprType(ex, wantTy)
 	case *ast.BinaryExpr:
 		switch e.Op {
-		case "+", "-", "*", "/", "%":
+		case "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>":
 			want := stripRange(expected)
 			if !isIntType(want) {
 				want = Type{K: TyI64}
@@ -842,7 +842,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 		return c.setExprType(ex, thenTy)
-		case *ast.MatchExpr:
+	case *ast.MatchExpr:
 		scrutTy := c.checkExpr(e.Scrutinee, Type{K: TyBad})
 		scrutBase := stripRange(scrutTy)
 		isEnum := scrutBase.K == TyEnum
@@ -862,142 +862,142 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 		}
 
-			resultTy := expected
-				// Exhaustiveness approximation (Stage0/Stage1 v0):
-				// - wildcard/bind arm covers all.
-				// - enum scrutinee:
-				//   - unit variant is covered if it appears in at least one arm.
-				//   - single-payload variant is covered if the union of its payload patterns covers the field type
-				//     (recursively, but only through enums; ints/strings require a wildcard/bind).
-				//   - multi-payload variant requires a catch-all arm for that variant (all payload patterns are wild/bind).
-				seenVariantUnit := map[string]bool{}   // unit variants
-				seenVariantArg1 := map[string][]ast.Pattern{}
-				seenVariantFull := map[string]bool{} // for multi-payload variants
-				hasWild := false
-				seenInt := map[string]bool{}
-				seenStr := map[string]bool{}
-				coveredAll := false
+		resultTy := expected
+		// Exhaustiveness approximation (Stage0/Stage1 v0):
+		// - wildcard/bind arm covers all.
+		// - enum scrutinee:
+		//   - unit variant is covered if it appears in at least one arm.
+		//   - single-payload variant is covered if the union of its payload patterns covers the field type
+		//     (recursively, but only through enums; ints/strings require a wildcard/bind).
+		//   - multi-payload variant requires a catch-all arm for that variant (all payload patterns are wild/bind).
+		seenVariantUnit := map[string]bool{} // unit variants
+		seenVariantArg1 := map[string][]ast.Pattern{}
+		seenVariantFull := map[string]bool{} // for multi-payload variants
+		hasWild := false
+		seenInt := map[string]bool{}
+		seenStr := map[string]bool{}
+		coveredAll := false
 
-				for _, arm := range e.Arms {
-					if hasWild || coveredAll {
+		for _, arm := range e.Arms {
+			if hasWild || coveredAll {
+				c.errorAt(arm.S, "unreachable match arm")
+			}
+			c.pushScope()
+			switch p := arm.Pat.(type) {
+			case *ast.WildPat:
+				hasWild = true
+			case *ast.BindPat:
+				// Always matches, but introduces a name for the scrutinee.
+				hasWild = true
+				if p.Name != "" {
+					c.scopeTop()[p.Name] = varInfo{ty: scrutTy, mutable: false}
+				}
+			case *ast.IntPat:
+				if !isInt {
+					c.errorAt(p.S, "integer pattern only allowed when scrutinee is int (stage0)")
+				} else {
+					if seenInt[p.Text] {
 						c.errorAt(arm.S, "unreachable match arm")
 					}
-					c.pushScope()
-					switch p := arm.Pat.(type) {
-					case *ast.WildPat:
-						hasWild = true
-					case *ast.BindPat:
-					// Always matches, but introduces a name for the scrutinee.
-					hasWild = true
-					if p.Name != "" {
-						c.scopeTop()[p.Name] = varInfo{ty: scrutTy, mutable: false}
-					}
-					case *ast.IntPat:
-						if !isInt {
-							c.errorAt(p.S, "integer pattern only allowed when scrutinee is int (stage0)")
-						} else {
-							if seenInt[p.Text] {
-								c.errorAt(arm.S, "unreachable match arm")
-							}
-							seenInt[p.Text] = true
-							i64v, err := strconv.ParseInt(p.Text, 10, 64)
-							if err != nil {
-								c.errorAt(p.S, "invalid integer literal in pattern")
-							} else {
-							base := scrutBase
-							if base.K == TyUntypedInt {
-								base = Type{K: TyI64}
-							}
-							min, max, ok := intMinMax(base)
-							if ok {
-								if i64v < min {
-									c.errorAt(p.S, "integer pattern out of range for "+base.String())
-								} else if i64v >= 0 && uint64(i64v) > max {
-									c.errorAt(p.S, "integer pattern out of range for "+base.String())
-								}
-							} else {
+					seenInt[p.Text] = true
+					i64v, err := strconv.ParseInt(p.Text, 10, 64)
+					if err != nil {
+						c.errorAt(p.S, "invalid integer literal in pattern")
+					} else {
+						base := scrutBase
+						if base.K == TyUntypedInt {
+							base = Type{K: TyI64}
+						}
+						min, max, ok := intMinMax(base)
+						if ok {
+							if i64v < min {
+								c.errorAt(p.S, "integer pattern out of range for "+base.String())
+							} else if i64v >= 0 && uint64(i64v) > max {
 								c.errorAt(p.S, "integer pattern out of range for "+base.String())
 							}
+						} else {
+							c.errorAt(p.S, "integer pattern out of range for "+base.String())
 						}
 					}
-					case *ast.StrPat:
-						if !isStr {
-							c.errorAt(p.S, "string pattern only allowed when scrutinee is String (stage0)")
-						}
-						if isStr {
-							if seenStr[p.Text] {
-								c.errorAt(arm.S, "unreachable match arm")
-							}
-							seenStr[p.Text] = true
-						}
-					case *ast.VariantPat:
-						if !isEnum {
-							c.errorAt(p.S, "enum variant pattern only allowed when scrutinee is enum (stage0)")
-							break
-						}
-					if c.curFn == nil || c.curFn.Span.File == nil {
-						c.errorAt(arm.S, "internal error: missing file for match")
-						break
+				}
+			case *ast.StrPat:
+				if !isStr {
+					c.errorAt(p.S, "string pattern only allowed when scrutinee is String (stage0)")
+				}
+				if isStr {
+					if seenStr[p.Text] {
+						c.errorAt(arm.S, "unreachable match arm")
 					}
-					pty := scrutTy
-					psig := esig
-					ok := true
-					if len(p.TypeParts) != 0 {
-						pty, psig, ok = c.resolveEnumByParts(c.curFn.Span.File, p.TypeParts, p.S)
-						if ok && !sameType(scrutTy, pty) {
-							c.errorAt(p.S, "pattern enum type does not match scrutinee")
-						}
+					seenStr[p.Text] = true
+				}
+			case *ast.VariantPat:
+				if !isEnum {
+					c.errorAt(p.S, "enum variant pattern only allowed when scrutinee is enum (stage0)")
+					break
+				}
+				if c.curFn == nil || c.curFn.Span.File == nil {
+					c.errorAt(arm.S, "internal error: missing file for match")
+					break
+				}
+				pty := scrutTy
+				psig := esig
+				ok := true
+				if len(p.TypeParts) != 0 {
+					pty, psig, ok = c.resolveEnumByParts(c.curFn.Span.File, p.TypeParts, p.S)
+					if ok && !sameType(scrutTy, pty) {
+						c.errorAt(p.S, "pattern enum type does not match scrutinee")
 					}
-					vidx, vok := psig.VariantIndex[p.Variant]
-					if !vok {
-						c.errorAt(p.S, "unknown variant: "+p.Variant)
-						break
-					}
-						v := psig.Variants[vidx]
-						if len(p.Args) != len(v.Fields) {
-							c.errorAt(p.S, fmt.Sprintf("wrong number of variant pattern args: expected %d, got %d", len(v.Fields), len(p.Args)))
+				}
+				vidx, vok := psig.VariantIndex[p.Variant]
+				if !vok {
+					c.errorAt(p.S, "unknown variant: "+p.Variant)
+					break
+				}
+				v := psig.Variants[vidx]
+				if len(p.Args) != len(v.Fields) {
+					c.errorAt(p.S, fmt.Sprintf("wrong number of variant pattern args: expected %d, got %d", len(v.Fields), len(p.Args)))
+				}
+				// Unreachable detection (variant-local).
+				if len(p.Args) == len(v.Fields) && !hasWild && !coveredAll {
+					switch len(v.Fields) {
+					case 0:
+						if seenVariantUnit[p.Variant] {
+							c.errorAt(arm.S, "unreachable match arm")
 						}
-						// Unreachable detection (variant-local).
-						if len(p.Args) == len(v.Fields) && !hasWild && !coveredAll {
-							switch len(v.Fields) {
-							case 0:
-								if seenVariantUnit[p.Variant] {
-									c.errorAt(arm.S, "unreachable match arm")
-								}
-							case 1:
-								if c.patsCoverAll(v.Fields[0], seenVariantArg1[p.Variant]) {
-									c.errorAt(arm.S, "unreachable match arm")
-								}
-							default:
-								if seenVariantFull[p.Variant] {
-									c.errorAt(arm.S, "unreachable match arm")
-								}
-							}
-						}
-						fullCover := true
-						for i := 0; i < len(p.Args) && i < len(v.Fields); i++ {
-							arg := p.Args[i]
-						// Only wild/bind cover the whole variant payload space.
-						switch arg.(type) {
-						case *ast.WildPat, *ast.BindPat:
-						default:
-							fullCover = false
-							}
-							c.checkMatchPat(arg, v.Fields[i])
-						}
-						// Track coverage info for exhaustiveness (only when arity is correct).
-						if len(p.Args) == len(v.Fields) {
-							if len(v.Fields) == 0 {
-								seenVariantUnit[p.Variant] = true
-							} else if len(v.Fields) == 1 {
-								seenVariantArg1[p.Variant] = append(seenVariantArg1[p.Variant], p.Args[0])
-							} else if len(v.Fields) > 1 && fullCover {
-								seenVariantFull[p.Variant] = true
-							}
+					case 1:
+						if c.patsCoverAll(v.Fields[0], seenVariantArg1[p.Variant]) {
+							c.errorAt(arm.S, "unreachable match arm")
 						}
 					default:
-						c.errorAt(arm.S, "unsupported pattern (stage0)")
+						if seenVariantFull[p.Variant] {
+							c.errorAt(arm.S, "unreachable match arm")
+						}
 					}
+				}
+				fullCover := true
+				for i := 0; i < len(p.Args) && i < len(v.Fields); i++ {
+					arg := p.Args[i]
+					// Only wild/bind cover the whole variant payload space.
+					switch arg.(type) {
+					case *ast.WildPat, *ast.BindPat:
+					default:
+						fullCover = false
+					}
+					c.checkMatchPat(arg, v.Fields[i])
+				}
+				// Track coverage info for exhaustiveness (only when arity is correct).
+				if len(p.Args) == len(v.Fields) {
+					if len(v.Fields) == 0 {
+						seenVariantUnit[p.Variant] = true
+					} else if len(v.Fields) == 1 {
+						seenVariantArg1[p.Variant] = append(seenVariantArg1[p.Variant], p.Args[0])
+					} else if len(v.Fields) > 1 && fullCover {
+						seenVariantFull[p.Variant] = true
+					}
+				}
+			default:
+				c.errorAt(arm.S, "unsupported pattern (stage0)")
+			}
 
 			armTy := c.checkExpr(arm.Expr, resultTy)
 			if resultTy.K == TyBad {
@@ -1018,50 +1018,50 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				}
 			}
 			c.popScope()
-				}
+		}
 
-					// Update "coveredAll" for unreachable detection of subsequent arms.
-					if isEnum {
-						if hasWild {
-							coveredAll = true
-						} else {
-							coveredAll = c.enumMatchCovered(esig, seenVariantUnit, seenVariantArg1, seenVariantFull)
+		// Update "coveredAll" for unreachable detection of subsequent arms.
+		if isEnum {
+			if hasWild {
+				coveredAll = true
+			} else {
+				coveredAll = c.enumMatchCovered(esig, seenVariantUnit, seenVariantArg1, seenVariantFull)
+			}
+		} else {
+			coveredAll = hasWild
+		}
+
+		if isEnum {
+			if !hasWild {
+				for _, v := range esig.Variants {
+					switch len(v.Fields) {
+					case 0:
+						if !seenVariantUnit[v.Name] {
+							c.errorAt(e.S, "non-exhaustive match, missing coverage for variant: "+v.Name)
 						}
-					} else {
-						coveredAll = hasWild
-					}
-
-				if isEnum {
-					if !hasWild {
-						for _, v := range esig.Variants {
-							switch len(v.Fields) {
-							case 0:
-								if !seenVariantUnit[v.Name] {
-									c.errorAt(e.S, "non-exhaustive match, missing coverage for variant: "+v.Name)
-								}
-							case 1:
-								if !c.patsCoverAll(v.Fields[0], seenVariantArg1[v.Name]) {
-									c.errorAt(e.S, "non-exhaustive match, missing coverage for variant: "+v.Name)
-								}
-							default:
-								if !seenVariantFull[v.Name] {
-									c.errorAt(e.S, "non-exhaustive match, missing coverage for variant: "+v.Name)
-								}
-							}
+					case 1:
+						if !c.patsCoverAll(v.Fields[0], seenVariantArg1[v.Name]) {
+							c.errorAt(e.S, "non-exhaustive match, missing coverage for variant: "+v.Name)
+						}
+					default:
+						if !seenVariantFull[v.Name] {
+							c.errorAt(e.S, "non-exhaustive match, missing coverage for variant: "+v.Name)
 						}
 					}
-				} else {
-					// Non-enum scrutinee: require a wildcard/bind arm for exhaustiveness.
-					if !hasWild {
-						c.errorAt(e.S, "non-exhaustive match, missing wildcard arm `_`")
-					}
 				}
-				return c.setExprType(ex, resultTy)
+			}
+		} else {
+			// Non-enum scrutinee: require a wildcard/bind arm for exhaustiveness.
+			if !hasWild {
+				c.errorAt(e.S, "non-exhaustive match, missing wildcard arm `_`")
+			}
+		}
+		return c.setExprType(ex, resultTy)
 	default:
 		c.errorAt(ex.Span(), "unsupported expression")
 		return c.setExprType(ex, Type{K: TyBad})
-		}
 	}
+}
 
 func (c *checker) enumMatchCovered(esig EnumSig, seenUnit map[string]bool, seenArg1 map[string][]ast.Pattern, seenFull map[string]bool) bool {
 	for _, v := range esig.Variants {

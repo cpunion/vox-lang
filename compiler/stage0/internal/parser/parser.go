@@ -577,41 +577,41 @@ func (p *Parser) parseType() ast.Type {
 	}
 
 	// range: @range(lo..=hi) Base
-		if p.match(lexer.TokenAt) {
-			atTok := p.prev()
-			kw := p.expect(lexer.TokenIdent, "expected `range` after `@`")
-			if kw.Kind == lexer.TokenIdent && kw.Lexeme != "range" {
-				p.errorAt(kw.Span, "unknown type directive: @"+kw.Lexeme)
-			}
-			p.expect(lexer.TokenLParen, "expected `(` after `@range`")
-			loNeg := false
-			if p.match(lexer.TokenMinus) {
-				loNeg = true
-			}
-			loTok := p.expect(lexer.TokenInt, "expected integer lower bound in @range")
-			p.expect(lexer.TokenDotDotEq, "expected `..=` in @range bounds")
-			hiNeg := false
-			if p.match(lexer.TokenMinus) {
-				hiNeg = true
-			}
-			hiTok := p.expect(lexer.TokenInt, "expected integer upper bound in @range")
-			rp := p.expect(lexer.TokenRParen, "expected `)` after @range bounds")
+	if p.match(lexer.TokenAt) {
+		atTok := p.prev()
+		kw := p.expect(lexer.TokenIdent, "expected `range` after `@`")
+		if kw.Kind == lexer.TokenIdent && kw.Lexeme != "range" {
+			p.errorAt(kw.Span, "unknown type directive: @"+kw.Lexeme)
+		}
+		p.expect(lexer.TokenLParen, "expected `(` after `@range`")
+		loNeg := false
+		if p.match(lexer.TokenMinus) {
+			loNeg = true
+		}
+		loTok := p.expect(lexer.TokenInt, "expected integer lower bound in @range")
+		p.expect(lexer.TokenDotDotEq, "expected `..=` in @range bounds")
+		hiNeg := false
+		if p.match(lexer.TokenMinus) {
+			hiNeg = true
+		}
+		hiTok := p.expect(lexer.TokenInt, "expected integer upper bound in @range")
+		rp := p.expect(lexer.TokenRParen, "expected `)` after @range bounds")
 
-			loText := loTok.Lexeme
-			if loNeg {
-				loText = "-" + loText
-			}
-			hiText := hiTok.Lexeme
-			if hiNeg {
-				hiText = "-" + hiText
-			}
-			lo, _ := strconv.ParseInt(loText, 10, 64)
-			hi, _ := strconv.ParseInt(hiText, 10, 64)
-			base := p.parseType()
-			end := rp.Span
-			if base != nil {
-				end = base.Span()
-			}
+		loText := loTok.Lexeme
+		if loNeg {
+			loText = "-" + loText
+		}
+		hiText := hiTok.Lexeme
+		if hiNeg {
+			hiText = "-" + hiText
+		}
+		lo, _ := strconv.ParseInt(loText, 10, 64)
+		hi, _ := strconv.ParseInt(hiText, 10, 64)
+		base := p.parseType()
+		end := rp.Span
+		if base != nil {
+			end = base.Span()
+		}
 		return &ast.RangeType{Lo: lo, Hi: hi, Base: base, S: joinSpan(atTok.Span, end)}
 	}
 
@@ -711,7 +711,7 @@ func (p *Parser) parsePrefixWith(allowStructLit bool) ast.Expr {
 		if op == "" {
 			op = tokenOpString(tok.Kind)
 		}
-		ex := p.parseExprWith(7, allowStructLit)
+		ex := p.parseExprWith(11, allowStructLit)
 		return p.parsePostfix(&ast.UnaryExpr{Op: op, Expr: ex, S: joinSpan(tok.Span, ex.Span())}, allowStructLit)
 	case lexer.TokenMatch:
 		p.advance()
@@ -742,9 +742,9 @@ func (p *Parser) parseBlockExpr(lbrace lexer.Token) ast.Expr {
 		// But we must still allow statement `if` without `else`, which stage1 code uses.
 		if p.peek().Kind == lexer.TokenIf && p.ifExprHasElseAhead() {
 			// fallthrough to expression parsing below
-			} else {
-				switch p.peek().Kind {
-				case lexer.TokenLet, lexer.TokenIf, lexer.TokenWhile, lexer.TokenLBrace:
+		} else {
+			switch p.peek().Kind {
+			case lexer.TokenLet, lexer.TokenIf, lexer.TokenWhile, lexer.TokenLBrace:
 				st := p.parseStmt()
 				if st != nil {
 					stmts = append(stmts, st)
@@ -752,26 +752,26 @@ func (p *Parser) parseBlockExpr(lbrace lexer.Token) ast.Expr {
 					p.advance()
 				}
 				continue
-				case lexer.TokenIdent:
-					// Allow assignment statements inside expression blocks, but preserve the ability
-					// to use an identifier expression as the tail value (`{ x }`).
-					// Only route to parseStmt when the lookahead makes it unambiguously an assignment.
-					if p.peekN(1).Kind == lexer.TokenEq ||
-						(p.peekN(1).Kind == lexer.TokenDot && p.peekN(2).Kind == lexer.TokenIdent && p.peekN(3).Kind == lexer.TokenEq) {
-						st := p.parseStmt()
-						if st != nil {
-							stmts = append(stmts, st)
-						} else {
-							p.advance()
-						}
-						continue
+			case lexer.TokenIdent:
+				// Allow assignment statements inside expression blocks, but preserve the ability
+				// to use an identifier expression as the tail value (`{ x }`).
+				// Only route to parseStmt when the lookahead makes it unambiguously an assignment.
+				if p.peekN(1).Kind == lexer.TokenEq ||
+					(p.peekN(1).Kind == lexer.TokenDot && p.peekN(2).Kind == lexer.TokenIdent && p.peekN(3).Kind == lexer.TokenEq) {
+					st := p.parseStmt()
+					if st != nil {
+						stmts = append(stmts, st)
+					} else {
+						p.advance()
 					}
-				case lexer.TokenReturn, lexer.TokenBreak, lexer.TokenContinue:
+					continue
+				}
+			case lexer.TokenReturn, lexer.TokenBreak, lexer.TokenContinue:
 				// These are legal statements generally, but block expressions are used as subexpressions.
 				// Keep stage0 IR gen simple by rejecting top-level terminators here.
 				p.errorHere("`return`/`break`/`continue` are not allowed in expression blocks (stage0)")
 				p.advance()
-			continue
+				continue
 			}
 		}
 
@@ -1127,12 +1127,20 @@ func exprPathParts(ex ast.Expr) ([]string, bool) {
 func (p *Parser) peekInfix() (op string, prec int, rightAssoc bool) {
 	switch p.peek().Kind {
 	case lexer.TokenStar, lexer.TokenSlash, lexer.TokenPercent:
-		return tokenOpString(p.peek().Kind), 6, false
+		return tokenOpString(p.peek().Kind), 10, false
 	case lexer.TokenPlus, lexer.TokenMinus:
-		return tokenOpString(p.peek().Kind), 5, false
+		return tokenOpString(p.peek().Kind), 9, false
+	case lexer.TokenLtLt, lexer.TokenGtGt:
+		return tokenOpString(p.peek().Kind), 8, false
 	case lexer.TokenLt, lexer.TokenLtEq, lexer.TokenGt, lexer.TokenGtEq:
-		return tokenOpString(p.peek().Kind), 4, false
+		return tokenOpString(p.peek().Kind), 7, false
 	case lexer.TokenEqEq, lexer.TokenBangEq:
+		return tokenOpString(p.peek().Kind), 6, false
+	case lexer.TokenAmp:
+		return tokenOpString(p.peek().Kind), 5, false
+	case lexer.TokenCaret:
+		return tokenOpString(p.peek().Kind), 4, false
+	case lexer.TokenPipe:
 		return tokenOpString(p.peek().Kind), 3, false
 	case lexer.TokenAndAnd:
 		return "&&", 2, false
@@ -1159,10 +1167,20 @@ func tokenOpString(k lexer.Kind) string {
 		return "<"
 	case lexer.TokenLtEq:
 		return "<="
+	case lexer.TokenLtLt:
+		return "<<"
 	case lexer.TokenGt:
 		return ">"
 	case lexer.TokenGtEq:
 		return ">="
+	case lexer.TokenGtGt:
+		return ">>"
+	case lexer.TokenAmp:
+		return "&"
+	case lexer.TokenCaret:
+		return "^"
+	case lexer.TokenPipe:
+		return "|"
 	case lexer.TokenEqEq:
 		return "=="
 	case lexer.TokenBangEq:

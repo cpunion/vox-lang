@@ -37,6 +37,29 @@ func TestCodegenInstrCoverage_ConstBinCmpLogicSlotsCallsBranches(t *testing.T) {
 			want: "42",
 		},
 		{
+			name: "i32_bitwise_shift",
+			prog: progMainI32(func(b *ir.Block) {
+				t0 := &ir.Temp{ID: 0}
+				t1 := &ir.Temp{ID: 1}
+				t2 := &ir.Temp{ID: 2}
+				t3 := &ir.Temp{ID: 3}
+				t4 := &ir.Temp{ID: 4}
+				t5 := &ir.Temp{ID: 5}
+				t6 := &ir.Temp{ID: 6}
+				b.Instr = append(b.Instr,
+					&ir.Const{Dst: t0, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 6}},
+					&ir.Const{Dst: t1, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 3}},
+					&ir.Const{Dst: t2, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 1}},
+					&ir.Const{Dst: t3, Ty: ir.Type{K: ir.TI32}, Val: &ir.ConstInt{Ty: ir.Type{K: ir.TI32}, Bits: 4}},
+					&ir.BinOp{Dst: t4, Op: ir.OpBitAnd, Ty: ir.Type{K: ir.TI32}, A: t0, B: t1}, // 6 & 3 = 2
+					&ir.BinOp{Dst: t5, Op: ir.OpShl, Ty: ir.Type{K: ir.TI32}, A: t2, B: t3},    // 1 << 4 = 16
+					&ir.BinOp{Dst: t6, Op: ir.OpBitOr, Ty: ir.Type{K: ir.TI32}, A: t4, B: t5},  // 2 | 16 = 18
+				)
+				b.Term = &ir.Ret{Val: t6}
+			}),
+			want: "18",
+		},
+		{
 			name: "slots_load_store",
 			prog: progMainI32(func(b *ir.Block) {
 				s0 := &ir.Slot{ID: 0}

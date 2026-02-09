@@ -64,8 +64,12 @@ const (
 	TokenBangEq
 	TokenLt
 	TokenLtEq
+	TokenLtLt
 	TokenGt
 	TokenGtEq
+	TokenGtGt
+	TokenAmp
+	TokenCaret
 	TokenAndAnd
 	TokenPipe
 	TokenOrOr

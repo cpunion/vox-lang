@@ -153,14 +153,25 @@ func (g *gen) genExpr(ex ast.Expr) (ir.Value, error) {
 			return nil, err
 		}
 		switch e.Op {
-		case "+", "-", "*", "/", "%":
+		case "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>":
 			ty := g.p.ExprTypes[e.Left]
 			irty, err := g.irTypeFromChecked(ty)
 			if err != nil {
 				return nil, err
 			}
 			tmp := g.newTemp()
-			op := map[string]ir.BinOpKind{"+": ir.OpAdd, "-": ir.OpSub, "*": ir.OpMul, "/": ir.OpDiv, "%": ir.OpMod}[e.Op]
+			op := map[string]ir.BinOpKind{
+				"+":  ir.OpAdd,
+				"-":  ir.OpSub,
+				"*":  ir.OpMul,
+				"/":  ir.OpDiv,
+				"%":  ir.OpMod,
+				"&":  ir.OpBitAnd,
+				"|":  ir.OpBitOr,
+				"^":  ir.OpBitXor,
+				"<<": ir.OpShl,
+				">>": ir.OpShr,
+			}[e.Op]
 			g.emit(&ir.BinOp{Dst: tmp, Op: op, Ty: irty, A: l, B: r})
 			return tmp, nil
 		case "<", "<=", ">", ">=", "==", "!=":

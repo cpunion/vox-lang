@@ -40,6 +40,7 @@ func TestFmtStringInstrAndTerm(t *testing.T) {
 	}{
 		{name: "const", ins: &Const{Dst: t0, Ty: Type{K: TI32}, Val: &ConstInt{Ty: Type{K: TI32}, Bits: 1}}, want: "%t0 = const i32 1"},
 		{name: "binop", ins: &BinOp{Dst: &Temp{ID: 1}, Op: OpAdd, Ty: Type{K: TI32}, A: t0, B: p0}, want: "%t1 = add i32 %t0 %p0"},
+		{name: "binop_bitand", ins: &BinOp{Dst: &Temp{ID: 16}, Op: OpBitAnd, Ty: Type{K: TI32}, A: t0, B: p0}, want: "%t16 = bitand i32 %t0 %p0"},
 		{name: "cmp", ins: &Cmp{Dst: &Temp{ID: 2}, Op: CmpLt, Ty: Type{K: TI64}, A: t0, B: &ConstInt{Ty: Type{K: TI64}, Bits: 5}}, want: "%t2 = cmp_lt i64 %t0 5"},
 		{name: "and", ins: &And{Dst: &Temp{ID: 3}, A: &ConstBool{V: true}, B: &ConstBool{V: false}}, want: "%t3 = and true false"},
 		{name: "or", ins: &Or{Dst: &Temp{ID: 4}, A: &ConstBool{V: true}, B: &ConstBool{V: false}}, want: "%t4 = or true false"},

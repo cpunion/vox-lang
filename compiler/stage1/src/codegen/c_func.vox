@@ -46,6 +46,11 @@ fn c_binop(op: ir.BinOpKind) -> String {
     ir.BinOpKind.Mul => "*",
     ir.BinOpKind.Div => "/",
     ir.BinOpKind.Mod => "%",
+    ir.BinOpKind.BitAnd => "&",
+    ir.BinOpKind.BitOr => "|",
+    ir.BinOpKind.BitXor => "^",
+    ir.BinOpKind.Shl => "<<",
+    ir.BinOpKind.Shr => ">>",
   };
 }
 
@@ -82,6 +87,22 @@ fn is_int_scalar_kind(k: ir.TyKind) -> bool {
 
 fn is_signed_int_kind(k: ir.TyKind) -> bool {
   return match k { ir.TyKind.I8 => true, ir.TyKind.I16 => true, ir.TyKind.I32 => true, ir.TyKind.I64 => true, ir.TyKind.ISize => true, _ => false };
+}
+
+fn int_bits(k: ir.TyKind) -> i32 {
+  return match k {
+    ir.TyKind.I8 => 8,
+    ir.TyKind.U8 => 8,
+    ir.TyKind.I16 => 16,
+    ir.TyKind.U16 => 16,
+    ir.TyKind.I32 => 32,
+    ir.TyKind.U32 => 32,
+    ir.TyKind.I64 => 64,
+    ir.TyKind.U64 => 64,
+    ir.TyKind.ISize => 64,
+    ir.TyKind.USize => 64,
+    _ => 0,
+  };
 }
 
 fn unsigned_peer_c_type(k: ir.TyKind) -> String {
@@ -324,11 +345,12 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
   if !is_int_scalar_kind(t.kind) { panic("binop int helper expects int type"); }
   let dst_cty: String = c_type(pool, ty);
 
-  // + - * wrap (stage0 parity). Avoid signed overflow UB by computing in unsigned and memcpy back.
+  // + - * and bitwise ops: wrap on integer bit width. Avoid signed overflow UB by operating on unsigned peers.
   let is_mul: bool = match op { ir.BinOpKind.Mul => true, _ => false };
   let is_add: bool = match op { ir.BinOpKind.Add => true, _ => false };
   let is_sub: bool = match op { ir.BinOpKind.Sub => true, _ => false };
-  if is_add || is_sub || is_mul {
+  let is_bit: bool = match op { ir.BinOpKind.BitAnd => true, ir.BinOpKind.BitOr => true, ir.BinOpKind.BitXor => true, _ => false };
+  if is_add || is_sub || is_mul || is_bit {
     if !is_signed_int_kind(t.kind) {
       // Unsigned arithmetic is well-defined modulo 2^N.
       let u64expr: String = "((uint64_t)".concat(c_value(a)).concat(") ").concat(c_binop(op)).concat(" ((uint64_t)").concat(c_value(b)).concat(")");
@@ -345,6 +367,46 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
     out.push("    ".concat(c_temp_name(tid)).concat(" = ").concat(tmp_name).concat(";"));
     out.push("  }");
     return out;
+  }
+
+  // << >> panics on invalid shift counts; right shift on signed types is arithmetic.
+  let is_shl: bool = match op { ir.BinOpKind.Shl => true, _ => false };
+  let is_shr: bool = match op { ir.BinOpKind.Shr => true, _ => false };
+  if is_shl || is_shr {
+    let bits: i32 = int_bits(t.kind);
+    if bits == 0 { panic("shift expects int type"); }
+    let uty: String = unsigned_peer_c_type(t.kind);
+    let tmp_name: String = "vox_tmp_".concat(c_temp_name(tid));
+    let mut out3: Vec[String] = Vec();
+    out3.push("  {");
+    out3.push("    ".concat(uty).concat(" ua = (").concat(uty).concat(")").concat(c_value(a)).concat(";"));
+    if is_signed_int_kind(t.kind) {
+      out3.push("    int64_t sh = (int64_t)".concat(c_value(b)).concat(";"));
+      out3.push("    if (sh < 0 || sh >= ".concat(bits.to_string()).concat(") { vox_builtin_panic(\"shift count out of range\"); }"));
+      out3.push("    uint64_t n = (uint64_t)sh;");
+    } else {
+      out3.push("    uint64_t n = (uint64_t)".concat(c_value(b)).concat(";"));
+      out3.push("    if (n >= ".concat(bits.to_string()).concat(") { vox_builtin_panic(\"shift count out of range\"); }"));
+    }
+    if is_shl {
+      out3.push("    ".concat(uty).concat(" ur = (").concat(uty).concat(")(ua << n);"));
+    } else if is_signed_int_kind(t.kind) {
+      out3.push("    ".concat(uty).concat(" ur;"));
+      out3.push("    if (n == 0) {");
+      out3.push("      ur = ua;");
+      out3.push("    } else if ((ua & ((".concat(uty).concat(")1 << ").concat((bits - 1).to_string()).concat(")) != 0) {"));
+      out3.push("      ".concat(uty).concat(" m = ~(((").concat(uty).concat(")~(").concat(uty).concat(")0) >> n);"));
+      out3.push("      ur = (".concat(uty).concat(")((ua >> n) | m);"));
+      out3.push("    } else {");
+      out3.push("      ur = (".concat(uty).concat(")(ua >> n);"));
+      out3.push("    }");
+    } else {
+      out3.push("    ".concat(uty).concat(" ur = (").concat(uty).concat(")(ua >> n);"));
+    }
+    out3.push("    ".concat(dst_cty).concat(" ").concat(tmp_name).concat("; memcpy(&").concat(tmp_name).concat(", &ur, sizeof(").concat(tmp_name).concat("));"));
+    out3.push("    ".concat(c_temp_name(tid)).concat(" = ").concat(tmp_name).concat(";"));
+    out3.push("  }");
+    return out3;
   }
 
   // / % panics on division by zero; signed also panics on MIN/-1 overflow.
