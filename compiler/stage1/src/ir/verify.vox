@@ -1,0 +1,362 @@
+// IR structural and type-invariant checks used before codegen.
+
+pub struct VerifyResult {
+  pub ok: bool,
+  pub err: String,
+}
+
+fn verify_ok() -> VerifyResult { return VerifyResult { ok: true, err: "" }; }
+fn verify_err(msg: String) -> VerifyResult { return VerifyResult { ok: false, err: msg }; }
+
+fn idx_valid(pool: TyPool, idx: i32) -> bool {
+  return idx >= 0 && idx < pool.tys.len();
+}
+
+fn has_name(xs: Vec[String], x: String) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if xs.get(i) == x { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn ty_kind_text(k: TyKind) -> String {
+  return match k {
+    TyKind.Bad => "bad",
+    TyKind.Unit => "unit",
+    TyKind.Bool => "bool",
+    TyKind.I8 => "i8",
+    TyKind.U8 => "u8",
+    TyKind.I16 => "i16",
+    TyKind.U16 => "u16",
+    TyKind.I32 => "i32",
+    TyKind.U32 => "u32",
+    TyKind.I64 => "i64",
+    TyKind.U64 => "u64",
+    TyKind.ISize => "isize",
+    TyKind.USize => "usize",
+    TyKind.F32 => "f32",
+    TyKind.F64 => "f64",
+    TyKind.String => "str",
+    TyKind.Param => "param",
+    TyKind.Struct => "struct",
+    TyKind.Enum => "enum",
+    TyKind.Vec => "vec",
+    TyKind.Range => "range",
+  };
+}
+
+fn ty_is_int_kind(k: TyKind) -> bool {
+  return
+    match k {
+      TyKind.I8 => true,
+      TyKind.U8 => true,
+      TyKind.I16 => true,
+      TyKind.U16 => true,
+      TyKind.I32 => true,
+      TyKind.U32 => true,
+      TyKind.I64 => true,
+      TyKind.U64 => true,
+      TyKind.ISize => true,
+      TyKind.USize => true,
+      _ => false,
+    };
+}
+
+fn ty_is_float_kind(k: TyKind) -> bool {
+  return match k { TyKind.F32 => true, TyKind.F64 => true, _ => false };
+}
+
+fn verify_ty_idx(pool: TyPool, idx: i32, what: String) -> VerifyResult {
+  if !idx_valid(pool, idx) {
+    return verify_err("invalid type index for ".concat(what).concat(": ").concat(idx.to_string()));
+  }
+  return verify_ok();
+}
+
+fn verify_id_nonneg(id: i32, what: String) -> VerifyResult {
+  if id < 0 {
+    return verify_err("negative id for ".concat(what).concat(": ").concat(id.to_string()));
+  }
+  return verify_ok();
+}
+
+fn verify_cast_int(pool: TyPool, dst_ty: i32, src_ty: i32, checked: bool, ctx: String) -> VerifyResult {
+  let vdst: VerifyResult = verify_ty_idx(pool, dst_ty, ctx.concat(" dst_ty"));
+  if !vdst.ok { return vdst; }
+  let vsrc: VerifyResult = verify_ty_idx(pool, src_ty, ctx.concat(" src_ty"));
+  if !vsrc.ok { return vsrc; }
+  let dk: TyKind = ty_pool_get(pool, dst_ty).kind;
+  let sk: TyKind = ty_pool_get(pool, src_ty).kind;
+
+  if !ty_is_int_kind(dk) {
+    return verify_err(ctx.concat(": dst must be int, got ").concat(ty_kind_text(dk)));
+  }
+  if checked {
+    if !ty_is_int_kind(sk) && !ty_is_float_kind(sk) {
+      return verify_err(ctx.concat(": src must be int/float, got ").concat(ty_kind_text(sk)));
+    }
+    return verify_ok();
+  }
+  if !ty_is_int_kind(sk) {
+    return verify_err(ctx.concat(": src must be int, got ").concat(ty_kind_text(sk)));
+  }
+  return verify_ok();
+}
+
+fn verify_cast_float(pool: TyPool, dst_ty: i32, src_ty: i32, ctx: String) -> VerifyResult {
+  let vdst: VerifyResult = verify_ty_idx(pool, dst_ty, ctx.concat(" dst_ty"));
+  if !vdst.ok { return vdst; }
+  let vsrc: VerifyResult = verify_ty_idx(pool, src_ty, ctx.concat(" src_ty"));
+  if !vsrc.ok { return vsrc; }
+  let dk: TyKind = ty_pool_get(pool, dst_ty).kind;
+  let sk: TyKind = ty_pool_get(pool, src_ty).kind;
+  if !ty_is_float_kind(dk) {
+    return verify_err(ctx.concat(": dst must be float, got ").concat(ty_kind_text(dk)));
+  }
+  if !ty_is_float_kind(sk) && !ty_is_int_kind(sk) {
+    return verify_err(ctx.concat(": src must be int/float, got ").concat(ty_kind_text(sk)));
+  }
+  return verify_ok();
+}
+
+fn verify_instr(pool: TyPool, f: Func, b: Block, inst: Instr) -> VerifyResult {
+  return
+    match inst {
+      Instr.Const(dst, ty, _v) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "const dst");
+        if !vd.ok { vd } else { verify_ty_idx(pool, ty, "const ty") }
+      },
+
+      Instr.BinOp(dst, _op, ty, _a, _c) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "binop dst");
+        if !vd.ok { vd } else { verify_ty_idx(pool, ty, "binop ty") }
+      },
+      Instr.Cmp(dst, _op, ty, _a, _c) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "cmp dst");
+        if !vd.ok { vd } else { verify_ty_idx(pool, ty, "cmp operand ty") }
+      },
+      Instr.And(dst, _a, _c) => verify_id_nonneg(dst, "and dst"),
+      Instr.Or(dst, _a, _c) => verify_id_nonneg(dst, "or dst"),
+      Instr.Not(dst, _a) => verify_id_nonneg(dst, "not dst"),
+
+      Instr.IntCast(dst, dst_ty, src_ty, _v) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "int_cast dst");
+        if !vd.ok { return vd; }
+        verify_cast_int(pool, dst_ty, src_ty, false, "int_cast in ".concat(f.name).concat("::").concat(b.name))
+      },
+      Instr.IntCastChecked(dst, dst_ty, src_ty, _v) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "int_cast_checked dst");
+        if !vd.ok { return vd; }
+        verify_cast_int(pool, dst_ty, src_ty, true, "int_cast_checked in ".concat(f.name).concat("::").concat(b.name))
+      },
+      Instr.FloatCast(dst, dst_ty, src_ty, _v) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "float_cast dst");
+        if !vd.ok { return vd; }
+        verify_cast_float(pool, dst_ty, src_ty, "float_cast in ".concat(f.name).concat("::").concat(b.name))
+      },
+
+      Instr.RangeCheck(ty, _v, lo, hi) => {
+        let vt: VerifyResult = verify_ty_idx(pool, ty, "range_check ty");
+        if !vt.ok { return vt; }
+        let tk: TyKind = ty_pool_get(pool, ty).kind;
+        if !ty_is_int_kind(tk) {
+          return verify_err("range_check must use int type, got ".concat(ty_kind_text(tk)));
+        }
+        if lo > hi {
+          return verify_err("range_check invalid bounds: lo > hi");
+        }
+        verify_ok()
+      },
+
+      Instr.SlotDecl(slot, ty) => {
+        let vs: VerifyResult = verify_id_nonneg(slot, "slot_decl slot");
+        if !vs.ok { return vs; }
+        verify_ty_idx(pool, ty, "slot_decl ty")
+      },
+      Instr.Store(slot, _v) => verify_id_nonneg(slot, "store slot"),
+      Instr.Load(dst, ty, slot) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "load dst");
+        if !vd.ok { return vd; }
+        let vs: VerifyResult = verify_id_nonneg(slot, "load slot");
+        if !vs.ok { return vs; }
+        verify_ty_idx(pool, ty, "load ty")
+      },
+
+      Instr.StructInit(dst, ty, _fields) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "struct_init dst");
+        if !vd.ok { return vd; }
+        verify_ty_idx(pool, ty, "struct_init ty")
+      },
+      Instr.FieldGet(dst, ty, _recv, _field) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "field_get dst");
+        if !vd.ok { return vd; }
+        verify_ty_idx(pool, ty, "field_get ty")
+      },
+      Instr.StoreField(slot, _field, _v) => verify_id_nonneg(slot, "store_field slot"),
+
+      Instr.EnumInit(dst, ty, _variant, _payload) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "enum_init dst");
+        if !vd.ok { return vd; }
+        verify_ty_idx(pool, ty, "enum_init ty")
+      },
+      Instr.EnumTag(dst, _recv) => verify_id_nonneg(dst, "enum_tag dst"),
+      Instr.EnumPayload(dst, ty, _recv, _variant, _idx) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "enum_payload dst");
+        if !vd.ok { return vd; }
+        verify_ty_idx(pool, ty, "enum_payload ty")
+      },
+
+      Instr.VecNew(dst, ty, elem) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "vec_new dst");
+        if !vd.ok { return vd; }
+        let vt: VerifyResult = verify_ty_idx(pool, ty, "vec_new vec_ty");
+        if !vt.ok { return vt; }
+        verify_ty_idx(pool, elem, "vec_new elem_ty")
+      },
+      Instr.VecPush(slot, elem, _v) => {
+        let vs: VerifyResult = verify_id_nonneg(slot, "vec_push slot");
+        if !vs.ok { return vs; }
+        verify_ty_idx(pool, elem, "vec_push elem_ty")
+      },
+      Instr.VecLen(dst, slot) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "vec_len dst");
+        if !vd.ok { return vd; }
+        verify_id_nonneg(slot, "vec_len slot")
+      },
+      Instr.VecGet(dst, ty, slot, _idx) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "vec_get dst");
+        if !vd.ok { return vd; }
+        let vs: VerifyResult = verify_id_nonneg(slot, "vec_get slot");
+        if !vs.ok { return vs; }
+        verify_ty_idx(pool, ty, "vec_get ty")
+      },
+      Instr.VecStrJoin(dst, slot, _sep) => {
+        let vd: VerifyResult = verify_id_nonneg(dst, "vec_str_join dst");
+        if !vd.ok { return vd; }
+        verify_id_nonneg(slot, "vec_str_join slot")
+      },
+
+      Instr.StrLen(dst, _recv) => verify_id_nonneg(dst, "str_len dst"),
+      Instr.StrByteAt(dst, _recv, _idx) => verify_id_nonneg(dst, "str_byte_at dst"),
+      Instr.StrSlice(dst, _recv, _s, _e) => verify_id_nonneg(dst, "str_slice dst"),
+      Instr.StrConcat(dst, _a, _c) => verify_id_nonneg(dst, "str_concat dst"),
+      Instr.StrEscapeC(dst, _recv) => verify_id_nonneg(dst, "str_escape_c dst"),
+
+      Instr.I32ToStr(dst, _v) => verify_id_nonneg(dst, "i32_to_str dst"),
+      Instr.I64ToStr(dst, _v) => verify_id_nonneg(dst, "i64_to_str dst"),
+      Instr.U64ToStr(dst, _v) => verify_id_nonneg(dst, "u64_to_str dst"),
+      Instr.F32ToStr(dst, _v) => verify_id_nonneg(dst, "f32_to_str dst"),
+      Instr.F64ToStr(dst, _v) => verify_id_nonneg(dst, "f64_to_str dst"),
+      Instr.BoolToStr(dst, _v) => verify_id_nonneg(dst, "bool_to_str dst"),
+
+      Instr.Call(has_dst, dst, ret_ty, _name, _args) => {
+        let vt: VerifyResult = verify_ty_idx(pool, ret_ty, "call ret_ty");
+        if !vt.ok { return vt; }
+        if has_dst { verify_id_nonneg(dst, "call dst") } else { verify_ok() }
+      },
+    };
+}
+
+fn verify_term_targets(f: Func, b: Block, block_names: Vec[String]) -> VerifyResult {
+  if !b.has_term {
+    return verify_err("missing terminator in ".concat(f.name).concat("::").concat(b.name));
+  }
+  return
+    match b.term {
+      Term.Ret(_has, _v) => verify_ok(),
+      Term.Panic(_msg) => verify_ok(),
+      Term.Br(tgt) =>
+        if has_name(block_names, tgt) {
+          verify_ok()
+        } else {
+          verify_err("unknown branch target in ".concat(f.name).concat("::").concat(b.name).concat(": ").concat(tgt))
+        },
+      Term.CondBr(_c, a, c) =>
+        if !has_name(block_names, a) {
+          verify_err("unknown condbr then target in ".concat(f.name).concat("::").concat(b.name).concat(": ").concat(a))
+        } else if !has_name(block_names, c) {
+          verify_err("unknown condbr else target in ".concat(f.name).concat("::").concat(b.name).concat(": ").concat(c))
+        } else {
+          verify_ok()
+        },
+    };
+}
+
+pub fn verify_program(p: Program) -> VerifyResult {
+  let pool: TyPool = p.pool;
+
+  // Global type index checks.
+  let mut si: i32 = 0;
+  while si < p.structs.len() {
+    let s: StructDecl = p.structs.get(si);
+    let mut fi: i32 = 0;
+    while fi < s.fields.len() {
+      let f: StructField = s.fields.get(fi);
+      let vrf: VerifyResult = verify_ty_idx(pool, f.ty, "struct field ".concat(s.name).concat(".").concat(f.name));
+      if !vrf.ok { return vrf; }
+      fi = fi + 1;
+    }
+    si = si + 1;
+  }
+
+  let mut ei: i32 = 0;
+  while ei < p.enums.len() {
+    let e: EnumDecl = p.enums.get(ei);
+    let mut vi: i32 = 0;
+    while vi < e.variants.len() {
+      let v: EnumVariant = e.variants.get(vi);
+      let mut pi: i32 = 0;
+      while pi < v.fields.len() {
+        let vrp: VerifyResult = verify_ty_idx(pool, v.fields.get(pi), "enum payload ".concat(e.name).concat(".").concat(v.name));
+        if !vrp.ok { return vrp; }
+        pi = pi + 1;
+      }
+      vi = vi + 1;
+    }
+    ei = ei + 1;
+  }
+
+  // Function-level checks.
+  let mut fi: i32 = 0;
+  while fi < p.funcs.len() {
+    let f: Func = p.funcs.get(fi);
+    let vret: VerifyResult = verify_ty_idx(pool, f.ret, "function ret ".concat(f.name));
+    if !vret.ok { return vret; }
+    let mut pi: i32 = 0;
+    while pi < f.params.len() {
+      let vp: VerifyResult = verify_ty_idx(pool, f.params.get(pi).ty, "function param ".concat(f.name));
+      if !vp.ok { return vp; }
+      pi = pi + 1;
+    }
+    if f.blocks.len() == 0 {
+      return verify_err("function has no blocks: ".concat(f.name));
+    }
+
+    let mut block_names: Vec[String] = Vec();
+    let mut bi0: i32 = 0;
+    while bi0 < f.blocks.len() {
+      block_names.push(f.blocks.get(bi0).name);
+      bi0 = bi0 + 1;
+    }
+
+    let mut bi: i32 = 0;
+    while bi < f.blocks.len() {
+      let b: Block = f.blocks.get(bi);
+      let vt: VerifyResult = verify_term_targets(f, b, block_names);
+      if !vt.ok { return vt; }
+      let mut ii: i32 = 0;
+      while ii < b.instrs.len() {
+        let vii: VerifyResult = verify_instr(pool, f, b, b.instrs.get(ii));
+        if !vii.ok { return vii; }
+        ii = ii + 1;
+      }
+      bi = bi + 1;
+    }
+    fi = fi + 1;
+  }
+
+  return verify_ok();
+}
+

@@ -133,12 +133,21 @@ Stage0 IR v0 定义“整数到整数”的显式转换：
 %t4 = float_cast f32 f64 %t5
 ```
 
-约束：
+约束（Stage1 当前实现）：
 
-- `int_cast`：转换不 panic（截断/按位转换语义，细节后续细化；stage0 目前很少生成）。
-- `int_cast_checked`：必须进行运行时范围检查；越界必须 `panic`。
-- `int_cast`/`int_cast_checked` 的 `dst/src` 当前允许所有整数标量类型：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`。
-- `float_cast` 当前用于 `f32 <-> f64` 显式转换。
+- `int_cast`：
+  - 仅允许 `int -> int`。
+  - 语义为不检查的显式转换（可能截断）。
+- `int_cast_checked`：
+  - 目标类型必须是整数。
+  - 源类型允许 `int` 或 `float`。
+  - 语义为 checked cast（越界/非法值 panic）。
+- `float_cast`：
+  - 目标类型必须是浮点。
+  - 源类型允许 `int` 或 `float`。
+  - 语义为数值转换（由后端目标语言转换规则承载）。
+- `int` 类型集合：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`
+- `float` 类型集合：`f32/f64`
 
 ### 5.4.2 范围检查（`@range`）
 
@@ -156,6 +165,18 @@ range_check i64 0 3 %t0
 - `range_check` 没有结果值，只做检查。
 - 若值不在 `[lo, hi]`（包含端点）内，必须 `panic("range check failed")`。
 - `range_check` 的类型参数当前允许所有整数标量类型：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`。
+- `range_check` 还要求 `lo <= hi`（非法区间在 IR 校验阶段报错）。
+
+### 5.4.3 IR 校验（Stage1）
+
+在 Stage1 编译管线中，IR 进入后端前会执行 `verify`：
+
+- 类型索引必须有效（函数参数/返回、结构体字段、枚举 payload、相关指令）
+- cast 指令必须满足本节定义的类型组合约束
+- `range_check` 必须作用于整数类型且区间合法（`lo <= hi`）
+- CFG 终结指令分支目标必须存在
+
+校验失败时，编译直接返回错误，不进入 codegen。
 
 ### 5.5 局部槽位（可变变量）
 
