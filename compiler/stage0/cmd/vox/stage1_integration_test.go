@@ -1413,6 +1413,12 @@ edition = "2026"
 	if !strings.Contains(string(bf), "STAGE2_FAIL_MARKER") {
 		t.Fatalf("expected captured failed test log in stage2 output, got:\n%s", string(bf))
 	}
+	if !strings.Contains(string(bf), "[hint] rerun failed:") || !strings.Contains(string(bf), "--rerun-failed") {
+		t.Fatalf("expected rerun hint in stage2 output, got:\n%s", string(bf))
+	}
+	if !strings.Contains(string(bf), "--jobs=2") {
+		t.Fatalf("expected rerun hint to preserve jobs in stage2 output, got:\n%s", string(bf))
+	}
 }
 
 func TestStage1ExitCodeNonZeroOnBuildPkgFailure(t *testing.T) {
