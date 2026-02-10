@@ -58,7 +58,15 @@ Stage1 v0 的 typecheck/irgen 错误以字符串为主，**但当 AST 节点拥�
 - trait/impl 的 associated type 声明已携带 `Span`，重复/非法绑定错误定位到具体 `type` 条目。
 - typecheck/import/irgen 错误已附带稳定错误码后缀，当前包含：
   - `E_TYPE_0001`
-  - `E_IMPORT_0001`
+  - `E_IMPORT_0001`（通用 import 错误）
+  - `E_IMPORT_0002`（unknown module import）
+  - `E_IMPORT_0003`（ambiguous import）
+  - `E_IMPORT_0004`（duplicate import alias）
+  - `E_IMPORT_0005`（duplicate imported name）
+  - `E_IMPORT_0006`（import name conflict）
+  - `E_IMPORT_0007`（unknown imported name）
+  - `E_IMPORT_0008`（ambiguous imported name）
+  - `E_IMPORT_0009`（imported symbol is private）
   - `E_IRGEN_0001`
 
 ## 4. 错误分层（kind/code）

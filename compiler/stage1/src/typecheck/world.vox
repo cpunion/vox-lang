@@ -73,8 +73,15 @@ fn err_aliases_at(sp: ast.Span, msg: String) -> ImportAliasesResult {
   return ImportAliasesResult { ok: false, err: import_error_at(sp, msg), aliases: Vec() };
 }
 
+fn err_aliases_at_code(sp: ast.Span, msg: String, code: String) -> ImportAliasesResult {
+  return ImportAliasesResult { ok: false, err: import_error_at_code(sp, msg, code), aliases: Vec() };
+}
+
 fn ok_path(p: String) -> ResolveImportResult { return ResolveImportResult { ok: true, err: TcError.None, path: p }; }
 fn err_path_at(sp: ast.Span, msg: String) -> ResolveImportResult { return ResolveImportResult { ok: false, err: import_error_at(sp, msg), path: "" }; }
+fn err_path_at_code(sp: ast.Span, msg: String, code: String) -> ResolveImportResult {
+  return ResolveImportResult { ok: false, err: import_error_at_code(sp, msg, code), path: "" };
+}
 
 fn last_path_seg(path: String) -> String {
   let n: i32 = path.len();
@@ -167,7 +174,7 @@ fn resolve_import_path(w: World, file: String, path: String, sp: ast.Span) -> Re
   let has_local: bool = find_mod(w, local).found;
   let has_pkg: bool = find_mod(w, pkg).found;
   if has_local && has_pkg {
-    return err_path_at(sp, "ambiguous import: ".concat(path).concat(" (use pkg: or mod:)"));
+    return err_path_at_code(sp, "ambiguous import: ".concat(path).concat(" (use pkg: or mod:)"), diag_code_import_ambiguous_module());
   }
   if has_local { return ok_path(local); }
   if has_pkg { return ok_path(pkg); }
@@ -194,7 +201,7 @@ pub fn build_import_aliases(w: World, imps: Vec[ast.ImportDecl], file: String) -
     if imp.names.len() != 0 { i = i + 1; continue; } // named imports don't introduce module aliases
     let alias: String = default_import_alias(imp.path, imp.alias);
     if contains_str(seen, alias) {
-      return err_aliases_at(imp.sp, "duplicate import alias: ".concat(alias));
+      return err_aliases_at_code(imp.sp, "duplicate import alias: ".concat(alias), diag_code_import_duplicate_alias());
     }
     seen.push(alias);
     let rr: ResolveImportResult = resolve_import_path(w, imp.file, imp.path, imp.sp);
@@ -267,6 +274,14 @@ fn err_imps_at(sp: ast.Span, msg: String) -> ImportsResult {
   return ImportsResult {
     ok: false,
     err: import_error_at(sp, msg),
+    imps: Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() },
+  };
+}
+
+fn err_imps_at_code(sp: ast.Span, msg: String, code: String) -> ImportsResult {
+  return ImportsResult {
+    ok: false,
+    err: import_error_at_code(sp, msg, code),
     imps: Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() },
   };
 }
@@ -478,7 +493,7 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
     if !rr.ok { return ImportsResult { ok: false, err: rr.err, imps: Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() } }; }
     let target_mod: String = rr.path;
     let fm: FindModResult = find_mod(w, target_mod);
-    if !fm.found { return err_imps_at(imp.sp, "unknown module import: ".concat(imp.path)); }
+    if !fm.found { return err_imps_at_code(imp.sp, "unknown module import: ".concat(imp.path), diag_code_import_unknown_module()); }
 
     let mut ni: i32 = 0;
     while ni < imp.names.len() {
@@ -486,9 +501,15 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
       let local: String = if nm.alias != "" { nm.alias } else { nm.name };
       if local == "" { return err_imps_at(nm.sp, "invalid imported name"); }
 
-      if contains_str(seen, local) { return err_imps_at(nm.sp, "duplicate imported name: ".concat(local)); }
-      if contains_alias(aliases, local) { return err_imps_at(nm.sp, "import name conflicts with module alias: ".concat(local)); }
-      if local_decl_conflicts(w, cur_mod, local) { return err_imps_at(nm.sp, "import name conflicts with local definition: ".concat(local)); }
+      if contains_str(seen, local) {
+        return err_imps_at_code(nm.sp, "duplicate imported name: ".concat(local), diag_code_import_duplicate_name());
+      }
+      if contains_alias(aliases, local) {
+        return err_imps_at_code(nm.sp, "import name conflicts with module alias: ".concat(local), diag_code_import_name_conflict());
+      }
+      if local_decl_conflicts(w, cur_mod, local) {
+        return err_imps_at_code(nm.sp, "import name conflicts with local definition: ".concat(local), diag_code_import_name_conflict());
+      }
 
       let target: String = qname(target_mod, nm.name);
       let has_fn: bool = has_decl_fn_any(w, target_mod, nm.name);
@@ -505,26 +526,38 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
       if has_enum { found = found + 1; }
       if has_trait { found = found + 1; }
 
-      if found == 0 { return err_imps_at(nm.sp, "unknown imported name: ".concat(target)); }
-      if found > 1 { return err_imps_at(nm.sp, "ambiguous imported name: ".concat(target)); }
+      if found == 0 { return err_imps_at_code(nm.sp, "unknown imported name: ".concat(target), diag_code_import_unknown_name()); }
+      if found > 1 { return err_imps_at_code(nm.sp, "ambiguous imported name: ".concat(target), diag_code_import_ambiguous_name()); }
 
       if has_fn {
-        if !vis_allows(find_decl_vis_fn(w, target_mod, nm.name), target_mod, cur_mod) { return err_imps_at(nm.sp, "function is private: ".concat(target)); }
+        if !vis_allows(find_decl_vis_fn(w, target_mod, nm.name), target_mod, cur_mod) {
+          return err_imps_at_code(nm.sp, "function is private: ".concat(target), diag_code_import_private_name());
+        }
         named_funcs.push(NamedFuncImport { local: local, mod_path: target_mod, name: nm.name });
       } else if has_const {
-        if !vis_allows(find_decl_vis_const(w, target_mod, nm.name), target_mod, cur_mod) { return err_imps_at(nm.sp, "const is private: ".concat(target)); }
+        if !vis_allows(find_decl_vis_const(w, target_mod, nm.name), target_mod, cur_mod) {
+          return err_imps_at_code(nm.sp, "const is private: ".concat(target), diag_code_import_private_name());
+        }
         named_consts.push(NamedConstImport { local: local, mod_path: target_mod, name: nm.name });
       } else if has_type_alias {
-        if !vis_allows(find_decl_vis_type_alias(w, target_mod, nm.name), target_mod, cur_mod) { return err_imps_at(nm.sp, "type is private: ".concat(target)); }
+        if !vis_allows(find_decl_vis_type_alias(w, target_mod, nm.name), target_mod, cur_mod) {
+          return err_imps_at_code(nm.sp, "type is private: ".concat(target), diag_code_import_private_name());
+        }
         named_types.push(NamedTypeImport { local: local, mod_path: target_mod, name: nm.name, kind: named_type_kind_alias() });
       } else if has_struct {
-        if !vis_allows(find_decl_vis_struct(w, target_mod, nm.name), target_mod, cur_mod) { return err_imps_at(nm.sp, "type is private: ".concat(target)); }
+        if !vis_allows(find_decl_vis_struct(w, target_mod, nm.name), target_mod, cur_mod) {
+          return err_imps_at_code(nm.sp, "type is private: ".concat(target), diag_code_import_private_name());
+        }
         named_types.push(NamedTypeImport { local: local, mod_path: target_mod, name: nm.name, kind: named_type_kind_struct() });
       } else if has_enum {
-        if !vis_allows(find_decl_vis_enum(w, target_mod, nm.name), target_mod, cur_mod) { return err_imps_at(nm.sp, "type is private: ".concat(target)); }
+        if !vis_allows(find_decl_vis_enum(w, target_mod, nm.name), target_mod, cur_mod) {
+          return err_imps_at_code(nm.sp, "type is private: ".concat(target), diag_code_import_private_name());
+        }
         named_types.push(NamedTypeImport { local: local, mod_path: target_mod, name: nm.name, kind: named_type_kind_enum() });
       } else {
-        if !vis_allows(find_decl_vis_trait(w, target_mod, nm.name), target_mod, cur_mod) { return err_imps_at(nm.sp, "type is private: ".concat(target)); }
+        if !vis_allows(find_decl_vis_trait(w, target_mod, nm.name), target_mod, cur_mod) {
+          return err_imps_at_code(nm.sp, "type is private: ".concat(target), diag_code_import_private_name());
+        }
         named_types.push(NamedTypeImport { local: local, mod_path: target_mod, name: nm.name, kind: named_type_kind_trait() });
       }
 
