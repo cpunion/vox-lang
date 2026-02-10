@@ -47,6 +47,32 @@ func TestParseTestOptionsAndDir_RunAndRerun(t *testing.T) {
 	}
 }
 
+func TestParseTestOptionsAndDir_Filter(t *testing.T) {
+	opts, err := parseTestOptionsAndDir([]string{"--filter", "sync", "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.filterText != "sync" {
+		t.Fatalf("filterText = %q, want %q", opts.filterText, "sync")
+	}
+}
+
+func TestParseTestOptionsAndDir_FilterEq(t *testing.T) {
+	opts, err := parseTestOptionsAndDir([]string{"--filter=smoke", "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.filterText != "smoke" {
+		t.Fatalf("filterText = %q, want %q", opts.filterText, "smoke")
+	}
+}
+
+func TestParseTestOptionsAndDir_FilterMissingValue(t *testing.T) {
+	if _, err := parseTestOptionsAndDir([]string{"--filter"}); err == nil {
+		t.Fatalf("expected error for missing --filter value")
+	}
+}
+
 func TestParseTestOptionsAndDir_Jobs(t *testing.T) {
 	opts, err := parseTestOptionsAndDir([]string{"--jobs=3", "."})
 	if err != nil {
@@ -122,6 +148,26 @@ func TestFilterTestsByPattern(t *testing.T) {
 	}
 	if got[0] != "tests::test_alpha" || got[1] != "a.b::test_beta" {
 		t.Fatalf("unexpected filter result: %v", got)
+	}
+}
+
+func TestFilterTestsBySubstring(t *testing.T) {
+	in := []string{
+		"tests::test_alpha",
+		"a.b::test_beta",
+		"a.b::bench_gamma",
+	}
+	got := filterTestsBySubstring(in, "beta")
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1, got=%v", len(got), got)
+	}
+	if got[0] != "a.b::test_beta" {
+		t.Fatalf("unexpected filter result: %v", got)
+	}
+
+	got = filterTestsBySubstring(in, "test_")
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2, got=%v", len(got), got)
 	}
 }
 

@@ -46,6 +46,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --interp            alias for --engine=interp")
 	fmt.Fprintln(os.Stderr, "test flags:")
 	fmt.Fprintln(os.Stderr, "  --run=<regex>       run tests whose qualified name (or short name) matches regex")
+	fmt.Fprintln(os.Stderr, "  --filter=<text>     run tests whose qualified name (or short name) contains text")
 	fmt.Fprintln(os.Stderr, "  --jobs=N, -j N      module-level test parallelism (default: GOMAXPROCS)")
 	fmt.Fprintln(os.Stderr, "  --rerun-failed      rerun only tests failed in previous run")
 	fmt.Fprintln(os.Stderr, "  --list              list selected tests and exit without running")
@@ -63,6 +64,7 @@ type testOptions struct {
 	eng         engine
 	dir         string
 	runPattern  string
+	filterText  string
 	jobs        int
 	rerunFailed bool
 	listOnly    bool
@@ -157,6 +159,18 @@ func parseTestOptionsAndDir(args []string) (opts testOptions, err error) {
 		}
 		if strings.HasPrefix(a, "--run=") {
 			opts.runPattern = strings.TrimPrefix(a, "--run=")
+			continue
+		}
+		if a == "--filter" {
+			if i+1 >= len(args) {
+				return testOptions{}, fmt.Errorf("missing value for --filter")
+			}
+			i++
+			opts.filterText = args[i]
+			continue
+		}
+		if strings.HasPrefix(a, "--filter=") {
+			opts.filterText = strings.TrimPrefix(a, "--filter=")
 			continue
 		}
 		if a == "-j" || a == "--jobs" {
@@ -510,6 +524,9 @@ func testWithOptions(opts testOptions) error {
 			return err
 		}
 	}
+	if opts.filterText != "" {
+		testNames = filterTestsBySubstring(testNames, opts.filterText)
+	}
 	if !opts.jsonOutput {
 		printSelectionSummary(os.Stdout, discoveredTests, len(testNames), opts, prevFailedCount)
 	}
@@ -668,6 +685,9 @@ func printSelectionSummary(out io.Writer, discovered int, selected int, opts tes
 	if opts.runPattern != "" {
 		fmt.Fprintf(out, "[select] --run: %q\n", opts.runPattern)
 	}
+	if opts.filterText != "" {
+		fmt.Fprintf(out, "[select] --filter: %q\n", opts.filterText)
+	}
 	if opts.jobs > 0 {
 		fmt.Fprintf(out, "[select] --jobs: %d\n", opts.jobs)
 	}
@@ -697,6 +717,7 @@ type jsonSelection struct {
 	Discovered      int    `json:"discovered"`
 	Selected        int    `json:"selected"`
 	RunPattern      string `json:"run_pattern,omitempty"`
+	FilterText      string `json:"filter,omitempty"`
 	Jobs            int    `json:"jobs,omitempty"`
 	RerunFailed     bool   `json:"rerun_failed,omitempty"`
 	PrevFailedCount int    `json:"prev_failed_count,omitempty"`
@@ -848,6 +869,9 @@ func buildJSONTestReport(
 	rep.ModuleDetails = buildJSONModuleDetails(testNames, results)
 	if opts.runPattern != "" {
 		rep.Selection.RunPattern = opts.runPattern
+	}
+	if opts.filterText != "" {
+		rep.Selection.FilterText = opts.filterText
 	}
 	if opts.jobs > 0 {
 		rep.Selection.Jobs = opts.jobs
@@ -1397,6 +1421,20 @@ func filterTestsByPattern(testNames []string, pattern string) ([]string, error) 
 		}
 	}
 	return out, nil
+}
+
+func filterTestsBySubstring(testNames []string, needle string) []string {
+	if needle == "" {
+		return append([]string{}, testNames...)
+	}
+	out := make([]string, 0, len(testNames))
+	for _, name := range testNames {
+		short := shortTestName(name)
+		if strings.Contains(name, needle) || strings.Contains(short, needle) {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func failedTestsPath(root string) string {

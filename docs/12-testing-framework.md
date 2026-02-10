@@ -18,6 +18,7 @@ vox test
 vox test --engine=c
 vox test --engine=interp
 vox test --run='regex'
+vox test --filter='substring'
 vox test --jobs=4
 vox test --rerun-failed
 vox test --list
@@ -32,6 +33,7 @@ Stage0 行为：
  - `vox test --engine=c`（默认）：编译生成测试可执行文件并执行（更贴近最终语义）
  - `vox test --engine=interp`：解释执行测试（用于快速对照；能力可能更受限）
  - `vox test --run=<regex>`：仅运行匹配的测试（匹配限定名 `mod::test_x` 与短名 `test_x`）
+ - `vox test --filter=<text>`：按子串筛选测试（匹配限定名 `mod::test_x` 与短名 `test_x`）
  - `vox test --jobs=N`（或 `-j N`）：设置模块级并行度；默认 `GOMAXPROCS`，始终保持“模块内串行”
  - `vox test --rerun-failed`：仅重跑上次失败测试（缓存文件：`target/debug/.vox_failed_tests`）
  - `vox test --list`：仅列出当前筛选后的测试，不执行
@@ -40,13 +42,13 @@ Stage0 行为：
  - 输出包含每个测试耗时（如 `([OK] mod::test_x (0.42ms))`）
  - 输出包含模块级汇总（`[module] <mod>: <passed> passed, <failed> failed (<dur>)`）
 - 输出包含最慢测试 TopN（当前 N=5，`[slowest] <test> (<dur>)`）
-- 输出包含选择摘要（`[select] discovered: N, selected: M`，并在使用 `--run/--rerun-failed` 时打印过滤来源）
+- 输出包含选择摘要（`[select] discovered: N, selected: M`，并在使用 `--run/--filter/--rerun-failed` 时打印过滤来源）
 - 测试失败后输出重跑提示（`[hint] rerun failed: vox test --engine=... --rerun-failed <dir>`）
 - `target/debug/.vox_failed_tests` 当前采用 JSON 元数据格式（包含失败测试列表与更新时间）；读取端兼容旧版纯文本行列表
 
 `--json` 的关键字段：
 
-- `selection`：发现数、筛选后数量、`--run/--jobs/--rerun-failed` 元信息
+- `selection`：发现数、筛选后数量、`--run/--filter/--jobs/--rerun-failed` 元信息
 - `results`：逐测试结果（状态、耗时、错误）
 - `modules`：模块级汇总（passed/failed/duration）
 - `module_details`：模块级测试清单（`tests`）与失败子集（`failed_tests`）
