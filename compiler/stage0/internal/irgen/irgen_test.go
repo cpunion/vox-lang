@@ -225,3 +225,33 @@ fn main() -> bool {
 		t.Fatalf("expected short-circuit lowering to avoid eager and/or; got:\n%s", s)
 	}
 }
+
+func TestLowerGenericNominalConstructorsFromExpectedType(t *testing.T) {
+	f := source.NewFile("src/main.vox", `struct Pair[T] { a: T, b: T }
+enum Option[T] { Some(T), None }
+fn main() -> i32 {
+  let p: Pair[i32] = Pair { a: 1, b: 2 };
+  let x: Option[i32] = Option.Some(p.a + p.b);
+  let y: Option[i32] = Option.None;
+  let n: i32 = match y { Option.Some(v) => v, Option.None => 0 };
+  return match x { Option.Some(v) => v + n, Option.None => 0 };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	checked, tdiags := typecheck.Check(prog, typecheck.Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+	irp, err := Generate(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := irp.Format()
+	for _, sub := range []string{"Pair$", "Option$", "enum_init", "struct_init"} {
+		if !strings.Contains(s, sub) {
+			t.Fatalf("expected IR to contain %q; got:\n%s", sub, s)
+		}
+	}
+}
