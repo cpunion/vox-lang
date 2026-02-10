@@ -18,6 +18,7 @@ pub fn is_reflect_intrinsic_name(name: String) -> bool {
     name == "@field_type_id" ||
     name == "@same_type" ||
     name == "@assignable_to" ||
+    name == "@castable_to" ||
     name == "@is_integer" ||
     name == "@is_signed_int" ||
     name == "@is_unsigned_int" ||
@@ -27,7 +28,9 @@ pub fn is_reflect_intrinsic_name(name: String) -> bool {
     name == "@is_struct" ||
     name == "@is_enum" ||
     name == "@is_vec" ||
-    name == "@is_range";
+    name == "@is_range" ||
+    name == "@is_eq_comparable" ||
+    name == "@is_ordered";
 }
 
 fn layout_ok(size: i64, align: i64) -> TyLayoutResult {
@@ -349,6 +352,92 @@ pub fn intrinsic_assignable_to_of(ctx: Ctx, src: i32, dst: i32) -> ReflectBoolRe
   return reflect_bool_ok(assignable_to(ctx, dst, src));
 }
 
+fn is_int_scalar_kind_reflect(k: ir.TyKind) -> bool {
+  return
+    k == ir.TyKind.I8 ||
+    k == ir.TyKind.U8 ||
+    k == ir.TyKind.I16 ||
+    k == ir.TyKind.U16 ||
+    k == ir.TyKind.I32 ||
+    k == ir.TyKind.U32 ||
+    k == ir.TyKind.I64 ||
+    k == ir.TyKind.U64 ||
+    k == ir.TyKind.ISize ||
+    k == ir.TyKind.USize;
+}
+
+fn castable_between_types(ctx: Ctx, src: i32, dst: i32) -> bool {
+  let from_float: bool = is_float_ty(ctx, src);
+  let to_float: bool = is_float_ty(ctx, dst);
+  if from_float || to_float {
+    let from_ok: bool = from_float || is_int_like_ty(ctx, src);
+    let to_ok: bool = to_float || is_int_like_ty(ctx, dst);
+    return from_ok && to_ok;
+  }
+  if !is_int_like_ty(ctx, src) || !is_int_like_ty(ctx, dst) { return false; }
+
+  let from_base: i32 = strip_range(ctx, src);
+  let to_base: i32 = strip_range(ctx, dst);
+  if from_base == to_base { return true; }
+
+  let fk: ir.TyKind = ir.ty_pool_get(ctx.pool, from_base).kind;
+  let tk: ir.TyKind = ir.ty_pool_get(ctx.pool, to_base).kind;
+  return is_int_scalar_kind_reflect(fk) && is_int_scalar_kind_reflect(tk);
+}
+
+fn eq_ty_capable_reflect(ctx: Ctx, ty: i32, seen0: Vec[String]) -> bool {
+  let base: i32 = strip_range(ctx, ty);
+  if base == ctx.ty_bool || base == ctx.ty_string { return true; }
+  if is_int_like_ty(ctx, base) || is_float_ty(ctx, base) { return true; }
+
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  let is_enum: bool = t.kind == ir.TyKind.Enum;
+  let is_struct: bool = t.kind == ir.TyKind.Struct;
+  if !is_enum && !is_struct { return false; }
+
+  let kind_prefix: String = if is_enum { "E:" } else { "S:" };
+  let qn: String = kind_prefix.concat(t.mod_path).concat("::").concat(t.name);
+  if contains_str_reflect(seen0, qn) { return true; }
+  let mut seen: Vec[String] = seen0;
+  seen.push(qn);
+
+  if is_struct {
+    let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+    if !fs.found { return false; }
+    let mut fi: i32 = 0;
+    while fi < fs.sig.fields.len() {
+      if !eq_ty_capable_reflect(ctx, fs.sig.fields.get(fi).ty, seen) { return false; }
+      fi = fi + 1;
+    }
+    return true;
+  }
+
+  let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+  if !fe.found { return false; }
+  let mut vi: i32 = 0;
+  while vi < fe.sig.vars.len() {
+    let v: EnumVariantSig = fe.sig.vars.get(vi);
+    let mut fi: i32 = 0;
+    while fi < v.fields.len() {
+      if !eq_ty_capable_reflect(ctx, v.fields.get(fi), seen) { return false; }
+      fi = fi + 1;
+    }
+    vi = vi + 1;
+  }
+  return true;
+}
+
+pub fn intrinsic_castable_to_of(ctx: Ctx, src: i32, dst: i32) -> ReflectBoolResult {
+  let ss: i32 = strip_range(ctx, src);
+  let dd: i32 = strip_range(ctx, dst);
+  let ts: ir.Ty = ir.ty_pool_get(ctx.pool, ss);
+  let td: ir.Ty = ir.ty_pool_get(ctx.pool, dd);
+  if ts.kind == ir.TyKind.Param || td.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(castable_between_types(ctx, src, dst));
+}
+
 pub fn intrinsic_is_integer_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
   let base: i32 = strip_range(ctx, ty);
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
@@ -449,4 +538,23 @@ pub fn intrinsic_is_range_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
     return reflect_bool_err("intrinsic requires concrete type");
   }
   return reflect_bool_ok(t.kind == ir.TyKind.Range);
+}
+
+pub fn intrinsic_is_eq_comparable_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(eq_ty_capable_reflect(ctx, base, Vec()));
+}
+
+pub fn intrinsic_is_ordered_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  let out: bool = is_int_like_ty(ctx, base) || is_float_ty(ctx, base) || base == ctx.ty_string;
+  return reflect_bool_ok(out);
 }
