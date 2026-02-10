@@ -45,7 +45,7 @@ fn join_mod_path(base: String, segs: Vec[String]) -> String {
 }
 
 struct EvalConstExprResult { ok: bool, err: TcError, kind: i32, ty: i32, iv: i64, bv: bool, sv: String, sigs: Vec[ConstSig], states: Vec[i32] }
-struct ResolveConstResult { ok: bool, err: TcError, sigs: Vec[ConstSig], states: Vec[i32] }
+struct ResolveConstResult { ok: bool, err: TcError, sigs: Vec[ConstSig], states: Vec[i32], ctx: Ctx }
 
 fn is_int_scalar_kind(k: ir.TyKind) -> bool {
   return match k {
@@ -928,7 +928,42 @@ fn const_find_func_decl(w: World, mod_path: String, name: String) -> ConstFindFu
   return ConstFindFuncDeclResult { found: false, decl: empty_func_decl() };
 }
 
-fn const_resolve_enum_ctor(ctx: Ctx, cur_mod: String, imps: Imports, parts: Vec[String], expected: i32) -> ConstResolveEnumCtorResult {
+fn const_resolve_enum_ctor(ctx: Ctx, w: World, cur_mod: String, imps: Imports, parts: Vec[String], enum_targs: Vec[ast.TypeName], expected: i32) -> ConstResolveEnumCtorResult {
+  if enum_targs.len() != 0 {
+    if parts.len() < 2 || parts.len() > 3 {
+      return ConstResolveEnumCtorResult { ok: false, err: "bad enum ctor path in const expression", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+    }
+    let mut enum_parts: Vec[String] = Vec();
+    let mut i: i32 = 0;
+    while i < parts.len() - 1 {
+      enum_parts.push(parts.get(i));
+      i = i + 1;
+    }
+    let vname_t: String = parts.get(parts.len() - 1);
+    let tn: ast.TypeName = ast.TypeName { parts: enum_parts, args: enum_targs };
+    let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), tn);
+    if !tr.ok {
+      return ConstResolveEnumCtorResult { ok: false, err: "bad typed enum ctor path in const expression", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+    }
+    let c2: Ctx = tr.ctx;
+    if tr.idx < 0 || tr.idx >= c2.pool.tys.len() {
+      return ConstResolveEnumCtorResult { ok: false, err: "bad typed enum ctor path in const expression", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+    }
+    let eb_t: i32 = strip_range(c2, tr.idx);
+    let et_t: ir.Ty = ir.ty_pool_get(c2.pool, eb_t);
+    if et_t.kind != ir.TyKind.Enum {
+      return ConstResolveEnumCtorResult { ok: false, err: "const typed path requires enum type", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+    }
+    if expected != -1 && strip_range(c2, expected) != eb_t {
+      return ConstResolveEnumCtorResult { ok: false, err: "const enum ctor type mismatch", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+    }
+    let fv_t: ConstFindVariantResult = const_find_enum_variant(c2, eb_t, vname_t);
+    if !fv_t.ok {
+      return ConstResolveEnumCtorResult { ok: false, err: "unknown enum variant in const expression", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+    }
+    return ConstResolveEnumCtorResult { ok: true, err: "", enum_ty: eb_t, variant: vname_t, vidx: fv_t.idx, fields: fv_t.fields };
+  }
+
   if expected == -1 {
     return ConstResolveEnumCtorResult { ok: false, err: "const enum shorthand requires expected enum type", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
   }
@@ -1327,7 +1362,7 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     let vname: String = match n { ast.ExprNode.DotIdent(x) => x, _ => "" };
     let mut parts0: Vec[String] = Vec();
     parts0.push(vname);
-    let cr0: ConstResolveEnumCtorResult = const_resolve_enum_ctor(ctx, cur_mod, imps, parts0, expected);
+    let cr0: ConstResolveEnumCtorResult = const_resolve_enum_ctor(ctx, w, cur_mod, imps, parts0, Vec(), expected);
     if !cr0.ok {
       return EvalConstExprResult { ok: false, err: type_error(file, cr0.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
@@ -1352,6 +1387,7 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
 
     let mut parts2: Vec[String] = Vec();
     let mut is_ctor: bool = false;
+    let mut ctor_targs: Vec[ast.TypeName] = Vec();
     if match cn { ast.ExprNode.Ident(_name) => true, _ => false } {
       let fname: String = match cn { ast.ExprNode.Ident(x) => x, _ => "" };
       let nf: NamedFuncImport = find_named_func(imps.named_funcs, fname);
@@ -1375,13 +1411,12 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
       parts2.push(vname2);
       is_ctor = true;
     } else if match cn { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
-      let recv2: i32 = match cn { ast.ExprNode.Member(r2, _name2) => r2, _ => -1 };
-      let name2: String = match cn { ast.ExprNode.Member(_r2, n2) => n2, _ => "" };
-      let pr2: ExprPartsResult = expr_parts_member(exprs, recv2, name2);
+      let pr2: ExprTypePathResult = expr_type_path(exprs, callee);
       if pr2.ok {
         parts2 = pr2.parts;
+        ctor_targs = pr2.targs;
         is_ctor = true;
-        if parts2.len() >= 2 {
+        if ctor_targs.len() == 0 && parts2.len() >= 2 {
           let basef: String = find_alias(imps.aliases, parts2.get(0));
           if basef != "" {
             let extraf: Vec[String] = slice_parts(parts2, 1, parts2.len() - 1);
@@ -1659,7 +1694,7 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
       if type_args.len() != 0 {
         return EvalConstExprResult { ok: false, err: type_error(file, "const enum ctor does not accept type args"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
       }
-      let cr2: ConstResolveEnumCtorResult = const_resolve_enum_ctor(ctx, cur_mod, imps, parts2, expected);
+      let cr2: ConstResolveEnumCtorResult = const_resolve_enum_ctor(ctx, w, cur_mod, imps, parts2, ctor_targs, expected);
       if !cr2.ok {
         return EvalConstExprResult { ok: false, err: type_error(file, cr2.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
       }
@@ -1760,12 +1795,13 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
       return EvalConstExprResult { ok: false, err: type_error(file, "unknown field"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: vr.sigs, states: vr.states };
     }
 
-    let pr: ExprPartsResult = expr_parts_member(exprs, recv, mname);
+    let pr: ExprTypePathResult = expr_type_path(exprs, id);
     if !pr.ok { return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const member path"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let parts: Vec[String] = pr.parts;
+    let enum_targs: Vec[ast.TypeName] = pr.targs;
     if parts.len() < 2 { return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const member path"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let base: String = find_alias(imps.aliases, parts.get(0));
-    if base != "" {
+    if base != "" && enum_targs.len() == 0 {
       let extra: Vec[String] = slice_parts(parts, 1, parts.len() - 1);
       let want_mod: String = if extra.len() == 0 { base } else { join_mod_path(base, extra) };
       let want_name: String = parts.get(parts.len() - 1);
@@ -1783,7 +1819,7 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     }
 
     // Fallback to enum unit value path when const lookup does not match.
-    let cr3: ConstResolveEnumCtorResult = const_resolve_enum_ctor(ctx, cur_mod, imps, parts, expected);
+    let cr3: ConstResolveEnumCtorResult = const_resolve_enum_ctor(ctx, w, cur_mod, imps, parts, enum_targs, expected);
     if !cr3.ok {
       return EvalConstExprResult { ok: false, err: type_error(file, cr3.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
@@ -2175,11 +2211,12 @@ fn slice_parts(xs: Vec[String], lo: i32, hi: i32) -> Vec[String] {
 }
 
 fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig], states0: Vec[i32], idx: i32) -> ResolveConstResult {
+  let mut c: Ctx = ctx;
   let st: i32 = states0.get(idx); // 0 pending, 1 resolving, 2 done
-  if st == 2 { return ResolveConstResult { ok: true, err: TcError.None, sigs: sigs0, states: states0 }; }
+  if st == 2 { return ResolveConstResult { ok: true, err: TcError.None, sigs: sigs0, states: states0, ctx: c }; }
   if st == 1 {
     let it0: ConstItem = items.get(idx);
-    return ResolveConstResult { ok: false, err: type_error(it0.decl.file, "const cycle: ".concat(const_qname(it0.mod_path, it0.decl.name))), sigs: sigs0, states: states0 };
+    return ResolveConstResult { ok: false, err: type_error(it0.decl.file, "const cycle: ".concat(const_qname(it0.mod_path, it0.decl.name))), sigs: sigs0, states: states0, ctx: c };
   }
 
   let mut sigs: Vec[ConstSig] = sigs0;
@@ -2189,29 +2226,30 @@ fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig]
   // Resolve declared type (v0: must be primitive or `@range(..) <int>`).
   let fm: FindModResult = find_mod(w, it.mod_path);
   if !fm.found {
-    return ResolveConstResult { ok: false, err: type_error(it.decl.file, "unknown module for const"), sigs: sigs, states: states };
+    return ResolveConstResult { ok: false, err: type_error(it.decl.file, "unknown module for const"), sigs: sigs, states: states, ctx: c };
   }
   let m: WorldModule = w.mods.get(fm.idx);
   let ir0: ImportsResult = build_imports(w, it.mod_path, m.prog.imports, it.decl.file);
-  if !ir0.ok { return ResolveConstResult { ok: false, err: ir0.err, sigs: sigs, states: states }; }
+  if !ir0.ok { return ResolveConstResult { ok: false, err: ir0.err, sigs: sigs, states: states, ctx: c }; }
   let imps: Imports = ir0.imps;
 
-  let tr: ResolveTyResult = resolve_type(ctx, w, it.mod_path, imps, Vec(), it.decl.ty);
-  if !tr.ok { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "type resolve failed in const"), sigs: sigs, states: states }; }
+  let tr: ResolveTyResult = resolve_type(c, w, it.mod_path, imps, Vec(), it.decl.ty);
+  if !tr.ok { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "type resolve failed in const"), sigs: sigs, states: states, ctx: c }; }
+  c = tr.ctx;
   let ty: i32 = tr.idx;
   let ok_v0: bool =
-    ty == ctx.ty_bool ||
-    ty == ctx.ty_string ||
-    ty == ctx.ty_f32 ||
-    ty == ctx.ty_f64 ||
-    is_enum_ty(ctx, ty) ||
-    is_struct_ty(ctx, ty) ||
-    is_int_scalar_kind(int_kind(ctx, ty));
-  if !ok_v0 { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "const type must be primitive/enum/struct in v0"), sigs: sigs, states: states }; }
+    ty == c.ty_bool ||
+    ty == c.ty_string ||
+    ty == c.ty_f32 ||
+    ty == c.ty_f64 ||
+    is_enum_ty(c, ty) ||
+    is_struct_ty(c, ty) ||
+    is_int_scalar_kind(int_kind(c, ty));
+  if !ok_v0 { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "const type must be primitive/enum/struct in v0"), sigs: sigs, states: states, ctx: c }; }
 
   // Evaluate init expression.
-  let ev: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs, states, it.mod_path, imps, m.prog.exprs, it.decl.file, it.decl.init, ty);
-  if !ev.ok { return ResolveConstResult { ok: false, err: ev.err, sigs: ev.sigs, states: ev.states }; }
+  let ev: EvalConstExprResult = eval_const_expr_in_mod(c, w, items, sigs, states, it.mod_path, imps, m.prog.exprs, it.decl.file, it.decl.init, ty);
+  if !ev.ok { return ResolveConstResult { ok: false, err: ev.err, sigs: ev.sigs, states: ev.states, ctx: c }; }
   sigs = ev.sigs;
   states = ev.states;
 
@@ -2228,7 +2266,7 @@ fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig]
   };
   sigs = const_set_sig_at(sigs, idx, cs);
   states = const_set_i32_at(states, idx, 2);
-  return ResolveConstResult { ok: true, err: TcError.None, sigs: sigs, states: states };
+  return ResolveConstResult { ok: true, err: TcError.None, sigs: sigs, states: states, ctx: c };
 }
 
 fn const_set_i32_at(xs0: Vec[i32], idx: i32, val: i32) -> Vec[i32] {
@@ -2285,7 +2323,8 @@ fn collect_consts(ctx: Ctx, w: World) -> TcCtxResult {
   i = 0;
   while i < items.len() {
     let rr: ResolveConstResult = resolve_const(c, w, items, sigs, states, i);
-    if !rr.ok { return TcCtxResult { ok: false, err: rr.err, ctx: c }; }
+    if !rr.ok { return TcCtxResult { ok: false, err: rr.err, ctx: rr.ctx }; }
+    c = rr.ctx;
     sigs = rr.sigs;
     states = rr.states;
     i = i + 1;
