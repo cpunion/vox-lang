@@ -7,14 +7,59 @@ import "ir" as ir
 
 pub struct CompileResult {
   pub ok: bool,
+  pub err_kind: i32,
+  pub err_code: String,
+  pub err_message: String,
   pub err: String,
   pub c: String,
+}
+
+pub fn compile_diag_kind_none() -> i32 { return 0; }
+pub fn compile_diag_kind_parse() -> i32 { return 1; }
+pub fn compile_diag_kind_lex() -> i32 { return 2; }
+pub fn compile_diag_kind_type() -> i32 { return 3; }
+pub fn compile_diag_kind_import() -> i32 { return 4; }
+pub fn compile_diag_kind_irgen() -> i32 { return 5; }
+pub fn compile_diag_kind_ir_verify() -> i32 { return 6; }
+
+fn compile_code_ir_verify() -> String { return "E_IR_VERIFY_0001"; }
+
+fn contains_text(hay: String, needle: String) -> bool {
+  if needle.len() == 0 { return true; }
+  if hay.len() < needle.len() { return false; }
+  let mut i: i32 = 0;
+  while i <= hay.len() - needle.len() {
+    if hay.slice(i, i + needle.len()) == needle { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn compile_ok(csrc: String) -> CompileResult {
+  return CompileResult { ok: true, err_kind: compile_diag_kind_none(), err_code: "", err_message: "", err: "", c: csrc };
+}
+
+fn compile_err(kind: i32, code: String, msg: String, rendered: String) -> CompileResult {
+  return CompileResult { ok: false, err_kind: kind, err_code: code, err_message: msg, err: rendered, c: "" };
+}
+
+fn compile_kind_from_tc(k: i32) -> i32 {
+  if k == tc.diag_kind_type() { return compile_diag_kind_type(); }
+  if k == tc.diag_kind_import() { return compile_diag_kind_import(); }
+  return compile_diag_kind_none();
+}
+
+fn compile_kind_from_parse(k: i32) -> i32 {
+  if k == p.parse_diag_kind_parse() { return compile_diag_kind_parse(); }
+  if k == p.parse_diag_kind_lex() { return compile_diag_kind_lex(); }
+  return compile_diag_kind_none();
 }
 
 pub fn compile_main_text_to_c(src: String, opts: cg.EmitOptions) -> CompileResult {
   let pr: p.ParseResult = p.parse_text_with_path("src/main.vox", src);
   if pr.err != p.ParseError.None {
-    return CompileResult { ok: false, err: p.parse_error_to_string_with_source("src/main.vox", src, pr.err), c: "" };
+    let pd: p.ParseDiag = p.parse_error_diag("src/main.vox", src, pr.err);
+    return compile_err(compile_kind_from_parse(pd.kind), pd.code, pd.message, pd.rendered);
   }
 
   let mut w: tc.World = tc.world();
@@ -22,39 +67,48 @@ pub fn compile_main_text_to_c(src: String, opts: cg.EmitOptions) -> CompileResul
 
   let tr: tc.TcResult = tc.typecheck_world(w);
   if !tr.ok {
-    return CompileResult { ok: false, err: tc.tc_error_to_string(tr.err), c: "" };
+    return compile_err(compile_kind_from_tc(tc.tc_error_kind(tr.err)), tc.tc_error_code(tr.err), tc.tc_error_message(tr.err), tc.tc_error_to_string(tr.err));
   }
 
   let gr: irgen.GenResult = irgen.generate_world(w);
   if !gr.ok {
-    return CompileResult { ok: false, err: gr.err, c: "" };
+    return compile_err(compile_diag_kind_irgen(), tc.diag_code_irgen(), gr.err, gr.err);
   }
   let vr: ir.VerifyResult = ir.verify_program(gr.prog);
   if !vr.ok {
-    return CompileResult { ok: false, err: "ir verify failed: ".concat(vr.err), c: "" };
+    let code: String = compile_code_ir_verify();
+    let msg: String = "ir verify failed: ".concat(vr.err);
+    let rendered: String = msg.concat(" [").concat(code).concat("]");
+    return compile_err(compile_diag_kind_ir_verify(), code, msg, rendered);
   }
 
   let c: String = cg.emit_c(gr.prog, opts);
-  return CompileResult { ok: true, err: "", c: c };
+  return compile_ok(c);
 }
 
 pub fn compile_files_to_c(files: Vec[ld.SourceFile], opts: cg.EmitOptions) -> CompileResult {
   let lr: ld.LoadWorldResult = ld.world_from_files(files);
   if !lr.ok {
-    return CompileResult { ok: false, err: lr.err, c: "" };
+    // loader currently only surfaces parse/lex diagnostics as rendered text.
+    let code: String = if contains_text(lr.err, "[E_LEX_0001]") { "E_LEX_0001" } else { "E_PARSE_0001" };
+    let kind: i32 = if code == "E_LEX_0001" { compile_diag_kind_lex() } else { compile_diag_kind_parse() };
+    return compile_err(kind, code, lr.err, lr.err);
   }
   let tr: tc.TcResult = tc.typecheck_world(lr.world);
   if !tr.ok {
-    return CompileResult { ok: false, err: tc.tc_error_to_string(tr.err), c: "" };
+    return compile_err(compile_kind_from_tc(tc.tc_error_kind(tr.err)), tc.tc_error_code(tr.err), tc.tc_error_message(tr.err), tc.tc_error_to_string(tr.err));
   }
   let gr: irgen.GenResult = irgen.generate_world(lr.world);
   if !gr.ok {
-    return CompileResult { ok: false, err: gr.err, c: "" };
+    return compile_err(compile_diag_kind_irgen(), tc.diag_code_irgen(), gr.err, gr.err);
   }
   let vr: ir.VerifyResult = ir.verify_program(gr.prog);
   if !vr.ok {
-    return CompileResult { ok: false, err: "ir verify failed: ".concat(vr.err), c: "" };
+    let code: String = compile_code_ir_verify();
+    let msg: String = "ir verify failed: ".concat(vr.err);
+    let rendered: String = msg.concat(" [").concat(code).concat("]");
+    return compile_err(compile_diag_kind_ir_verify(), code, msg, rendered);
   }
   let c: String = cg.emit_c(gr.prog, opts);
-  return CompileResult { ok: true, err: "", c: c };
+  return compile_ok(c);
 }

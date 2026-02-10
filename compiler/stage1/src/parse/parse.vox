@@ -8,6 +8,17 @@ pub enum ParseError {
   UnexpectedToken(lex.TokenKind, lex.TokenKind, i32), // expected, got, byte offset
 }
 
+pub struct ParseDiag {
+  pub kind: i32,
+  pub code: String,
+  pub message: String,
+  pub rendered: String,
+}
+
+pub fn parse_diag_kind_none() -> i32 { return 0; }
+pub fn parse_diag_kind_parse() -> i32 { return 1; }
+pub fn parse_diag_kind_lex() -> i32 { return 2; }
+
 pub fn parse_error_to_string(e: ParseError) -> String {
   return match e {
     ParseError.None => "none",
@@ -23,6 +34,35 @@ pub fn parse_error_to_string(e: ParseError) -> String {
 
 fn parse_code_parse() -> String { return "E_PARSE_0001"; }
 fn parse_code_lex() -> String { return "E_LEX_0001"; }
+
+pub fn parse_error_kind(e: ParseError) -> i32 {
+  return match e {
+    ParseError.None => parse_diag_kind_none(),
+    ParseError.Lex(_le) => parse_diag_kind_lex(),
+    ParseError.InvalidString(_at, _why) => parse_diag_kind_parse(),
+    ParseError.UnexpectedToken(_exp, _got, _at) => parse_diag_kind_parse(),
+  };
+}
+
+pub fn parse_error_code(e: ParseError) -> String {
+  return match e {
+    ParseError.None => "",
+    ParseError.Lex(_le) => parse_code_lex(),
+    ParseError.InvalidString(_at, _why) => parse_code_parse(),
+    ParseError.UnexpectedToken(_exp, _got, _at) => parse_code_parse(),
+  };
+}
+
+pub fn parse_error_message(e: ParseError) -> String {
+  return match e {
+    ParseError.None => "parse error: none",
+    ParseError.Lex(le) => "lex error: ".concat(lex.lex_error_to_string(le)),
+    ParseError.InvalidString(_at, why) => "parse error: invalid string literal: ".concat(why),
+    ParseError.UnexpectedToken(exp, got, _at) =>
+      "parse error: unexpected token: expected ".concat(lex.token_kind_name(exp))
+        .concat(", got ").concat(lex.token_kind_name(got)),
+  };
+}
 
 struct LineCol { line: i32, col: i32 }
 
@@ -83,11 +123,35 @@ fn span_tok(p: Parser, t: lex.Token) -> ast.Span { return span_at(p, t.start); }
 fn span_expr(exprs: ast.ExprPool, id: i32) -> ast.Span { return ast.expr_pool_span(exprs, id); }
 
 pub fn parse_error_to_string_with_source(file: String, text: String, e: ParseError) -> String {
+  return parse_error_diag(file, text, e).rendered;
+}
+
+pub fn parse_error_diag(file: String, text: String, e: ParseError) -> ParseDiag {
   return match e {
-    ParseError.None => file.concat(":1:1: parse error: none"),
-    ParseError.UnexpectedToken(exp, got, at) => format_unexpected_token(file, text, exp, got, at),
-    ParseError.InvalidString(at, why) => format_invalid_string(file, text, at, why),
-    ParseError.Lex(le) => format_lex_error(file, text, le),
+    ParseError.None => ParseDiag {
+      kind: parse_diag_kind_none(),
+      code: "",
+      message: "parse error: none",
+      rendered: file.concat(":1:1: parse error: none"),
+    },
+    ParseError.UnexpectedToken(exp, got, at) => ParseDiag {
+      kind: parse_diag_kind_parse(),
+      code: parse_code_parse(),
+      message: parse_error_message(e),
+      rendered: format_unexpected_token(file, text, exp, got, at),
+    },
+    ParseError.InvalidString(at, why) => ParseDiag {
+      kind: parse_diag_kind_parse(),
+      code: parse_code_parse(),
+      message: parse_error_message(e),
+      rendered: format_invalid_string(file, text, at, why),
+    },
+    ParseError.Lex(le) => ParseDiag {
+      kind: parse_diag_kind_lex(),
+      code: parse_code_lex(),
+      message: parse_error_message(e),
+      rendered: format_lex_error(file, text, le),
+    },
   };
 }
 
