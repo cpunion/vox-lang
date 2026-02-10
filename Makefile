@@ -1,4 +1,4 @@
-.PHONY: fmt test test-go test-stage1 test-stage1-c test-stage1-interp test-stage2 \
+.PHONY: fmt test test-go test-stage1 test-stage1-c test-stage1-interp test-stage2 test-stage2-tests \
 	test-examples test-examples-c test-examples-interp test-stage1-toolchain test-selfhost test-stage2-selfhost \
 	test-active audit-vox-lines
 
@@ -32,9 +32,10 @@ test-stage1-interp:
 	end=$$(date +%s); \
 	echo "[time] vox test --engine=interp ../stage1: $$((end-start))s"
 
-# Stage2 gate currently uses bootstrap E2E:
-# stage1 (built by stage0) -> build stage2 -> stage2 builds sample package.
-test-stage2: test-stage2-selfhost
+# Stage2 gate (frozen stage1 + active stage2):
+# 1) bootstrap E2E: stage1 -> stage2 -> sample package
+# 2) stage2 self-test suite via stage2 test-pkg
+test-stage2: test-stage2-selfhost test-stage2-tests
 
 test-examples: test-examples-c test-examples-interp
 
@@ -65,6 +66,10 @@ test-selfhost:
 # Dedicated stage2 bootstrap gate: stage1 -> stage2 -> sample package.
 test-stage2-selfhost:
 	cd compiler/stage0 && VOX_RUN_SELFHOST_TESTS=1 go test ./cmd/vox -run 'TestStage1BuildsStage2AndBuildsPackage' -count=1
+
+# Dedicated stage2 suite gate: stage1 -> stage2 -> stage2 test-pkg.
+test-stage2-tests:
+	cd compiler/stage0 && VOX_RUN_SELFHOST_TESTS=1 go test ./cmd/vox -run 'TestStage1BuildsStage2AndRunsStage2Tests' -count=1
 
 # Audit long lines in Vox sources (default max width: 140, override with MAX=<n>).
 audit-vox-lines:

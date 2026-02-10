@@ -17,6 +17,12 @@ var (
 	stage1ToolOnce     sync.Once
 	stage1ToolBinPath  string
 	stage1ToolBuildErr error
+
+	stage2ToolOnce     sync.Once
+	stage2ToolDirAbs   string
+	stage2ToolBinPath  string
+	stage2ToolBuildErr error
+	stage2ToolBuildOut string
 )
 
 func stage1ToolDir() string {
@@ -43,6 +49,48 @@ func requireSelfhostTests(t *testing.T) {
 	if os.Getenv(selfhostTestsEnv) != "1" {
 		t.Skipf("set %s=1 to run self-host tests", selfhostTestsEnv)
 	}
+}
+
+func stage2ToolBinBuiltByStage1(t *testing.T) (dirAbs string, binPath string) {
+	t.Helper()
+	stage2ToolOnce.Do(func() {
+		// 1) Build stage1 compiler A (tool driver) using stage0.
+		stage1BinA := stage1ToolBin(t)
+
+		// 2) Use stage1 A to build stage2 compiler B in stage2/target/debug so
+		// __exe_path-based std discovery resolves stage2/src/std.
+		stage2Dir := stage2ToolDir()
+		stage2DirAbs0, err := filepath.Abs(stage2Dir)
+		if err != nil {
+			stage2ToolBuildErr = err
+			return
+		}
+		outRel := filepath.Join("target", "debug", "vox_stage2_b_tool")
+		if err := os.MkdirAll(filepath.Join(stage2DirAbs0, "target", "debug"), 0o755); err != nil {
+			stage2ToolBuildErr = err
+			return
+		}
+		cmd := exec.Command(stage1BinA, "build-pkg", "--driver=tool", outRel)
+		cmd.Dir = stage2DirAbs0
+		b, err := cmd.CombinedOutput()
+		stage2ToolBuildOut = string(b)
+		if err != nil {
+			stage2ToolBuildErr = err
+			return
+		}
+
+		stage2BinB := filepath.Join(stage2DirAbs0, outRel)
+		if _, err := os.Stat(stage2BinB); err != nil {
+			stage2ToolBuildErr = err
+			return
+		}
+		stage2ToolDirAbs = stage2DirAbs0
+		stage2ToolBinPath = stage2BinB
+	})
+	if stage2ToolBuildErr != nil {
+		t.Fatalf("build stage2 tool failed: %v\n%s", stage2ToolBuildErr, stage2ToolBuildOut)
+	}
+	return stage2ToolDirAbs, stage2ToolBinPath
 }
 
 func TestStage1ToolchainBuildsMultiModuleProgram(t *testing.T) {
@@ -1169,33 +1217,9 @@ edition = "2026"
 func TestStage1BuildsStage2AndBuildsPackage(t *testing.T) {
 	requireSelfhostTests(t)
 
-	// 1) Build stage1 compiler A (tool driver) using stage0.
-	stage1BinA := stage1ToolBin(t)
+	_, stage2BinB := stage2ToolBinBuiltByStage1(t)
 
-	// 2) Use stage1 A to build stage2 compiler B in stage2/target/debug so
-	// __exe_path-based std discovery resolves stage2/src/std.
-	stage2Dir := stage2ToolDir()
-	stage2DirAbs, err := filepath.Abs(stage2Dir)
-	if err != nil {
-		t.Fatalf("abs: %v", err)
-	}
-	outRel := filepath.Join("target", "debug", "vox_stage2_b_tool")
-	if err := os.MkdirAll(filepath.Join(stage2DirAbs, "target", "debug"), 0o755); err != nil {
-		t.Fatalf("mkdir target/debug: %v", err)
-	}
-	cmd := exec.Command(stage1BinA, "build-pkg", "--driver=tool", outRel)
-	cmd.Dir = stage2DirAbs
-	b, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage1 -> stage2 build failed: %v\n%s", err, string(b))
-	}
-
-	stage2BinB := filepath.Join(stage2DirAbs, outRel)
-	if _, err := os.Stat(stage2BinB); err != nil {
-		t.Fatalf("missing stage2 tool binary: %v", err)
-	}
-
-	// 3) Use stage2 B to build and run a tiny package.
+	// Use stage2 B to build and run a tiny package.
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -1225,6 +1249,22 @@ edition = "2026"
 	}
 	if got := strings.TrimSpace(string(out)); got != "7" {
 		t.Fatalf("unexpected output: %q", got)
+	}
+}
+
+func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
+	requireSelfhostTests(t)
+
+	stage2DirAbs, stage2BinB := stage2ToolBinBuiltByStage1(t)
+	outRel := filepath.Join("target", "debug", "vox_stage2.test")
+	cmd := exec.Command(stage2BinB, "test-pkg", outRel)
+	cmd.Dir = stage2DirAbs
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg failed: %v\n%s", err, string(b))
+	}
+	if !strings.Contains(string(b), "[test]") {
+		t.Fatalf("expected stage2 test summary, got:\n%s", string(b))
 	}
 }
 

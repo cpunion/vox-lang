@@ -19,7 +19,7 @@
 
 推荐日常命令：
 
-- `make test-active`：冻结维护期的主线门禁（`stage0` 单测 + `stage1 -> stage2` 引导链路）。
+- `make test-active`：冻结维护期的主线门禁（`stage0` 单测 + `stage1 -> stage2` 引导链路 + `stage2` 自测套件）。
 
 ## Stage0 范围（已定）
 
@@ -109,4 +109,5 @@ make test
 
 - 仓库已增加 `compiler/stage2`（以 `compiler/stage1` 当前实现为基线复制）。
 - 自举门禁新增 `TestStage1BuildsStage2AndBuildsPackage`：验证 `stage1 -> stage2` 编译链路可用。
-- 可通过 `make test-stage2-selfhost` 单独执行该链路（依赖 `VOX_RUN_SELFHOST_TESTS=1`）。
+- 自举门禁新增 `TestStage1BuildsStage2AndRunsStage2Tests`：验证 `stage2` 工具可运行 `test-pkg` 并通过其自身测试集。
+- 可通过 `make test-stage2-selfhost`（仅引导链路）与 `make test-stage2-tests`（stage2 测试套件）单独执行（依赖 `VOX_RUN_SELFHOST_TESTS=1`）。

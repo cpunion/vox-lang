@@ -39,6 +39,7 @@
 - stage1 CLI（最小）：`compiler/stage1/src/main.vox` 提供 `emit-c/build/build-pkg`，使用 `std/fs` 与 `std/process` 完成读写与调用系统 `cc`（用于自举前的工具链验证）。CLI 会自动注入 stage1 自带的 `src/std/**` 作为被编译包的本地 `src/std/**`；`build-pkg` 还会读取当前目录 `vox.toml` 并加载依赖 `src/**`（支持 `path`、`git`、以及本地 registry cache 的 `version` 解析，包含传递依赖）。另外 `emit-c/build/build-pkg` 支持 `--driver=user|tool`：`tool` 模式下生成的二进制不打印返回值，并把 `main() -> i32` 作为进程退出码返回（用于自举工具）。
 - stage1 CLI（测试）：`compiler/stage1/src/main.vox` 还提供 `test-pkg`，发现并运行 `src/**/*_test.vox` 与 `tests/**/*.vox` 中的 `test_*`（行为对齐 stage0 的 `vox test`：单一测试二进制 + 每个测试单独进程运行）。
 - stage0 集成测试已覆盖 Stage1 CLI 的关键路径：`emit-c`/`build`/`build-pkg`/`test-pkg`、`--driver=tool` 退出码语义、以及“包内 `src/std/**` 优先于嵌入 std 回退”的行为。
+- stage0 自举门禁已覆盖 `stage1 -> stage2 -> stage2 test-pkg`，确保 Stage2 主线迭代不会悄悄破坏自举链路。
 
 ## 与自举相关的实现细节（当前实现）
 

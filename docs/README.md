@@ -29,6 +29,13 @@ Documents:
 - `docs/13-standard-library.md`
 - `docs/19-ir-spec.md`
 - `docs/20-bootstrap.md`
+- `docs/21-stage1-compiler.md`
+
+Current stage policy:
+
+- `stage0`: frozen maintenance
+- `stage1`: frozen bootstrap line
+- `stage2`: active evolution line
 
 Deferred for now:
 
