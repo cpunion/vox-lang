@@ -381,11 +381,14 @@ func testWithOptions(opts testOptions) error {
 
 	// Discover tests (Go-like): tests/**.vox and src/**/*_test.vox, functions named `test_*`.
 	testNames := discoverTests(res.Program)
+	discoveredTests := len(testNames)
+	prevFailedCount := 0
 	if opts.rerunFailed {
 		prevFailed, err := readFailedTests(abs)
 		if err != nil {
 			return err
 		}
+		prevFailedCount = len(prevFailed)
 		if len(prevFailed) == 0 {
 			fmt.Fprintf(os.Stdout, "[test] no previous failed tests (%s)\n", failedTestsPath(abs))
 			return nil
@@ -398,6 +401,7 @@ func testWithOptions(opts testOptions) error {
 			return err
 		}
 	}
+	printSelectionSummary(os.Stdout, discoveredTests, len(testNames), opts, prevFailedCount)
 	if len(testNames) == 0 {
 		fmt.Fprintln(os.Stdout, "[test] no tests found")
 		fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
@@ -493,6 +497,16 @@ func printSelectedTests(out io.Writer, testNames []string) {
 		}
 	}
 	fmt.Fprintf(out, "[list] total: %d\n", len(testNames))
+}
+
+func printSelectionSummary(out io.Writer, discovered int, selected int, opts testOptions, prevFailedCount int) {
+	fmt.Fprintf(out, "[select] discovered: %d, selected: %d\n", discovered, selected)
+	if opts.runPattern != "" {
+		fmt.Fprintf(out, "[select] --run: %q\n", opts.runPattern)
+	}
+	if opts.rerunFailed {
+		fmt.Fprintf(out, "[select] --rerun-failed: %d cached\n", prevFailedCount)
+	}
 }
 
 type testExecResult struct {

@@ -12,6 +12,7 @@ vox c
 vox test
 vox test --run='regex'
 vox test --rerun-failed
+vox test --list
 
 vox fmt
 vox lint
@@ -37,6 +38,7 @@ Stage0 提供两套执行/验证引擎，便于在“快（解释器）”与“
   - `--engine=interp`：用解释器运行测试（用于快速对照；能力可能更受限）
   - `--run=<regex>`：按正则过滤测试名（支持限定名或短名匹配）
   - `--rerun-failed`：仅运行上次失败测试（读取 `target/debug/.vox_failed_tests`）
+  - `--list`：仅列出筛选后的测试并退出（不执行）
 - `vox build`：
   - `--engine=c`：产出 C 与可执行文件（见下方“Stage0 产物”）
   - `--engine=interp`：仅加载/解析/类型检查（不产出二进制）

@@ -36,6 +36,7 @@ Stage0 行为：
  - 输出包含每个测试耗时（如 `([OK] mod::test_x (0.42ms))`）
  - 输出包含模块级汇总（`[module] <mod>: <passed> passed, <failed> failed (<dur>)`）
  - 输出包含最慢测试 TopN（当前 N=5，`[slowest] <test> (<dur>)`）
+ - 输出包含选择摘要（`[select] discovered: N, selected: M`，并在使用 `--run/--rerun-failed` 时打印过滤来源）
  - 测试失败后输出重跑提示（`[hint] rerun failed: vox test --engine=... --rerun-failed <dir>`）
 
 ## 2. 断言（Stage0）

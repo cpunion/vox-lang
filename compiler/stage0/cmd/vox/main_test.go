@@ -221,3 +221,18 @@ func TestPrintSelectedTests(t *testing.T) {
 		t.Fatalf("missing total summary: %q", out)
 	}
 }
+
+func TestPrintSelectionSummary(t *testing.T) {
+	var b bytes.Buffer
+	printSelectionSummary(&b, 7, 2, testOptions{runPattern: "foo", rerunFailed: true}, 3)
+	out := b.String()
+	if !strings.Contains(out, "[select] discovered: 7, selected: 2") {
+		t.Fatalf("missing discover/selected summary: %q", out)
+	}
+	if !strings.Contains(out, "[select] --run: \"foo\"") {
+		t.Fatalf("missing run summary: %q", out)
+	}
+	if !strings.Contains(out, "[select] --rerun-failed: 3 cached") {
+		t.Fatalf("missing rerun summary: %q", out)
+	}
+}
