@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,6 +34,19 @@ func TestParseTestOptionsAndDir_RunAndRerun(t *testing.T) {
 	}
 	if opts.dir != "pkg" {
 		t.Fatalf("dir = %q, want %q", opts.dir, "pkg")
+	}
+	if opts.listOnly {
+		t.Fatalf("listOnly = true, want false")
+	}
+}
+
+func TestParseTestOptionsAndDir_List(t *testing.T) {
+	opts, err := parseTestOptionsAndDir([]string{"--list", "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.listOnly {
+		t.Fatalf("listOnly = false, want true")
 	}
 }
 
@@ -174,5 +189,35 @@ func TestSummarizeTestResults_ModuleAndSlowest(t *testing.T) {
 	}
 	if slowest[2].name != "mod.a::test_fast" {
 		t.Fatalf("slowest[2] = %q, want mod.a::test_fast", slowest[2].name)
+	}
+}
+
+func TestTestRerunCommand(t *testing.T) {
+	gotC := testRerunCommand(engineC, "/tmp/p")
+	if gotC != "vox test --engine=c --rerun-failed /tmp/p" {
+		t.Fatalf("unexpected c rerun command: %q", gotC)
+	}
+	gotInterp := testRerunCommand(engineInterp, "/tmp/p")
+	if gotInterp != "vox test --engine=interp --rerun-failed /tmp/p" {
+		t.Fatalf("unexpected interp rerun command: %q", gotInterp)
+	}
+}
+
+func TestPrintSelectedTests(t *testing.T) {
+	var b bytes.Buffer
+	printSelectedTests(&b, []string{
+		"mod.a::test_one",
+		"mod.a::test_two",
+		"mod.b::test_ok",
+	})
+	out := b.String()
+	if !strings.Contains(out, "[list] mod.a (2)") {
+		t.Fatalf("missing mod.a summary: %q", out)
+	}
+	if !strings.Contains(out, "[test] mod.a::test_one") {
+		t.Fatalf("missing test line: %q", out)
+	}
+	if !strings.Contains(out, "[list] total: 3") {
+		t.Fatalf("missing total summary: %q", out)
 	}
 }

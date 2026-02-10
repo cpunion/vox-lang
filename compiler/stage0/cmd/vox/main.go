@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "test flags:")
 	fmt.Fprintln(os.Stderr, "  --run=<regex>       run tests whose qualified name (or short name) matches regex")
 	fmt.Fprintln(os.Stderr, "  --rerun-failed      rerun only tests failed in previous run")
+	fmt.Fprintln(os.Stderr, "  --list              list selected tests and exit without running")
 }
 
 type engine int
@@ -52,6 +54,7 @@ type testOptions struct {
 	dir         string
 	runPattern  string
 	rerunFailed bool
+	listOnly    bool
 }
 
 func parseEngineAndDir(args []string) (eng engine, dir string, err error) {
@@ -146,6 +149,10 @@ func parseTestOptionsAndDir(args []string) (opts testOptions, err error) {
 		}
 		if a == "--rerun-failed" {
 			opts.rerunFailed = true
+			continue
+		}
+		if a == "--list" {
+			opts.listOnly = true
 			continue
 		}
 		if strings.HasPrefix(a, "-") {
@@ -380,7 +387,7 @@ func testWithOptions(opts testOptions) error {
 			return err
 		}
 		if len(prevFailed) == 0 {
-			fmt.Fprintln(os.Stdout, "[test] no previous failed tests")
+			fmt.Fprintf(os.Stdout, "[test] no previous failed tests (%s)\n", failedTestsPath(abs))
 			return nil
 		}
 		testNames = intersectTests(testNames, prevFailed)
@@ -399,6 +406,11 @@ func testWithOptions(opts testOptions) error {
 		}
 		return nil
 	}
+	if opts.listOnly {
+		printSelectedTests(os.Stdout, testNames)
+		fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
+		return nil
+	}
 
 	if opts.eng == engineInterp {
 		log, failedNames, err := interp.RunTestsNamed(res.Program, testNames)
@@ -408,6 +420,9 @@ func testWithOptions(opts testOptions) error {
 		fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
 		if werr := writeFailedTests(abs, failedNames); werr != nil {
 			return werr
+		}
+		if len(failedNames) != 0 {
+			fmt.Fprintf(os.Stdout, "[hint] rerun failed: %s\n", testRerunCommand(opts.eng, abs))
 		}
 		return err
 	}
@@ -455,9 +470,29 @@ func testWithOptions(opts testOptions) error {
 		return err
 	}
 	if failed != 0 {
+		fmt.Fprintf(os.Stdout, "[hint] rerun failed: %s\n", testRerunCommand(opts.eng, abs))
 		return fmt.Errorf("%d test(s) failed", failed)
 	}
 	return nil
+}
+
+func testRerunCommand(eng engine, absDir string) string {
+	engArg := "--engine=c"
+	if eng == engineInterp {
+		engArg = "--engine=interp"
+	}
+	return "vox test " + engArg + " --rerun-failed " + absDir
+}
+
+func printSelectedTests(out io.Writer, testNames []string) {
+	groups := names.GroupQualifiedTestsByModule(testNames)
+	for _, g := range groups {
+		fmt.Fprintf(out, "[list] %s (%d)\n", displayModuleName(g.Key), len(g.Tests))
+		for _, name := range g.Tests {
+			fmt.Fprintf(out, "[test] %s\n", name)
+		}
+	}
+	fmt.Fprintf(out, "[list] total: %d\n", len(testNames))
 }
 
 type testExecResult struct {
