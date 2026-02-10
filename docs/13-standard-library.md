@@ -10,11 +10,14 @@
 - `std::process`：最小进程能力（args/exec；用于 stage1 工具链自举）
 - `std::sync`：`Arc[T]`、`Weak[T]`、（后续）`Mutex[T]`、`Atomic[T]`
 - `std::collections`：`Vec`、`Map` 等
-- `std::io`：文件/网络抽象（deferred，需与 effect/资源系统协调）
+- `std::io`：最小输出能力已落地；文件/网络抽象 deferred（需与 effect/资源系统协调）
 
 当前 stage1 落地：
 
 - `std::prelude` 已提供默认 trait：`Eq`、`Show`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
 - 未显式 import 时，函数名会回退到 `std/prelude`；trait 静态调用与 `impl Trait for ...` 也支持回退到 `std/prelude` 的公开 trait。
+- `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、`.vox` 枚举、命令执行、参数读取）。
+- `std::io` 已提供最小输出接口：`out`、`out_ln`、`fail`。
+- `std::sync` 已提供 stage1 单线程占位类型：`MutexI32`、`AtomicI32`（接口先行，泛型与真实并发语义后续补齐）。
 
 重要：由于 Vox 的“临时借用”规则，标准库应优先提供“可长期保存的拥有型视图”（例如 `StrView`），避免 API 设计依赖 `&T` 返回值。
