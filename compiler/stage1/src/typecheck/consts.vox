@@ -929,6 +929,36 @@ fn const_find_func_decl(w: World, mod_path: String, name: String) -> ConstFindFu
   return ConstFindFuncDeclResult { found: false, decl: empty_func_decl() };
 }
 
+fn const_struct_path_matches_expected(ctx: Ctx, cur_mod: String, imps: Imports, parts: Vec[String], expected: i32) -> bool {
+  if expected == -1 { return false; }
+  let eb: i32 = strip_range(ctx, expected);
+  if !is_struct_ty(ctx, eb) { return false; }
+  if parts.len() != 1 && parts.len() != 2 { return false; }
+
+  let mut struct_mod: String = "";
+  let mut struct_name: String = "";
+  if parts.len() == 1 {
+    struct_mod = cur_mod;
+    struct_name = parts.get(0);
+    let nt: NamedTypeImport = find_named_type(imps.named_types, struct_name);
+    if nt.local != "" {
+      if nt.kind != named_type_kind_struct() { return false; }
+      struct_mod = nt.mod_path;
+      struct_name = nt.name;
+    }
+  } else {
+    struct_mod = find_alias(imps.aliases, parts.get(0));
+    if struct_mod == "" { return false; }
+    struct_name = parts.get(1);
+  }
+
+  let et: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
+  if struct_mod != ty_mod(et) { return false; }
+  let fs: FindStructResult = find_struct(ctx, ty_mod(et), ty_name(et));
+  if !fs.found { return false; }
+  return struct_name == fs.sig.base_name || struct_name == fs.sig.name;
+}
+
 fn const_resolve_enum_ctor(ctx: Ctx, w: World, cur_mod: String, imps: Imports, parts: Vec[String], enum_targs: Vec[ast.TypeName], expected: i32) -> ConstResolveEnumCtorResult {
   if enum_targs.len() != 0 {
     if parts.len() < 2 || parts.len() > 3 {
@@ -1541,12 +1571,17 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     if !tpr.ok {
       return EvalConstExprResult { ok: false, err: type_error(file, "const struct literal type must be a type path"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
-    let tn: ast.TypeName = ast.TypeName { parts: tpr.parts, args: tpr.targs };
-    let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), tn);
-    if !tr.ok {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const struct literal type resolve failed"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    let mut sty: i32 = -1;
+    if tpr.targs.len() == 0 && const_struct_path_matches_expected(ctx, cur_mod, imps, tpr.parts, expected) {
+      sty = strip_range(ctx, expected);
+    } else {
+      let tn: ast.TypeName = ast.TypeName { parts: tpr.parts, args: tpr.targs };
+      let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), tn);
+      if !tr.ok {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const struct literal type resolve failed"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+      sty = tr.idx;
     }
-    let sty: i32 = tr.idx;
     if !is_struct_ty(ctx, sty) {
       return EvalConstExprResult { ok: false, err: type_error(file, "const struct literal expects struct type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }

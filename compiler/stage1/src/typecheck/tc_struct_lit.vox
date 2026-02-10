@@ -1,13 +1,28 @@
 import "ast" as ast
 import "ir" as ir
 
+fn struct_path_matches_expected(ctx: Ctx, path_mod: String, path_name: String, expected: i32) -> bool {
+  if expected == -1 { return false; }
+  let eb: i32 = strip_range(ctx, expected);
+  if !is_struct_ty(ctx, eb) { return false; }
+
+  let et: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
+  if path_mod != ty_mod(et) { return false; }
+
+  let fs: FindStructResult = find_struct(ctx, ty_mod(et), ty_name(et));
+  if !fs.found { return false; }
+  return path_name == fs.sig.base_name || path_name == fs.sig.name;
+}
+
 fn tc_expr_struct_lit(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ty_expr: i32, fields: Vec[ast.StructLitField], expected: i32) -> ExprTyResult {
   let mut struct_ty: i32 = -1;
   let mut struct_mod: String = "";
   let mut struct_name: String = "";
+  let mut has_named_path: bool = false;
 
   let pr: ExprTypePathResult = expr_type_path(exprs, ty_expr);
   if pr.ok {
+    has_named_path = true;
     let ps: Vec[String] = pr.parts;
     if ps.len() != 1 && ps.len() != 2 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
@@ -38,13 +53,21 @@ fn tc_expr_struct_lit(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs
       struct_name = ty_name(t0);
     } else {
       struct_ty = find_struct_ty_idx(ctx, struct_mod, struct_name);
+      if struct_ty == -1 && struct_path_matches_expected(ctx, struct_mod, struct_name, expected) {
+        let eb: i32 = strip_range(ctx, expected);
+        struct_ty = eb;
+        let et: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
+        struct_mod = ty_mod(et);
+        struct_name = ty_name(et);
+      }
     }
   }
 
   if struct_ty == -1 {
-    if expected != -1 && is_struct_ty(ctx, expected) {
-      struct_ty = expected;
-      let t: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
+    if !has_named_path && expected != -1 && is_struct_ty(ctx, strip_range(ctx, expected)) {
+      let eb: i32 = strip_range(ctx, expected);
+      struct_ty = eb;
+      let t: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
       struct_mod = ty_mod(t);
       struct_name = ty_name(t);
     } else {
