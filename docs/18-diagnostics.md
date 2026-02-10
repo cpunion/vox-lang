@@ -57,6 +57,8 @@ Stage1 v0 的 typecheck/irgen 错误以字符串为主，**但当 AST 节点拥�
 - trait 方法声明已携带 `Span`，其方法级 `where/comptime where` 错误定位到方法行而非 trait 头。
 - trait/impl 的 associated type 声明已携带 `Span`，重复/非法绑定错误定位到具体 `type` 条目。
 - typecheck/import/irgen 错误已附带稳定错误码后缀，当前包含：
+  - `E_PARSE_0001`
+  - `E_LEX_0001`
   - `E_TYPE_0001`
   - `E_IMPORT_0001`（通用 import 错误）
   - `E_IMPORT_0002`（unknown module import）
