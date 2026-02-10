@@ -884,6 +884,36 @@ fn const_find_enum_variant(ctx: Ctx, enum_ty: i32, vname: String) -> ConstFindVa
 
 struct ConstResolveEnumCtorResult { ok: bool, err: String, enum_ty: i32, variant: String, vidx: i32, fields: Vec[i32] }
 
+struct ConstFindFuncDeclResult { found: bool, decl: ast.FuncDecl }
+
+fn empty_func_decl() -> ast.FuncDecl {
+  return ast.FuncDecl {
+    file: "",
+    vis: ast.vis_pub(),
+    is_pub: false,
+    name: "",
+    type_params: Vec(),
+    const_params: Vec(),
+    type_param_bounds: Vec(),
+    params: Vec(),
+    ret: ast.TypeName { parts: Vec(), args: Vec() },
+    body: ast.Block { stmts: Vec() },
+  };
+}
+
+fn const_find_func_decl(w: World, mod_path: String, name: String) -> ConstFindFuncDeclResult {
+  let fm: FindModResult = find_mod(w, mod_path);
+  if !fm.found { return ConstFindFuncDeclResult { found: false, decl: empty_func_decl() }; }
+  let m: WorldModule = w.mods.get(fm.idx);
+  let mut i: i32 = 0;
+  while i < m.prog.funcs.len() {
+    let fd: ast.FuncDecl = m.prog.funcs.get(i);
+    if fd.name == name { return ConstFindFuncDeclResult { found: true, decl: fd }; }
+    i = i + 1;
+  }
+  return ConstFindFuncDeclResult { found: false, decl: empty_func_decl() };
+}
+
 fn const_resolve_enum_ctor(ctx: Ctx, cur_mod: String, imps: Imports, parts: Vec[String], expected: i32) -> ConstResolveEnumCtorResult {
   if expected == -1 {
     return ConstResolveEnumCtorResult { ok: false, err: "const enum shorthand requires expected enum type", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
@@ -1300,9 +1330,33 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     let type_args: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, ta, _args) => ta, _ => Vec() };
     let args: Vec[i32] = match n { ast.ExprNode.Call(_c, _ta, as0) => as0, _ => Vec() };
     let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+
+    // Try normal function call first.
+    let mut has_fn_target: bool = false;
+    let mut fn_target_mod: String = "";
+    let mut fn_target_name: String = "";
+
     let mut parts2: Vec[String] = Vec();
     let mut is_ctor: bool = false;
-    if match cn { ast.ExprNode.DotIdent(_name) => true, _ => false } {
+    if match cn { ast.ExprNode.Ident(_name) => true, _ => false } {
+      let fname: String = match cn { ast.ExprNode.Ident(x) => x, _ => "" };
+      let nf: NamedFuncImport = find_named_func(imps.named_funcs, fname);
+      if nf.local != "" {
+        has_fn_target = true;
+        fn_target_mod = nf.mod_path;
+        fn_target_name = nf.name;
+      } else if find_func(ctx, cur_mod, fname).found {
+        has_fn_target = true;
+        fn_target_mod = cur_mod;
+        fn_target_name = fname;
+      } else if find_func(ctx, "std/prelude", fname).found {
+        has_fn_target = true;
+        fn_target_mod = "std/prelude";
+        fn_target_name = fname;
+      } else if find_func(ctx, "", fname).found {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const call does not support builtin function: ".concat(fname)), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+    } else if match cn { ast.ExprNode.DotIdent(_name) => true, _ => false } {
       let vname2: String = match cn { ast.ExprNode.DotIdent(x) => x, _ => "" };
       parts2.push(vname2);
       is_ctor = true;
@@ -1313,7 +1367,104 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
       if pr2.ok {
         parts2 = pr2.parts;
         is_ctor = true;
+        if parts2.len() >= 2 {
+          let basef: String = find_alias(imps.aliases, parts2.get(0));
+          if basef != "" {
+            let extraf: Vec[String] = slice_parts(parts2, 1, parts2.len() - 1);
+            let mpathf: String = if extraf.len() == 0 { basef } else { join_mod_path(basef, extraf) };
+            let fnamef: String = parts2.get(parts2.len() - 1);
+            if find_func(ctx, mpathf, fnamef).found {
+              has_fn_target = true;
+              fn_target_mod = mpathf;
+              fn_target_name = fnamef;
+            }
+          }
+        }
       }
+    }
+
+    if has_fn_target {
+      let fr_call: FindFuncResult = find_func(ctx, fn_target_mod, fn_target_name);
+      if !fr_call.found {
+        return EvalConstExprResult { ok: false, err: type_error(file, "unknown fn: ".concat(fn_target_name)), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+      if !vis_allows(fr_call.sig.vis, fn_target_mod, cur_mod) {
+        return EvalConstExprResult { ok: false, err: type_error(file, "function is private: ".concat(const_qname(fn_target_mod, fn_target_name))), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+      if type_args.len() != 0 {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const fn call does not accept generic args yet"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+      if fr_call.sig.type_params.len() != 0 || fr_call.sig.const_params.len() != 0 {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const fn call does not support generic fn yet"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+      if args.len() != fr_call.sig.params.len() {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const fn call arity mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+
+      let fdr: ConstFindFuncDeclResult = const_find_func_decl(w, fn_target_mod, fn_target_name);
+      if !fdr.found {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const fn body unavailable"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+      if fdr.decl.params.len() != args.len() {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const fn decl/signature mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+
+      let fmf: FindModResult = find_mod(w, fn_target_mod);
+      if !fmf.found {
+        return EvalConstExprResult { ok: false, err: type_error(file, "unknown module: ".concat(fn_target_mod)), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+      let mf: WorldModule = w.mods.get(fmf.idx);
+      let ir: ImportsResult = build_imports(w, fn_target_mod, mf.prog.imports, fdr.decl.file);
+      if !ir.ok {
+        return EvalConstExprResult { ok: false, err: ir.err, kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      }
+
+      let mut sigs2: Vec[ConstSig] = sigs0;
+      let mut states2: Vec[i32] = states0;
+      let mut call_locals: Vec[ConstLocal] = Vec();
+      let mut ai0: i32 = 0;
+      while ai0 < args.len() {
+        let want: i32 = fr_call.sig.params.get(ai0);
+        let ar0: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs2, states2, cur_mod, imps, exprs, file, args.get(ai0), want, locals);
+        if !ar0.ok { return ar0; }
+        sigs2 = ar0.sigs;
+        states2 = ar0.states;
+        if !assignable_to(ctx, want, ar0.ty) {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const fn arg type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
+        }
+        let pname: String = fdr.decl.params.get(ai0).name;
+        call_locals.push(const_local_from_value(pname, false, ar0));
+        ai0 = ai0 + 1;
+      }
+
+      let sr: ConstExecStmtsResult = const_exec_stmts(ctx, w, items, sigs2, states2, fn_target_mod, ir.imps, mf.prog.exprs, fdr.decl.file, fdr.decl.body.stmts, call_locals, 0);
+      if !sr.ok {
+        return EvalConstExprResult { ok: false, err: sr.err, kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sr.sigs, states: sr.states };
+      }
+      if sr.flow == const_flow_break() || sr.flow == const_flow_continue() {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const fn body has invalid loop control flow"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sr.sigs, states: sr.states };
+      }
+      if sr.flow == const_flow_return() {
+        if !assignable_to(ctx, fr_call.sig.ret, sr.ret_ty) {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const fn return type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sr.sigs, states: sr.states };
+        }
+        if expected != -1 && !assignable_to(ctx, expected, sr.ret_ty) {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const fn call result type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sr.sigs, states: sr.states };
+        }
+        return EvalConstExprResult {
+          ok: true, err: TcError.None,
+          kind: sr.ret_kind, ty: sr.ret_ty, iv: sr.ret_iv, bv: sr.ret_bv, sv: sr.ret_sv,
+          sigs: sr.sigs, states: sr.states,
+        };
+      }
+
+      if fr_call.sig.ret == ctx.ty_unit {
+        if expected != -1 && !assignable_to(ctx, expected, ctx.ty_unit) {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const fn call result type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sr.sigs, states: sr.states };
+        }
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: 0, ty: ctx.ty_unit, iv: 0, bv: false, sv: "", sigs: sr.sigs, states: sr.states };
+      }
+      return EvalConstExprResult { ok: false, err: type_error(file, "const fn call requires explicit return"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sr.sigs, states: sr.states };
     }
 
     if is_ctor {
