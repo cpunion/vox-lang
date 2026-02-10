@@ -376,6 +376,7 @@ pub const NAME: String = "vox";
   - `-x` / `!x`（`!` 对 `bool` 是逻辑非，对整数是按位非）
   - `expr as <int>`、`expr as f32/f64`（运行时与 const 场景均支持整数与浮点互转；`float -> int` 为 checked cast）
   - `+ - * / %`、`& | ^ << >>`、比较、`== !=`、`&& ||`
+    - `&& ||` 在 const 中同样是短路求值：`false && rhs` / `true || rhs` 不会求值 `rhs`。
   - `if cond { a } else { b }`（cond 必须为常量 bool）
   - `match`（当前 const 子集支持 `_`、bind、`true/false`、整数字面量、字符串字面量、enum pattern（含 payload））
 - 整数运算语义与运行时保持一致：
