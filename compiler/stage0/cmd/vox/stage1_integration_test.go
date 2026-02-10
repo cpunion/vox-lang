@@ -1320,6 +1320,14 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(b), "[module]") {
 		t.Fatalf("expected stage2 module summary, got:\n%s", string(b))
 	}
+	cachePath := filepath.Join(stage2DirAbs, "target", "debug", ".vox_last_failed_tests")
+	cache, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("read stage2 failed-tests cache: %v", err)
+	}
+	if !strings.Contains(string(cache), "\"failed_tests\":") {
+		t.Fatalf("expected json failed-tests cache, got:\n%s", string(cache))
+	}
 
 	cmdRerun := exec.Command(stage2BinB, "test-pkg", "--rerun-failed", outRel)
 	cmdRerun.Dir = stage2DirAbs
