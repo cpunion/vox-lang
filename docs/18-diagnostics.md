@@ -52,6 +52,8 @@ Stage1 v0 的 typecheck/irgen 错误以字符串为主，**但当 AST 节点拥�
 - collect/typecheck 的一批声明级错误（如 duplicate/reserved/bound/impl 校验）已优先使用声明 `Span`。
 - irgen 的 `missing return` 已使用函数声明 `Span`，不再固定 `file:1:1`。
 - import 相关错误（重复 alias、命名导入冲突、unknown/ambiguous import）已优先使用 `import` 声明/名称位置。
+- `comptime where` 声明期错误（unknown rhs/unknown type param/default 违规等）已优先使用声明 `Span`。
+- supertrait cycle 报错已定位到 trait 声明位置（不再回退 `file:1:1`）。
 
 后续计划（Stage1 诊断升级）：
 

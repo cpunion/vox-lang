@@ -300,13 +300,13 @@ fn find_enum_decl_in_mod(m: WorldModule, name: String) -> FindEnumDeclResult {
   };
 }
 
-fn nominal_check_comptime_where(ctx0: Ctx, file: String, tps: Vec[String], cwds: Vec[ast.ConstWhereDecl], arg_tys: Vec[i32]) -> NominalComptimeWhereResult {
+fn nominal_check_comptime_where(ctx0: Ctx, sp: ast.Span, tps: Vec[String], cwds: Vec[ast.ConstWhereDecl], arg_tys: Vec[i32]) -> NominalComptimeWhereResult {
   let mut c: Ctx = ctx0;
-  let cwr: CollectConstWhereResult = collect_const_where_bounds(file, tps, Vec(), cwds);
+  let cwr: CollectConstWhereResult = collect_const_where_bounds(sp, tps, Vec(), cwds);
   if !cwr.ok { return NominalComptimeWhereResult { ok: false, err: cwr.err, ctx: c }; }
   let subs: Vec[TySub] = subs_from_args(tps, arg_tys);
   let ck: ConstWhereCheckResult = check_const_where_bounds(c, cwr.bounds, subs, Vec());
-  if !ck.ok { return NominalComptimeWhereResult { ok: false, err: type_error(file, ck.err), ctx: c }; }
+  if !ck.ok { return NominalComptimeWhereResult { ok: false, err: type_error_at(sp, ck.err), ctx: c }; }
   return NominalComptimeWhereResult { ok: true, err: TcError.None, ctx: c };
 }
 
@@ -324,7 +324,7 @@ fn nominal_check_type_param_bounds(
   w: World,
   cur_mod: String,
   imps: Imports,
-  file: String,
+  sp: ast.Span,
   tps: Vec[String],
   tpbs: Vec[ast.TypeParamBoundsDecl],
   arg_tys: Vec[i32]
@@ -337,7 +337,7 @@ fn nominal_check_type_param_bounds(
     if tpi == -1 {
       return NominalTraitBoundsResult {
         ok: false,
-        err: type_error(file, "unknown type param in trait bound: ".concat(bdecl.name)),
+        err: type_error_at(sp, "unknown type param in trait bound: ".concat(bdecl.name)),
         ctx: c,
       };
     }
@@ -347,20 +347,20 @@ fn nominal_check_type_param_bounds(
     while bj < bdecl.bounds.len() {
       let rtr: ResolveTraitRefResult = resolve_trait_ref(c, w, cur_mod, imps, bdecl.bounds.get(bj));
       if !rtr.ok {
-        return NominalTraitBoundsResult { ok: false, err: type_error(file, "bad trait bound"), ctx: c };
+        return NominalTraitBoundsResult { ok: false, err: type_error_at(sp, "bad trait bound"), ctx: c };
       }
       let tf: FindTraitResult = find_trait(c, rtr.mod_path, rtr.name);
       if !tf.found {
         return NominalTraitBoundsResult {
           ok: false,
-          err: type_error(file, "unknown trait in bound: ".concat(rtr.name)),
+          err: type_error_at(sp, "unknown trait in bound: ".concat(rtr.name)),
           ctx: c,
         };
       }
       if !vis_allows(tf.sig.vis, rtr.mod_path, cur_mod) {
         return NominalTraitBoundsResult {
           ok: false,
-          err: type_error(file, "trait bound refers to private trait: ".concat(rtr.name)),
+          err: type_error_at(sp, "trait bound refers to private trait: ".concat(rtr.name)),
           ctx: c,
         };
       }
@@ -377,7 +377,7 @@ fn nominal_check_type_param_bounds(
               .concat(" (candidates: ")
               .concat(fi.candidates)
               .concat(")");
-          return NominalTraitBoundsResult { ok: false, err: type_error(file, msg0), ctx: c };
+          return NominalTraitBoundsResult { ok: false, err: type_error_at(sp, msg0), ctx: c };
         }
         if !fi.found {
           let cands: String = trait_impl_candidates_text(c, rtr.mod_path, rtr.name);
@@ -391,7 +391,7 @@ fn nominal_check_type_param_bounds(
               .concat(" (available impls: ")
               .concat(cands)
               .concat(")");
-          return NominalTraitBoundsResult { ok: false, err: type_error(file, msg1), ctx: c };
+          return NominalTraitBoundsResult { ok: false, err: type_error_at(sp, msg1), ctx: c };
         }
       }
       bj = bj + 1;
@@ -626,10 +626,10 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
       arg_tys.push(ar.idx);
       ai = ai + 1;
     }
-    let ckw: NominalComptimeWhereResult = nominal_check_comptime_where(c, sd.file, sd.type_params, sd.const_where_bounds, arg_tys);
+    let ckw: NominalComptimeWhereResult = nominal_check_comptime_where(c, sd.sp, sd.type_params, sd.const_where_bounds, arg_tys);
     c = ckw.ctx;
     if !ckw.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
-    let tbk: NominalTraitBoundsResult = nominal_check_type_param_bounds(c, w, cur_mod, imps, sd.file, sd.type_params, sd.type_param_bounds, arg_tys);
+    let tbk: NominalTraitBoundsResult = nominal_check_type_param_bounds(c, w, cur_mod, imps, sd.sp, sd.type_params, sd.type_param_bounds, arg_tys);
     c = tbk.ctx;
     if !tbk.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
 
@@ -682,10 +682,10 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
       arg_tys.push(ar.idx);
       ai = ai + 1;
     }
-    let ckw: NominalComptimeWhereResult = nominal_check_comptime_where(c, ed.file, ed.type_params, ed.const_where_bounds, arg_tys);
+    let ckw: NominalComptimeWhereResult = nominal_check_comptime_where(c, ed.sp, ed.type_params, ed.const_where_bounds, arg_tys);
     c = ckw.ctx;
     if !ckw.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
-    let tbk: NominalTraitBoundsResult = nominal_check_type_param_bounds(c, w, cur_mod, imps, ed.file, ed.type_params, ed.type_param_bounds, arg_tys);
+    let tbk: NominalTraitBoundsResult = nominal_check_type_param_bounds(c, w, cur_mod, imps, ed.sp, ed.type_params, ed.type_param_bounds, arg_tys);
     c = tbk.ctx;
     if !tbk.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
 
