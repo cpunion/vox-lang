@@ -82,6 +82,57 @@ fn main() -> i32 { let a: Vec[String] = p.args(); fs.write_string("out.txt", "x"
 	}
 }
 
+func TestBuildPackage_LocalStdOverridesEmbeddedStd(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "vox.toml"), `[package]
+name = "a"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+`)
+	mustWrite(t, filepath.Join(dir, "src", "main.vox"), `import "std/prelude" as p
+fn main() -> i32 { p.assert(true); return 0; }`)
+	// Intentionally duplicates embedded std/prelude::assert symbols.
+	mustWrite(t, filepath.Join(dir, "src", "std", "prelude", "assert.vox"), `pub fn assert(cond: bool) -> () {
+  if !cond { panic("assertion failed"); }
+}`)
+
+	_, diags, err := BuildPackage(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags.Items)
+	}
+}
+
+func TestTestPackage_LocalStdOverridesEmbeddedStd(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "vox.toml"), `[package]
+name = "a"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+`)
+	mustWrite(t, filepath.Join(dir, "src", "main.vox"), `fn main() -> i32 { return 0; }`)
+	mustWrite(t, filepath.Join(dir, "src", "a_test.vox"), `import "std/testing" as t
+fn test_basic() -> () { t.assert(true); }`)
+	// Intentionally duplicates embedded std/testing::assert symbols.
+	mustWrite(t, filepath.Join(dir, "src", "std", "testing", "testing.vox"), `pub fn assert(cond: bool) -> () {
+  if !cond { panic("assertion failed"); }
+}`)
+
+	_, diags, err := TestPackage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags.Items)
+	}
+}
+
 func TestBuildPackage_IgnoresSrcTestFiles(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "vox.toml"), `[package]

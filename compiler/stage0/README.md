@@ -30,6 +30,7 @@ Notes:
 
 - The language spec lives in `../../docs/`.
 - Stage0 implements a small but growing subset; comptime/macro/trait/effects are out of scope.
+- Stage0 injects embedded std modules by default, but if a package provides `src/std/**`, local std overrides embedded std injection.
 - Stage1 is the frozen self-hosting bootstrap compiler line (implemented in Vox).
 - Stage2 is the active Vox compiler evolution line (language/compiler features continue here).
 - Stage3 is the developer toolchain phase (fmt/lint/doc/LSP).

@@ -107,11 +107,13 @@ func buildPackage(dir string, run bool, tests bool) (*BuildResult, *diag.Bag, er
 	if err != nil {
 		return nil, nil, err
 	}
-	// Stage0 stdlib is always available, except when building stage1 itself:
-	// stage1 owns the stdlib sources under compiler/stage1/src/std/**.
-	if stage1Root, err := stdlib.Stage1RootDir(); err == nil && filepath.Clean(root) == filepath.Clean(stage1Root) {
-		// no injection
-	} else {
+	// Inject stage0 stdlib only when package does not provide local src/std/**.
+	// This lets self-hosted compilers and user packages override std modules.
+	hasLocalStd, err := packageHasLocalStd(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !hasLocalStd {
 		stdFiles, err := stdlib.Files()
 		if err != nil {
 			return nil, nil, err
@@ -202,6 +204,18 @@ func findPackageRoot(dir string) (root string, manifestPath string, err error) {
 		cur = parent
 	}
 	return abs, "", nil
+}
+
+func packageHasLocalStd(root string) (bool, error) {
+	p := filepath.Join(root, "src", "std")
+	st, err := os.Stat(p)
+	if err == nil {
+		return st.IsDir(), nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 func validateDeps(root string, mani *manifest.Manifest) error {
