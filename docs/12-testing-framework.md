@@ -38,7 +38,7 @@ print(msg: String);
 
 断言与测试工具由标准库提供（以 `.vox` 源码形式随 stage0 一起注入）：
 
-- `std/prelude`：`assert` / `assert_with` / `assert_eq[T: Eq]` / `fail`
+- `std/prelude`：`assert` / `assert_with` / `assert_eq[T: Eq]` / `assert_ne[T: Eq]` / `fail`
 - `std/testing`：对 `std/prelude` 的薄封装，便于显式使用 `t.assert(...)` 这类风格
 
 ```vox
@@ -48,6 +48,7 @@ fn test_ok() -> () {
   t.assert(true);
   t.assert_with(1 + 1 == 2, "math broken");
   t.assert_eq(1 + 1, 2);
+  t.assert_ne(1 + 1, 3);
   t.assert_eq(true, true);
   t.assert_eq("a", "a");
   // t.fail("message"); // 直接失败并打印消息
@@ -56,5 +57,5 @@ fn test_ok() -> () {
 
 说明：
 
-- `assert_eq` 是泛型函数（stage0 支持最小子集的泛型单态化 + 推导，语法支持 `T: Eq`）。
-- 目前 `assert_eq` 依赖 `!=`：因此在 stage0 里只支持 `bool/i32/i64/String` 的比较（其他类型后续再做 lowering/trait 化）。
+- `assert_eq/assert_ne` 是泛型函数（stage0 支持最小子集的泛型单态化 + 推导，语法支持 `T: Eq`）。
+- `assert_eq` 依赖 `!=`、`assert_ne` 依赖 `==`；可用类型由当前阶段 `Eq` 与比较 lowering 覆盖范围决定。
