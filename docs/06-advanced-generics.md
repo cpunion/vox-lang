@@ -47,7 +47,7 @@ where
 }
 ```
 
-当前 Stage1 已实现（函数/trait 方法）：
+当前 Stage1 已实现（函数/trait 方法 + struct/enum 声明）：
 
 - 语法：`where comptime N > 0, comptime N <= 256`
 - 约束对象：
@@ -55,7 +55,9 @@ where
   - 已声明的类型参数布局反射（`comptime @size_of(T) <= 64`、`comptime @align_of(T) <= 8`）
 - 右值：十进制整数字面量（支持负号）或 `const` 参数（如 `comptime N < M`、`comptime @size_of(T) <= LIM`）
 - 运算符：`== != < <= > >=`
-- 校验时机：调用点（含默认 const 实参）
+- 校验时机：
+  - 函数/trait 方法：调用点（含默认 const 实参）
+  - generic struct/enum：类型实例化点（如 `Small[i32]`、`Tiny[i32]`）
 - 默认值一致性：声明阶段会校验“默认 const 值是否满足 comptime where”（当约束涉及的参数都有默认值时）
 - impl 一致性：`impl Trait for Type` 的方法必须与 trait 方法声明的 `comptime where` 约束一致
 

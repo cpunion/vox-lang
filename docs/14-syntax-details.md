@@ -37,6 +37,7 @@
   - `where comptime` 约束（Stage1 已实现子集）：`fn addn[const N: i32](x: i32) -> i32 where comptime N > 0, comptime N <= 8 { ... }`
   - `where comptime` 右值可为常量参数：`fn f[const N: i32, const M: i32](x: i32) -> i32 where comptime N < M { ... }`
   - `where comptime` 支持类型布局反射约束：`fn fit[T](x: T) -> i32 where comptime @size_of(T) <= 64, comptime @align_of(T) <= 8 { ... }`
+  - generic struct/enum 也支持 `where comptime`：`struct Small[T] where comptime @size_of(T) <= 8 { v: T }`
   - 泛型调用（可显式给出类型实参）：`id[i32](1)`
   - 泛型调用（通常可省略类型实参，由实参/返回期望推导）：`id(1)`
   - 函数 const 泛型：`fn addn[const N: i32](x: i32) -> i32 { return x + N; }`

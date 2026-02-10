@@ -251,6 +251,7 @@ fn subs_from_args(type_params: Vec[String], arg_tys: Vec[i32]) -> Vec[TySub] {
 
 struct FindStructDeclResult { found: bool, d: ast.StructDecl }
 struct FindEnumDeclResult { found: bool, d: ast.EnumDecl }
+struct NominalComptimeWhereResult { ok: bool, err: TcError, ctx: Ctx }
 
 fn find_struct_decl_in_mod(m: WorldModule, name: String) -> FindStructDeclResult {
   let mut i: i32 = 0;
@@ -261,7 +262,16 @@ fn find_struct_decl_in_mod(m: WorldModule, name: String) -> FindStructDeclResult
   }
   return FindStructDeclResult {
     found: false,
-    d: ast.StructDecl { file: "", vis: ast.vis_private(), is_pub: false, name: "", type_params: Vec(), fields: Vec() },
+    d: ast.StructDecl {
+      file: "",
+      vis: ast.vis_private(),
+      is_pub: false,
+      name: "",
+      type_params: Vec(),
+      type_param_bounds: Vec(),
+      const_where_bounds: Vec(),
+      fields: Vec(),
+    },
   };
 }
 
@@ -274,8 +284,27 @@ fn find_enum_decl_in_mod(m: WorldModule, name: String) -> FindEnumDeclResult {
   }
   return FindEnumDeclResult {
     found: false,
-    d: ast.EnumDecl { file: "", vis: ast.vis_private(), is_pub: false, name: "", type_params: Vec(), variants: Vec() },
+    d: ast.EnumDecl {
+      file: "",
+      vis: ast.vis_private(),
+      is_pub: false,
+      name: "",
+      type_params: Vec(),
+      type_param_bounds: Vec(),
+      const_where_bounds: Vec(),
+      variants: Vec(),
+    },
   };
+}
+
+fn nominal_check_comptime_where(ctx0: Ctx, file: String, tps: Vec[String], cwds: Vec[ast.ConstWhereDecl], arg_tys: Vec[i32]) -> NominalComptimeWhereResult {
+  let mut c: Ctx = ctx0;
+  let cwr: CollectConstWhereResult = collect_const_where_bounds(file, tps, Vec(), cwds);
+  if !cwr.ok { return NominalComptimeWhereResult { ok: false, err: cwr.err, ctx: c }; }
+  let subs: Vec[TySub] = subs_from_args(tps, arg_tys);
+  let ck: ConstWhereCheckResult = check_const_where_bounds(c, cwr.bounds, subs, Vec());
+  if !ck.ok { return NominalComptimeWhereResult { ok: false, err: type_error(file, ck.err), ctx: c }; }
+  return NominalComptimeWhereResult { ok: true, err: TcError.None, ctx: c };
 }
 
 fn nominal_intern_struct(ctx0: Ctx, mod_path: String, name: String) -> ResolveTyResult {
@@ -503,6 +532,9 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
       arg_tys.push(ar.idx);
       ai = ai + 1;
     }
+    let ckw: NominalComptimeWhereResult = nominal_check_comptime_where(c, sd.file, sd.type_params, sd.const_where_bounds, arg_tys);
+    c = ckw.ctx;
+    if !ckw.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
 
     let subs: Vec[TySub] = subs_from_args(sd.type_params, arg_tys);
     let inst: String = inst_name(c, sd.name, sd.type_params, subs);
@@ -553,6 +585,9 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
       arg_tys.push(ar.idx);
       ai = ai + 1;
     }
+    let ckw: NominalComptimeWhereResult = nominal_check_comptime_where(c, ed.file, ed.type_params, ed.const_where_bounds, arg_tys);
+    c = ckw.ctx;
+    if !ckw.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
 
     let subs: Vec[TySub] = subs_from_args(ed.type_params, arg_tys);
     let inst: String = inst_name(c, ed.name, ed.type_params, subs);
