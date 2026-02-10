@@ -1284,6 +1284,21 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(brun), "[test] test_std_testing_smoke") {
 		t.Fatalf("expected run pattern to select std testing smoke, got:\n%s", string(brun))
 	}
+	cmdModule := exec.Command(stage2BinB, "test-pkg", "--module=typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list", outRel)
+	cmdModule.Dir = stage2DirAbs
+	bmod, err := cmdModule.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg --module failed: %v\n%s", err, string(bmod))
+	}
+	if !strings.Contains(string(bmod), "[select] --module: \"typecheck\"") {
+		t.Fatalf("expected module filter in text selection output, got:\n%s", string(bmod))
+	}
+	if !strings.Contains(string(bmod), "[test] typecheck::test_typecheck_allows_generic_fn_sig") {
+		t.Fatalf("expected module-filtered test in list output, got:\n%s", string(bmod))
+	}
+	if strings.Contains(string(bmod), "[test] parse::test_parse_single_fn_return_int") {
+		t.Fatalf("expected module filter to exclude parse tests, got:\n%s", string(bmod))
+	}
 
 	cmdJobs := exec.Command(stage2BinB, "test-pkg", "--jobs=2", "--run=*std_sync_runtime_generic_api_smoke", "--list", outRel)
 	cmdJobs.Dir = stage2DirAbs
@@ -1327,6 +1342,18 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	}
 	if !strings.Contains(string(bj), "\"jobs\":2") {
 		t.Fatalf("expected jobs in selection json output, got:\n%s", string(bj))
+	}
+	cmdJSONModule := exec.Command(stage2BinB, "test-pkg", "--module=typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list", "--json", outRel)
+	cmdJSONModule.Dir = stage2DirAbs
+	bjm, err := cmdJSONModule.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg --module --json failed: %v\n%s", err, string(bjm))
+	}
+	if !strings.Contains(string(bjm), "\"module\":\"typecheck\"") {
+		t.Fatalf("expected module in selection json output, got:\n%s", string(bjm))
+	}
+	if !strings.Contains(string(bjm), "\"selected_tests\":[\"typecheck::test_typecheck_allows_generic_fn_sig\"]") {
+		t.Fatalf("expected module-filtered selected test in json output, got:\n%s", string(bjm))
 	}
 
 	cmdJSONRun := exec.Command(stage2BinB, "test-pkg", "--run=*std_sync_runtime_generic_api_smoke", "--json", outRel)
