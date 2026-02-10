@@ -42,7 +42,7 @@ print(msg: String);
 
 断言与测试工具由标准库提供（以 `.vox` 源码形式随 stage0 一起注入）：
 
-- `std/prelude`：`assert` / `assert_with` / `assert_eq[T: Eq]` / `assert_ne[T: Eq]` / `fail`
+- `std/prelude`：`assert` / `assert_with` / `assert_eq[T: Eq]` / `assert_ne[T: Eq]` / `assert_lt[T: Ord]` / `assert_le[T: Ord]` / `assert_gt[T: Ord]` / `assert_ge[T: Ord]` / `fail`
 - `std/testing`：对 `std/prelude` 的薄封装，便于显式使用 `t.assert(...)` 这类风格
 
 ```vox

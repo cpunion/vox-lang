@@ -14,7 +14,7 @@
 
 当前 stage1 落地：
 
-- `std::prelude` 已提供默认 trait：`Eq`、`Show`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
+- `std::prelude` 已提供默认 trait：`Eq`、`Ord`、`Show`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
 - 未显式 import 时，函数名会回退到 `std/prelude`；trait 静态调用与 `impl Trait for ...` 也支持回退到 `std/prelude` 的公开 trait。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、`.vox` 枚举、命令执行、参数读取）。
 - `std::io` 已提供最小输出接口：`out`、`out_ln`、`fail`。
