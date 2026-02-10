@@ -57,6 +57,8 @@ fn crc_table() -> [u32; 256] { ... }
 @is_range(T) -> bool
 @is_eq_comparable(T) -> bool
 @is_ordered(T) -> bool
+@is_unit(T) -> bool
+@is_numeric(T) -> bool
 ```
 
 语法与约束（当前）：
@@ -78,6 +80,8 @@ fn crc_table() -> [u32; 256] { ... }
 - `@is_*` 返回类型分类判定（当前要求 `T` 为 concrete type）。
 - `@is_eq_comparable` 与 `==/!=` 能力对齐（含递归 struct/enum 字段检查）。
 - `@is_ordered` 与 `< <= > >=` 能力对齐（当前 `int/float/string`）。
+- `@is_unit` 判断是否为 `()`。
+- `@is_numeric` 判断是否为数值类型（`int` 或 `float`，含 range）。
 
 暂未实现（保留方向）：
 

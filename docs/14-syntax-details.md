@@ -523,6 +523,8 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 - `@is_range(Type) -> bool`
 - `@is_eq_comparable(Type) -> bool`
 - `@is_ordered(Type) -> bool`
+- `@is_unit(Type) -> bool`
+- `@is_numeric(Type) -> bool`
 
 说明：
 
