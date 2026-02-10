@@ -2,8 +2,14 @@ package names
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 )
+
+type TestModuleGroup struct {
+	Key   string
+	Tests []string
+}
 
 // SplitOwnerAndModule derives the "owning package" and module path from a source file name.
 //
@@ -105,4 +111,31 @@ func QualifyFunc(fileName string, fnName string) string {
 func PackageFromFileName(name string) string {
 	pkg, _, _ := SplitOwnerAndModule(name)
 	return pkg
+}
+
+// GroupQualifiedTestsByModule groups qualified test function names by module key.
+//
+// Input names should already be sorted if deterministic per-module order is desired.
+func GroupQualifiedTestsByModule(testNames []string) []TestModuleGroup {
+	if len(testNames) == 0 {
+		return nil
+	}
+	groupMap := map[string][]string{}
+	keys := make([]string, 0)
+	for _, name := range testNames {
+		key := ""
+		if i := strings.LastIndex(name, "::"); i >= 0 {
+			key = name[:i]
+		}
+		if _, ok := groupMap[key]; !ok {
+			keys = append(keys, key)
+		}
+		groupMap[key] = append(groupMap[key], name)
+	}
+	sort.Strings(keys)
+	out := make([]TestModuleGroup, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, TestModuleGroup{Key: key, Tests: groupMap[key]})
+	}
+	return out
 }

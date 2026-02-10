@@ -5,8 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"voxlang/internal/codegen"
@@ -315,27 +317,92 @@ func test(dir string, eng engine) error {
 		return err
 	}
 
+	groups := names.GroupQualifiedTestsByModule(testNames)
+	results := runCompiledTestsByModule(bin, groups)
+
 	passed := 0
 	failed := 0
 	for _, name := range testNames {
-		cmd := exec.Command(bin, name)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
-		start := time.Now()
-		if err := cmd.Run(); err != nil {
+		r, ok := results[name]
+		if !ok {
 			failed++
-			fmt.Fprintf(os.Stdout, "[FAIL] %s (%s)\n", name, formatTestDuration(time.Since(start)))
+			fmt.Fprintf(os.Stdout, "[FAIL] %s (%s)\n", name, formatTestDuration(0))
+			continue
+		}
+		if r.err != nil {
+			failed++
+			fmt.Fprintf(os.Stdout, "[FAIL] %s (%s)\n", name, formatTestDuration(r.dur))
 			continue
 		}
 		passed++
-		fmt.Fprintf(os.Stdout, "[OK] %s (%s)\n", name, formatTestDuration(time.Since(start)))
+		fmt.Fprintf(os.Stdout, "[OK] %s (%s)\n", name, formatTestDuration(r.dur))
 	}
 	fmt.Fprintf(os.Stdout, "[test] %d passed, %d failed\n", passed, failed)
 	if failed != 0 {
 		return fmt.Errorf("%d test(s) failed", failed)
 	}
 	return nil
+}
+
+type testExecResult struct {
+	dur time.Duration
+	err error
+}
+
+func runCompiledTestsByModule(bin string, groups []names.TestModuleGroup) map[string]testExecResult {
+	total := 0
+	for _, g := range groups {
+		total += len(g.Tests)
+	}
+	out := make(map[string]testExecResult, total)
+	if total == 0 {
+		return out
+	}
+
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(groups) {
+		workers = len(groups)
+	}
+
+	jobs := make(chan names.TestModuleGroup, len(groups))
+	type namedResult struct {
+		name string
+		res  testExecResult
+	}
+	results := make(chan namedResult, total)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for g := range jobs {
+				for _, name := range g.Tests {
+					cmd := exec.Command(bin, name)
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+					cmd.Stdin = os.Stdin
+					start := time.Now()
+					err := cmd.Run()
+					results <- namedResult{name: name, res: testExecResult{dur: time.Since(start), err: err}}
+				}
+			}
+		}()
+	}
+	for _, g := range groups {
+		jobs <- g
+	}
+	close(jobs)
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	for r := range results {
+		out[r.name] = r.res
+	}
+	return out
 }
 
 func formatTestDuration(d time.Duration) string {

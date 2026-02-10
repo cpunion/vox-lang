@@ -3,8 +3,10 @@ package interp
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"voxlang/internal/ast"
@@ -124,33 +126,106 @@ func RunTests(p *typecheck.CheckedProgram) (string, error) {
 		}
 	}
 	sort.Strings(testNames)
+	if len(testNames) == 0 {
+		return "[test] no tests found\n", nil
+	}
+
+	results := runInterpTestsByModule(p, names.GroupQualifiedTestsByModule(testNames))
 	var log strings.Builder
 	failed := 0
 	for _, name := range testNames {
-		start := time.Now()
-		sig, ok := p.FuncSigs[name]
-		if !ok || len(sig.Params) != 0 || sig.Ret.K != typecheck.TyUnit {
+		r, ok := results[name]
+		if !ok {
 			failed++
-			fmt.Fprintf(&log, "[FAIL] %s (%s): invalid test signature (expected fn %s() -> ())\n", name, formatTestDuration(time.Since(start)), name)
+			fmt.Fprintf(&log, "[FAIL] %s (%s): internal error: missing test result\n", name, formatTestDuration(0))
 			continue
 		}
-		_, err := rt.call(name, nil)
-		if err != nil {
+		if r.err != nil {
 			failed++
-			fmt.Fprintf(&log, "[FAIL] %s (%s): %v\n", name, formatTestDuration(time.Since(start)), err)
-		} else {
-			fmt.Fprintf(&log, "[OK] %s (%s)\n", name, formatTestDuration(time.Since(start)))
+			fmt.Fprintf(&log, "[FAIL] %s (%s): %v\n", name, formatTestDuration(r.dur), r.err)
+			continue
 		}
+		fmt.Fprintf(&log, "[OK] %s (%s)\n", name, formatTestDuration(r.dur))
 	}
-	if len(testNames) == 0 {
-		log.WriteString("[test] no tests found\n")
-	} else {
-		fmt.Fprintf(&log, "[test] %d passed, %d failed\n", len(testNames)-failed, failed)
-	}
+	fmt.Fprintf(&log, "[test] %d passed, %d failed\n", len(testNames)-failed, failed)
 	if failed != 0 {
 		return log.String(), fmt.Errorf("%d test(s) failed", failed)
 	}
 	return log.String(), nil
+}
+
+type interpTestResult struct {
+	dur time.Duration
+	err error
+}
+
+func runtimeForTests(p *typecheck.CheckedProgram) *Runtime {
+	rt := newRuntime(p)
+	for _, fn := range p.Prog.Funcs {
+		rt.funcs[names.QualifyFunc(fn.Span.File.Name, fn.Name)] = fn
+	}
+	return rt
+}
+
+func runInterpTestsByModule(p *typecheck.CheckedProgram, groups []names.TestModuleGroup) map[string]interpTestResult {
+	total := 0
+	for _, g := range groups {
+		total += len(g.Tests)
+	}
+	out := make(map[string]interpTestResult, total)
+	if total == 0 {
+		return out
+	}
+
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(groups) {
+		workers = len(groups)
+	}
+
+	jobs := make(chan names.TestModuleGroup, len(groups))
+	type namedResult struct {
+		name string
+		res  interpTestResult
+	}
+	results := make(chan namedResult, total)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for g := range jobs {
+				rt := runtimeForTests(p)
+				for _, name := range g.Tests {
+					start := time.Now()
+					sig, ok := p.FuncSigs[name]
+					if !ok || len(sig.Params) != 0 || sig.Ret.K != typecheck.TyUnit {
+						results <- namedResult{name: name, res: interpTestResult{
+							dur: time.Since(start),
+							err: fmt.Errorf("invalid test signature (expected fn %s() -> ())", name),
+						}}
+						continue
+					}
+					_, err := rt.call(name, nil)
+					results <- namedResult{name: name, res: interpTestResult{dur: time.Since(start), err: err}}
+				}
+			}
+		}()
+	}
+	for _, g := range groups {
+		jobs <- g
+	}
+	close(jobs)
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	for r := range results {
+		out[r.name] = r.res
+	}
+	return out
 }
 
 func formatTestDuration(d time.Duration) string {
