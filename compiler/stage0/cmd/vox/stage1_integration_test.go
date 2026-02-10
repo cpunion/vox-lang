@@ -42,6 +42,8 @@ func requireSelfhostTests(t *testing.T) {
 }
 
 func TestStage1ToolchainBuildsMultiModuleProgram(t *testing.T) {
+	t.Parallel()
+
 	// 1) Build the stage1 compiler (vox_stage1) using stage0.
 	stage1Bin := stage1ToolBin(t)
 
@@ -110,6 +112,8 @@ dep = { path = "dep_pkg" }
 }
 
 func TestStage1ToolchainEmitCAndBuildCommands(t *testing.T) {
+	t.Parallel()
+
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Bin := stage1ToolBin(t)
 
@@ -179,6 +183,8 @@ func TestStage1ToolchainEmitCAndBuildCommands(t *testing.T) {
 }
 
 func TestStage1ToolchainBuildPkgAndTestPkgUseLocalStd(t *testing.T) {
+	t.Parallel()
+
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Bin := stage1ToolBin(t)
 
@@ -255,6 +261,8 @@ pub fn assert(cond: bool) -> () { prelude.assert(cond); }
 }
 
 func TestStage1CliArgumentValidation(t *testing.T) {
+	t.Parallel()
+
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Bin := stage1ToolBin(t)
 
@@ -311,6 +319,8 @@ func TestStage1CliArgumentValidation(t *testing.T) {
 }
 
 func TestStage1ToolchainBuildsWithTransitivePathDeps(t *testing.T) {
+	t.Parallel()
+
 	// 1) Build the stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Bin := stage1ToolBin(t)
 
@@ -395,6 +405,8 @@ dep = { path = "dep_pkg" }
 }
 
 func TestStage1BuildPkgNoSymbolCollisionBetweenQualifiedAndPlainNames(t *testing.T) {
+	t.Parallel()
+
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Bin := stage1ToolBin(t)
 
@@ -459,6 +471,8 @@ dep = { path = "dep_pkg" }
 }
 
 func TestStage1BuildPkgImportSchemesDisambiguateDepAndLocalModule(t *testing.T) {
+	t.Parallel()
+
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Bin := stage1ToolBin(t)
 
@@ -561,6 +575,8 @@ dep = { path = "dep_pkg" }
 }
 
 func TestStage1BuildPkgFailsOnInvalidManifest(t *testing.T) {
+	t.Parallel()
+
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Bin := stage1ToolBin(t)
 
@@ -597,6 +613,8 @@ this is not valid
 }
 
 func TestStage1BuildPkgFailsOnDuplicateDependencyName(t *testing.T) {
+	t.Parallel()
+
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
 	stage1Bin := stage1ToolBin(t)
 
@@ -633,6 +651,8 @@ dep = { path = "dep2" }
 }
 
 func TestStage1BuildPkgWritesLockfile(t *testing.T) {
+	t.Parallel()
+
 	stage1Bin := stage1ToolBin(t)
 
 	root := t.TempDir()
@@ -701,6 +721,8 @@ dep = { path = "dep_pkg", version = "0.1.0" }
 }
 
 func TestStage1BuildPkgFailsWhenLockDigestMismatch(t *testing.T) {
+	t.Parallel()
+
 	stage1Bin := stage1ToolBin(t)
 
 	root := t.TempDir()
@@ -763,6 +785,8 @@ dep = { path = "dep_pkg", version = "0.1.0" }
 }
 
 func TestStage1BuildPkgFailsOnMissingRegistryDependency(t *testing.T) {
+	t.Parallel()
+
 	stage1Bin := stage1ToolBin(t)
 
 	root := t.TempDir()
@@ -800,6 +824,8 @@ dep = "1.2.3"
 }
 
 func TestStage1BuildPkgSupportsVersionDependencyFromRegistryCache(t *testing.T) {
+	t.Parallel()
+
 	stage1Bin := stage1ToolBin(t)
 
 	root := t.TempDir()
@@ -851,6 +877,8 @@ dep = "1.2.3"
 }
 
 func TestStage1BuildPkgSupportsGitDependency(t *testing.T) {
+	t.Parallel()
+
 	stage1Bin := stage1ToolBin(t)
 
 	root := t.TempDir()
@@ -931,6 +959,8 @@ dep = { git = "dep_git_repo" }
 }
 
 func TestStage1ToolchainTestPkgRunsTests(t *testing.T) {
+	t.Parallel()
+
 	// 1) Build the stage1 compiler (vox_stage1) using stage0.
 	stage1Bin := stage1ToolBin(t)
 
@@ -1133,6 +1163,8 @@ edition = "2026"
 }
 
 func TestStage1ExitCodeNonZeroOnBuildPkgFailure(t *testing.T) {
+	t.Parallel()
+
 	// Build stage1 compiler (vox_stage1) using stage0.
 	stage1Bin := stage1ToolBin(t)
 
@@ -1177,6 +1209,8 @@ edition = "2026"
 }
 
 func TestStage1BuildPkgIsQuietOnSuccess(t *testing.T) {
+	t.Parallel()
+
 	// Build stage1 compiler (vox_stage1) using stage0.
 	stage1Bin := stage1ToolBin(t)
 
