@@ -126,22 +126,30 @@ func RunTests(p *typecheck.CheckedProgram) (string, error) {
 		}
 	}
 	sort.Strings(testNames)
+	log, _, err := RunTestsNamed(p, testNames)
+	return log, err
+}
+
+func RunTestsNamed(p *typecheck.CheckedProgram, testNames []string) (string, []string, error) {
 	if len(testNames) == 0 {
-		return "[test] no tests found\n", nil
+		return "[test] no tests found\n", nil, nil
 	}
 
 	results := runInterpTestsByModule(p, names.GroupQualifiedTestsByModule(testNames))
 	var log strings.Builder
 	failed := 0
+	failedNames := make([]string, 0)
 	for _, name := range testNames {
 		r, ok := results[name]
 		if !ok {
 			failed++
+			failedNames = append(failedNames, name)
 			fmt.Fprintf(&log, "[FAIL] %s (%s): internal error: missing test result\n", name, formatTestDuration(0))
 			continue
 		}
 		if r.err != nil {
 			failed++
+			failedNames = append(failedNames, name)
 			fmt.Fprintf(&log, "[FAIL] %s (%s): %v\n", name, formatTestDuration(r.dur), r.err)
 			continue
 		}
@@ -149,9 +157,9 @@ func RunTests(p *typecheck.CheckedProgram) (string, error) {
 	}
 	fmt.Fprintf(&log, "[test] %d passed, %d failed\n", len(testNames)-failed, failed)
 	if failed != 0 {
-		return log.String(), fmt.Errorf("%d test(s) failed", failed)
+		return log.String(), failedNames, fmt.Errorf("%d test(s) failed", failed)
 	}
-	return log.String(), nil
+	return log.String(), nil, nil
 }
 
 type interpTestResult struct {

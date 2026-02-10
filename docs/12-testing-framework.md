@@ -17,6 +17,8 @@ CLI（见 `docs/15-toolchain.md`）：
 vox test
 vox test --engine=c
 vox test --engine=interp
+vox test --run='regex'
+vox test --rerun-failed
 ```
 
 Stage0 行为：
@@ -26,6 +28,8 @@ Stage0 行为：
 - 依赖包（path deps）的测试文件不会被加入（保持依赖纯净）
  - `vox test --engine=c`（默认）：编译生成测试可执行文件并执行（更贴近最终语义）
  - `vox test --engine=interp`：解释执行测试（用于快速对照；能力可能更受限）
+ - `vox test --run=<regex>`：仅运行匹配的测试（匹配限定名 `mod::test_x` 与短名 `test_x`）
+ - `vox test --rerun-failed`：仅重跑上次失败测试（缓存文件：`target/debug/.vox_failed_tests`）
 
 ## 2. 断言（Stage0）
 

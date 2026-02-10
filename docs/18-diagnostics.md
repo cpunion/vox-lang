@@ -18,7 +18,9 @@
 
 - `file`：源码路径（VFS 虚拟路径也可，如依赖包文件 `dep/src/x.vox`）
 - `line/col`：1-based
-- `col`：按 UTF-8 byte 计数（Stage1 v0 约定；后续可升级为 rune/column）
+- `col`：
+  - Stage0：按 rune（Unicode code point）计数
+  - Stage1 v0：按 UTF-8 byte 计数（后续计划升级为 rune）
 
 ## 2. 解析错误（parse/lex）
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -34,6 +35,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --engine=c|interp   execution engine (default: c)")
 	fmt.Fprintln(os.Stderr, "  --compile           alias for --engine=c")
 	fmt.Fprintln(os.Stderr, "  --interp            alias for --engine=interp")
+	fmt.Fprintln(os.Stderr, "test flags:")
+	fmt.Fprintln(os.Stderr, "  --run=<regex>       run tests whose qualified name (or short name) matches regex")
+	fmt.Fprintln(os.Stderr, "  --rerun-failed      rerun only tests failed in previous run")
 }
 
 type engine int
@@ -42,6 +46,13 @@ const (
 	engineC engine = iota
 	engineInterp
 )
+
+type testOptions struct {
+	eng         engine
+	dir         string
+	runPattern  string
+	rerunFailed bool
+}
 
 func parseEngineAndDir(args []string) (eng engine, dir string, err error) {
 	eng = engineC
@@ -86,6 +97,67 @@ func parseEngineAndDir(args []string) (eng engine, dir string, err error) {
 		setDir = true
 	}
 	return eng, dir, nil
+}
+
+func parseTestOptionsAndDir(args []string) (opts testOptions, err error) {
+	opts.eng = engineC
+	opts.dir = "."
+	setDir := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--compile" {
+			opts.eng = engineC
+			continue
+		}
+		if a == "--interp" {
+			opts.eng = engineInterp
+			continue
+		}
+		if a == "--engine" {
+			if i+1 >= len(args) {
+				return testOptions{}, fmt.Errorf("missing value for --engine")
+			}
+			i++
+			a = "--engine=" + args[i]
+		}
+		if strings.HasPrefix(a, "--engine=") {
+			v := strings.TrimPrefix(a, "--engine=")
+			switch v {
+			case "c":
+				opts.eng = engineC
+			case "interp":
+				opts.eng = engineInterp
+			default:
+				return testOptions{}, fmt.Errorf("unknown engine: %q", v)
+			}
+			continue
+		}
+		if a == "--run" {
+			if i+1 >= len(args) {
+				return testOptions{}, fmt.Errorf("missing value for --run")
+			}
+			i++
+			opts.runPattern = args[i]
+			continue
+		}
+		if strings.HasPrefix(a, "--run=") {
+			opts.runPattern = strings.TrimPrefix(a, "--run=")
+			continue
+		}
+		if a == "--rerun-failed" {
+			opts.rerunFailed = true
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			return testOptions{}, fmt.Errorf("unknown flag: %s", a)
+		}
+		if setDir {
+			return testOptions{}, fmt.Errorf("unexpected extra arg: %s", a)
+		}
+		opts.dir = a
+		setDir = true
+	}
+	return opts, nil
 }
 
 func main() {
@@ -153,12 +225,12 @@ func main() {
 			os.Exit(1)
 		}
 	case "test":
-		eng, dir, err := parseEngineAndDir(os.Args[2:])
+		opts, err := parseTestOptionsAndDir(os.Args[2:])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
-		if err := test(dir, eng); err != nil {
+		if err := testWithOptions(opts); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
@@ -279,7 +351,11 @@ func run(dir string, eng engine, progArgs []string) error {
 }
 
 func test(dir string, eng engine) error {
-	abs, err := filepath.Abs(dir)
+	return testWithOptions(testOptions{eng: eng, dir: dir})
+}
+
+func testWithOptions(opts testOptions) error {
+	abs, err := filepath.Abs(opts.dir)
 	if err != nil {
 		return err
 	}
@@ -295,19 +371,42 @@ func test(dir string, eng engine) error {
 		return fmt.Errorf("internal error: missing checked program")
 	}
 
-	if eng == engineInterp {
-		log, err := interp.RunTests(res.Program)
+	// Discover tests (Go-like): tests/**.vox and src/**/*_test.vox, functions named `test_*`.
+	testNames := discoverTests(res.Program)
+	if opts.rerunFailed {
+		prevFailed, err := readFailedTests(abs)
+		if err != nil {
+			return err
+		}
+		if len(prevFailed) == 0 {
+			fmt.Fprintln(os.Stdout, "[test] no previous failed tests")
+			return nil
+		}
+		testNames = intersectTests(testNames, prevFailed)
+	}
+	if opts.runPattern != "" {
+		testNames, err = filterTestsByPattern(testNames, opts.runPattern)
+		if err != nil {
+			return err
+		}
+	}
+	if len(testNames) == 0 {
+		fmt.Fprintln(os.Stdout, "[test] no tests found")
+		if err := writeFailedTests(abs, nil); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if opts.eng == engineInterp {
+		log, failedNames, err := interp.RunTestsNamed(res.Program, testNames)
 		if log != "" {
 			fmt.Fprint(os.Stdout, log)
 		}
+		if werr := writeFailedTests(abs, failedNames); werr != nil {
+			return werr
+		}
 		return err
-	}
-
-	// Discover tests (Go-like): tests/**.vox and src/**/*_test.vox, functions named `test_*`.
-	testNames := discoverTests(res.Program)
-	if len(testNames) == 0 {
-		fmt.Fprintln(os.Stdout, "[test] no tests found")
-		return nil
 	}
 
 	// Build a single test binary and run each test in a separate process so panics
@@ -322,15 +421,18 @@ func test(dir string, eng engine) error {
 
 	passed := 0
 	failed := 0
+	failedNames := make([]string, 0)
 	for _, name := range testNames {
 		r, ok := results[name]
 		if !ok {
 			failed++
+			failedNames = append(failedNames, name)
 			fmt.Fprintf(os.Stdout, "[FAIL] %s (%s)\n", name, formatTestDuration(0))
 			continue
 		}
 		if r.err != nil {
 			failed++
+			failedNames = append(failedNames, name)
 			fmt.Fprintf(os.Stdout, "[FAIL] %s (%s)\n", name, formatTestDuration(r.dur))
 			continue
 		}
@@ -338,6 +440,9 @@ func test(dir string, eng engine) error {
 		fmt.Fprintf(os.Stdout, "[OK] %s (%s)\n", name, formatTestDuration(r.dur))
 	}
 	fmt.Fprintf(os.Stdout, "[test] %d passed, %d failed\n", passed, failed)
+	if err := writeFailedTests(abs, failedNames); err != nil {
+		return err
+	}
 	if failed != 0 {
 		return fmt.Errorf("%d test(s) failed", failed)
 	}
@@ -490,6 +595,91 @@ func discoverTests(p *typecheck.CheckedProgram) []string {
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+func shortTestName(name string) string {
+	i := strings.LastIndex(name, "::")
+	if i < 0 || i+2 >= len(name) {
+		return name
+	}
+	return name[i+2:]
+}
+
+func filterTestsByPattern(testNames []string, pattern string) ([]string, error) {
+	rx, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --run regex: %w", err)
+	}
+	out := make([]string, 0, len(testNames))
+	for _, name := range testNames {
+		if rx.MatchString(name) || rx.MatchString(shortTestName(name)) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+func failedTestsPath(root string) string {
+	return filepath.Join(root, "target", "debug", ".vox_failed_tests")
+}
+
+func readFailedTests(root string) ([]string, error) {
+	path := failedTestsPath(root)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	lines := strings.Split(string(b), "\n")
+	out := make([]string, 0, len(lines))
+	seen := map[string]struct{}{}
+	for _, ln := range lines {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		if _, ok := seen[ln]; ok {
+			continue
+		}
+		seen[ln] = struct{}{}
+		out = append(out, ln)
+	}
+	return out, nil
+}
+
+func writeFailedTests(root string, failed []string) error {
+	path := failedTestsPath(root)
+	if len(failed) == 0 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, name := range failed {
+		b.WriteString(name)
+		b.WriteByte('\n')
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func intersectTests(all []string, keep []string) []string {
+	ks := make(map[string]struct{}, len(keep))
+	for _, name := range keep {
+		ks[name] = struct{}{}
+	}
+	out := make([]string, 0, len(all))
+	for _, name := range all {
+		if _, ok := ks[name]; ok {
+			out = append(out, name)
+		}
+	}
 	return out
 }
 
