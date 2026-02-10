@@ -328,7 +328,10 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			l := stripRange(c.forceIntType(e.Left, l0, want))
 			r0 := c.checkExpr(e.Right, l)
 			r := stripRange(c.forceIntType(e.Right, r0, l))
-			if !isIntType(l) || !isIntType(r) || !sameType(l, r) {
+			if !sameType(l, r) {
+				c.errorAt(e.S, "comparison requires same integer type")
+			}
+			if !isIntType(l) && l.K != TyString {
 				c.errorAt(e.S, "comparison requires same integer type")
 			}
 			return c.setExprType(ex, Type{K: TyBool})

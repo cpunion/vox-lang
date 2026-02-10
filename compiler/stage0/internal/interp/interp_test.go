@@ -351,6 +351,18 @@ func TestInterpStringSlice(t *testing.T) {
 	}
 }
 
+func TestInterpStringOrderedComparison(t *testing.T) {
+	out := runMain(t, `fn main() -> i32 {
+  let a: String = "a";
+  let b: String = "b";
+  if a < b && a <= b && b > a && b >= a { return 1; }
+  return 0;
+}`)
+	if out != "1" {
+		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
 func TestShortCircuitAndAndDoesNotEvalRHS(t *testing.T) {
 	out := runMain(t, `fn rhs() -> bool { panic("rhs executed"); return true; }
 fn main() -> i32 {

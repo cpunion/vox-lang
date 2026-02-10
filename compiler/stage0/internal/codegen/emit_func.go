@@ -177,10 +177,6 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 		return nil
 	case *ir.Cmp:
 		if i.Ty.K == ir.TString {
-			// Only equality is supported for strings in stage0 backend.
-			if i.Op != ir.CmpEq && i.Op != ir.CmpNe {
-				return fmt.Errorf("unsupported string comparison")
-			}
 			out.WriteString("  ")
 			out.WriteString(cTempName(i.Dst.ID))
 			out.WriteString(" = (strcmp(")
@@ -190,8 +186,18 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 			out.WriteString(") ")
 			if i.Op == ir.CmpEq {
 				out.WriteString("==")
-			} else {
+			} else if i.Op == ir.CmpNe {
 				out.WriteString("!=")
+			} else if i.Op == ir.CmpLt {
+				out.WriteString("<")
+			} else if i.Op == ir.CmpLe {
+				out.WriteString("<=")
+			} else if i.Op == ir.CmpGt {
+				out.WriteString(">")
+			} else if i.Op == ir.CmpGe {
+				out.WriteString(">=")
+			} else {
+				return fmt.Errorf("unsupported string comparison")
 			}
 			out.WriteString(" 0);\n")
 			return nil

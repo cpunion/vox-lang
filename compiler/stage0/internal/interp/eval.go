@@ -274,6 +274,19 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		}
 		switch e.Op {
 		case "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>", "<", "<=", ">", ">=":
+			// String ordered comparison uses Go's byte-wise lexicographic order.
+			if (e.Op == "<" || e.Op == "<=" || e.Op == ">" || e.Op == ">=") && l.K == VString && r.K == VString {
+				switch e.Op {
+				case "<":
+					return Value{K: VBool, B: l.S < r.S}, nil
+				case "<=":
+					return Value{K: VBool, B: l.S <= r.S}, nil
+				case ">":
+					return Value{K: VBool, B: l.S > r.S}, nil
+				case ">=":
+					return Value{K: VBool, B: l.S >= r.S}, nil
+				}
+			}
 			if l.K != VInt || r.K != VInt {
 				return unit(), fmt.Errorf("binary op %s expects ints", e.Op)
 			}

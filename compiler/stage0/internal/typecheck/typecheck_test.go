@@ -568,6 +568,26 @@ func TestMatchIntAndStrPatternsTypecheck(t *testing.T) {
 	}
 }
 
+func TestStringOrderedComparisonTypechecks(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main() -> i32 {
+  let a: String = "a";
+  let b: String = "b";
+  if a < b { return 1; }
+  if a <= b { return 2; }
+  if b > a { return 3; }
+  if b >= a { return 4; }
+  return 0;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestMatchBoolPatternsTypecheck(t *testing.T) {
 	f := source.NewFile("src/main.vox", `fn main(b: bool) -> i32 {
   return match b {
