@@ -502,6 +502,7 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 
 - `@size_of(Type) -> usize`
 - `@align_of(Type) -> usize`
+- `@type(Type) -> TypeId`（Stage1 当前表示为 `usize`）
 - `@type_name(Type) -> String`
 - `@field_count(Type) -> usize`（当前支持 `struct/enum`）
 - `@field_name(Type, I) -> String`（当前支持 `struct/enum`，`I` 为 const 索引）

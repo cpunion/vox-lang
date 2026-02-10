@@ -36,6 +36,7 @@ fn crc_table() -> [u32; 256] { ... }
 ```vox
 @size_of(T) -> usize
 @align_of(T) -> usize
+@type(T) -> TypeId
 @type_name(T) -> String
 @field_count(T) -> usize
 @field_name(T, I) -> String
@@ -51,6 +52,7 @@ fn crc_table() -> [u32; 256] { ... }
 - 调用形态固定为 `@name(Type)`（单一类型参数）。
 - 可用于普通表达式与 `const` 初始化（均会折叠为常量）。
 - `@size_of/@align_of` 当前按 Stage1 C 后端目标布局模型计算。
+- `@type` 返回编译期 `TypeId`（Stage1 当前表示为 `usize`）。
 - `@type_name` 返回编译器的类型显示字符串。
 - `@field_count` 当前支持 `struct/enum`（分别返回字段数/variant 数）。
 - `@field_name` 当前支持 `struct/enum`（分别返回字段名/variant 名），`I` 为 `usize` const 实参。
