@@ -392,7 +392,7 @@ fn main() -> i32 {
 	}
 	found := false
 	for _, it := range tdiags.Items {
-		if it.Msg == "member calls on values are not supported yet" {
+		if it.Msg == "unknown method on value: one" {
 			found = true
 			break
 		}

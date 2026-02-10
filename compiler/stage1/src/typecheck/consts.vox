@@ -444,6 +444,29 @@ fn const_set_local_at(xs0: Vec[ConstLocal], idx: i32, val: ConstLocal) -> Vec[Co
   return xs;
 }
 
+fn const_locals_prefix(xs0: Vec[ConstLocal], n0: i32) -> Vec[ConstLocal] {
+  let mut out: Vec[ConstLocal] = Vec();
+  let mut n: i32 = n0;
+  if n < 0 { n = 0; }
+  if n > xs0.len() { n = xs0.len(); }
+  let mut i: i32 = 0;
+  while i < n {
+    out.push(xs0.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn const_set_payload_field_at(xs0: Vec[ConstEnumPayloadField], idx: i32, val: ConstEnumPayloadField) -> Vec[ConstEnumPayloadField] {
+  let mut xs: Vec[ConstEnumPayloadField] = Vec();
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    xs.push(if i == idx { val } else { xs0.get(i) });
+    i = i + 1;
+  }
+  return xs;
+}
+
 struct ConstExecStmtsResult {
   ok: bool,
   err: TcError,
@@ -558,6 +581,86 @@ fn const_exec_stmts(
       continue;
     }
 
+    if match st { ast.Stmt.AssignField(_sp, _recv, _field, _id2) => true, _ => false } {
+      let recv: String = match st { ast.Stmt.AssignField(_sp, x, _field, _id2) => x, _ => "" };
+      let field: String = match st { ast.Stmt.AssignField(_sp, _x, f, _id2) => f, _ => "" };
+      let rhs: i32 = match st { ast.Stmt.AssignField(_sp, _x, _f, ex) => ex, _ => -1 };
+      let li: i32 = const_find_local(locals1, recv);
+      if li == -1 {
+        return const_exec_err(type_error(file, "const assign unknown local"), sigs1, states1, locals1);
+      }
+
+      let target: ConstLocal = locals1.get(li);
+      if !target.mutable {
+        return const_exec_err(type_error(file, "const assign target is immutable"), sigs1, states1, locals1);
+      }
+      if target.kind != const_kind_struct() || !is_struct_ty(ctx, target.ty) {
+        return const_exec_err(type_error(file, "const field assign recv must be struct"), sigs1, states1, locals1);
+      }
+
+      let st: ir.Ty = ir.ty_pool_get(ctx.pool, target.ty);
+      let fs: FindStructResult = find_struct(ctx, ty_mod(st), ty_name(st));
+      if !fs.found {
+        return const_exec_err(type_error(file, "unknown struct type"), sigs1, states1, locals1);
+      }
+      if !vis_allows(fs.sig.vis, fs.sig.mod_path, cur_mod) {
+        return const_exec_err(type_error(file, "type is private"), sigs1, states1, locals1);
+      }
+
+      let dec: ConstStructDecode = const_struct_unpack(target.sv);
+      if !dec.ok || dec.fields.len() != fs.sig.fields.len() {
+        return const_exec_err(type_error(file, "bad const struct encoding"), sigs1, states1, locals1);
+      }
+
+      let mut found: bool = false;
+      let mut fidx: i32 = -1;
+      let mut fty: i32 = ctx.ty_bad;
+      let mut fi: i32 = 0;
+      while fi < fs.sig.fields.len() {
+        let sf: StructFieldSig = fs.sig.fields.get(fi);
+        if sf.name == field {
+          found = true;
+          fidx = fi;
+          fty = sf.ty;
+          if !vis_allows(sf.vis, fs.sig.mod_path, cur_mod) {
+            return const_exec_err(type_error(file, "field is private"), sigs1, states1, locals1);
+          }
+          fi = fs.sig.fields.len();
+        } else {
+          fi = fi + 1;
+        }
+      }
+      if !found {
+        return const_exec_err(type_error(file, "unknown field"), sigs1, states1, locals1);
+      }
+
+      let rr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs1, states1, cur_mod, imps, exprs, file, rhs, fty, locals1);
+      if !rr.ok { return const_exec_err(rr.err, rr.sigs, rr.states, locals1); }
+      sigs1 = rr.sigs;
+      states1 = rr.states;
+      if !assignable_to(ctx, fty, rr.ty) {
+        return const_exec_err(type_error(file, "const assign type mismatch"), sigs1, states1, locals1);
+      }
+
+      let fr: ConstToPayloadFieldResult = const_payload_field_from_eval(rr);
+      if !fr.ok {
+        return const_exec_err(type_error(file, fr.err), sigs1, states1, locals1);
+      }
+      let packed: String = const_struct_pack(const_set_payload_field_at(dec.fields, fidx, fr.f));
+      let updated: ConstLocal = ConstLocal {
+        name: target.name,
+        mutable: target.mutable,
+        kind: const_kind_struct(),
+        ty: target.ty,
+        iv: 0,
+        bv: false,
+        sv: packed,
+      };
+      locals1 = const_set_local_at(locals1, li, updated);
+      si = si + 1;
+      continue;
+    }
+
     if match st { ast.Stmt.Expr(_sp, _id2) => true, _ => false } {
       let exid: i32 = match st { ast.Stmt.Expr(_sp, x) => x, _ => -1 };
       let er: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs1, states1, cur_mod, imps, exprs, file, exid, -1, locals1);
@@ -583,18 +686,22 @@ fn const_exec_stmts(
       sigs1 = cr.sigs;
       states1 = cr.states;
       if cr.bv {
+        let base_len: i32 = locals1.len();
         let br1: ConstExecStmtsResult = const_exec_stmts(ctx, w, items, sigs1, states1, cur_mod, imps, exprs, file, thn.stmts, locals1, loop_depth);
         if !br1.ok { return br1; }
         sigs1 = br1.sigs;
         states1 = br1.states;
+        locals1 = const_locals_prefix(br1.locals, base_len);
         if br1.flow != const_flow_none() {
           return const_exec_ctrl(sigs1, states1, locals1, br1.flow, br1.ret_kind, br1.ret_ty, br1.ret_iv, br1.ret_bv, br1.ret_sv);
         }
       } else if has_else {
+        let base_len: i32 = locals1.len();
         let br2: ConstExecStmtsResult = const_exec_stmts(ctx, w, items, sigs1, states1, cur_mod, imps, exprs, file, els.stmts, locals1, loop_depth);
         if !br2.ok { return br2; }
         sigs1 = br2.sigs;
         states1 = br2.states;
+        locals1 = const_locals_prefix(br2.locals, base_len);
         if br2.flow != const_flow_none() {
           return const_exec_ctrl(sigs1, states1, locals1, br2.flow, br2.ret_kind, br2.ret_ty, br2.ret_iv, br2.ret_bv, br2.ret_sv);
         }
@@ -622,10 +729,12 @@ fn const_exec_stmts(
         states1 = crw.states;
         if !crw.bv { break; }
 
+        let base_len: i32 = locals1.len();
         let wr: ConstExecStmtsResult = const_exec_stmts(ctx, w, items, sigs1, states1, cur_mod, imps, exprs, file, body.stmts, locals1, loop_depth + 1);
         if !wr.ok { return wr; }
         sigs1 = wr.sigs;
         states1 = wr.states;
+        locals1 = const_locals_prefix(wr.locals, base_len);
         if wr.flow == const_flow_return() {
           return const_exec_ctrl(sigs1, states1, locals1, wr.flow, wr.ret_kind, wr.ret_ty, wr.ret_iv, wr.ret_bv, wr.ret_sv);
         }
@@ -931,14 +1040,21 @@ fn const_payload_field_from_eval(v: EvalConstExprResult) -> ConstToPayloadFieldR
     v.kind == const_kind_bool() ||
     v.kind == const_kind_str() ||
     v.kind == const_kind_float() ||
-    v.kind == const_kind_enum();
+    v.kind == const_kind_enum() ||
+    v.kind == const_kind_struct();
   if !is_ok_kind {
-    return ConstToPayloadFieldResult { ok: false, err: "const enum payload must be const value", f: ConstEnumPayloadField { kind: 0, ty: -1, iv: 0, bv: false, sv: "" } };
+    return ConstToPayloadFieldResult { ok: false, err: "const payload must be const value", f: ConstEnumPayloadField { kind: 0, ty: -1, iv: 0, bv: false, sv: "" } };
   }
   if v.kind == const_kind_enum() {
     let dec: ConstEnumPayloadDecode = const_enum_unpack(v.sv);
     if !dec.ok {
       return ConstToPayloadFieldResult { ok: false, err: "bad const enum payload encoding", f: ConstEnumPayloadField { kind: 0, ty: -1, iv: 0, bv: false, sv: "" } };
+    }
+  }
+  if v.kind == const_kind_struct() {
+    let dec2: ConstStructDecode = const_struct_unpack(v.sv);
+    if !dec2.ok {
+      return ConstToPayloadFieldResult { ok: false, err: "bad const struct encoding", f: ConstEnumPayloadField { kind: 0, ty: -1, iv: 0, bv: false, sv: "" } };
     }
   }
   return ConstToPayloadFieldResult {
@@ -1053,6 +1169,90 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
     return eval_const_expr_in_mod_locals(ctx, w, items, sr.sigs, sr.states, cur_mod, imps, exprs, file, b.tail, expected, sr.locals);
   }
 
+  if match n { ast.ExprNode.StructLit(_ty_expr, _fields) => true, _ => false } {
+    let ty_expr: i32 = match n { ast.ExprNode.StructLit(t, _fields) => t, _ => -1 };
+    let fields: Vec[ast.StructLitField] = match n { ast.ExprNode.StructLit(_t, fs) => fs, _ => Vec() };
+
+    let tpr: ExprTypePathResult = expr_type_path(exprs, ty_expr);
+    if !tpr.ok {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const struct literal type must be a type path"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    let tn: ast.TypeName = ast.TypeName { parts: tpr.parts, args: tpr.targs };
+    let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), tn);
+    if !tr.ok {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const struct literal type resolve failed"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    let sty: i32 = tr.idx;
+    if !is_struct_ty(ctx, sty) {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const struct literal expects struct type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    if expected != -1 && !assignable_to(ctx, expected, sty) {
+      return EvalConstExprResult { ok: false, err: type_error(file, "const struct literal type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+
+    let st: ir.Ty = ir.ty_pool_get(ctx.pool, sty);
+    let fs: FindStructResult = find_struct(ctx, ty_mod(st), ty_name(st));
+    if !fs.found {
+      return EvalConstExprResult { ok: false, err: type_error(file, "unknown struct type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    if !vis_allows(fs.sig.vis, fs.sig.mod_path, cur_mod) {
+      return EvalConstExprResult { ok: false, err: type_error(file, "type is private"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+    if fields.len() != fs.sig.fields.len() {
+      return EvalConstExprResult { ok: false, err: type_error(file, "struct literal field count mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    }
+
+    let mut sigs2: Vec[ConstSig] = sigs0;
+    let mut states2: Vec[i32] = states0;
+    let mut payload: Vec[ConstEnumPayloadField] = Vec();
+    let mut i: i32 = 0;
+    while i < fs.sig.fields.len() {
+      let sf: StructFieldSig = fs.sig.fields.get(i);
+      if !vis_allows(sf.vis, fs.sig.mod_path, cur_mod) {
+        return EvalConstExprResult { ok: false, err: type_error(file, "field is private"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
+      }
+
+      let mut hit: i32 = 0;
+      let mut eid: i32 = -1;
+      let mut fi: i32 = 0;
+      while fi < fields.len() {
+        let f: ast.StructLitField = fields.get(fi);
+        if f.name == sf.name {
+          hit = hit + 1;
+          eid = f.expr;
+        }
+        fi = fi + 1;
+      }
+      if hit == 0 {
+        return EvalConstExprResult { ok: false, err: type_error(file, "missing field in const struct literal: ".concat(sf.name)), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
+      }
+      if hit > 1 {
+        return EvalConstExprResult { ok: false, err: type_error(file, "duplicate field in const struct literal: ".concat(sf.name)), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
+      }
+
+      let vr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs2, states2, cur_mod, imps, exprs, file, eid, sf.ty, locals);
+      if !vr.ok { return vr; }
+      sigs2 = vr.sigs;
+      states2 = vr.states;
+      if !assignable_to(ctx, sf.ty, vr.ty) {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const struct literal field type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
+      }
+
+      let fr: ConstToPayloadFieldResult = const_payload_field_from_eval(vr);
+      if !fr.ok {
+        return EvalConstExprResult { ok: false, err: type_error(file, fr.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
+      }
+      payload.push(fr.f);
+      i = i + 1;
+    }
+
+    return EvalConstExprResult {
+      ok: true, err: TcError.None,
+      kind: const_kind_struct(), ty: sty, iv: 0, bv: false, sv: const_struct_pack(payload),
+      sigs: sigs2, states: states2,
+    };
+  }
+
   // enum variant shorthand: `.None` (unit) / `.Some(...)` (payload)
   // expected enum type is required.
   if match n { ast.ExprNode.DotIdent(_name) => true, _ => false } {
@@ -1161,6 +1361,42 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
   if match n { ast.ExprNode.Member(_r, _name) => true, _ => false } {
     let recv: i32 = match n { ast.ExprNode.Member(r, _name) => r, _ => -1 };
     let mname: String = match n { ast.ExprNode.Member(_r, x) => x, _ => "" };
+
+    // Value field access first: `v.field` where `v` is a const struct value.
+    let vr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, recv, -1, locals);
+    if vr.ok && vr.kind == const_kind_struct() && is_struct_ty(ctx, vr.ty) {
+      let st: ir.Ty = ir.ty_pool_get(ctx.pool, vr.ty);
+      let fs: FindStructResult = find_struct(ctx, ty_mod(st), ty_name(st));
+      if !fs.found {
+        return EvalConstExprResult { ok: false, err: type_error(file, "unknown struct type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: vr.sigs, states: vr.states };
+      }
+      if !vis_allows(fs.sig.vis, fs.sig.mod_path, cur_mod) {
+        return EvalConstExprResult { ok: false, err: type_error(file, "type is private"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: vr.sigs, states: vr.states };
+      }
+
+      let decs: ConstStructDecode = const_struct_unpack(vr.sv);
+      if !decs.ok || decs.fields.len() != fs.sig.fields.len() {
+        return EvalConstExprResult { ok: false, err: type_error(file, "bad const struct encoding"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: vr.sigs, states: vr.states };
+      }
+
+      let mut fi: i32 = 0;
+      while fi < fs.sig.fields.len() {
+        let sf: StructFieldSig = fs.sig.fields.get(fi);
+        if sf.name == mname {
+          if !vis_allows(sf.vis, fs.sig.mod_path, cur_mod) {
+            return EvalConstExprResult { ok: false, err: type_error(file, "field is private"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: vr.sigs, states: vr.states };
+          }
+          let out: EvalConstExprResult = const_payload_field_eval(vr, decs.fields.get(fi));
+          if expected != -1 && !assignable_to(ctx, expected, out.ty) {
+            return EvalConstExprResult { ok: false, err: type_error(file, "const member type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: vr.sigs, states: vr.states };
+          }
+          return out;
+        }
+        fi = fi + 1;
+      }
+      return EvalConstExprResult { ok: false, err: type_error(file, "unknown field"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: vr.sigs, states: vr.states };
+    }
+
     let pr: ExprPartsResult = expr_parts_member(exprs, recv, mname);
     if !pr.ok { return EvalConstExprResult { ok: false, err: type_error(file, "unsupported const member path"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     let parts: Vec[String] = pr.parts;
@@ -1550,8 +1786,9 @@ fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig]
     ty == ctx.ty_f32 ||
     ty == ctx.ty_f64 ||
     is_enum_ty(ctx, ty) ||
+    is_struct_ty(ctx, ty) ||
     is_int_scalar_kind(int_kind(ctx, ty));
-  if !ok_v0 { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "const type must be primitive/enum in v0"), sigs: sigs, states: states }; }
+  if !ok_v0 { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "const type must be primitive/enum/struct in v0"), sigs: sigs, states: states }; }
 
   // Evaluate init expression.
   let ev: EvalConstExprResult = eval_const_expr_in_mod(ctx, w, items, sigs, states, it.mod_path, imps, m.prog.exprs, it.decl.file, it.decl.init, ty);

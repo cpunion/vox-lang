@@ -445,18 +445,33 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 				out.WriteString(cFnName("main"))
 				out.WriteString("();\n")
 				out.WriteString("  return 0;\n")
-			case ir.TI32:
+			case ir.TBool:
+				out.WriteString("  bool rc = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  return rc ? 1 : 0;\n")
+			case ir.TI8, ir.TI16, ir.TI32:
 				out.WriteString("  int32_t rc = ")
 				out.WriteString(cFnName("main"))
 				out.WriteString("();\n")
 				out.WriteString("  return (int)rc;\n")
-			case ir.TISize:
+			case ir.TU8, ir.TU16, ir.TU32:
+				out.WriteString("  uint32_t rc = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  return (int)rc;\n")
+			case ir.TI64, ir.TISize:
 				out.WriteString("  int64_t rc = ")
 				out.WriteString(cFnName("main"))
 				out.WriteString("();\n")
 				out.WriteString("  return (int)rc;\n")
+			case ir.TU64, ir.TUSize:
+				out.WriteString("  uint64_t rc = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  return (int)rc;\n")
 			default:
-				return "", fmt.Errorf("unsupported main return type in tool driver (expected () or i32/isize)")
+				return "", fmt.Errorf("unsupported main return type in tool driver (expected ()/bool/<int>)")
 			}
 			out.WriteString("}\n")
 		default:

@@ -10,13 +10,27 @@ import (
 )
 
 func TestToolDriverMainIsQuietAndReturnsExitCode(t *testing.T) {
+	assertToolDriverExitCode(t, `fn main() -> i32 { return 7; }`, 7)
+}
+
+func TestToolDriverMainBoolExitCode(t *testing.T) {
+	assertToolDriverExitCode(t, `fn main() -> bool { return true; }`, 1)
+}
+
+func TestToolDriverMainU32ExitCode(t *testing.T) {
+	assertToolDriverExitCode(t, `fn main() -> u32 { return 9; }`, 9)
+}
+
+func assertToolDriverExitCode(t *testing.T, mainSrc string, wantCode int) {
+	t.Helper()
+
 	cc, err := exec.LookPath("cc")
 	if err != nil {
 		t.Skip("cc not found")
 	}
 
 	checked := parseAndCheckWithStdlib(t, []*source.File{
-		source.NewFile("main.vox", `fn main() -> i32 { return 7; }`),
+		source.NewFile("main.vox", mainSrc),
 	})
 	irp, err := irgen.Generate(checked)
 	if err != nil {
@@ -48,8 +62,8 @@ func TestToolDriverMainIsQuietAndReturnsExitCode(t *testing.T) {
 		t.Fatalf("expected no output, got %q", got)
 	}
 	if ee, ok := err.(*exec.ExitError); ok {
-		if ee.ExitCode() != 7 {
-			t.Fatalf("expected exit code 7, got %d", ee.ExitCode())
+		if ee.ExitCode() != wantCode {
+			t.Fatalf("expected exit code %d, got %d", wantCode, ee.ExitCode())
 		}
 		return
 	}

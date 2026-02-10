@@ -374,9 +374,14 @@ pub const NAME: String = "vox";
   - `/ %` 在除数为 `0` 时编译期报错。
   - 有符号整数在 `MIN / -1` 与 `MIN % -1` 时编译期报错（`division overflow`）。
   - `<< >>` 的移位位数必须在 `[0, bit_width(T)-1]`，否则编译期报错。
-- 浮点常量（`f32/f64`）在 v0 支持：字面量、常量引用、`-x`、`f32 <-> f64 as`、`+ - * /`、`< <= > >=`、`== !=`。
-- 浮点常量的 `/` 在除数为 `0.0`（或规范化后为 `0.0`）时报错：`const division by zero`。
-- 不支持在 const 初始化中调用普通函数、构造 struct；支持 enum 变体构造（含 payload），例如 `const X: E = .A(1)`。
+  - 浮点常量（`f32/f64`）在 v0 支持：字面量、常量引用、`-x`、`f32 <-> f64 as`、`+ - * /`、`< <= > >=`、`== !=`。
+  - 浮点常量的 `/` 在除数为 `0.0`（或规范化后为 `0.0`）时报错：`const division by zero`。
+- 不支持在 const 初始化中调用普通函数。
+- 支持在 const 初始化中构造 struct 与读取字段，例如：
+  - `const P0: P = P { x: 1, y: 2 }`
+  - `const X: i32 = P0.x`
+- 支持在 const block 中对 `let mut` 的 struct 局部执行字段赋值（`p.x = ...`）。
+- 支持 enum 变体构造（含 payload），例如 `const X: E = .A(1)`。
   - 也支持限定路径写法：`const X: E = E.A(1)`、`const X: dep.E = dep.E.A(1)`。
 
 可见性与导入（Stage0/Stage1）：
