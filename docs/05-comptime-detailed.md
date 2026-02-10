@@ -29,23 +29,34 @@ fn crc_table() -> [u32; 256] { ... }
 
 含义：要求该函数必须满足 comptime 约束；若包含不允许的操作（IO/随机/系统时间等）则直接报错。
 
-## 反射内建（草案）
+## 反射内建（Stage1 已实现子集）
 
-内建以 `@name(...)` 形式出现（名字待最终确定）：
+当前已实现：
 
 ```vox
-@size_of(T: type) -> usize
-@align_of(T: type) -> usize
-@type_name(T: type) -> &'static str
+@size_of(T) -> usize
+@align_of(T) -> usize
+@type_name(T) -> String
+@is_integer(T) -> bool
+@is_float(T) -> bool
+@is_struct(T) -> bool
+@is_enum(T) -> bool
+```
 
-@is_integer(T: type) -> bool
-@is_float(T: type) -> bool
-@is_struct(T: type) -> bool
-@is_enum(T: type) -> bool
+语法与约束（当前）：
 
-@field_count(T: type) -> usize
-@field_name(T: type, index: usize) -> &'static str
-@field_type(T: type, index: usize) -> type
+- 调用形态固定为 `@name(Type)`（单一类型参数）。
+- 可用于普通表达式与 `const` 初始化（均会折叠为常量）。
+- `@size_of/@align_of` 当前按 Stage1 C 后端目标布局模型计算。
+- `@type_name` 返回编译器的类型显示字符串。
+- `@is_*` 返回类型分类判定（当前要求 `T` 为 concrete type）。
+
+暂未实现（保留方向）：
+
+```vox
+@field_count(T) -> usize
+@field_name(T, index: usize) -> String
+@field_type(T, index: usize) -> type
 ```
 
 ## comptime 报错

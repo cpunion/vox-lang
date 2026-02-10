@@ -496,6 +496,24 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 - 禁止用户代码定义以 `__` 开头的函数/类型名（保留给自举期 intrinsic 与标准库实现）。
 - 这些名字保留给标准库实现与自举工具链，用户代码应通过 `std/fs`、`std/process` 等封装接口使用。
 
+### 类型反射 intrinsic（Stage1 已实现）
+
+当前可用：
+
+- `@size_of(Type) -> usize`
+- `@align_of(Type) -> usize`
+- `@type_name(Type) -> String`
+- `@is_integer(Type) -> bool`
+- `@is_float(Type) -> bool`
+- `@is_struct(Type) -> bool`
+- `@is_enum(Type) -> bool`
+
+说明：
+
+- 语法是 `@name(Type)`，不是普通函数调用语法。
+- 这些 intrinsic 会在 IR 生成时折叠为常量；在 `const` 上下文同样可用。
+- `@size_of/@align_of` 采用 Stage1 当前 C 后端的目标布局模型。
+
 ## 导入语法（Stage0 最小子集）
 
 模块/包导入：

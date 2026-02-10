@@ -28,12 +28,8 @@ struct Buffer[T, const N: usize = 1024] {
 ## 2. 编译期约束（comptime where）
 
 ```vox
-fn process[T](x: T)
-where
-  comptime @size_of(T) <= 64
-{
-  // ...
-}
+// 计划方向（尚未实现）：
+// where comptime @size_of(T) <= 64
 ```
 
 ```vox
