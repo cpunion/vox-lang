@@ -413,21 +413,36 @@ func EmitC(p *ir.Program, opts EmitOptions) (string, error) {
 				out.WriteString(cFnName("main"))
 				out.WriteString("();\n")
 				out.WriteString("  printf(\"%s\\n\", v ? \"true\" : \"false\");\n")
-			case ir.TI32:
+			case ir.TI8, ir.TI16, ir.TI32:
 				out.WriteString("  int32_t v = ")
 				out.WriteString(cFnName("main"))
 				out.WriteString("();\n")
 				out.WriteString("  printf(\"%\" PRId32 \"\\n\", v);\n")
+			case ir.TU8, ir.TU16, ir.TU32:
+				out.WriteString("  uint32_t v = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  printf(\"%\" PRIu32 \"\\n\", v);\n")
 			case ir.TI64:
 				out.WriteString("  int64_t v = ")
 				out.WriteString(cFnName("main"))
 				out.WriteString("();\n")
 				out.WriteString("  printf(\"%\" PRId64 \"\\n\", v);\n")
+			case ir.TU64:
+				out.WriteString("  uint64_t v = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  printf(\"%\" PRIu64 \"\\n\", v);\n")
 			case ir.TISize:
 				out.WriteString("  int64_t v = ")
 				out.WriteString(cFnName("main"))
 				out.WriteString("();\n")
 				out.WriteString("  printf(\"%\" PRId64 \"\\n\", v);\n")
+			case ir.TUSize:
+				out.WriteString("  uint64_t v = ")
+				out.WriteString(cFnName("main"))
+				out.WriteString("();\n")
+				out.WriteString("  printf(\"%\" PRIu64 \"\\n\", v);\n")
 			case ir.TString:
 				out.WriteString("  const char* v = ")
 				out.WriteString(cFnName("main"))
