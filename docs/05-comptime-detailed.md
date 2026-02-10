@@ -42,6 +42,8 @@ fn crc_table() -> [u32; 256] { ... }
 @field_name(T, I) -> String
 @field_type(T, I) -> String
 @is_integer(T) -> bool
+@is_signed_int(T) -> bool
+@is_unsigned_int(T) -> bool
 @is_float(T) -> bool
 @is_struct(T) -> bool
 @is_enum(T) -> bool
