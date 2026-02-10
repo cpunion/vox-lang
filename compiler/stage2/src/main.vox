@@ -22,6 +22,8 @@ fn usage() -> () {
   print("\n");
   print("flags:\n");
   print("  --driver=user|tool  driver main mode for emitted binaries (default: user)\n");
+  print("  --filter=<text>     test-pkg: keep tests whose name contains text\n");
+  print("  --list              test-pkg: list selected tests and exit\n");
 }
 
 fn has_prefix(s: String, pre: String) -> bool {
@@ -151,6 +153,45 @@ fn discover_tests(paths: Vec[String]) -> Vec[String] {
     i = i + 1;
   }
   return out;
+}
+
+fn text_contains(s: String, part: String) -> bool {
+  if part.len() == 0 { return true; }
+  if s.len() < part.len() { return false; }
+  let mut i: i32 = 0;
+  while i + part.len() <= s.len() {
+    if s.slice(i, i + part.len()) == part { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn filter_tests_contains(tests: Vec[String], part: String) -> Vec[String] {
+  if part == "" { return tests; }
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < tests.len() {
+    let name: String = tests.get(i);
+    if text_contains(name, part) { out.push(name); }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn print_test_selection(discovered: i32, selected: i32, filter: String) -> () {
+  print("[select] discovered: ".concat(discovered.to_string()).concat(", selected: ").concat(selected.to_string()).concat("\n"));
+  if filter != "" {
+    print("[select] --filter: \"".concat(filter).concat("\"\n"));
+  }
+}
+
+fn print_test_list(tests: Vec[String]) -> () {
+  let mut i: i32 = 0;
+  while i < tests.len() {
+    print("[test] ".concat(tests.get(i)).concat("\n"));
+    i = i + 1;
+  }
+  print("[list] total: ".concat(tests.len().to_string()).concat("\n"));
 }
 
 fn load_deps_from_manifest() -> DepsResult {
@@ -509,6 +550,8 @@ fn main() -> i32 {
   }
   let cmd: String = args.get(0);
   let mut driver: cg.DriverMainKind = cg.DriverMainKind.User;
+  let mut test_filter: String = "";
+  let mut test_list_only: bool = false;
   let mut i: i32 = 1;
   while i < args.len() {
     let a: String = args.get(i);
@@ -519,6 +562,26 @@ fn main() -> i32 {
       usage();
       print("unknown driver: ".concat(v).concat("\n"));
       return 1;
+    }
+    if has_prefix(a, "--filter=") {
+      if cmd != "test-pkg" {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      test_filter = a.slice(9, a.len());
+      i = i + 1;
+      continue;
+    }
+    if a == "--list" {
+      if cmd != "test-pkg" {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      test_list_only = true;
+      i = i + 1;
+      continue;
     }
     if has_prefix(a, "-") {
       usage();
@@ -609,7 +672,13 @@ fn main() -> i32 {
     let all: Vec[String] = fs.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_test_sources(all);
 
-    let tests: Vec[String] = discover_tests(paths);
+    let discovered: Vec[String] = discover_tests(paths);
+    let tests: Vec[String] = filter_tests_contains(discovered, test_filter);
+    print_test_selection(discovered.len(), tests.len(), test_filter);
+    if test_list_only {
+      print_test_list(tests);
+      return 0;
+    }
     if tests.len() == 0 {
       print("[test] no tests found\n");
       return 0;

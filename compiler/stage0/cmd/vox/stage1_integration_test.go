@@ -1257,6 +1257,24 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 
 	stage2DirAbs, stage2BinB := stage2ToolBinBuiltByStage1(t)
 	outRel := filepath.Join("target", "debug", "vox_stage2.test")
+
+	// Ensure test selection flags are available in stage2 test-pkg.
+	cmdList := exec.Command(stage2BinB, "test-pkg", "--filter=std_sync_runtime_generic_api_smoke", "--list", outRel)
+	cmdList.Dir = stage2DirAbs
+	bl, err := cmdList.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg --list failed: %v\n%s", err, string(bl))
+	}
+	if !strings.Contains(string(bl), "[select] discovered:") {
+		t.Fatalf("expected stage2 selection summary, got:\n%s", string(bl))
+	}
+	if !strings.Contains(string(bl), "[test] test_std_sync_runtime_generic_api_smoke") {
+		t.Fatalf("expected filtered test in list output, got:\n%s", string(bl))
+	}
+	if strings.Contains(string(bl), "[test] test_std_testing_smoke") {
+		t.Fatalf("expected filter to exclude unrelated tests, got:\n%s", string(bl))
+	}
+
 	cmd := exec.Command(stage2BinB, "test-pkg", outRel)
 	cmd.Dir = stage2DirAbs
 	b, err := cmd.CombinedOutput()
