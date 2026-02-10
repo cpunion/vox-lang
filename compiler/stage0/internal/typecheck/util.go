@@ -148,7 +148,9 @@ func isIntLikeType(t Type) bool {
 	return isIntType(t)
 }
 
-func isSignedIntType(t Type) bool { return t.K == TyI8 || t.K == TyI16 || t.K == TyI32 || t.K == TyI64 || t.K == TyISize }
+func isSignedIntType(t Type) bool {
+	return t.K == TyI8 || t.K == TyI16 || t.K == TyI32 || t.K == TyI64 || t.K == TyISize
+}
 
 func isUnsignedIntType(t Type) bool {
 	return t.K == TyU8 || t.K == TyU16 || t.K == TyU32 || t.K == TyU64 || t.K == TyUSize

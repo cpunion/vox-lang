@@ -1,5 +1,8 @@
-.PHONY: test test-go test-stage1 test-stage1-c test-stage1-interp test-examples \
+.PHONY: fmt test test-go test-stage1 test-stage1-c test-stage1-interp test-examples \
 	test-examples-c test-examples-interp test-stage1-toolchain test-selfhost
+
+fmt:
+	cd compiler/stage0 && gofmt -w $$(find . -name '*.go' -type f)
 
 # Run all tests (stage0 Go unit tests + stage1 Vox tests via stage0 + example package tests).
 test: test-go test-stage1 test-examples
