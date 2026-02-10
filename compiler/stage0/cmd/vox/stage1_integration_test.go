@@ -1285,7 +1285,17 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 		t.Fatalf("expected run pattern to select std testing smoke, got:\n%s", string(brun))
 	}
 
-	cmdJSON := exec.Command(stage2BinB, "test-pkg", "--run=*std_sync_runtime_generic_api_smoke", "--list", "--json", outRel)
+	cmdJobs := exec.Command(stage2BinB, "test-pkg", "--jobs=2", "--run=*std_sync_runtime_generic_api_smoke", "--list", outRel)
+	cmdJobs.Dir = stage2DirAbs
+	bjobs, err := cmdJobs.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg --jobs failed: %v\n%s", err, string(bjobs))
+	}
+	if !strings.Contains(string(bjobs), "[select] --jobs: 2") {
+		t.Fatalf("expected jobs selection in text output, got:\n%s", string(bjobs))
+	}
+
+	cmdJSON := exec.Command(stage2BinB, "test-pkg", "--jobs=2", "--run=*std_sync_runtime_generic_api_smoke", "--list", "--json", outRel)
 	cmdJSON.Dir = stage2DirAbs
 	bj, err := cmdJSON.CombinedOutput()
 	if err != nil {
@@ -1296,6 +1306,9 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	}
 	if !strings.Contains(string(bj), "\"selected_tests\":[\"test_std_sync_runtime_generic_api_smoke\"]") {
 		t.Fatalf("expected selected test in json output, got:\n%s", string(bj))
+	}
+	if !strings.Contains(string(bj), "\"jobs\":2") {
+		t.Fatalf("expected jobs in selection json output, got:\n%s", string(bj))
 	}
 
 	cmdJSONRun := exec.Command(stage2BinB, "test-pkg", "--run=*std_sync_runtime_generic_api_smoke", "--json", outRel)

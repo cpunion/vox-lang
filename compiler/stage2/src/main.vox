@@ -25,6 +25,7 @@ fn usage() -> () {
   print("  --driver=user|tool  driver main mode for emitted binaries (default: user)\n");
   print("  --run=<glob>        test-pkg: run tests by glob on qualified/short name (*, ?)\n");
   print("  --filter=<text>     test-pkg: keep tests whose name contains text\n");
+  print("  --jobs=N, -j N      test-pkg: module-level parallelism; module-internal remains serial\n");
   print("  --list              test-pkg: list selected tests and exit\n");
   print("  --rerun-failed      test-pkg: run only previously failed tests\n");
   print("  --json              test-pkg: print JSON report\n");
@@ -240,8 +241,34 @@ fn filter_tests_run_pattern(tests: Vec[String], pat: String) -> Vec[String] {
   return out;
 }
 
-fn print_test_selection(discovered: i32, selected: i32, run_pat: String, filter: String, rerun_failed_count: i32) -> () {
+struct ParseI32Result { ok: bool, v: i32 }
+
+fn parse_i32_decimal(s0: String) -> ParseI32Result {
+  let s: String = trim_space(s0);
+  if s.len() == 0 { return ParseI32Result { ok: false, v: 0 }; }
+  let mut i: i32 = 0;
+  let mut neg: bool = false;
+  if s.byte_at(0) == 45 { // '-'
+    neg = true;
+    i = 1;
+  }
+  if i >= s.len() { return ParseI32Result { ok: false, v: 0 }; }
+  let mut v: i32 = 0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    if ch < 48 || ch > 57 { return ParseI32Result { ok: false, v: 0 }; }
+    v = v * 10 + (ch - 48);
+    i = i + 1;
+  }
+  if neg { v = 0 - v; }
+  return ParseI32Result { ok: true, v: v };
+}
+
+fn print_test_selection(discovered: i32, selected: i32, run_pat: String, filter: String, jobs: i32, rerun_failed_count: i32) -> () {
   print("[select] discovered: ".concat(discovered.to_string()).concat(", selected: ").concat(selected.to_string()).concat("\n"));
+  if jobs > 0 {
+    print("[select] --jobs: ".concat(jobs.to_string()).concat("\n"));
+  }
   if run_pat != "" {
     print("[select] --run: \"".concat(run_pat).concat("\"\n"));
   }
@@ -484,6 +511,127 @@ fn print_slowest(xs: Vec[NamedDuration]) -> () {
   }
 }
 
+struct ModuleQueue {
+  module: String,
+  tests: Vec[String],
+  next: i32,
+}
+
+struct RunningJob {
+  module_idx: i32,
+  name: String,
+  rc_file: String,
+  log_file: String,
+  start_ns: i64,
+}
+
+fn find_module_queue_idx(qs: Vec[ModuleQueue], module: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < qs.len() {
+    if qs.get(i).module == module { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn build_module_queues(tests: Vec[String]) -> Vec[ModuleQueue] {
+  let mut out: Vec[ModuleQueue] = Vec();
+  let mut i: i32 = 0;
+  while i < tests.len() {
+    let name: String = tests.get(i);
+    let module: String = test_module_name(name);
+    let qi: i32 = find_module_queue_idx(out, module);
+    if qi < 0 {
+      let mut ts: Vec[String] = Vec();
+      ts.push(name);
+      out.push(ModuleQueue { module: module, tests: ts, next: 0 });
+    } else {
+      let q0: ModuleQueue = out.get(qi);
+      let mut ts1: Vec[String] = q0.tests;
+      ts1.push(name);
+      let q1: ModuleQueue = ModuleQueue { module: q0.module, tests: ts1, next: q0.next };
+      let mut out2: Vec[ModuleQueue] = Vec();
+      let mut j: i32 = 0;
+      while j < out.len() {
+        if j == qi { out2.push(q1); } else { out2.push(out.get(j)); }
+        j = j + 1;
+      }
+      out = out2;
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn has_running_module(rs: Vec[RunningJob], module_idx: i32) -> bool {
+  let mut i: i32 = 0;
+  while i < rs.len() {
+    if rs.get(i).module_idx == module_idx { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn set_module_queue_next(qs: Vec[ModuleQueue], idx: i32, next: i32) -> Vec[ModuleQueue] {
+  let mut out: Vec[ModuleQueue] = Vec();
+  let mut i: i32 = 0;
+  while i < qs.len() {
+    let q: ModuleQueue = qs.get(i);
+    if i == idx {
+      out.push(ModuleQueue { module: q.module, tests: q.tests, next: next });
+    } else {
+      out.push(q);
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn has_pending_queues(qs: Vec[ModuleQueue]) -> bool {
+  let mut i: i32 = 0;
+  while i < qs.len() {
+    let q: ModuleQueue = qs.get(i);
+    if q.next < q.tests.len() { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn pick_runnable_queue_idx(qs: Vec[ModuleQueue], rs: Vec[RunningJob]) -> i32 {
+  let mut i: i32 = 0;
+  while i < qs.len() {
+    let q: ModuleQueue = qs.get(i);
+    if q.next < q.tests.len() && !has_running_module(rs, i) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test_name: String) -> RunningJob {
+  let tag: String = module_idx.to_string().concat("_").concat(seq.to_string());
+  let rc_file: String = path_join(run_dir, "job_".concat(tag).concat(".rc"));
+  let log_file: String = path_join(run_dir, "job_".concat(tag).concat(".log"));
+  // Keep command shell-portable: `&&`/`||` works in both sh/cmd.
+  let run_cmd: String =
+    bin.concat(" ").concat(test_name)
+      .concat(" > ").concat(log_file).concat(" 2>&1")
+      .concat(" && echo 0 > ").concat(rc_file)
+      .concat(" || echo 1 > ").concat(rc_file);
+  let bg_cmd: String = "( ".concat(run_cmd).concat(" ) &");
+  let _rc: i32 = proc.exec(bg_cmd);
+  return RunningJob {
+    module_idx: module_idx,
+    name: test_name,
+    rc_file: rc_file,
+    log_file: log_file,
+    start_ns: tm.now_ns(),
+  };
+}
+
+fn parse_exit_code_file(s0: String) -> ParseI32Result {
+  return parse_i32_decimal(s0);
+}
+
 fn json_quote(s: String) -> String {
   let mut out: String = "\"";
   let mut i: i32 = 0;
@@ -587,6 +735,7 @@ fn print_json_report(
   selected: i32,
   run_pat: String,
   filter: String,
+  jobs: i32,
   rerun_failed: bool,
   rerun_failed_count: i32,
   list_only: bool,
@@ -605,6 +754,7 @@ fn print_json_report(
   out = out.concat("\"selection\":{");
   out = out.concat("\"discovered\":").concat(discovered.to_string());
   out = out.concat(",\"selected\":").concat(selected.to_string());
+  if jobs > 0 { out = out.concat(",\"jobs\":").concat(jobs.to_string()); }
   if run_pat != "" { out = out.concat(",\"run\":").concat(json_quote(run_pat)); }
   if filter != "" { out = out.concat(",\"filter\":").concat(json_quote(filter)); }
   if rerun_failed {
@@ -1096,6 +1246,7 @@ fn main() -> i32 {
   let mut driver: cg.DriverMainKind = cg.DriverMainKind.User;
   let mut test_run_pat: String = "";
   let mut test_filter: String = "";
+  let mut test_jobs: i32 = 1;
   let mut test_list_only: bool = false;
   let mut test_rerun_failed: bool = false;
   let mut test_json: bool = false;
@@ -1117,6 +1268,43 @@ fn main() -> i32 {
         return 1;
       }
       test_run_pat = a.slice(6, a.len());
+      i = i + 1;
+      continue;
+    }
+    if a == "-j" || a == "--jobs" {
+      if cmd != "test-pkg" {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      if i + 1 >= args.len() {
+        usage();
+        print("missing value for --jobs\n");
+        return 1;
+      }
+      let pj: ParseI32Result = parse_i32_decimal(args.get(i + 1));
+      if !pj.ok || pj.v <= 0 {
+        usage();
+        print("invalid --jobs value: ".concat(args.get(i + 1)).concat("\n"));
+        return 1;
+      }
+      test_jobs = pj.v;
+      i = i + 2;
+      continue;
+    }
+    if has_prefix(a, "--jobs=") {
+      if cmd != "test-pkg" {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      let pj: ParseI32Result = parse_i32_decimal(a.slice(7, a.len()));
+      if !pj.ok || pj.v <= 0 {
+        usage();
+        print("invalid --jobs value: ".concat(a.slice(7, a.len())).concat("\n"));
+        return 1;
+      }
+      test_jobs = pj.v;
       i = i + 1;
       continue;
     }
@@ -1253,7 +1441,7 @@ fn main() -> i32 {
     let prev_failed: Vec[String] = if test_rerun_failed { read_failed_tests() } else { Vec() };
     if test_rerun_failed && prev_failed.len() == 0 {
       if test_json {
-        print_json_report(discovered.len(), 0, test_run_pat, test_filter, true, 0, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", 0, 0, 0);
+        print_json_report(discovered.len(), 0, test_run_pat, test_filter, test_jobs, true, 0, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", 0, 0, 0);
       } else {
         print("[test] no previous failed tests\n");
       }
@@ -1263,11 +1451,11 @@ fn main() -> i32 {
     let by_run: Vec[String] = filter_tests_run_pattern(base, test_run_pat);
     let tests: Vec[String] = filter_tests_contains(by_run, test_filter);
     if !test_json {
-      print_test_selection(discovered.len(), tests.len(), test_run_pat, test_filter, if test_rerun_failed { prev_failed.len() } else { -1 });
+      print_test_selection(discovered.len(), tests.len(), test_run_pat, test_filter, test_jobs, if test_rerun_failed { prev_failed.len() } else { -1 });
     }
     if test_list_only {
       if test_json {
-        print_json_report(discovered.len(), tests.len(), test_run_pat, test_filter, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, true, tests, Vec(), Vec(), Vec(), Vec(), Vec(), "", 0, 0, 0);
+        print_json_report(discovered.len(), tests.len(), test_run_pat, test_filter, test_jobs, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, true, tests, Vec(), Vec(), Vec(), Vec(), Vec(), "", 0, 0, 0);
       } else {
         print_test_list(tests);
       }
@@ -1275,7 +1463,7 @@ fn main() -> i32 {
     }
     if tests.len() == 0 {
       if test_json {
-        print_json_report(discovered.len(), 0, test_run_pat, test_filter, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", 0, 0, 0);
+        print_json_report(discovered.len(), 0, test_run_pat, test_filter, test_jobs, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", 0, 0, 0);
       } else {
         print("[test] no tests found\n");
       }
@@ -1317,7 +1505,7 @@ fn main() -> i32 {
       return 1;
     }
 
-    // Run each test in a separate process, stage0-like.
+    // Run tests by module-level parallel queues, keeping module-internal order.
     let run_start_ns: i64 = tm.now_ns();
     let mut passed: i32 = 0;
     let mut failed: i32 = 0;
@@ -1325,35 +1513,77 @@ fn main() -> i32 {
     let mut module_summaries: Vec[ModuleSummary] = Vec();
     let mut module_details: Vec[ModuleDetail] = Vec();
     let mut results: Vec[TestRunResult] = Vec();
-    let mut ti: i32 = 0;
-    while ti < tests.len() {
-      let name: String = tests.get(ti);
-      let t0: i64 = tm.now_ns();
-      let rc: i32 = proc.exec(bin.concat(" ").concat(name));
-      let t1: i64 = tm.now_ns();
-      let dur_ns: i64 = dur_nonneg_ns(t0, t1);
-      if rc != 0 {
-        failed = failed + 1;
-        failed_names.push(name);
-        module_summaries = update_module_summary(module_summaries, name, false, dur_ns);
-        module_details = update_module_detail(module_details, name, false, dur_ns);
-        results.push(TestRunResult { name: name, module: test_module_name(name), ok: false, dur_ns: dur_ns });
-        if !test_json { print("[FAIL] ".concat(name).concat(" (").concat(format_duration_ns(dur_ns)).concat(")\n")); }
-      } else {
-        passed = passed + 1;
-        module_summaries = update_module_summary(module_summaries, name, true, dur_ns);
-        module_details = update_module_detail(module_details, name, true, dur_ns);
-        results.push(TestRunResult { name: name, module: test_module_name(name), ok: true, dur_ns: dur_ns });
-        if !test_json { print("[OK] ".concat(name).concat(" (").concat(format_duration_ns(dur_ns)).concat(")\n")); }
+    let mut queues: Vec[ModuleQueue] = build_module_queues(tests);
+    let mut running: Vec[RunningJob] = Vec();
+    let mut launch_seq: i32 = 0;
+    let run_dir: String = path_join("target/debug", ".vox_test_jobs_".concat(run_start_ns.to_string()));
+    fs.mkdir_p(run_dir);
+    while passed + failed < tests.len() {
+      while running.len() < test_jobs {
+        let qi: i32 = pick_runnable_queue_idx(queues, running);
+        if qi < 0 { break; }
+        let q: ModuleQueue = queues.get(qi);
+        let name: String = q.tests.get(q.next);
+        queues = set_module_queue_next(queues, qi, q.next + 1);
+        let job: RunningJob = launch_test_job(bin, run_dir, qi, launch_seq, name);
+        running.push(job);
+        launch_seq = launch_seq + 1;
       }
-      ti = ti + 1;
+
+      if running.len() == 0 && !has_pending_queues(queues) { break; }
+
+      let mut next_running: Vec[RunningJob] = Vec();
+      let mut completed: bool = false;
+      let mut i: i32 = 0;
+      while i < running.len() {
+        let job: RunningJob = running.get(i);
+        if fs.exists(job.rc_file) {
+          let rc_text: String = fs.read_to_string(job.rc_file);
+          let prc: ParseI32Result = parse_exit_code_file(rc_text);
+          if !prc.ok {
+            // File may exist before shell write is fully visible; poll again.
+            next_running.push(job);
+            i = i + 1;
+            continue;
+          }
+          completed = true;
+          let rc: i32 = prc.v;
+          let dur_ns: i64 = dur_nonneg_ns(job.start_ns, tm.now_ns());
+          if rc != 0 {
+            failed = failed + 1;
+            failed_names.push(job.name);
+            module_summaries = update_module_summary(module_summaries, job.name, false, dur_ns);
+            module_details = update_module_detail(module_details, job.name, false, dur_ns);
+            results.push(TestRunResult { name: job.name, module: test_module_name(job.name), ok: false, dur_ns: dur_ns });
+            if !test_json { print("[FAIL] ".concat(job.name).concat(" (").concat(format_duration_ns(dur_ns)).concat(")\n")); }
+          } else {
+            passed = passed + 1;
+            module_summaries = update_module_summary(module_summaries, job.name, true, dur_ns);
+            module_details = update_module_detail(module_details, job.name, true, dur_ns);
+            results.push(TestRunResult { name: job.name, module: test_module_name(job.name), ok: true, dur_ns: dur_ns });
+            if !test_json { print("[OK] ".concat(job.name).concat(" (").concat(format_duration_ns(dur_ns)).concat(")\n")); }
+          }
+        } else {
+          next_running.push(job);
+        }
+        i = i + 1;
+      }
+      running = next_running;
+
+      if !completed {
+        // Keep polling overhead bounded without relying on shell `sleep`.
+        let spin0: i64 = tm.now_ns();
+        while dur_nonneg_ns(spin0, tm.now_ns()) < 2000000 {
+          // ~2ms spin wait
+        }
+      }
     }
     let total_ns: i64 = dur_nonneg_ns(run_start_ns, tm.now_ns());
     let slowest: Vec[NamedDuration] = build_slowest(results);
     write_failed_tests(failed_names);
     let hint: String = if failed != 0 { "vox_stage1 test-pkg --rerun-failed ".concat(out) } else { "" };
     if test_json {
-      print_json_report(discovered.len(), tests.len(), test_run_pat, test_filter, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, tests, results, module_summaries, module_details, slowest, failed_names, hint, passed, failed, total_ns);
+      print_json_report(discovered.len(), tests.len(), test_run_pat, test_filter, test_jobs, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, tests, results, module_summaries, module_details, slowest, failed_names, hint, passed, failed, total_ns);
     } else {
       print_module_summaries(module_summaries);
       print_slowest(slowest);

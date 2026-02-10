@@ -111,7 +111,7 @@ make test
 - 仓库已增加 `compiler/stage2`（以 `compiler/stage1` 当前实现为基线复制）。
 - 自举门禁新增 `TestStage1BuildsStage2AndBuildsPackage`：验证 `stage1 -> stage2` 编译链路可用。
 - 自举门禁新增 `TestStage1BuildsStage2AndRunsStage2Tests`：验证 `stage2` 工具可运行 `test-pkg` 并通过其自身测试集。
-- `stage2 test-pkg` 当前支持最小选择参数：`--run=<glob>`、`--filter=<text>`、`--list`、`--rerun-failed` 与 `--json`（用于缩小迭代验证范围与机器可读报告）。
+- `stage2 test-pkg` 当前支持最小选择参数：`--run=<glob>`、`--filter=<text>`、`--jobs=N`（模块级并行，模块内串行）、`--list`、`--rerun-failed` 与 `--json`（用于缩小迭代验证范围与机器可读报告）。
 - `test-pkg` 当前文本输出包含：单测耗时、模块汇总耗时、slowest 列表与总耗时。
 - `--json` 当前输出 `selection/selected_tests/results/modules/module_details/slowest/failed_tests/summary`，并附带 `duration_us` 字段；失败时附带 `hint`。
 - `--rerun-failed` 缓存文件位于 `target/debug/.vox_last_failed_tests`，当前使用 JSON 元数据（兼容旧文本行格式读取）。
