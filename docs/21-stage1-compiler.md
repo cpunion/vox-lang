@@ -76,4 +76,4 @@ Stage0/Stage1 v0 的 `Vec[T]` 在 C 后端中被表示为一个 by-value 的小�
 
 1. Const 泛型默认值：已支持函数/trait 方法声明默认 const 参数，并支持调用端省略/覆盖。
 2. 包管理：`vox.toml` 依赖项支持 `path` 与 `version` 字段解析；`build-pkg`/`test-pkg` 会生成 `vox.lock`。
-3. 类型反射 intrinsic：已支持 `@size_of/@align_of/@type/@type_name/@field_count/@field_name/@field_type` 以及 `@is_integer/@is_signed_int/@is_unsigned_int/@is_float/@is_struct/@is_enum`，并在 const 与 IR lowering 阶段常量折叠。
+3. 类型反射 intrinsic：已支持 `@size_of/@align_of/@type/@type_name/@field_count/@field_name/@field_type` 以及 `@is_integer/@is_signed_int/@is_unsigned_int/@is_float/@is_struct/@is_enum/@is_vec/@is_range`，并在 const 与 IR lowering 阶段常量折叠。

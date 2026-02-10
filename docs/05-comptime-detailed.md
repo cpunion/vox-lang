@@ -47,6 +47,8 @@ fn crc_table() -> [u32; 256] { ... }
 @is_float(T) -> bool
 @is_struct(T) -> bool
 @is_enum(T) -> bool
+@is_vec(T) -> bool
+@is_range(T) -> bool
 ```
 
 语法与约束（当前）：
