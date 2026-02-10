@@ -7,6 +7,7 @@ import (
 
 	"voxlang/internal/ast"
 	"voxlang/internal/names"
+	"voxlang/internal/stringlit"
 )
 
 func (c *checker) checkAll() {
@@ -394,7 +395,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 			msg := "compile_error triggered"
 			if sl, ok := e.Args[0].(*ast.StringLit); ok {
-				if u, err := strconv.Unquote(sl.Text); err == nil {
+				if u, err := stringlit.Decode(sl.Text); err == nil {
 					msg = u
 				}
 			}

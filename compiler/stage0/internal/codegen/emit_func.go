@@ -591,6 +591,283 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 			out.WriteString(");\n")
 			return nil
 		}
+		if i.Name == "__mutex_i32_new" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__mutex_i32_new expects 1 arg")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__mutex_i32_new must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_mutex_i32_new(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__mutex_i32_load" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__mutex_i32_load expects 1 arg")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__mutex_i32_load must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_mutex_i32_load(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__mutex_i32_store" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("__mutex_i32_store expects 2 args")
+			}
+			out.WriteString("  vox_builtin_mutex_i32_store(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__atomic_i32_new" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__atomic_i32_new expects 1 arg")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__atomic_i32_new must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_atomic_i32_new(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__atomic_i32_load" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__atomic_i32_load expects 1 arg")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__atomic_i32_load must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_atomic_i32_load(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__atomic_i32_store" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("__atomic_i32_store expects 2 args")
+			}
+			out.WriteString("  vox_builtin_atomic_i32_store(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__atomic_i32_fetch_add" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("__atomic_i32_fetch_add expects 2 args")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__atomic_i32_fetch_add must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_atomic_i32_fetch_add(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__atomic_i32_swap" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("__atomic_i32_swap expects 2 args")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__atomic_i32_swap must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_atomic_i32_swap(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__mutex_i64_new" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__mutex_i64_new expects 1 arg")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__mutex_i64_new must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_mutex_i64_new(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__mutex_i64_load" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__mutex_i64_load expects 1 arg")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__mutex_i64_load must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_mutex_i64_load(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__mutex_i64_store" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("__mutex_i64_store expects 2 args")
+			}
+			out.WriteString("  vox_builtin_mutex_i64_store(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__atomic_i64_new" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__atomic_i64_new expects 1 arg")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__atomic_i64_new must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_atomic_i64_new(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__atomic_i64_load" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__atomic_i64_load expects 1 arg")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__atomic_i64_load must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_atomic_i64_load(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__atomic_i64_store" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("__atomic_i64_store expects 2 args")
+			}
+			out.WriteString("  vox_builtin_atomic_i64_store(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__atomic_i64_fetch_add" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("__atomic_i64_fetch_add expects 2 args")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__atomic_i64_fetch_add must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_atomic_i64_fetch_add(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__atomic_i64_swap" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("__atomic_i64_swap expects 2 args")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__atomic_i64_swap must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_atomic_i64_swap(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__tcp_connect" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("__tcp_connect expects 2 args")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__tcp_connect must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_tcp_connect(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__tcp_send" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("__tcp_send expects 2 args")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__tcp_send must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_tcp_send(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__tcp_recv" {
+			if len(i.Args) != 2 {
+				return fmt.Errorf("__tcp_recv expects 2 args")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__tcp_recv must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_tcp_recv(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(", ")
+			out.WriteString(cValue(i.Args[1]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__tcp_close" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__tcp_close expects 1 arg")
+			}
+			out.WriteString("  vox_builtin_tcp_close(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
 		out.WriteString("  ")
 		if i.Ret.K != ir.TUnit {
 			out.WriteString(cTempName(i.Dst.ID))

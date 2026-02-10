@@ -355,6 +355,7 @@ func test(dir string, eng engine) error {
 }
 
 func testWithOptions(opts testOptions) error {
+	runStart := time.Now()
 	abs, err := filepath.Abs(opts.dir)
 	if err != nil {
 		return err
@@ -392,6 +393,7 @@ func testWithOptions(opts testOptions) error {
 	}
 	if len(testNames) == 0 {
 		fmt.Fprintln(os.Stdout, "[test] no tests found")
+		fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
 		if err := writeFailedTests(abs, nil); err != nil {
 			return err
 		}
@@ -403,6 +405,7 @@ func testWithOptions(opts testOptions) error {
 		if log != "" {
 			fmt.Fprint(os.Stdout, log)
 		}
+		fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
 		if werr := writeFailedTests(abs, failedNames); werr != nil {
 			return werr
 		}
@@ -439,7 +442,15 @@ func testWithOptions(opts testOptions) error {
 		passed++
 		fmt.Fprintf(os.Stdout, "[OK] %s (%s)\n", name, formatTestDuration(r.dur))
 	}
+	moduleSummaries, slowest := summarizeTestResults(testNames, results)
+	for _, ms := range moduleSummaries {
+		fmt.Fprintf(os.Stdout, "[module] %s: %d passed, %d failed (%s)\n", displayModuleName(ms.module), ms.passed, ms.failed, formatTestDuration(ms.dur))
+	}
+	for _, s := range slowest {
+		fmt.Fprintf(os.Stdout, "[slowest] %s (%s)\n", s.name, formatTestDuration(s.dur))
+	}
 	fmt.Fprintf(os.Stdout, "[test] %d passed, %d failed\n", passed, failed)
+	fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
 	if err := writeFailedTests(abs, failedNames); err != nil {
 		return err
 	}
@@ -452,6 +463,79 @@ func testWithOptions(opts testOptions) error {
 type testExecResult struct {
 	dur time.Duration
 	err error
+}
+
+type moduleTestSummary struct {
+	module string
+	passed int
+	failed int
+	dur    time.Duration
+}
+
+type namedTestDuration struct {
+	name string
+	dur  time.Duration
+}
+
+func moduleFromQualifiedTest(name string) string {
+	i := strings.LastIndex(name, "::")
+	if i < 0 {
+		return ""
+	}
+	return name[:i]
+}
+
+func displayModuleName(module string) string {
+	if module == "" {
+		return "(root)"
+	}
+	return module
+}
+
+func summarizeTestResults(testNames []string, results map[string]testExecResult) ([]moduleTestSummary, []namedTestDuration) {
+	modMap := map[string]moduleTestSummary{}
+	slowest := make([]namedTestDuration, 0, len(testNames))
+	for _, name := range testNames {
+		mod := moduleFromQualifiedTest(name)
+		sum, ok := modMap[mod]
+		if !ok {
+			sum = moduleTestSummary{module: mod}
+		}
+		r, rok := results[name]
+		if !rok || r.err != nil {
+			sum.failed++
+			if rok {
+				sum.dur += r.dur
+				slowest = append(slowest, namedTestDuration{name: name, dur: r.dur})
+			}
+		} else {
+			sum.passed++
+			sum.dur += r.dur
+			slowest = append(slowest, namedTestDuration{name: name, dur: r.dur})
+		}
+		modMap[mod] = sum
+	}
+
+	keys := make([]string, 0, len(modMap))
+	for k := range modMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	mods := make([]moduleTestSummary, 0, len(keys))
+	for _, k := range keys {
+		mods = append(mods, modMap[k])
+	}
+
+	sort.Slice(slowest, func(i, j int) bool {
+		if slowest[i].dur == slowest[j].dur {
+			return slowest[i].name < slowest[j].name
+		}
+		return slowest[i].dur > slowest[j].dur
+	})
+	if len(slowest) > 5 {
+		slowest = slowest[:5]
+	}
+	return mods, slowest
 }
 
 func runCompiledTestsByModule(bin string, groups []names.TestModuleGroup) map[string]testExecResult {
@@ -515,7 +599,10 @@ func formatTestDuration(d time.Duration) string {
 	if us < 1000 {
 		return fmt.Sprintf("%dus", us)
 	}
-	return fmt.Sprintf("%.2fms", float64(us)/1000.0)
+	if us < 1000*1000 {
+		return fmt.Sprintf("%.2fms", float64(us)/1000.0)
+	}
+	return fmt.Sprintf("%.2fs", float64(us)/1000.0/1000.0)
 }
 
 func compile(dir string) (string, error) {

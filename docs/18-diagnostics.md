@@ -4,7 +4,7 @@
 
 - 错误消息可用于定位：至少包含 `file:line:col`
 - 输出稳定：便于测试用例断言与回归
-- 实现成本可控：先支持 byte offset 到 `line/col` 的映射，不追求完整的源代码片段高亮
+- 实现成本可控：支持 byte offset 到 `line/rune-col` 的映射，不追求完整的源代码片段高亮
 
 ## 1. 基本格式
 
@@ -20,11 +20,11 @@
 - `line/col`：1-based
 - `col`：
   - Stage0：按 rune（Unicode code point）计数
-  - Stage1 v0：按 UTF-8 byte 计数（后续计划升级为 rune）
+  - Stage1：按 rune（Unicode code point）计数
 
 ## 2. 解析错误（parse/lex）
 
-Stage1 v0 的 lexer/parser 会产出 byte offset（`at`）。对外输出时应转换为 `line/col`：
+Stage1 的 lexer/parser 会产出 byte offset（`at`）。对外输出时应转换为 `line/col`（其中 `col` 为 rune 列）：
 
 ```text
 src/main.vox:2:1: parse error: unexpected token: expected fn, got else

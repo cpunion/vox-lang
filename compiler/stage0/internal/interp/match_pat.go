@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"voxlang/internal/ast"
+	"voxlang/internal/stringlit"
 	"voxlang/internal/typecheck"
 )
 
@@ -64,7 +65,7 @@ func (rt *Runtime) matchPatInto(p ast.Pattern, v Value, expected typecheck.Type,
 		}
 		s, ok := rt.strLitCache[p.Text]
 		if !ok {
-			parsed, err := strconv.Unquote(p.Text)
+			parsed, err := stringlit.Decode(p.Text)
 			if err != nil {
 				return false, fmt.Errorf("invalid string pattern")
 			}

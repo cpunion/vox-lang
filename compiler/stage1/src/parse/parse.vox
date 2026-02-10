@@ -4,6 +4,7 @@ import "lex" as lex
 pub enum ParseError {
   None,
   Lex(lex.LexError),
+  InvalidString(i32, String), // byte offset, reason
   UnexpectedToken(lex.TokenKind, lex.TokenKind, i32), // expected, got, byte offset
 }
 
@@ -11,6 +12,8 @@ pub fn parse_error_to_string(e: ParseError) -> String {
   return match e {
     ParseError.None => "none",
     ParseError.Lex(le) => "lex error: ".concat(lex.lex_error_to_string(le)),
+    ParseError.InvalidString(at, why) =>
+      "invalid string literal at ".concat(at.to_string()).concat(": ").concat(why),
     ParseError.UnexpectedToken(exp, got, at) =>
       "unexpected token at ".concat(at.to_string())
         .concat(": expected ").concat(lex.token_kind_name(exp))
@@ -33,6 +36,23 @@ fn build_line_starts(text: String) -> Vec[i32] {
   return out;
 }
 
+fn is_utf8_cont_byte(b: i32) -> bool {
+  return b >= 128 && b <= 191;
+}
+
+fn rune_col_from_line_start(text: String, line_start: i32, at: i32) -> i32 {
+  // 1-based rune column.
+  if at <= line_start { return 1; }
+  let mut col: i32 = 1;
+  let mut i: i32 = line_start;
+  while i < at {
+    let b: i32 = text.byte_at(i);
+    if !is_utf8_cont_byte(b) { col = col + 1; }
+    i = i + 1;
+  }
+  return col;
+}
+
 fn pos_to_line_col(text: String, line_starts: Vec[i32], at0: i32) -> LineCol {
   let mut at: i32 = at0;
   if at < 0 { at = 0; }
@@ -46,7 +66,7 @@ fn pos_to_line_col(text: String, line_starts: Vec[i32], at0: i32) -> LineCol {
     if line_starts.get(mid) <= at { lo = mid; } else { hi = mid; }
   }
   let line: i32 = lo + 1;
-  let col: i32 = (at - line_starts.get(lo)) + 1;
+  let col: i32 = rune_col_from_line_start(text, line_starts.get(lo), at);
   return LineCol { line: line, col: col };
 }
 
@@ -63,6 +83,7 @@ pub fn parse_error_to_string_with_source(file: String, text: String, e: ParseErr
   return match e {
     ParseError.None => file.concat(":1:1: parse error: none"),
     ParseError.UnexpectedToken(exp, got, at) => format_unexpected_token(file, text, exp, got, at),
+    ParseError.InvalidString(at, why) => format_invalid_string(file, text, at, why),
     ParseError.Lex(le) => format_lex_error(file, text, le),
   };
 }
@@ -92,6 +113,12 @@ fn format_lex_unterminated_string(file: String, text: String, at: i32) -> String
   let lc: LineCol = pos_to_line_col(text, build_line_starts(text), at);
   return file.concat(":").concat(lc.line.to_string()).concat(":").concat(lc.col.to_string())
     .concat(": lex error: unterminated string");
+}
+
+fn format_invalid_string(file: String, text: String, at: i32, why: String) -> String {
+  let lc: LineCol = pos_to_line_col(text, build_line_starts(text), at);
+  return file.concat(":").concat(lc.line.to_string()).concat(":").concat(lc.col.to_string())
+    .concat(": parse error: invalid string literal: ").concat(why);
 }
 
 pub struct ParseResult {
@@ -129,6 +156,8 @@ struct ParseTypeResult { p: Parser, ty: ast.TypeName }
 		struct ParseProgramResult { p: Parser, prog: ast.Program }
 	struct ParseImportResult { p: Parser, imp: ast.ImportDecl }
 	struct ParseStringResult { p: Parser, s: String, at: i32 }
+struct DecodeStringResult { ok: bool, text: String, err: String }
+struct LineIndentInfo { blank: bool, has_tab_indent: bool, indent: i32 }
 struct ParseImportNameResult { p: Parser, nm: ast.ImportName }
 struct ParseParamsResult { p: Parser, params: Vec[ast.Param] }
 struct ParseFieldResult { p: Parser, f: ast.FieldDecl }
@@ -372,16 +401,89 @@ fn add_expr(p: Parser, sp: ast.Span, node: ast.ExprNode) -> ParseExprResult {
   return ParseExprResult { p: q, id: r.id };
 }
 
-fn parse_string_inner(p: Parser) -> ParseStringResult {
-  let ar: AdvanceResult = expect(p, lex.TokenKind.Str);
-  let at: i32 = ar.tok.start;
-  let mut s: String = lexeme(ar.p, ar.tok); // includes quotes
-  let n: i32 = s.len();
-  if n >= 2 {
-    s = s.slice(1, n - 1);
+fn str_is_triple_quoted(lit: String) -> bool {
+  return lit.len() >= 6 && lit.slice(0, 3) == "\"\"\"" && lit.slice(lit.len() - 3, lit.len()) == "\"\"\"";
+}
+
+fn normalize_newlines(s0: String) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < s0.len() {
+    let b: i32 = s0.byte_at(i);
+    if b == 13 { // \r
+      if (i + 1) < s0.len() && s0.byte_at(i + 1) == 10 {
+        i = i + 2;
+      } else {
+        i = i + 1;
+      }
+      out = out.concat("\n");
+      continue;
+    }
+    out = out.concat(s0.slice(i, i + 1));
+    i = i + 1;
   }
-  // Unescape common sequences in string literals.
-  // Supported: \\ \" \n \r \t
+  return out;
+}
+
+fn split_lines_keep_empty(s: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut cur: String = "";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let b: i32 = s.byte_at(i);
+    if b == 10 {
+      out.push(cur);
+      cur = "";
+      i = i + 1;
+      continue;
+    }
+    cur = cur.concat(s.slice(i, i + 1));
+    i = i + 1;
+  }
+  out.push(cur);
+  return out;
+}
+
+fn join_lines(ls: Vec[String]) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < ls.len() {
+    if i > 0 { out = out.concat("\n"); }
+    out = out.concat(ls.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn trim_one_trailing_empty_line(ls: Vec[String]) -> Vec[String] {
+  if ls.len() == 0 { return ls; }
+  if ls.get(ls.len() - 1) != "" { return ls; }
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < (ls.len() - 1) {
+    out.push(ls.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn line_indent_info(line: String) -> LineIndentInfo {
+  let mut i: i32 = 0;
+  while i < line.len() {
+    let b: i32 = line.byte_at(i);
+    if b == 32 { // space
+      i = i + 1;
+      continue;
+    }
+    if b == 9 { // tab
+      return LineIndentInfo { blank: false, has_tab_indent: true, indent: i };
+    }
+    return LineIndentInfo { blank: false, has_tab_indent: false, indent: i };
+  }
+  return LineIndentInfo { blank: true, has_tab_indent: false, indent: 0 };
+}
+
+fn unescape_relaxed(s: String) -> DecodeStringResult {
   let mut out: String = "";
   let mut i: i32 = 0;
   while i < s.len() {
@@ -394,12 +496,11 @@ fn parse_string_inner(p: Parser) -> ParseStringResult {
         if nb == 116 { out = out.concat("\t"); i = i + 2; continue; } // t
         if nb == 34 { out = out.concat("\""); i = i + 2; continue; }  // "
         if nb == 92 { out = out.concat("\\"); i = i + 2; continue; }  // \
-        // Unknown escape: drop '\' and keep next char as-is.
+        // Backward-compatible: unknown escape drops '\' and keeps char.
         out = out.concat(s.slice(i + 1, i + 2));
         i = i + 2;
         continue;
       }
-      // trailing '\' -> keep it
       out = out.concat("\\");
       i = i + 1;
       continue;
@@ -407,8 +508,74 @@ fn parse_string_inner(p: Parser) -> ParseStringResult {
     out = out.concat(s.slice(i, i + 1));
     i = i + 1;
   }
-  s = out;
-  return ParseStringResult { p: ar.p, s: s, at: at };
+  return DecodeStringResult { ok: true, text: out, err: "" };
+}
+
+fn decode_string_lit(lit: String) -> DecodeStringResult {
+  if !str_is_triple_quoted(lit) {
+    let mut s0: String = lit;
+    let n0: i32 = s0.len();
+    if n0 >= 2 { s0 = s0.slice(1, n0 - 1); }
+    return unescape_relaxed(s0);
+  }
+
+  let mut body: String = lit.slice(3, lit.len() - 3);
+  body = normalize_newlines(body);
+  if body.len() > 0 && body.byte_at(0) == 10 {
+    body = body.slice(1, body.len());
+  }
+
+  let mut lines: Vec[String] = split_lines_keep_empty(body);
+  lines = trim_one_trailing_empty_line(lines);
+
+  let mut min_indent: i32 = -1;
+  let mut i: i32 = 0;
+  while i < lines.len() {
+    let inf: LineIndentInfo = line_indent_info(lines.get(i));
+    if inf.has_tab_indent {
+      return DecodeStringResult { ok: false, text: "", err: "tab indentation is not allowed in multiline string" };
+    }
+    if !inf.blank {
+      if min_indent == -1 || inf.indent < min_indent { min_indent = inf.indent; }
+    }
+    i = i + 1;
+  }
+  if min_indent < 0 {
+    return DecodeStringResult { ok: true, text: "", err: "" };
+  }
+
+  let mut norm: Vec[String] = Vec();
+  let mut j: i32 = 0;
+  while j < lines.len() {
+    let ln: String = lines.get(j);
+    let inf2: LineIndentInfo = line_indent_info(ln);
+    if inf2.has_tab_indent {
+      return DecodeStringResult { ok: false, text: "", err: "tab indentation is not allowed in multiline string" };
+    }
+    if inf2.blank {
+      norm.push("");
+    } else if ln.len() <= min_indent {
+      norm.push("");
+    } else {
+      norm.push(ln.slice(min_indent, ln.len()));
+    }
+    j = j + 1;
+  }
+
+  return unescape_relaxed(join_lines(norm));
+}
+
+fn parse_string_inner(p: Parser) -> ParseStringResult {
+  let ar: AdvanceResult = expect(p, lex.TokenKind.Str);
+  let at: i32 = ar.tok.start;
+  let d: DecodeStringResult = decode_string_lit(lexeme(ar.p, ar.tok));
+  if !d.ok {
+    let mut q: Parser = ar.p;
+    q.has_err = true;
+    q.err = ParseError.InvalidString(at, d.err);
+    return ParseStringResult { p: q, s: "", at: at };
+  }
+  return ParseStringResult { p: ar.p, s: d.text, at: at };
 }
 
 fn parse_import_name(p: Parser) -> ParseImportNameResult {

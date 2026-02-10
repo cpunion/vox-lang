@@ -7,6 +7,7 @@ import (
 	"voxlang/internal/diag"
 	"voxlang/internal/lexer"
 	"voxlang/internal/source"
+	"voxlang/internal/stringlit"
 )
 
 type Parser struct {
@@ -1629,8 +1630,9 @@ func joinSpan(a source.Span, b source.Span) source.Span {
 }
 
 func unquote(s string) string {
-	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-		return s[1 : len(s)-1]
+	u, err := stringlit.Decode(s)
+	if err == nil {
+		return u
 	}
 	return s
 }

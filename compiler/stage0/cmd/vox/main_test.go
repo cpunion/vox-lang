@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func containsString(xs []string, s string) bool {
@@ -138,5 +139,40 @@ func TestInterpTestRerunFailed(t *testing.T) {
 	}
 	if len(failed2) != 0 {
 		t.Fatalf("expected failed cache cleared, got %v", failed2)
+	}
+}
+
+func TestSummarizeTestResults_ModuleAndSlowest(t *testing.T) {
+	testNames := []string{
+		"mod.a::test_fast",
+		"mod.a::test_slow",
+		"mod.b::test_fail",
+	}
+	results := map[string]testExecResult{
+		"mod.a::test_fast": {dur: 1 * time.Millisecond, err: nil},
+		"mod.a::test_slow": {dur: 4 * time.Millisecond, err: nil},
+		"mod.b::test_fail": {dur: 2 * time.Millisecond, err: os.ErrInvalid},
+	}
+	mods, slowest := summarizeTestResults(testNames, results)
+	if len(mods) != 2 {
+		t.Fatalf("module count = %d, want 2", len(mods))
+	}
+	if mods[0].module != "mod.a" || mods[0].passed != 2 || mods[0].failed != 0 {
+		t.Fatalf("unexpected module summary[0]: %+v", mods[0])
+	}
+	if mods[1].module != "mod.b" || mods[1].passed != 0 || mods[1].failed != 1 {
+		t.Fatalf("unexpected module summary[1]: %+v", mods[1])
+	}
+	if len(slowest) != 3 {
+		t.Fatalf("slowest count = %d, want 3", len(slowest))
+	}
+	if slowest[0].name != "mod.a::test_slow" {
+		t.Fatalf("slowest[0] = %q, want mod.a::test_slow", slowest[0].name)
+	}
+	if slowest[1].name != "mod.b::test_fail" {
+		t.Fatalf("slowest[1] = %q, want mod.b::test_fail", slowest[1].name)
+	}
+	if slowest[2].name != "mod.a::test_fast" {
+		t.Fatalf("slowest[2] = %q, want mod.a::test_fast", slowest[2].name)
 	}
 }

@@ -252,6 +252,7 @@ fn subs_from_args(type_params: Vec[String], arg_tys: Vec[i32]) -> Vec[TySub] {
 struct FindStructDeclResult { found: bool, d: ast.StructDecl }
 struct FindEnumDeclResult { found: bool, d: ast.EnumDecl }
 struct NominalComptimeWhereResult { ok: bool, err: TcError, ctx: Ctx }
+struct NominalTraitBoundsResult { ok: bool, err: TcError, ctx: Ctx }
 
 fn find_struct_decl_in_mod(m: WorldModule, name: String) -> FindStructDeclResult {
   let mut i: i32 = 0;
@@ -305,6 +306,97 @@ fn nominal_check_comptime_where(ctx0: Ctx, file: String, tps: Vec[String], cwds:
   let ck: ConstWhereCheckResult = check_const_where_bounds(c, cwr.bounds, subs, Vec());
   if !ck.ok { return NominalComptimeWhereResult { ok: false, err: type_error(file, ck.err), ctx: c }; }
   return NominalComptimeWhereResult { ok: true, err: TcError.None, ctx: c };
+}
+
+fn type_param_idx_nominal(tps: Vec[String], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < tps.len() {
+    if tps.get(i) == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn nominal_check_type_param_bounds(
+  ctx0: Ctx,
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  file: String,
+  tps: Vec[String],
+  tpbs: Vec[ast.TypeParamBoundsDecl],
+  arg_tys: Vec[i32]
+) -> NominalTraitBoundsResult {
+  let mut c: Ctx = ctx0;
+  let mut bi: i32 = 0;
+  while bi < tpbs.len() {
+    let bdecl: ast.TypeParamBoundsDecl = tpbs.get(bi);
+    let tpi: i32 = type_param_idx_nominal(tps, bdecl.name);
+    if tpi == -1 {
+      return NominalTraitBoundsResult {
+        ok: false,
+        err: type_error(file, "unknown type param in trait bound: ".concat(bdecl.name)),
+        ctx: c,
+      };
+    }
+    let arg_ty: i32 = strip_range(c, arg_tys.get(tpi));
+    let at: ir.Ty = ir.ty_pool_get(c.pool, arg_ty);
+    let mut bj: i32 = 0;
+    while bj < bdecl.bounds.len() {
+      let rtr: ResolveTraitRefResult = resolve_trait_ref(c, w, cur_mod, imps, bdecl.bounds.get(bj));
+      if !rtr.ok {
+        return NominalTraitBoundsResult { ok: false, err: type_error(file, "bad trait bound"), ctx: c };
+      }
+      let tf: FindTraitResult = find_trait(c, rtr.mod_path, rtr.name);
+      if !tf.found {
+        return NominalTraitBoundsResult {
+          ok: false,
+          err: type_error(file, "unknown trait in bound: ".concat(rtr.name)),
+          ctx: c,
+        };
+      }
+      if !vis_allows(tf.sig.vis, rtr.mod_path, cur_mod) {
+        return NominalTraitBoundsResult {
+          ok: false,
+          err: type_error(file, "trait bound refers to private trait: ".concat(rtr.name)),
+          ctx: c,
+        };
+      }
+      // Keep generic nominal instantiation possible inside generic bodies.
+      // Concrete checks run once type params are substituted.
+      if at.kind != ir.TyKind.Param {
+        let fi: FindImplForTyResult = find_impl_for_ty(c, rtr.mod_path, rtr.name, arg_ty);
+        if fi.ambiguous {
+          let msg0: String =
+            "type argument "
+              .concat(ty_inst_str(c, arg_ty))
+              .concat(" has ambiguous impls for trait ")
+              .concat(rtr.name)
+              .concat(" (candidates: ")
+              .concat(fi.candidates)
+              .concat(")");
+          return NominalTraitBoundsResult { ok: false, err: type_error(file, msg0), ctx: c };
+        }
+        if !fi.found {
+          let cands: String = trait_impl_candidates_text(c, rtr.mod_path, rtr.name);
+          let msg1: String =
+            "type argument "
+              .concat(ty_inst_str(c, arg_ty))
+              .concat(" does not satisfy trait bound ")
+              .concat(bdecl.name)
+              .concat(": ")
+              .concat(rtr.name)
+              .concat(" (available impls: ")
+              .concat(cands)
+              .concat(")");
+          return NominalTraitBoundsResult { ok: false, err: type_error(file, msg1), ctx: c };
+        }
+      }
+      bj = bj + 1;
+    }
+    bi = bi + 1;
+  }
+  return NominalTraitBoundsResult { ok: true, err: TcError.None, ctx: c };
 }
 
 fn nominal_intern_struct(ctx0: Ctx, mod_path: String, name: String) -> ResolveTyResult {
@@ -535,6 +627,9 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
     let ckw: NominalComptimeWhereResult = nominal_check_comptime_where(c, sd.file, sd.type_params, sd.const_where_bounds, arg_tys);
     c = ckw.ctx;
     if !ckw.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let tbk: NominalTraitBoundsResult = nominal_check_type_param_bounds(c, w, cur_mod, imps, sd.file, sd.type_params, sd.type_param_bounds, arg_tys);
+    c = tbk.ctx;
+    if !tbk.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
 
     let subs: Vec[TySub] = subs_from_args(sd.type_params, arg_tys);
     let inst: String = inst_name(c, sd.name, sd.type_params, subs);
@@ -588,6 +683,9 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
     let ckw: NominalComptimeWhereResult = nominal_check_comptime_where(c, ed.file, ed.type_params, ed.const_where_bounds, arg_tys);
     c = ckw.ctx;
     if !ckw.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let tbk: NominalTraitBoundsResult = nominal_check_type_param_bounds(c, w, cur_mod, imps, ed.file, ed.type_params, ed.type_param_bounds, arg_tys);
+    c = tbk.ctx;
+    if !tbk.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
 
     let subs: Vec[TySub] = subs_from_args(ed.type_params, arg_tys);
     let inst: String = inst_name(c, ed.name, ed.type_params, subs);

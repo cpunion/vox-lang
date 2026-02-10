@@ -1,6 +1,6 @@
 package irgen
 
-import "strconv"
+import "voxlang/internal/stringlit"
 
 func parseUint64(text string) uint64 {
 	var n uint64
@@ -11,7 +11,5 @@ func parseUint64(text string) uint64 {
 }
 
 func unquoteUnescape(lit string) (string, error) {
-	// Lexer keeps the full token lexeme including quotes; reuse Go-like unquoting.
-	// This accepts standard escapes like \n, \t, \\, \", \r.
-	return strconv.Unquote(lit)
+	return stringlit.Decode(lit)
 }

@@ -2,6 +2,7 @@ package interp
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -31,6 +32,13 @@ type Runtime struct {
 	patBindsCache map[ast.Pattern]bool
 	// Pre-classified call kinds keyed by call expr node.
 	callKinds map[*ast.CallExpr]callKind
+	// Intrinsic runtime handles used by std/sync wrappers.
+	nextHandle uint64
+	mutexI32   map[uint64]int32
+	atomicI32  map[uint64]int32
+	mutexI64   map[uint64]int64
+	atomicI64  map[uint64]int64
+	tcpConns   map[uint64]net.Conn
 }
 
 type callKind uint8
@@ -155,6 +163,13 @@ func RunTestsNamed(p *typecheck.CheckedProgram, testNames []string) (string, []s
 		}
 		fmt.Fprintf(&log, "[OK] %s (%s)\n", name, formatTestDuration(r.dur))
 	}
+	moduleSummaries, slowest := summarizeInterpTestResults(testNames, results)
+	for _, ms := range moduleSummaries {
+		fmt.Fprintf(&log, "[module] %s: %d passed, %d failed (%s)\n", displayModuleNameForInterp(ms.module), ms.passed, ms.failed, formatTestDuration(ms.dur))
+	}
+	for _, s := range slowest {
+		fmt.Fprintf(&log, "[slowest] %s (%s)\n", s.name, formatTestDuration(s.dur))
+	}
 	fmt.Fprintf(&log, "[test] %d passed, %d failed\n", len(testNames)-failed, failed)
 	if failed != 0 {
 		return log.String(), failedNames, fmt.Errorf("%d test(s) failed", failed)
@@ -165,6 +180,64 @@ func RunTestsNamed(p *typecheck.CheckedProgram, testNames []string) (string, []s
 type interpTestResult struct {
 	dur time.Duration
 	err error
+}
+
+type interpModuleSummary struct {
+	module string
+	passed int
+	failed int
+	dur    time.Duration
+}
+
+type namedInterpDuration struct {
+	name string
+	dur  time.Duration
+}
+
+func summarizeInterpTestResults(testNames []string, results map[string]interpTestResult) ([]interpModuleSummary, []namedInterpDuration) {
+	modMap := map[string]interpModuleSummary{}
+	slowest := make([]namedInterpDuration, 0, len(testNames))
+	for _, name := range testNames {
+		mod := moduleFromQualifiedTestName(name)
+		sum, ok := modMap[mod]
+		if !ok {
+			sum = interpModuleSummary{module: mod}
+		}
+		r, rok := results[name]
+		if !rok || r.err != nil {
+			sum.failed++
+			if rok {
+				sum.dur += r.dur
+				slowest = append(slowest, namedInterpDuration{name: name, dur: r.dur})
+			}
+		} else {
+			sum.passed++
+			sum.dur += r.dur
+			slowest = append(slowest, namedInterpDuration{name: name, dur: r.dur})
+		}
+		modMap[mod] = sum
+	}
+
+	keys := make([]string, 0, len(modMap))
+	for k := range modMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	mods := make([]interpModuleSummary, 0, len(keys))
+	for _, k := range keys {
+		mods = append(mods, modMap[k])
+	}
+
+	sort.Slice(slowest, func(i, j int) bool {
+		if slowest[i].dur == slowest[j].dur {
+			return slowest[i].name < slowest[j].name
+		}
+		return slowest[i].dur > slowest[j].dur
+	})
+	if len(slowest) > 5 {
+		slowest = slowest[:5]
+	}
+	return mods, slowest
 }
 
 func runtimeForTests(p *typecheck.CheckedProgram) *Runtime {
@@ -253,6 +326,12 @@ func newRuntime(p *typecheck.CheckedProgram) *Runtime {
 		intPatCache:   map[string]int64{},
 		patBindsCache: map[ast.Pattern]bool{},
 		callKinds:     map[*ast.CallExpr]callKind{},
+		nextHandle:    1,
+		mutexI32:      map[uint64]int32{},
+		atomicI32:     map[uint64]int32{},
+		mutexI64:      map[uint64]int64{},
+		atomicI64:     map[uint64]int64{},
+		tcpConns:      map[uint64]net.Conn{},
 	}
 	for call := range p.VecCalls {
 		rt.callKinds[call] = callKindVec
@@ -278,6 +357,21 @@ func isTestFile(name string) bool {
 		return true
 	}
 	return strings.HasSuffix(name, "_test.vox")
+}
+
+func moduleFromQualifiedTestName(name string) string {
+	i := strings.LastIndex(name, "::")
+	if i < 0 {
+		return ""
+	}
+	return name[:i]
+}
+
+func displayModuleNameForInterp(module string) string {
+	if module == "" {
+		return "(root)"
+	}
+	return module
 }
 
 func (rt *Runtime) call(name string, args []Value) (Value, error) {

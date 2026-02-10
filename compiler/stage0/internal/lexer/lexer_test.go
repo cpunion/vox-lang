@@ -119,6 +119,26 @@ func TestLexCompoundAssignTokens(t *testing.T) {
 	}
 }
 
+func TestLexTripleQuotedString(t *testing.T) {
+	f := source.NewFile("test.vox", "fn main() -> i32 { print(\"\"\"\n  a\n\"\"\"); return 0; }")
+	toks := Lex(f)
+	var lit Token
+	found := false
+	for _, tk := range toks {
+		if tk.Kind == TokenString {
+			lit = tk
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected TokenString")
+	}
+	if !strings.HasPrefix(lit.Lexeme, `"""`) || !strings.HasSuffix(lit.Lexeme, `"""`) {
+		t.Fatalf("expected triple-quoted lexeme, got %q", lit.Lexeme)
+	}
+}
+
 func kindsNoEOF(toks []Token) []Kind {
 	out := make([]Kind, 0, len(toks))
 	for _, tk := range toks {

@@ -686,8 +686,79 @@ dep = { path = "dep_pkg", version = "0.1.0" }
 	if !strings.Contains(lock, `name = "dep"`) {
 		t.Fatalf("expected dep name in lockfile, got:\n%s", lock)
 	}
+	if !strings.Contains(lock, `source = "path"`) {
+		t.Fatalf("expected path source in lockfile, got:\n%s", lock)
+	}
 	if !strings.Contains(lock, "dep_pkg") {
 		t.Fatalf("expected dep path in lockfile, got:\n%s", lock)
+	}
+	if !strings.Contains(lock, "resolved_path") {
+		t.Fatalf("expected resolved_path in lockfile, got:\n%s", lock)
+	}
+	if !strings.Contains(lock, `digest = "`) {
+		t.Fatalf("expected digest in lockfile, got:\n%s", lock)
+	}
+}
+
+func TestStage1BuildPkgFailsWhenLockDigestMismatch(t *testing.T) {
+	stage1Bin := stage1ToolBin(t)
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir root src: %v", err)
+	}
+	depRoot := filepath.Join(root, "dep_pkg")
+	if err := os.MkdirAll(filepath.Join(depRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir dep src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "vox.toml"), []byte(`[package]
+name = "dep"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write dep vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "src", "dep.vox"), []byte("pub fn two() -> i32 { return 2; }\n"), 0o644); err != nil {
+		t.Fatalf("write dep source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = { path = "dep_pkg", version = "0.1.0" }
+`), 0o644); err != nil {
+		t.Fatalf("write root vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("import \"dep\" as dep\nfn main() -> i32 { return dep.two(); }\n"), 0o644); err != nil {
+		t.Fatalf("write root source: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("stage1 build-pkg first run failed: %v\n%s", err, string(b))
+	}
+
+	// Tamper dependency content without updating lockfile.
+	if err := os.WriteFile(filepath.Join(depRoot, "src", "dep.vox"), []byte("pub fn two() -> i32 { return 3; }\n"), 0o644); err != nil {
+		t.Fatalf("rewrite dep source: %v", err)
+	}
+
+	cmd2 := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd2.Dir = root
+	out, err := cmd2.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected lock mismatch failure after dependency tamper")
+	}
+	s := string(out)
+	if !strings.Contains(s, "invalid vox.lock") {
+		t.Fatalf("expected invalid vox.lock error, got:\n%s", s)
+	}
+	if !strings.Contains(s, "dependency mismatch") {
+		t.Fatalf("expected dependency mismatch detail, got:\n%s", s)
 	}
 }
 
@@ -844,6 +915,18 @@ dep = { git = "dep_git_repo" }
 	}
 	if strings.TrimSpace(string(got)) != "3" {
 		t.Fatalf("unexpected output: %q", string(got))
+	}
+	lockPath := filepath.Join(root, "vox.lock")
+	lockBytes, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("read vox.lock: %v", err)
+	}
+	lock := string(lockBytes)
+	if !strings.Contains(lock, `source = "git"`) {
+		t.Fatalf("expected git source in lockfile, got:\n%s", lock)
+	}
+	if !strings.Contains(lock, `rev = "`) {
+		t.Fatalf("expected resolved git rev in lockfile, got:\n%s", lock)
 	}
 }
 

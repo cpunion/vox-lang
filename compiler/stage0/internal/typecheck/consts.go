@@ -8,6 +8,7 @@ import (
 	"voxlang/internal/ast"
 	"voxlang/internal/names"
 	"voxlang/internal/source"
+	"voxlang/internal/stringlit"
 )
 
 func (c *checker) collectConstSigs() {
@@ -372,7 +373,7 @@ func (c *checker) evalConstExprWithExpected(ex ast.Expr, file *source.File, expe
 	case *ast.BoolLit:
 		return ConstValue{K: ConstBool, B: e.Value}, Type{K: TyBool}
 	case *ast.StringLit:
-		s, err := strconv.Unquote(e.Text)
+		s, err := stringlit.Decode(e.Text)
 		if err != nil {
 			c.errorAt(e.S, "invalid string literal")
 			return ConstValue{K: ConstBad}, Type{K: TyBad}

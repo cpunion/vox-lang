@@ -141,6 +141,21 @@ func (lx *lexer) lexInt() {
 
 func (lx *lexer) lexString() {
 	start := lx.pos
+	// Multiline string literal: """ ... """
+	if lx.pos+2 < len(lx.input) && lx.input[lx.pos] == '"' && lx.input[lx.pos+1] == '"' && lx.input[lx.pos+2] == '"' {
+		lx.pos += 3
+		for lx.pos+2 < len(lx.input) {
+			if lx.input[lx.pos] == '"' && lx.input[lx.pos+1] == '"' && lx.input[lx.pos+2] == '"' {
+				lx.pos += 3
+				lx.emit(TokenString, lx.input[start:lx.pos], start, lx.pos)
+				return
+			}
+			lx.pos++
+		}
+		lx.emit(TokenBad, lx.input[start:lx.pos], start, lx.pos)
+		return
+	}
+
 	lx.pos++ // opening "
 	for lx.pos < len(lx.input) {
 		ch := lx.next()

@@ -1,7 +1,9 @@
 package interp
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"voxlang/internal/parser"
 	"voxlang/internal/source"
@@ -277,6 +279,41 @@ fn main() -> i32 {
 }`)
 	if out != "1" {
 		t.Fatalf("expected 1, got %q", out)
+	}
+}
+
+func TestSummarizeInterpTestResults_ModuleAndSlowest(t *testing.T) {
+	testNames := []string{
+		"tests::test_fast",
+		"tests::test_slow",
+		"tests.net::test_fail",
+	}
+	results := map[string]interpTestResult{
+		"tests::test_fast":     {dur: 1 * time.Millisecond, err: nil},
+		"tests::test_slow":     {dur: 4 * time.Millisecond, err: nil},
+		"tests.net::test_fail": {dur: 2 * time.Millisecond, err: errors.New("boom")},
+	}
+	mods, slowest := summarizeInterpTestResults(testNames, results)
+	if len(mods) != 2 {
+		t.Fatalf("module count = %d, want 2", len(mods))
+	}
+	if mods[0].module != "tests" || mods[0].passed != 2 || mods[0].failed != 0 {
+		t.Fatalf("unexpected module summary[0]: %+v", mods[0])
+	}
+	if mods[1].module != "tests.net" || mods[1].passed != 0 || mods[1].failed != 1 {
+		t.Fatalf("unexpected module summary[1]: %+v", mods[1])
+	}
+	if len(slowest) != 3 {
+		t.Fatalf("slowest count = %d, want 3", len(slowest))
+	}
+	if slowest[0].name != "tests::test_slow" {
+		t.Fatalf("slowest[0] = %q, want tests::test_slow", slowest[0].name)
+	}
+	if slowest[1].name != "tests.net::test_fail" {
+		t.Fatalf("slowest[1] = %q, want tests.net::test_fail", slowest[1].name)
+	}
+	if slowest[2].name != "tests::test_fast" {
+		t.Fatalf("slowest[2] = %q, want tests::test_fast", slowest[2].name)
 	}
 }
 

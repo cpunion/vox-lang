@@ -319,6 +319,25 @@ struct TypeWalkResult {
 fn type_walk_ok(c: Ctx) -> TypeWalkResult { return TypeWalkResult { ok: true, err: TcError.None, ctx: c }; }
 fn type_walk_err(c: Ctx, e: TcError) -> TypeWalkResult { return TypeWalkResult { ok: false, err: e, ctx: c }; }
 
+fn type_name_text(tn: ast.TypeName) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < tn.parts.len() {
+    if i > 0 { out = out.concat("."); }
+    out = out.concat(tn.parts.get(i));
+    i = i + 1;
+  }
+  if tn.args.len() == 0 { return out; }
+  out = out.concat("[");
+  i = 0;
+  while i < tn.args.len() {
+    if i > 0 { out = out.concat(", "); }
+    out = out.concat(type_name_text(tn.args.get(i)));
+    i = i + 1;
+  }
+  return out.concat("]");
+}
+
 // Typed-path marker pre-resolution:
 // parser encodes `TypePath[T]` (before `.member` or `{ ... }`) as `Call(path, [T], [])`.
 // We resolve it here to ensure typecheck/irgen can rely on already-interned nominal types.
@@ -357,7 +376,7 @@ fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, typ
     let tn: ast.TypeName = match n { ast.ExprNode.As(_a, t) => t, _ => ast.TypeName { parts: Vec(), args: Vec() } };
     let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, tn);
     c = tr.ctx;
-    if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in expression type annotation")); }
+    if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in expression type annotation: ".concat(type_name_text(tn)))); }
   }
   if match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } {
     let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, ts, _a) => ts, _ => Vec() };
@@ -367,7 +386,7 @@ fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, typ
       if !is_const_generic_arg_tn(ta) {
         let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, ta);
         c = tr.ctx;
-        if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in call type arg")); }
+        if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in call type arg: ".concat(type_name_text(ta)))); }
       }
       ti = ti + 1;
     }
@@ -455,7 +474,7 @@ fn walk_stmt_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, typ
       if has_ann {
         let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, ann);
         c = tr.ctx;
-        if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in let annotation")); }
+        if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in let annotation: ".concat(type_name_text(ann)))); }
       }
       walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, init, owner_file)
     },
@@ -906,6 +925,29 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
   c.funcs.push(FuncSym { mod_path: "", name: "__mkdir_p", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
   c.funcs.push(FuncSym { mod_path: "", name: "__exec", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_i32, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
   c.funcs.push(FuncSym { mod_path: "", name: "__walk_vox_files", sig: FuncSig { params: vec1(c.ty_string), ret: vec_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  // std/sync low-level intrinsics (i32 compatibility).
+  c.funcs.push(FuncSym { mod_path: "", name: "__mutex_i32_new", sig: FuncSig { params: vec1(c.ty_i32), ret: c.ty_i64, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__mutex_i32_load", sig: FuncSig { params: vec1(c.ty_i64), ret: c.ty_i32, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__mutex_i32_store", sig: FuncSig { params: vec2(c.ty_i64, c.ty_i32), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__atomic_i32_new", sig: FuncSig { params: vec1(c.ty_i32), ret: c.ty_i64, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__atomic_i32_load", sig: FuncSig { params: vec1(c.ty_i64), ret: c.ty_i32, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__atomic_i32_store", sig: FuncSig { params: vec2(c.ty_i64, c.ty_i32), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__atomic_i32_fetch_add", sig: FuncSig { params: vec2(c.ty_i64, c.ty_i32), ret: c.ty_i32, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__atomic_i32_swap", sig: FuncSig { params: vec2(c.ty_i64, c.ty_i32), ret: c.ty_i32, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  // std/sync low-level intrinsics (i64 generic storage backend).
+  c.funcs.push(FuncSym { mod_path: "", name: "__mutex_i64_new", sig: FuncSig { params: vec1(c.ty_i64), ret: c.ty_i64, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__mutex_i64_load", sig: FuncSig { params: vec1(c.ty_i64), ret: c.ty_i64, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__mutex_i64_store", sig: FuncSig { params: vec2(c.ty_i64, c.ty_i64), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__atomic_i64_new", sig: FuncSig { params: vec1(c.ty_i64), ret: c.ty_i64, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__atomic_i64_load", sig: FuncSig { params: vec1(c.ty_i64), ret: c.ty_i64, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__atomic_i64_store", sig: FuncSig { params: vec2(c.ty_i64, c.ty_i64), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__atomic_i64_fetch_add", sig: FuncSig { params: vec2(c.ty_i64, c.ty_i64), ret: c.ty_i64, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__atomic_i64_swap", sig: FuncSig { params: vec2(c.ty_i64, c.ty_i64), ret: c.ty_i64, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  // std/io minimal TCP intrinsics.
+  c.funcs.push(FuncSym { mod_path: "", name: "__tcp_connect", sig: FuncSig { params: vec2(c.ty_string, c.ty_i32), ret: c.ty_i64, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__tcp_send", sig: FuncSig { params: vec2(c.ty_i64, c.ty_string), ret: c.ty_i32, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__tcp_recv", sig: FuncSig { params: vec2(c.ty_i64, c.ty_i32), ret: c.ty_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__tcp_close", sig: FuncSig { params: vec1(c.ty_i64), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
 
   let mut mi: i32 = 0;
   while mi < w.mods.len() {

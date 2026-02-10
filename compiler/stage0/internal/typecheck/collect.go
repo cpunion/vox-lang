@@ -208,6 +208,29 @@ func (c *checker) collectFuncSigs() {
 	c.funcSigs["__args"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
 	c.funcSigs["__walk_vox_files"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
 	c.funcSigs["__exe_path"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyString}}
+	// Stage1 std/sync intrinsics (i32 MVP).
+	c.funcSigs["__mutex_i32_new"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI32}}, Ret: Type{K: TyI64}}
+	c.funcSigs["__mutex_i32_load"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}}, Ret: Type{K: TyI32}}
+	c.funcSigs["__mutex_i32_store"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}, {K: TyI32}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["__atomic_i32_new"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI32}}, Ret: Type{K: TyI64}}
+	c.funcSigs["__atomic_i32_load"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}}, Ret: Type{K: TyI32}}
+	c.funcSigs["__atomic_i32_store"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}, {K: TyI32}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["__atomic_i32_fetch_add"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}, {K: TyI32}}, Ret: Type{K: TyI32}}
+	c.funcSigs["__atomic_i32_swap"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}, {K: TyI32}}, Ret: Type{K: TyI32}}
+	// Stage1 std/sync intrinsics (i64 generic storage backend).
+	c.funcSigs["__mutex_i64_new"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}}, Ret: Type{K: TyI64}}
+	c.funcSigs["__mutex_i64_load"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}}, Ret: Type{K: TyI64}}
+	c.funcSigs["__mutex_i64_store"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}, {K: TyI64}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["__atomic_i64_new"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}}, Ret: Type{K: TyI64}}
+	c.funcSigs["__atomic_i64_load"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}}, Ret: Type{K: TyI64}}
+	c.funcSigs["__atomic_i64_store"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}, {K: TyI64}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["__atomic_i64_fetch_add"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}, {K: TyI64}}, Ret: Type{K: TyI64}}
+	c.funcSigs["__atomic_i64_swap"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}, {K: TyI64}}, Ret: Type{K: TyI64}}
+	// Stage1 std/io network intrinsics (minimal TCP).
+	c.funcSigs["__tcp_connect"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}, {K: TyI32}}, Ret: Type{K: TyI64}}
+	c.funcSigs["__tcp_send"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}, {K: TyString}}, Ret: Type{K: TyI32}}
+	c.funcSigs["__tcp_recv"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}, {K: TyI32}}, Ret: Type{K: TyString}}
+	c.funcSigs["__tcp_close"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI64}}, Ret: Type{K: TyUnit}}
 
 	for _, fn := range c.prog.Funcs {
 		if strings.HasPrefix(fn.Name, "__") {

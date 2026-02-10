@@ -17,7 +17,9 @@ Stage1 当前可解析：
 
 - `dep = { path = "../dep" }`
 - `dep = { path = "../dep", version = "0.1.0" }`
-- `dep = "1.2.3"`（仅解析；Stage1 目前不支持非 path 拉取）
+- `dep = { git = "https://...", rev = "..." }`
+- `dep = { git = "../local/repo", version = "tag-or-branch" }`
+- `dep = "1.2.3"`（从本地 registry cache 解析）
 
 ## 目录约定（草案）
 
@@ -36,9 +38,23 @@ my_app/
 Stage1 当前能力：
 
 - `path`：支持，且支持递归加载传递依赖
-- `registry`：未实现（遇到非 path 依赖会报错）
-- `git`：未实现
+- `git`：支持 clone/fetch/checkout（支持本地路径与远程 URL）
+- `registry`：支持从本地 cache 目录解析 `name/version`（默认 `.vox/deps/registry`，可通过 `registry` 字段覆盖根目录）
 
 ## 锁文件：`vox.lock`
 
-Stage1 在 `build-pkg` / `test-pkg` 成功解析依赖后会写出 `vox.lock`（当前为最小实现，记录依赖名与已解析 path/version 字段）。
+Stage1 在 `build-pkg` / `test-pkg` 成功解析依赖后会写出 `vox.lock`，并在后续构建时做完整性校验。当前字段包含：
+
+- `name`
+- `source`（`path` / `git` / `registry`）
+- `path`（声明式 path 依赖）
+- `resolved_path`（解析后的本地目录）
+- `git` / `rev`（git 依赖会记录解析后的具体 commit）
+- `registry` / `version`
+- `digest`（依赖源码快照摘要，基于 `vox.toml` + `src/**/*.vox` 的稳定哈希）
+
+完整性规则（stage1 当前实现）：
+
+- 若存在 `vox.lock`，构建前会校验每个依赖条目的 `source/path/git/rev/registry/version/digest` 与当前解析结果一致。
+- 不一致会直接失败（提示 lockfile mismatch），要求先刷新依赖并重建锁文件。
+- 这样可以防止“依赖内容悄悄变化但版本号不变”的非可复现构建。

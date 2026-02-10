@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"voxlang/internal/ast"
+	"voxlang/internal/stringlit"
 	"voxlang/internal/typecheck"
 )
 
@@ -156,8 +157,8 @@ func (rt *Runtime) evalExpr(ex ast.Expr) (Value, error) {
 		if s, ok := rt.strLitCache[e.Text]; ok {
 			return Value{K: VString, S: s}, nil
 		}
-		// Keep runtime semantics aligned with IR generation (Go-like unquoting).
-		s, err := strconv.Unquote(e.Text)
+		// Keep runtime semantics aligned with IR generation.
+		s, err := stringlit.Decode(e.Text)
 		if err != nil {
 			return unit(), fmt.Errorf("invalid string literal")
 		}
