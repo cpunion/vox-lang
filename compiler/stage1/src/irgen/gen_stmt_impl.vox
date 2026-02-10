@@ -2,6 +2,28 @@ import "ast" as ast
 import "ir" as ir
 import "typecheck" as tc
 
+struct AssignParentSlot {
+  parent_slot: i32,
+  field: String,
+  child_slot: i32,
+  child_ty: i32,
+}
+
+fn split_field_path(path: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut start: i32 = 0;
+  let mut i: i32 = 0;
+  while i < path.len() {
+    if path.byte_at(i) == 46 {
+      out.push(path.slice(start, i));
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  out.push(path.slice(start, path.len()));
+  return out;
+}
+
 fn subs_lookup_inst(subs: Vec[tc.TySub], name: String) -> i32 {
   let mut i: i32 = 0;
   while i < subs.len() {
@@ -72,33 +94,91 @@ fn gen_stmt_assign_field(g0: Gen, recv: String, field: String, rhs: i32) -> GenS
   if !sr.found { return GenStmtResult { ok: false, err: "unknown var", g: g }; }
   if !sr.mutable { return GenStmtResult { ok: false, err: "assign to immutable var", g: g }; }
 
-  let rt: ir.Ty = ir.ty_pool_get(g.ctx.pool, sr.ty);
-  if rt.kind != ir.TyKind.Struct { return GenStmtResult { ok: false, err: "field assign recv must be struct", g: g }; }
-  let fs: tc.FindStructResult = tc.find_struct(g.ctx, rt.mod_path, rt.name);
-  if !fs.found { return GenStmtResult { ok: false, err: "unknown struct type", g: g }; }
-  if !tc.vis_allows(fs.sig.vis, fs.sig.mod_path, g.mod_path) { return GenStmtResult { ok: false, err: "type is private", g: g }; }
+  let parts: Vec[String] = split_field_path(field);
+  let mut cur_slot: i32 = sr.slot;
+  let mut cur_ty: i32 = sr.ty;
+  let mut parents: Vec[AssignParentSlot] = Vec();
 
-  let mut found: bool = false;
+  let mut pi: i32 = 0;
+  while pi < parts.len() - 1 {
+    let rt: ir.Ty = ir.ty_pool_get(g.ctx.pool, cur_ty);
+    if rt.kind != ir.TyKind.Struct { return GenStmtResult { ok: false, err: "field assign recv must be struct", g: g }; }
+    let fs: tc.FindStructResult = tc.find_struct(g.ctx, rt.mod_path, rt.name);
+    if !fs.found { return GenStmtResult { ok: false, err: "unknown struct type", g: g }; }
+    if !tc.vis_allows(fs.sig.vis, fs.sig.mod_path, g.mod_path) { return GenStmtResult { ok: false, err: "type is private", g: g }; }
+
+    let mut found: bool = false;
+    let mut next_ty: i32 = g.ctx.ty_bad;
+    let mut fvis: i32 = ast.vis_private();
+    let mut fi: i32 = 0;
+    while fi < fs.sig.fields.len() {
+      let f: tc.StructFieldSig = fs.sig.fields.get(fi);
+      if f.name == parts.get(pi) {
+        found = true;
+        next_ty = f.ty;
+        fvis = f.vis;
+        break;
+      }
+      fi = fi + 1;
+    }
+    if !found { return GenStmtResult { ok: false, err: "unknown field", g: g }; }
+    if !tc.vis_allows(fvis, fs.sig.mod_path, g.mod_path) { return GenStmtResult { ok: false, err: "field is private", g: g }; }
+
+    let nt: GenNewIdResult = gen_new_temp(g);
+    g = nt.g;
+    let tid: i32 = nt.id;
+    g = gen_emit(g, ir.Instr.FieldGet(tid, cur_ty, ir.v_slot(cur_slot), parts.get(pi)));
+    let ns: GenNewIdResult = gen_new_slot(g);
+    g = ns.g;
+    let sid: i32 = ns.id;
+    g = gen_emit(g, ir.Instr.SlotDecl(sid, next_ty));
+    g = gen_emit(g, ir.Instr.Store(sid, ir.v_temp(tid)));
+
+    parents.push(AssignParentSlot { parent_slot: cur_slot, field: parts.get(pi), child_slot: sid, child_ty: next_ty });
+    cur_slot = sid;
+    cur_ty = next_ty;
+    pi = pi + 1;
+  }
+
+  let rt_last: ir.Ty = ir.ty_pool_get(g.ctx.pool, cur_ty);
+  if rt_last.kind != ir.TyKind.Struct { return GenStmtResult { ok: false, err: "field assign recv must be struct", g: g }; }
+  let fs_last: tc.FindStructResult = tc.find_struct(g.ctx, rt_last.mod_path, rt_last.name);
+  if !fs_last.found { return GenStmtResult { ok: false, err: "unknown struct type", g: g }; }
+  if !tc.vis_allows(fs_last.sig.vis, fs_last.sig.mod_path, g.mod_path) { return GenStmtResult { ok: false, err: "type is private", g: g }; }
+
+  let leaf: String = parts.get(parts.len() - 1);
+  let mut found_last: bool = false;
   let mut fty: i32 = g.ctx.ty_bad;
-  let mut fvis: i32 = ast.vis_private();
+  let mut fvis_last: i32 = ast.vis_private();
   let mut i: i32 = 0;
-  while i < fs.sig.fields.len() {
-    let f: tc.StructFieldSig = fs.sig.fields.get(i);
-    if f.name == field {
-      found = true;
+  while i < fs_last.sig.fields.len() {
+    let f: tc.StructFieldSig = fs_last.sig.fields.get(i);
+    if f.name == leaf {
+      found_last = true;
       fty = f.ty;
-      fvis = f.vis;
+      fvis_last = f.vis;
       break;
     }
     i = i + 1;
   }
-  if !found { return GenStmtResult { ok: false, err: "unknown field", g: g }; }
-  if !tc.vis_allows(fvis, fs.sig.mod_path, g.mod_path) { return GenStmtResult { ok: false, err: "field is private", g: g }; }
+  if !found_last { return GenStmtResult { ok: false, err: "unknown field", g: g }; }
+  if !tc.vis_allows(fvis_last, fs_last.sig.mod_path, g.mod_path) { return GenStmtResult { ok: false, err: "field is private", g: g }; }
 
   let er: GenExprResult = gen_expr(g, rhs, fty);
   if !er.ok { return GenStmtResult { ok: false, err: er.err, g: er.g }; }
   g = er.g;
-  g = gen_emit(g, ir.Instr.StoreField(sr.slot, field, er.val));
+  g = gen_emit(g, ir.Instr.StoreField(cur_slot, leaf, er.val));
+
+  let mut ri: i32 = parents.len() - 1;
+  while ri >= 0 {
+    let ps: AssignParentSlot = parents.get(ri);
+    let nt: GenNewIdResult = gen_new_temp(g);
+    g = nt.g;
+    let tid: i32 = nt.id;
+    g = gen_emit(g, ir.Instr.Load(tid, ps.child_ty, ps.child_slot));
+    g = gen_emit(g, ir.Instr.StoreField(ps.parent_slot, ps.field, ir.v_temp(tid)));
+    ri = ri - 1;
+  }
   return GenStmtResult { ok: true, err: "", g: g };
 }
 

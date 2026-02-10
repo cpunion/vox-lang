@@ -221,6 +221,32 @@ fn assign_op_to_binary(k: lex.TokenKind) -> ast.BinaryOp {
   };
 }
 
+fn is_field_assign_start(p: Parser) -> bool {
+  if !kind_is(peek_kind(p), lex.TokenKind.Ident) { return false; }
+  let toks: Vec[lex.Token] = p.toks;
+  let n: i32 = toks.len();
+  let mut i: i32 = p.pos + 1;
+  let mut saw_field: bool = false;
+  while (i + 1) < n && kind_is(toks.get(i).kind, lex.TokenKind.Dot) && kind_is(toks.get(i + 1).kind, lex.TokenKind.Ident) {
+    saw_field = true;
+    i = i + 2;
+  }
+  if !saw_field { return false; }
+  if i >= n { return false; }
+  return is_assign_op(toks.get(i).kind);
+}
+
+fn join_field_path(parts: Vec[String]) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < parts.len() {
+    if i > 0 { out = out.concat("."); }
+    out = out.concat(parts.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
 fn advance(p: Parser) -> AdvanceResult {
   let tok: lex.Token = peek(p);
   let mut q: Parser = p;
@@ -515,8 +541,8 @@ fn parse_expr_block(p: Parser) -> ParseExprResult {
       kind_is(k, lex.TokenKind.KwReturn) ||
       // assignment: ident <assign-op> ...
       (kind_is(k, lex.TokenKind.Ident) && is_assign_op(peek2_kind(q))) ||
-      // field assignment: ident . ident <assign-op> ...
-      (kind_is(k, lex.TokenKind.Ident) && kind_is(peek2_kind(q), lex.TokenKind.Dot) && kind_is(peek3_kind(q), lex.TokenKind.Ident) && is_assign_op(peek4_kind(q)));
+      // field assignment: ident(.ident)+ <assign-op> ...
+      is_field_assign_start(q);
 
     if is_stmt {
       let sr: ParseStmtResult = parse_stmt(q);
@@ -1159,16 +1185,20 @@ fn parse_stmt(p: Parser) -> ParseStmtResult {
     return ParseStmtResult { p: ar3.p, st: ast.Stmt.ReturnStmt(sp0, true, r2.id) };
   }
 
-  // field assignment: ident . ident <assign-op> expr ;
-  if kind_is(k, lex.TokenKind.Ident) &&
-     kind_is(peek2_kind(p), lex.TokenKind.Dot) &&
-     kind_is(peek3_kind(p), lex.TokenKind.Ident) &&
-     is_assign_op(peek4_kind(p)) {
+  // field assignment: ident(.ident)+ <assign-op> expr ;
+  if is_field_assign_start(p) {
     let r1: ParseIdentResult = parse_ident(p);
-    let ar2: AdvanceResult = expect(r1.p, lex.TokenKind.Dot);
-    let r3: ParseIdentResult = parse_ident(ar2.p);
-    let op_tok: lex.Token = peek(r3.p);
-    let ar4: AdvanceResult = advance(r3.p);
+    let mut ql: Parser = r1.p;
+    let mut fields: Vec[String] = Vec();
+    while kind_is(peek_kind(ql), lex.TokenKind.Dot) && kind_is(peek2_kind(ql), lex.TokenKind.Ident) {
+      let ard: AdvanceResult = expect(ql, lex.TokenKind.Dot);
+      let rf: ParseIdentResult = parse_ident(ard.p);
+      ql = rf.p;
+      fields.push(rf.name);
+    }
+
+    let op_tok: lex.Token = peek(ql);
+    let ar4: AdvanceResult = advance(ql);
     let r5: ParseExprResult = parse_expr(ar4.p, 0);
     let mut q: Parser = r5.p;
     let mut rhs_id: i32 = r5.id;
@@ -1178,20 +1208,24 @@ fn parse_stmt(p: Parser) -> ParseStmtResult {
         ast.ExprNode.Ident(r1.name),
         span_at(q, op_tok.start)
       );
-      let mut lhs_recv_id: i32 = lhs_add0.id;
+      let mut lhs_id: i32 = lhs_add0.id;
       let mut q2: Parser = q;
       q2.exprs = lhs_add0.pool;
-      let lhs_add1: ast.AddExprResult = ast.expr_pool_add(
-        q2.exprs,
-        ast.ExprNode.Member(lhs_recv_id, r3.name),
-        span_at(q2, op_tok.start)
-      );
-      lhs_recv_id = lhs_add1.id;
-      q2.exprs = lhs_add1.pool;
+      let mut fi: i32 = 0;
+      while fi < fields.len() {
+        let lhs_next: ast.AddExprResult = ast.expr_pool_add(
+          q2.exprs,
+          ast.ExprNode.Member(lhs_id, fields.get(fi)),
+          span_at(q2, op_tok.start)
+        );
+        lhs_id = lhs_next.id;
+        q2.exprs = lhs_next.pool;
+        fi = fi + 1;
+      }
       let bop: ast.BinaryOp = assign_op_to_binary(op_tok.kind);
       let addb: ast.AddExprResult = ast.expr_pool_add(
         q2.exprs,
-        ast.ExprNode.Binary(bop, lhs_recv_id, rhs_id),
+        ast.ExprNode.Binary(bop, lhs_id, rhs_id),
         span_at(q2, op_tok.start)
       );
       q = q2;
@@ -1199,7 +1233,7 @@ fn parse_stmt(p: Parser) -> ParseStmtResult {
       rhs_id = addb.id;
     }
     let ar6: AdvanceResult = expect(q, lex.TokenKind.Semicolon);
-    return ParseStmtResult { p: ar6.p, st: ast.Stmt.AssignField(sp0, r1.name, r3.name, rhs_id) };
+    return ParseStmtResult { p: ar6.p, st: ast.Stmt.AssignField(sp0, r1.name, join_field_path(fields), rhs_id) };
   }
 
   // assignment: ident <assign-op> expr ;

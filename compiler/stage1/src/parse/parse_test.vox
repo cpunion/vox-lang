@@ -611,6 +611,20 @@ fn test_parse_field_assign_stmt() -> () {
   t.assert(ok(r.err));
 }
 
+fn test_parse_nested_field_assign_stmt() -> () {
+  let src: String = "struct I { x: i32 }\nstruct O { i: I }\nfn main() -> i32 { let mut o: O = O { i: I { x: 1 } }; o.i.x = 2; return o.i.x; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  let st1: ast.Stmt = f.body.stmts.get(1);
+  let ok0: bool = match st1 {
+    ast.Stmt.AssignField(_sp, recv, field, _id) => recv == "o" && field == "i.x",
+    _ => false,
+  };
+  t.assert(ok0);
+}
+
 fn test_parse_compound_assign_stmt() -> () {
   let r: p.ParseResult = p.parse_text("fn main() -> i32 { let mut x: i32 = 1; x += 2; return x; }");
   t.assert(ok(r.err));
@@ -653,6 +667,37 @@ fn test_parse_compound_field_assign_stmt() -> () {
             _ => false,
           } &&
           match ast.expr_pool_get(exprs, rhs) { ast.ExprNode.Int(v) => v == "1", _ => false },
+        _ => false,
+      },
+    _ => false,
+  };
+  t.assert(ok0);
+}
+
+fn test_parse_compound_nested_field_assign_stmt() -> () {
+  let src: String = "struct I { x: i32 }\nstruct O { i: I }\nfn main() -> i32 { let mut o: O = O { i: I { x: 1 } }; o.i.x += 3; return o.i.x; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  let exprs: ast.ExprPool = r.prog.exprs;
+  let st1: ast.Stmt = f.body.stmts.get(1);
+  let ok0: bool = match st1 {
+    ast.Stmt.AssignField(_sp, recv, field, id) =>
+      recv == "o" && field == "i.x" &&
+      match ast.expr_pool_get(exprs, id) {
+        ast.ExprNode.Binary(op, l, rhs) =>
+          match op { ast.BinaryOp.Add => true, _ => false } &&
+          match ast.expr_pool_get(exprs, l) {
+            ast.ExprNode.Member(l0, n1) =>
+              n1 == "x" && match ast.expr_pool_get(exprs, l0) {
+                ast.ExprNode.Member(l1, n0) =>
+                  n0 == "i" && match ast.expr_pool_get(exprs, l1) { ast.ExprNode.Ident(s) => s == "o", _ => false },
+                _ => false,
+              },
+            _ => false,
+          } &&
+          match ast.expr_pool_get(exprs, rhs) { ast.ExprNode.Int(v) => v == "3", _ => false },
         _ => false,
       },
     _ => false,

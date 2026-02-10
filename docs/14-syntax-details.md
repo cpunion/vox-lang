@@ -88,6 +88,7 @@
 - `x += e; x -= e; x *= e; x /= e; x %= e;`
 - `x &= e; x |= e; x ^= e; x <<= e; x >>= e;`
 - 字段同样支持：`s.f = e; s.f += e; ...`
+- 多级字段也支持：`a.b.c = e; a.b.c += e; ...`
 
 当前实现采用 parser 反糖（desugar）：
 
