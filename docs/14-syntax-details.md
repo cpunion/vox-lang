@@ -511,6 +511,8 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 - `@is_signed_int(Type) -> bool`
 - `@is_unsigned_int(Type) -> bool`
 - `@is_float(Type) -> bool`
+- `@is_bool(Type) -> bool`
+- `@is_string(Type) -> bool`
 - `@is_struct(Type) -> bool`
 - `@is_enum(Type) -> bool`
 - `@is_vec(Type) -> bool`

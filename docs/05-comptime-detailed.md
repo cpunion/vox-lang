@@ -45,6 +45,8 @@ fn crc_table() -> [u32; 256] { ... }
 @is_signed_int(T) -> bool
 @is_unsigned_int(T) -> bool
 @is_float(T) -> bool
+@is_bool(T) -> bool
+@is_string(T) -> bool
 @is_struct(T) -> bool
 @is_enum(T) -> bool
 @is_vec(T) -> bool
