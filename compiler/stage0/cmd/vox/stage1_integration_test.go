@@ -1284,6 +1284,16 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(b), "[test]") {
 		t.Fatalf("expected stage2 test summary, got:\n%s", string(b))
 	}
+
+	cmdRerun := exec.Command(stage2BinB, "test-pkg", "--rerun-failed", outRel)
+	cmdRerun.Dir = stage2DirAbs
+	br, err := cmdRerun.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg --rerun-failed failed: %v\n%s", err, string(br))
+	}
+	if !strings.Contains(string(br), "no previous failed tests") {
+		t.Fatalf("expected no previous failed tests message, got:\n%s", string(br))
+	}
 }
 
 func TestStage1ExitCodeNonZeroOnBuildPkgFailure(t *testing.T) {
