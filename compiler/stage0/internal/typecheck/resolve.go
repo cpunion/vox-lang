@@ -405,6 +405,52 @@ func (c *checker) resolveStructByParts(file *source.File, parts []string, typeAr
 	return ty, ss, true
 }
 
+func (c *checker) structBaseQNameByParts(file *source.File, parts []string) (string, bool) {
+	if file == nil || len(parts) == 0 {
+		return "", false
+	}
+	if len(parts) == 1 {
+		if tm := c.namedTypes[file]; tm != nil {
+			if ty := tm[parts[0]]; ty.K == TyStruct {
+				return ty.Name, true
+			}
+		}
+		pkg, mod, _ := names.SplitOwnerAndModule(file.Name)
+		q1 := names.QualifyParts(pkg, mod, parts[0])
+		if _, ok := c.structSigs[q1]; ok {
+			return q1, true
+		}
+		if _, ok := c.genericStructSigs[q1]; ok {
+			return q1, true
+		}
+		q2 := names.QualifyParts(pkg, nil, parts[0])
+		if _, ok := c.structSigs[q2]; ok {
+			return q2, true
+		}
+		if _, ok := c.genericStructSigs[q2]; ok {
+			return q2, true
+		}
+		return "", false
+	}
+	alias := parts[0]
+	extraMods := parts[1 : len(parts)-1]
+	name := parts[len(parts)-1]
+	m := c.imports[file]
+	tgt, ok := m[alias]
+	if !ok {
+		return "", false
+	}
+	mod := append(append([]string{}, tgt.Mod...), extraMods...)
+	q := names.QualifyParts(tgt.Pkg, mod, name)
+	if _, ok := c.structSigs[q]; ok {
+		return q, true
+	}
+	if _, ok := c.genericStructSigs[q]; ok {
+		return q, true
+	}
+	return "", false
+}
+
 func (c *checker) enumBaseQNameByParts(file *source.File, parts []string) (string, bool) {
 	if file == nil || len(parts) == 0 {
 		return "", false

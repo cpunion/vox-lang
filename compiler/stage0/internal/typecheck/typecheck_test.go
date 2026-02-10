@@ -1580,6 +1580,54 @@ fn main() -> i32 {
 	}
 }
 
+func TestGenericNominalStructLitUsesExpectedType(t *testing.T) {
+	f := source.NewFile("src/main.vox", `struct Pair[T] { a: T, b: T }
+fn main() -> i32 {
+  let p: Pair[i32] = Pair { a: 1, b: 2 };
+  return p.a + p.b;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestGenericNominalEnumCtorUsesExpectedType(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum Option[T] { Some(T), None }
+fn main() -> i32 {
+  let x: Option[i32] = Option.Some(7);
+  return match x { Option.Some(v) => v, Option.None => 0 };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestGenericNominalEnumUnitUsesExpectedType(t *testing.T) {
+	f := source.NewFile("src/main.vox", `enum Option[T] { Some(T), None }
+fn main() -> i32 {
+  let x: Option[i32] = Option.None;
+  return match x { Option.Some(v) => v, Option.None => 3 };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
 func TestGenericNominalMissingTypeArgsRejected(t *testing.T) {
 	f := source.NewFile("src/main.vox", `struct Pair[T] { a: T, b: T }
 fn main() -> i32 {

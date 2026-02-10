@@ -457,7 +457,25 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				c.errorAt(e.S, "internal error: missing file for call resolution")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
-			ety, es, found := c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1], pathTypeArgs, e.S)
+			var (
+				ety   Type
+				es    EnumSig
+				found bool
+			)
+			if expected.K == TyEnum && len(pathTypeArgs) == 0 {
+				if baseQ, okBase := c.enumBaseQNameByParts(c.curFn.Span.File, parts[:len(parts)-1]); okBase {
+					if expected.Name == baseQ || strings.HasPrefix(expected.Name, baseQ+"$") {
+						if es0, ok := c.enumSigs[expected.Name]; ok {
+							ety = expected
+							es = es0
+							found = true
+						}
+					}
+				}
+			}
+			if !found {
+				ety, es, found = c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1], pathTypeArgs, e.S)
+			}
 			if found {
 				if !c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Vis) {
 					c.errorAt(e.S, "type is private: "+ety.Name)
@@ -644,7 +662,25 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			if ok && len(parts) >= 2 {
 				alias := parts[0]
 				if _, ok := c.lookupVar(alias); !ok {
-					ety, es, found := c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1], pathTypeArgs, e.S)
+					var (
+						ety   Type
+						es    EnumSig
+						found bool
+					)
+					if expected.K == TyEnum && len(pathTypeArgs) == 0 {
+						if baseQ, okBase := c.enumBaseQNameByParts(c.curFn.Span.File, parts[:len(parts)-1]); okBase {
+							if expected.Name == baseQ || strings.HasPrefix(expected.Name, baseQ+"$") {
+								if es0, ok := c.enumSigs[expected.Name]; ok {
+									ety = expected
+									es = es0
+									found = true
+								}
+							}
+						}
+					}
+					if !found {
+						ety, es, found = c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1], pathTypeArgs, e.S)
+					}
 					if found && !c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Vis) {
 						c.errorAt(e.S, "type is private: "+ety.Name)
 						return c.setExprType(ex, Type{K: TyBad})
@@ -689,7 +725,25 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			c.errorAt(e.S, "internal error: missing file for struct literal")
 			return c.setExprType(ex, Type{K: TyBad})
 		}
-		sty, ss, ok := c.resolveStructByParts(e.S.File, e.TypeParts, e.TypeArgs, e.S)
+		var (
+			sty Type
+			ss  StructSig
+			ok  bool
+		)
+		if expected.K == TyStruct && len(e.TypeArgs) == 0 {
+			if baseQ, okBase := c.structBaseQNameByParts(e.S.File, e.TypeParts); okBase {
+				if expected.Name == baseQ || strings.HasPrefix(expected.Name, baseQ+"$") {
+					if ss0, okSig := c.structSigs[expected.Name]; okSig {
+						sty = expected
+						ss = ss0
+						ok = true
+					}
+				}
+			}
+		}
+		if !ok {
+			sty, ss, ok = c.resolveStructByParts(e.S.File, e.TypeParts, e.TypeArgs, e.S)
+		}
 		if !ok {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
