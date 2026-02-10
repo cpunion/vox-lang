@@ -13,18 +13,38 @@ test-go:
 test-stage1: test-stage1-c test-stage1-interp
 
 test-stage1-c:
-	cd compiler/stage0 && go run ./cmd/vox test --engine=c ../stage1
+	@set -e; \
+	start=$$(date +%s); \
+	cd compiler/stage0; \
+	go run ./cmd/vox test --engine=c ../stage1; \
+	end=$$(date +%s); \
+	echo "[time] vox test --engine=c ../stage1: $$((end-start))s"
 
 test-stage1-interp:
-	cd compiler/stage0 && go run ./cmd/vox test --engine=interp ../stage1
+	@set -e; \
+	start=$$(date +%s); \
+	cd compiler/stage0; \
+	go run ./cmd/vox test --engine=interp ../stage1; \
+	end=$$(date +%s); \
+	echo "[time] vox test --engine=interp ../stage1: $$((end-start))s"
 
 test-examples: test-examples-c test-examples-interp
 
 test-examples-c:
-	cd compiler/stage0 && go run ./cmd/vox test --engine=c ../../examples/c_demo
+	@set -e; \
+	start=$$(date +%s); \
+	cd compiler/stage0; \
+	go run ./cmd/vox test --engine=c ../../examples/c_demo; \
+	end=$$(date +%s); \
+	echo "[time] vox test --engine=c ../../examples/c_demo: $$((end-start))s"
 
 test-examples-interp:
-	cd compiler/stage0 && go run ./cmd/vox test --engine=interp ../../examples/c_demo
+	@set -e; \
+	start=$$(date +%s); \
+	cd compiler/stage0; \
+	go run ./cmd/vox test --engine=interp ../../examples/c_demo; \
+	end=$$(date +%s); \
+	echo "[time] vox test --engine=interp ../../examples/c_demo: $$((end-start))s"
 
 # Stage1 CLI/toolchain integration tests (run without test cache).
 test-stage1-toolchain:
