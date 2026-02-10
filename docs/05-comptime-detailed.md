@@ -99,13 +99,17 @@ fn crc_table() -> [u32; 256] { ... }
 @field_type(T, index: usize) -> type
 ```
 
-## comptime 报错
-
-建议提供：
+## comptime 报错（Stage1 已实现）
 
 ```vox
-@compile_error(msg: &'static str) -> !
+@compile_error(msg: String)
 ```
+
+当前语义：
+
+- 参数必须是 1 个 `String` 表达式。
+- 调用点直接触发编译错误，错误文本为 `compile_error: <msg>`。
+- 该语义同样适用于 `const` 初始化中的调用。
 
 ## 资源限制
 
