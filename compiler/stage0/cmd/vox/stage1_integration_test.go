@@ -1357,6 +1357,44 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(br), "no previous failed tests") {
 		t.Fatalf("expected no previous failed tests message, got:\n%s", string(br))
 	}
+
+	// Ensure failed test logs are still visible when running with module-level jobs.
+	failRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(failRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir fail src: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(failRoot, "tests"), 0o755); err != nil {
+		t.Fatalf("mkdir fail tests: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(failRoot, "target", "debug"), 0o755); err != nil {
+		t.Fatalf("mkdir fail target/debug: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(failRoot, "vox.toml"), []byte(`[package]
+name = "fail_app"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write fail vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(failRoot, "src", "main.vox"), []byte("fn main() -> i32 { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("write fail main: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(failRoot, "tests", "fail.vox"), []byte("import \"std/testing\" as t\nfn test_fail_marker() -> () { t.fail(\"STAGE2_FAIL_MARKER\"); }\n"), 0o644); err != nil {
+		t.Fatalf("write fail test: %v", err)
+	}
+	failOutRel := filepath.Join("target", "debug", "vox_stage2_fail.test")
+	cmdFail := exec.Command(stage2BinB, "test-pkg", "--jobs=2", failOutRel)
+	cmdFail.Dir = failRoot
+	bf, err := cmdFail.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected failing stage2 test-pkg to return non-zero, got success:\n%s", string(bf))
+	}
+	if !strings.Contains(string(bf), "[FAIL] tests::test_fail_marker") {
+		t.Fatalf("expected fail line in stage2 output, got:\n%s", string(bf))
+	}
+	if !strings.Contains(string(bf), "STAGE2_FAIL_MARKER") {
+		t.Fatalf("expected captured failed test log in stage2 output, got:\n%s", string(bf))
+	}
 }
 
 func TestStage1ExitCodeNonZeroOnBuildPkgFailure(t *testing.T) {
