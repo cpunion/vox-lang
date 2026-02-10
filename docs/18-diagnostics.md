@@ -54,6 +54,7 @@ Stage1 v0 的 typecheck/irgen 错误以字符串为主，**但当 AST 节点拥�
 - import 相关错误（重复 alias、命名导入冲突、unknown/ambiguous import）已优先使用 `import` 声明/名称位置。
 - `comptime where` 声明期错误（unknown rhs/unknown type param/default 违规等）已优先使用声明 `Span`。
 - supertrait cycle 报错已定位到 trait 声明位置（不再回退 `file:1:1`）。
+- trait 方法声明已携带 `Span`，其方法级 `where/comptime where` 错误定位到方法行而非 trait 头。
 
 后续计划（Stage1 诊断升级）：
 
