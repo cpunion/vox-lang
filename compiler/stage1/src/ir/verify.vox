@@ -21,6 +21,79 @@ fn has_name(xs: Vec[String], x: String) -> bool {
   return false;
 }
 
+struct FindStructDeclResult {
+  found: bool,
+  s: StructDecl,
+}
+
+struct FindEnumDeclResult {
+  found: bool,
+  e: EnumDecl,
+}
+
+struct FindEnumVariantResult {
+  found: bool,
+  v: EnumVariant,
+}
+
+fn nominal_qname(t: Ty) -> String {
+  if t.mod_path == "" || t.mod_path == "main" { return t.name; }
+  let mut s: String = t.mod_path;
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == 47 { // '/'
+      s = s.slice(0, i).concat(".").concat(s.slice(i + 1, s.len()));
+    }
+    i = i + 1;
+  }
+  return s.concat("::").concat(t.name);
+}
+
+fn find_struct_decl(p: Program, qname: String) -> FindStructDeclResult {
+  let mut i: i32 = 0;
+  while i < p.structs.len() {
+    let s: StructDecl = p.structs.get(i);
+    if s.name == qname {
+      return FindStructDeclResult { found: true, s: s };
+    }
+    i = i + 1;
+  }
+  return FindStructDeclResult { found: false, s: StructDecl { name: "", fields: Vec() } };
+}
+
+fn find_enum_decl(p: Program, qname: String) -> FindEnumDeclResult {
+  let mut i: i32 = 0;
+  while i < p.enums.len() {
+    let e: EnumDecl = p.enums.get(i);
+    if e.name == qname {
+      return FindEnumDeclResult { found: true, e: e };
+    }
+    i = i + 1;
+  }
+  return FindEnumDeclResult { found: false, e: EnumDecl { name: "", variants: Vec() } };
+}
+
+fn find_enum_variant(e: EnumDecl, name: String) -> FindEnumVariantResult {
+  let mut i: i32 = 0;
+  while i < e.variants.len() {
+    let v: EnumVariant = e.variants.get(i);
+    if v.name == name {
+      return FindEnumVariantResult { found: true, v: v };
+    }
+    i = i + 1;
+  }
+  return FindEnumVariantResult { found: false, v: EnumVariant { name: "", fields: Vec() } };
+}
+
+fn struct_has_field(s: StructDecl, field: String) -> bool {
+  let mut i: i32 = 0;
+  while i < s.fields.len() {
+    if s.fields.get(i).name == field { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn ty_kind_text(k: TyKind) -> String {
   return match k {
     TyKind.Bad => "bad",
@@ -121,7 +194,8 @@ fn verify_cast_float(pool: TyPool, dst_ty: i32, src_ty: i32, ctx: String) -> Ver
   return verify_ok();
 }
 
-fn verify_instr(pool: TyPool, f: Func, b: Block, inst: Instr) -> VerifyResult {
+fn verify_instr(p: Program, f: Func, b: Block, inst: Instr) -> VerifyResult {
+  let pool: TyPool = p.pool;
   return
     match inst {
       Instr.Const(dst, ty, _v) => {
@@ -184,10 +258,28 @@ fn verify_instr(pool: TyPool, f: Func, b: Block, inst: Instr) -> VerifyResult {
         verify_ty_idx(pool, ty, "load ty")
       },
 
-      Instr.StructInit(dst, ty, _fields) => {
+      Instr.StructInit(dst, ty, fields) => {
         let vd: VerifyResult = verify_id_nonneg(dst, "struct_init dst");
         if !vd.ok { return vd; }
-        verify_ty_idx(pool, ty, "struct_init ty")
+        let vt: VerifyResult = verify_ty_idx(pool, ty, "struct_init ty");
+        if !vt.ok { return vt; }
+        let tt: Ty = ty_pool_get(pool, ty);
+        if tt.kind != TyKind.Struct {
+          return verify_err("struct_init ty must be struct");
+        }
+        let sf: FindStructDeclResult = find_struct_decl(p, nominal_qname(tt));
+        if !sf.found {
+          return verify_err("struct_init references unknown struct decl: ".concat(nominal_qname(tt)));
+        }
+        let mut i: i32 = 0;
+        while i < fields.len() {
+          let fnm: String = fields.get(i).name;
+          if !struct_has_field(sf.s, fnm) {
+            return verify_err("struct_init unknown field: ".concat(fnm));
+          }
+          i = i + 1;
+        }
+        verify_ok()
       },
       Instr.FieldGet(dst, ty, _recv, _field) => {
         let vd: VerifyResult = verify_id_nonneg(dst, "field_get dst");
@@ -196,16 +288,38 @@ fn verify_instr(pool: TyPool, f: Func, b: Block, inst: Instr) -> VerifyResult {
       },
       Instr.StoreField(slot, _field, _v) => verify_id_nonneg(slot, "store_field slot"),
 
-      Instr.EnumInit(dst, ty, _variant, _payload) => {
+      Instr.EnumInit(dst, ty, vrn, payload) => {
         let vd: VerifyResult = verify_id_nonneg(dst, "enum_init dst");
         if !vd.ok { return vd; }
-        verify_ty_idx(pool, ty, "enum_init ty")
+        let vt: VerifyResult = verify_ty_idx(pool, ty, "enum_init ty");
+        if !vt.ok { return vt; }
+        let tt: Ty = ty_pool_get(pool, ty);
+        if tt.kind != TyKind.Enum {
+          return verify_err("enum_init ty must be enum");
+        }
+        let ef: FindEnumDeclResult = find_enum_decl(p, nominal_qname(tt));
+        if !ef.found {
+          return verify_err("enum_init references unknown enum decl: ".concat(nominal_qname(tt)));
+        }
+        let vf: FindEnumVariantResult = find_enum_variant(ef.e, vrn);
+        if !vf.found {
+          return verify_err("enum_init unknown variant: ".concat(vrn));
+        }
+        if payload.len() != vf.v.fields.len() {
+          return verify_err("enum_init payload arity mismatch for variant ".concat(vrn));
+        }
+        verify_ok()
       },
       Instr.EnumTag(dst, _recv) => verify_id_nonneg(dst, "enum_tag dst"),
-      Instr.EnumPayload(dst, ty, _recv, _variant, _idx) => {
+      Instr.EnumPayload(dst, ty, _recv, _variant, idx) => {
         let vd: VerifyResult = verify_id_nonneg(dst, "enum_payload dst");
         if !vd.ok { return vd; }
-        verify_ty_idx(pool, ty, "enum_payload ty")
+        let vt: VerifyResult = verify_ty_idx(pool, ty, "enum_payload ty");
+        if !vt.ok { return vt; }
+        if idx < 0 {
+          return verify_err("enum_payload index must be non-negative");
+        }
+        verify_ok()
       },
 
       Instr.VecNew(dst, ty, elem) => {
@@ -348,7 +462,7 @@ pub fn verify_program(p: Program) -> VerifyResult {
       if !vt.ok { return vt; }
       let mut ii: i32 = 0;
       while ii < b.instrs.len() {
-        let vii: VerifyResult = verify_instr(pool, f, b, b.instrs.get(ii));
+        let vii: VerifyResult = verify_instr(p, f, b, b.instrs.get(ii));
         if !vii.ok { return vii; }
         ii = ii + 1;
       }
@@ -359,4 +473,3 @@ pub fn verify_program(p: Program) -> VerifyResult {
 
   return verify_ok();
 }
-
