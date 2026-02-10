@@ -6,7 +6,8 @@
 
 1. **Stage0（Go）**：实现 Vox 的一个“可用于自举”的实用子集，重点是工程基础（包/多文件/测试/诊断），而不是语言全部特性。
 2. **Stage1（Vox，自举）**：用 Vox 实现 Vox 编译器，目标是在功能覆盖上达到 Stage0，并在此基础上完善工程基座（测试/包管理/模块）以及编译链路（IR/后端/构建）。
-3. **Stage2（工具链）**：在 Stage1 的编译链路稳定后，完善 fmt/lint/doc/LSP 等开发工具，并逐步纳入更多语言特性（comptime/宏等）。
+3. **Stage2（Vox，Stage1 产出）**：以 Stage1 为基线复制并演进的下一代编译器线，由 Stage1 编译生成。该阶段用于承载超出 Stage0 约束的语言能力（例如更激进的泛型/标准库抽象演进）。
+4. **Stage3（工具链）**：在 Stage2 编译链路稳定后，完善 fmt/lint/doc/LSP 等开发工具，并逐步纳入 comptime/宏等更高阶特性。
 
 ## Stage0 范围（已定）
 
@@ -91,3 +92,9 @@ make test
 
 - Stage1 CLI 在运行时会根据 `std/process.exe_path()` 推导 Stage1 根目录，从其 `src/std/**` 加载标准库源码。
 - 因此 self-build 时 Stage1 B 的输出路径需要位于 `compiler/stage1/target/debug/`（测试也固定了这一点）。
+
+补充（Stage2 引导）：
+
+- 仓库已增加 `compiler/stage2`（以 `compiler/stage1` 当前实现为基线复制）。
+- 自举门禁新增 `TestStage1BuildsStage2AndBuildsPackage`：验证 `stage1 -> stage2` 编译链路可用。
+- 可通过 `make test-stage2-selfhost` 单独执行该链路（依赖 `VOX_RUN_SELFHOST_TESTS=1`）。

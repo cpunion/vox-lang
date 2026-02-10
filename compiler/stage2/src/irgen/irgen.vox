@@ -1,0 +1,475 @@
+import "ast" as ast
+import "ir" as ir
+import "typecheck" as tc
+
+pub struct GenResult {
+  pub ok: bool,
+  pub err: String,
+  pub prog: ir.Program,
+}
+
+fn ok0(p: ir.Program) -> GenResult { return GenResult { ok: true, err: "", prog: p }; }
+fn err0(p: ir.Program, msg: String) -> GenResult { return GenResult { ok: false, err: msg, prog: p }; }
+
+fn qname(mod_path: String, name: String) -> String {
+  // Root module uses plain names (stage0-like); others use `a.b::name`.
+  if mod_path == "" || mod_path == "main" { return name; }
+  // Replace '/' with '.'.
+  let mut s: String = mod_path;
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == 47 { // '/'
+      s = s.slice(0, i).concat(".").concat(s.slice(i + 1, s.len()));
+    }
+    i = i + 1;
+  }
+  return s.concat("::").concat(name);
+}
+
+enum TaskKind { Normal, Inst }
+
+struct FuncTask {
+  kind: TaskKind,
+  mod_path: String,
+  func_idx: i32,     // for Normal (-1 otherwise)
+  impl_idx: i32,     // for impl method task (-1 otherwise)
+  impl_m_idx: i32,   // for impl method task (-1 otherwise)
+  impl_name: String, // lowered impl method name
+  impl_sig: tc.FuncSig,
+  impl_from_default: bool,
+  impl_default_mod_path: String,
+  impl_default_file: String,
+  impl_default_params: Vec[String],
+  impl_default_body: ast.Block,
+  base_name: String, // for Inst
+  inst_name: String, // for Inst
+  inst_sig: tc.FuncSig,
+  subs: Vec[tc.TySub],
+  const_subs: Vec[tc.ConstSub],
+}
+
+fn has_str(vs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < vs.len() {
+    if vs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn dummy_type_name() -> ast.TypeName {
+  let mut parts: Vec[String] = Vec();
+  parts.push("i32");
+  return ast.TypeName { parts: parts, args: Vec() };
+}
+
+fn synth_params(names: Vec[String]) -> Vec[ast.Param] {
+  let mut out: Vec[ast.Param] = Vec();
+  let mut i: i32 = 0;
+  while i < names.len() {
+    out.push(ast.Param { name: names.get(i), ty: dummy_type_name() });
+    i = i + 1;
+  }
+  return out;
+}
+
+fn find_impl_method_decl_idx(id: ast.ImplDecl, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < id.methods.len() {
+    if id.methods.get(i).name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+struct FindModResult { found: bool, m: tc.WorldModule }
+
+fn find_mod(w: tc.World, path: String) -> FindModResult {
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(i);
+    if m.path == path { return FindModResult { found: true, m: m }; }
+    i = i + 1;
+  }
+  // Dummy; caller must check found.
+  return FindModResult {
+    found: false,
+    m: tc.WorldModule {
+      path: "",
+      prog: ast.Program {
+        imports: Vec(),
+        types: Vec(),
+        consts: Vec(),
+        structs: Vec(),
+        enums: Vec(),
+        traits: Vec(),
+        impls: Vec(),
+        funcs: Vec(),
+        exprs: ast.expr_pool(),
+      },
+    },
+  };
+}
+
+struct FindFuncDeclResult { found: bool, mod_path: String, fd: ast.FuncDecl }
+
+fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDeclResult {
+  let mut i: i32 = 0;
+  while i < m.prog.funcs.len() {
+    let fd: ast.FuncDecl = m.prog.funcs.get(i);
+    if fd.name == name && (fd.type_params.len() != 0 || fd.const_params.len() != 0) { return FindFuncDeclResult { found: true, mod_path: m.path, fd: fd }; }
+    i = i + 1;
+  }
+
+  // Generic impl methods are looked up by lowered impl symbol name.
+  let mut ii: i32 = 0;
+  while ii < m.prog.impls.len() {
+    let id: ast.ImplDecl = m.prog.impls.get(ii);
+    let mut si: i32 = 0;
+    while si < ctx.impls.len() {
+      let isg: tc.ImplSig = ctx.impls.get(si);
+      if isg.mod_path == m.path && isg.decl_idx == ii {
+        let mut mi: i32 = 0;
+        while mi < isg.methods.len() {
+          let ms: tc.ImplMethodSig = isg.methods.get(mi);
+          if ms.lowered_name == name && (ms.sig.type_params.len() != 0 || ms.sig.const_params.len() != 0) {
+            if ms.from_default {
+              let fd0: ast.FuncDecl = ast.FuncDecl {
+                file: ms.default_file,
+                sp: ast.span0(),
+                vis: ast.vis_private(),
+                is_pub: false,
+                name: ms.lowered_name,
+                type_params: ms.sig.type_params,
+                const_params: Vec(),
+                type_param_bounds: Vec(),
+                const_where_bounds: Vec(),
+                params: synth_params(ms.default_params),
+                ret: dummy_type_name(),
+                body: ms.default_body,
+              };
+              return FindFuncDeclResult { found: true, mod_path: ms.default_mod_path, fd: fd0 };
+            } else {
+              let mdi: i32 = find_impl_method_decl_idx(id, ms.name);
+              if mdi != -1 {
+                let md: ast.FuncDecl = id.methods.get(mdi);
+                // `ms.sig.type_params` already includes impl-header + method generics.
+                // For `impl[T] Trait for ... { fn m(...) ... }`, method decl itself can be non-generic.
+                return FindFuncDeclResult { found: true, mod_path: m.path, fd: md };
+              }
+            }
+          }
+          mi = mi + 1;
+        }
+      }
+      si = si + 1;
+    }
+    ii = ii + 1;
+  }
+
+  return FindFuncDeclResult {
+    found: false,
+    mod_path: "",
+    fd: ast.FuncDecl {
+      file: "",
+      sp: ast.span0(),
+      vis: ast.vis_private(),
+      is_pub: false,
+      name: "",
+      type_params: Vec(),
+      const_params: Vec(),
+      type_param_bounds: Vec(),
+      const_where_bounds: Vec(),
+      params: Vec(),
+      ret: ast.TypeName { parts: Vec(), args: Vec() },
+      body: ast.Block { stmts: Vec() },
+    },
+  };
+}
+
+struct FindImplSigResult { found: bool, sig: tc.ImplSig }
+struct FindImplMethodResult { found: bool, sig: tc.ImplMethodSig }
+
+fn empty_impl_sig() -> tc.ImplSig {
+  return tc.ImplSig { mod_path: "", decl_idx: -1, trait_mod_path: "", trait_name: "", for_ty: -1, assoc_types: Vec(), methods: Vec() };
+}
+
+fn empty_impl_method_sig() -> tc.ImplMethodSig {
+  return tc.ImplMethodSig {
+    name: "",
+    lowered_name: "",
+    sig: tc.FuncSig { params: Vec(), ret: -1, vis: ast.vis_private(), is_pub: false, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
+    from_default: false,
+    default_mod_path: "",
+    default_file: "",
+    default_params: Vec(),
+    default_body: ast.Block { stmts: Vec() },
+  };
+}
+
+fn find_impl_sig(ctx: tc.Ctx, mod_path: String, decl_idx: i32) -> FindImplSigResult {
+  let mut i: i32 = 0;
+  while i < ctx.impls.len() {
+    let s: tc.ImplSig = ctx.impls.get(i);
+    if s.mod_path == mod_path && s.decl_idx == decl_idx {
+      return FindImplSigResult { found: true, sig: s };
+    }
+    i = i + 1;
+  }
+  return FindImplSigResult { found: false, sig: empty_impl_sig() };
+}
+
+fn find_impl_method_sig(sig: tc.ImplSig, name: String) -> FindImplMethodResult {
+  let mut i: i32 = 0;
+  while i < sig.methods.len() {
+    let m: tc.ImplMethodSig = sig.methods.get(i);
+    if m.name == name { return FindImplMethodResult { found: true, sig: m }; }
+    i = i + 1;
+  }
+  return FindImplMethodResult { found: false, sig: empty_impl_method_sig() };
+}
+
+pub fn generate_world(w: tc.World) -> GenResult {
+  let br: tc.BuildCtxResult = tc.build_ctx(w);
+  let mut ctx: tc.Ctx = br.ctx;
+  let mut p: ir.Program = ir.program(ctx.pool);
+  if !br.ok { return err0(p, tc.tc_error_to_string(br.err)); }
+
+  // Nominal defs from collected signatures.
+  let mut si: i32 = 0;
+  while si < br.ctx.structs.len() {
+    let s: tc.StructSig = br.ctx.structs.get(si);
+    let mut fields: Vec[ir.StructField] = Vec();
+    let mut fi: i32 = 0;
+    while fi < s.fields.len() {
+      let f: tc.StructFieldSig = s.fields.get(fi);
+      fields.push(ir.StructField { name: f.name, ty: f.ty });
+      fi = fi + 1;
+    }
+    p.structs.push(ir.StructDecl { name: qname(s.mod_path, s.name), fields: fields });
+    si = si + 1;
+  }
+
+  let mut ei: i32 = 0;
+  while ei < br.ctx.enums.len() {
+    let e: tc.EnumSig = br.ctx.enums.get(ei);
+    let mut vars: Vec[ir.EnumVariant] = Vec();
+    let mut vi: i32 = 0;
+    while vi < e.vars.len() {
+      let v: tc.EnumVariantSig = e.vars.get(vi);
+      vars.push(ir.EnumVariant { name: v.name, fields: v.fields });
+      vi = vi + 1;
+    }
+    p.enums.push(ir.EnumDecl { name: qname(e.mod_path, e.name), variants: vars });
+    ei = ei + 1;
+  }
+
+  // Function bodies: generate all non-generic functions, then monomorphize reachable generic instantiations.
+  let mut tasks: Vec[FuncTask] = Vec();
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(mi);
+    let mut fi: i32 = 0;
+    while fi < m.prog.funcs.len() {
+      let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+      if fd.type_params.len() == 0 && fd.const_params.len() == 0 {
+        tasks.push(FuncTask {
+          kind: TaskKind.Normal,
+          mod_path: m.path,
+          func_idx: fi,
+          impl_idx: -1,
+          impl_m_idx: -1,
+          impl_name: "",
+          impl_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
+          impl_from_default: false,
+          impl_default_mod_path: "",
+          impl_default_file: "",
+          impl_default_params: Vec(),
+          impl_default_body: ast.Block { stmts: Vec() },
+          base_name: "",
+          inst_name: "",
+          inst_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
+          subs: Vec(),
+          const_subs: Vec(),
+        });
+      }
+      fi = fi + 1;
+    }
+
+    // Impl methods: monomorphic ones are lowered eagerly; generic ones are monomorphized on-demand.
+    let mut ii: i32 = 0;
+    while ii < m.prog.impls.len() {
+      let id: ast.ImplDecl = m.prog.impls.get(ii);
+      let ir0: FindImplSigResult = find_impl_sig(br.ctx, m.path, ii);
+      if !ir0.found { return err0(p, "missing impl signature"); }
+
+      let mut msi: i32 = 0;
+      while msi < ir0.sig.methods.len() {
+        let mr0: tc.ImplMethodSig = ir0.sig.methods.get(msi);
+        if mr0.sig.type_params.len() != 0 || mr0.sig.const_params.len() != 0 {
+          msi = msi + 1;
+          continue;
+        }
+        let mut mdi: i32 = -1;
+        if !mr0.from_default {
+          mdi = find_impl_method_decl_idx(id, mr0.name);
+          if mdi == -1 { return err0(p, "missing impl method decl"); }
+        }
+        tasks.push(FuncTask {
+          kind: TaskKind.Normal,
+          mod_path: m.path,
+          func_idx: -1,
+          impl_idx: ii,
+          impl_m_idx: mdi,
+          impl_name: mr0.lowered_name,
+          impl_sig: mr0.sig,
+          impl_from_default: mr0.from_default,
+          impl_default_mod_path: mr0.default_mod_path,
+          impl_default_file: mr0.default_file,
+          impl_default_params: mr0.default_params,
+          impl_default_body: mr0.default_body,
+          base_name: "",
+          inst_name: "",
+          inst_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
+          subs: Vec(),
+          const_subs: Vec(),
+        });
+        msi = msi + 1;
+      }
+
+      ii = ii + 1;
+    }
+
+    mi = mi + 1;
+  }
+
+  let mut emitted: Vec[String] = Vec();
+  let mut ti: i32 = 0;
+  while ti < tasks.len() {
+    let t: FuncTask = tasks.get(ti);
+
+    let mr: FindModResult = find_mod(w, t.mod_path);
+    if !mr.found { return err0(p, "missing module for task"); }
+    let m2: tc.WorldModule = mr.m;
+    let mut want_name: String = "";
+    let mut imps: tc.Imports = tc.Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() };
+    let mut r: GenFuncResult = GenFuncResult { ok: false, err: "", ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, pending: Vec() };
+    // Vox match arms only support single expressions (no block arms yet),
+    // so branch on a structural invariant instead of matching on TaskKind.
+    if t.func_idx != -1 {
+      // Normal task.
+      let fd: ast.FuncDecl = m2.prog.funcs.get(t.func_idx);
+      let ar: tc.ImportsResult = tc.build_imports(w, t.mod_path, m2.prog.imports, fd.file);
+      if !ar.ok { return err0(p, tc.tc_error_to_string(ar.err)); }
+      imps = ar.imps;
+      want_name = qname(t.mod_path, fd.name);
+      if has_str(emitted, want_name) { ti = ti + 1; continue; }
+      r = gen_func(ctx, w, t.mod_path, imps, m2.prog.exprs, fd);
+    } else if t.impl_idx != -1 {
+      // Impl method task.
+      let mut md: ast.FuncDecl = ast.FuncDecl {
+        file: "",
+        sp: ast.span0(),
+        vis: ast.vis_private(),
+        is_pub: false,
+        name: "",
+        type_params: Vec(),
+        const_params: Vec(),
+        type_param_bounds: Vec(),
+        const_where_bounds: Vec(),
+        params: Vec(),
+        ret: ast.TypeName { parts: Vec(), args: Vec() },
+        body: ast.Block { stmts: Vec() },
+      };
+      let mut body_mod_path: String = t.mod_path;
+      let mut body_exprs: ast.ExprPool = m2.prog.exprs;
+      let mut body_imports: Vec[ast.ImportDecl] = m2.prog.imports;
+      let mut file_for_imports: String = "";
+      if t.impl_from_default {
+        body_mod_path = t.impl_default_mod_path;
+        let fmd: FindModResult = find_mod(w, t.impl_default_mod_path);
+        if !fmd.found { return err0(p, "missing default trait method module"); }
+        body_exprs = fmd.m.prog.exprs;
+        body_imports = fmd.m.prog.imports;
+        file_for_imports = t.impl_default_file;
+        md = ast.FuncDecl {
+          file: t.impl_default_file,
+          sp: ast.span0(),
+          vis: ast.vis_private(),
+          is_pub: false,
+          name: t.impl_name,
+          type_params: Vec(),
+          const_params: Vec(),
+          type_param_bounds: Vec(),
+          const_where_bounds: Vec(),
+          params: synth_params(t.impl_default_params),
+          ret: dummy_type_name(),
+          body: t.impl_default_body,
+        };
+      } else {
+        let id: ast.ImplDecl = m2.prog.impls.get(t.impl_idx);
+        md = id.methods.get(t.impl_m_idx);
+        file_for_imports = md.file;
+      }
+      let ar: tc.ImportsResult = tc.build_imports(w, body_mod_path, body_imports, file_for_imports);
+      if !ar.ok { return err0(p, tc.tc_error_to_string(ar.err)); }
+      imps = ar.imps;
+      want_name = qname(t.mod_path, t.impl_name);
+      if has_str(emitted, want_name) { ti = ti + 1; continue; }
+      r = gen_func_impl(ctx, w, body_mod_path, t.mod_path, imps, body_exprs, md, t.impl_name, t.impl_sig, Vec(), Vec());
+    } else {
+      // Generic instantiation task.
+      let fr: FindFuncDeclResult = find_generic_func(br.ctx, m2, t.base_name);
+      if !fr.found { return err0(p, "missing generic fn for instantiation"); }
+      let mut bmod: tc.WorldModule = m2;
+      if fr.mod_path != t.mod_path {
+        let fm2: FindModResult = find_mod(w, fr.mod_path);
+        if !fm2.found { return err0(p, "missing module for generic body"); }
+        bmod = fm2.m;
+      }
+      let ar: tc.ImportsResult = tc.build_imports(w, bmod.path, bmod.prog.imports, fr.fd.file);
+      if !ar.ok { return err0(p, tc.tc_error_to_string(ar.err)); }
+      imps = ar.imps;
+      want_name = qname(t.mod_path, t.inst_name);
+      if has_str(emitted, want_name) { ti = ti + 1; continue; }
+      r = gen_func_impl(ctx, w, bmod.path, t.mod_path, imps, bmod.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs, t.const_subs);
+    }
+
+    if !r.ok { return err0(p, r.err); }
+    ctx = r.ctx;
+    emitted.push(want_name);
+    p.funcs.push(r.f);
+
+    // Enqueue pending instantiations discovered while lowering this function.
+    let mut pi: i32 = 0;
+    while pi < r.pending.len() {
+      let pend: PendingInst = r.pending.get(pi);
+      tasks.push(FuncTask {
+        kind: TaskKind.Inst,
+        mod_path: pend.mod_path,
+        func_idx: -1,
+        impl_idx: -1,
+        impl_m_idx: -1,
+        impl_name: "",
+        impl_sig: tc.FuncSig { params: Vec(), ret: br.ctx.ty_bad, vis: ast.vis_private(), is_pub: false, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
+        impl_from_default: false,
+        impl_default_mod_path: "",
+        impl_default_file: "",
+        impl_default_params: Vec(),
+        impl_default_body: ast.Block { stmts: Vec() },
+        base_name: pend.base_name,
+        inst_name: pend.inst_name,
+        inst_sig: pend.sig,
+        subs: pend.subs,
+        const_subs: pend.const_subs,
+      });
+      pi = pi + 1;
+    }
+
+    ti = ti + 1;
+  }
+
+  // Keep the program's pool in sync with any types interned while lowering bodies.
+  p.pool = ctx.pool;
+  return ok0(p);
+}

@@ -1,0 +1,106 @@
+import "std/testing" as t
+import "parse" as p
+import "typecheck" as tc
+
+fn add_mod2(w: tc.World, path: String, src: String) -> tc.World {
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(r.err == p.ParseError.None);
+  return tc.world_add(w, path, r.prog);
+}
+
+fn test_typecheck_allows_generic_fn_sig() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod2(w, "main", "fn id[T](x: T) -> T { return x; }\nfn main() -> i32 { return 0; }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_generic_call_infers_vec_return() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod2(w, "main", "fn mk[T](x: T) -> Vec[T] { return Vec(); }\nfn main() -> i32 { let v = mk(1); return v.len(); }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_generic_trait_bound_satisfied() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod2(w, "main", """
+    trait Eq { fn eq(a: Self, b: Self) -> bool; }
+    impl Eq for i32 { fn eq(a: i32, b: i32) -> bool { return a == b; } }
+    fn same[T: Eq](a: T, b: T) -> bool { return Eq.eq(a, b); }
+    fn main() -> i32 { return if same(1, 1) { 1 } else { 0 }; }
+  """);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_generic_trait_bound_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod2(w, "main", """
+    trait Eq { fn eq(a: Self, b: Self) -> bool; }
+    impl Eq for i32 { fn eq(a: i32, b: i32) -> bool { return a == b; } }
+    fn same[T: Eq](a: T, b: T) -> bool { return Eq.eq(a, b); }
+    fn main() -> i32 { return if same("a", "b") { 1 } else { 0 }; }
+  """);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(msg.len() > 0);
+}
+
+fn test_typecheck_generic_where_trait_bound_satisfied() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod2(w, "main", """
+    trait Eq { fn eq(a: Self, b: Self) -> bool; }
+    impl Eq for i32 { fn eq(a: i32, b: i32) -> bool { return a == b; } }
+    fn same[T](a: T, b: T) -> bool where T: Eq { return Eq.eq(a, b); }
+    fn main() -> i32 { return if same(1, 1) { 1 } else { 0 }; }
+  """);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_generic_where_trait_bound_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod2(w, "main", """
+    trait Eq { fn eq(a: Self, b: Self) -> bool; }
+    impl Eq for i32 { fn eq(a: i32, b: i32) -> bool { return a == b; } }
+    fn same[T](a: T, b: T) -> bool where T: Eq { return Eq.eq(a, b); }
+    fn main() -> i32 { return if same("a", "b") { 1 } else { 0 }; }
+  """);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+}
+
+fn test_typecheck_impl_specialization_prefers_more_specific_impl() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "trait Tag { fn tag(x: Self) -> i32; }\n"
+    .concat("impl[T] Tag for Vec[T] { fn tag(x: Vec[T]) -> i32 { return 1; } }\n")
+    .concat("impl Tag for Vec[i32] { fn tag(x: Vec[i32]) -> i32 { return 2; } }\n")
+    .concat("fn main() -> i32 {\n")
+    .concat("  let mut vi: Vec[i32] = Vec();\n")
+    .concat("  let mut vs: Vec[String] = Vec();\n")
+    .concat("  vi.push(7);\n")
+    .concat("  vs.push(\"x\");\n")
+    .concat("  return Tag.tag(vi) + Tag.tag(vs);\n")
+    .concat("}");
+  w = add_mod2(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(r.ok, tc.tc_error_to_string(r.err));
+  t.assert(r.ok);
+}
+
+fn test_typecheck_impl_specialization_requires_strict_order() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "trait Tag { fn tag(x: Self) -> i32; }\n"
+    .concat("impl[T] Tag for Vec[T] { fn tag(x: Vec[T]) -> i32 { return 1; } }\n")
+    .concat("impl[U] Tag for Vec[U] { fn tag(x: Vec[U]) -> i32 { return 2; } }\n")
+    .concat("fn main() -> i32 { let mut v: Vec[i32] = Vec(); return Tag.tag(v); }");
+  w = add_mod2(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(contains(msg, "overlapping impl without strict specialization"));
+}

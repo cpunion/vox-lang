@@ -1,0 +1,294 @@
+// Minimal manifest parser for Vox.toml (stage1 v0).
+//
+// Supported subset:
+// - [package] name = "..."
+// - [dependencies]
+//   - dep = { path = "...", version = "...", git = "...", rev = "...", registry = "..." }
+//   - dep = "1.2.3"
+
+pub struct Dependency {
+  pub name: String,
+  pub path: String,
+  pub has_path: bool,
+  pub git: String,
+  pub has_git: bool,
+  pub rev: String,
+  pub has_rev: bool,
+  pub registry: String,
+  pub has_registry: bool,
+  pub version: String,
+  pub has_version: bool,
+}
+
+pub struct Manifest {
+  pub pkg_name: String,
+  pub deps: Vec[Dependency],
+}
+
+pub struct ParseResult {
+  pub ok: bool,
+  pub err: String,
+  pub m: Manifest,
+}
+
+fn ok0(m: Manifest) -> ParseResult { return ParseResult { ok: true, err: "", m: m }; }
+fn err0(msg: String) -> ParseResult { return ParseResult { ok: false, err: msg, m: Manifest { pkg_name: "", deps: Vec() } }; }
+
+pub fn parse(text: String) -> ParseResult {
+  let mut m: Manifest = Manifest { pkg_name: "", deps: Vec() };
+  let mut section: String = "";
+  let mut deps_seen: Vec[String] = Vec();
+  let lines: Vec[String] = split_lines(text);
+  let mut i: i32 = 0;
+  while i < lines.len() {
+    let mut line: String = strip_comment(lines.get(i));
+    line = trim_space(line);
+    if line == "" { i = i + 1; continue; }
+
+    if has_prefix(line, "[") && has_suffix(line, "]") {
+      section = trim_space(line.slice(1, line.len() - 1));
+      i = i + 1;
+      continue;
+    }
+
+    let kv: CutKVResult = cut_kv(line);
+    if !kv.ok { return err0("invalid manifest line"); }
+    let key: String = kv.key;
+    let val: String = kv.val;
+
+    if section == "package" {
+      if key == "name" {
+        m.pkg_name = unquote(val);
+      }
+    } else if section == "dependencies" {
+      if contains_str(deps_seen, key) { return err0("duplicate dependency: ".concat(key)); }
+      let dr: ParseDepValueResult = parse_dependency_value(val);
+      if !dr.ok { return err0("invalid dependency spec: ".concat(key)); }
+      deps_seen.push(key);
+      m.deps.push(Dependency {
+        name: key,
+        path: dr.path,
+        has_path: dr.has_path,
+        git: dr.git,
+        has_git: dr.has_git,
+        rev: dr.rev,
+        has_rev: dr.has_rev,
+        registry: dr.registry,
+        has_registry: dr.has_registry,
+        version: dr.version,
+        has_version: dr.has_version,
+      });
+    }
+
+    i = i + 1;
+  }
+  return ok0(m);
+}
+
+fn contains_str(vs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < vs.len() {
+    if vs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn has_prefix(s: String, pre: String) -> bool {
+  if s.len() < pre.len() { return false; }
+  return s.slice(0, pre.len()) == pre;
+}
+
+fn has_suffix(s: String, suf: String) -> bool {
+  if s.len() < suf.len() { return false; }
+  return s.slice(s.len() - suf.len(), s.len()) == suf;
+}
+
+fn strip_comment(line: String) -> String {
+  let i: i32 = index_byte(line, 35); // '#'
+  if i == -1 { return line; }
+  return line.slice(0, i);
+}
+
+fn is_space(ch: i32) -> bool { return ch == 32 || ch == 9 || ch == 10 || ch == 13; }
+
+fn byte_at_safe(s: String, idx: i32) -> i32 {
+  if idx < 0 { return -1; }
+  if idx >= s.len() { return -1; }
+  return s.byte_at(idx);
+}
+
+fn trim_space(s: String) -> String {
+  let n: i32 = s.len();
+  if n == 0 { return ""; }
+  let mut i: i32 = 0;
+  while i < n && is_space(s.byte_at(i)) { i = i + 1; }
+  let mut j: i32 = n;
+  while j > i && is_space(s.byte_at(j - 1)) { j = j - 1; }
+  return s.slice(i, j);
+}
+
+fn index_byte(s: String, b: i32) -> i32 {
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == b { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+struct CutKVResult { ok: bool, key: String, val: String }
+struct ParseDepValueResult {
+  ok: bool,
+  path: String,
+  has_path: bool,
+  git: String,
+  has_git: bool,
+  rev: String,
+  has_rev: bool,
+  registry: String,
+  has_registry: bool,
+  version: String,
+  has_version: bool,
+}
+
+fn cut_kv(line: String) -> CutKVResult {
+  let i: i32 = index_byte(line, 61); // '='
+  if i == -1 { return CutKVResult { ok: false, key: "", val: "" }; }
+  let k: String = trim_space(line.slice(0, i));
+  let v: String = trim_space(line.slice(i + 1, line.len()));
+  if k == "" || v == "" { return CutKVResult { ok: false, key: "", val: "" }; }
+  return CutKVResult { ok: true, key: k, val: v };
+}
+
+fn unquote(s: String) -> String {
+  let t: String = trim_space(s);
+  if t.len() >= 2 && byte_at_safe(t, 0) == 34 && byte_at_safe(t, t.len() - 1) == 34 { // '"'
+    return t.slice(1, t.len() - 1);
+  }
+  return t;
+}
+
+fn parse_inline_dep(val: String) -> ParseDepValueResult {
+  // stage1 subset: { path = "...", version = "...", git = "...", rev = "...", registry = "..." }
+  let t: String = trim_space(val);
+  if t.len() < 2 {
+    return ParseDepValueResult { ok: false, path: "", has_path: false, git: "", has_git: false, rev: "", has_rev: false, registry: "", has_registry: false, version: "", has_version: false };
+  }
+  if byte_at_safe(t, 0) != 123 {
+    return ParseDepValueResult { ok: false, path: "", has_path: false, git: "", has_git: false, rev: "", has_rev: false, registry: "", has_registry: false, version: "", has_version: false };
+  } // '{'
+  if byte_at_safe(t, t.len() - 1) != 125 {
+    return ParseDepValueResult { ok: false, path: "", has_path: false, git: "", has_git: false, rev: "", has_rev: false, registry: "", has_registry: false, version: "", has_version: false };
+  } // '}'
+  let inner: String = trim_space(t.slice(1, t.len() - 1));
+  let mut path: String = "";
+  let mut has_path: bool = false;
+  let mut git: String = "";
+  let mut has_git: bool = false;
+  let mut rev: String = "";
+  let mut has_rev: bool = false;
+  let mut registry: String = "";
+  let mut has_registry: bool = false;
+  let mut version: String = "";
+  let mut has_version: bool = false;
+  // If there are multiple entries separated by commas, do a simple scan.
+  let parts: Vec[String] = split_by_comma(inner);
+  if parts.len() == 0 {
+    return ParseDepValueResult { ok: false, path: "", has_path: false, git: "", has_git: false, rev: "", has_rev: false, registry: "", has_registry: false, version: "", has_version: false };
+  }
+  let mut i: i32 = 0;
+  while i < parts.len() {
+    let kv2: CutKVResult = cut_kv(trim_space(parts.get(i)));
+    if !kv2.ok {
+      return ParseDepValueResult { ok: false, path: "", has_path: false, git: "", has_git: false, rev: "", has_rev: false, registry: "", has_registry: false, version: "", has_version: false };
+    }
+    if kv2.key == "path" {
+      path = unquote(kv2.val);
+      has_path = true;
+    } else if kv2.key == "git" {
+      git = unquote(kv2.val);
+      has_git = true;
+    } else if kv2.key == "rev" {
+      rev = unquote(kv2.val);
+      has_rev = true;
+    } else if kv2.key == "registry" {
+      registry = unquote(kv2.val);
+      has_registry = true;
+    } else if kv2.key == "version" {
+      version = unquote(kv2.val);
+      has_version = true;
+    } else {
+      return ParseDepValueResult { ok: false, path: "", has_path: false, git: "", has_git: false, rev: "", has_rev: false, registry: "", has_registry: false, version: "", has_version: false };
+    }
+    i = i + 1;
+  }
+  return ParseDepValueResult {
+    ok: true,
+    path: path,
+    has_path: has_path,
+    git: git,
+    has_git: has_git,
+    rev: rev,
+    has_rev: has_rev,
+    registry: registry,
+    has_registry: has_registry,
+    version: version,
+    has_version: has_version,
+  };
+}
+
+fn parse_dependency_value(val: String) -> ParseDepValueResult {
+  let t: String = trim_space(val);
+  if t == "" {
+    return ParseDepValueResult { ok: false, path: "", has_path: false, git: "", has_git: false, rev: "", has_rev: false, registry: "", has_registry: false, version: "", has_version: false };
+  }
+  if byte_at_safe(t, 0) == 123 { return parse_inline_dep(t); } // '{'
+  if byte_at_safe(t, 0) == 34 && byte_at_safe(t, t.len() - 1) == 34 { // '"x"'
+    return ParseDepValueResult {
+      ok: true,
+      path: "",
+      has_path: false,
+      git: "",
+      has_git: false,
+      rev: "",
+      has_rev: false,
+      registry: "",
+      has_registry: false,
+      version: unquote(t),
+      has_version: true,
+    };
+  }
+  return ParseDepValueResult { ok: false, path: "", has_path: false, git: "", has_git: false, rev: "", has_rev: false, registry: "", has_registry: false, version: "", has_version: false };
+}
+
+fn split_lines(text: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  let mut start: i32 = 0;
+  while i < text.len() {
+    if text.byte_at(i) == 10 { // '\n'
+      out.push(text.slice(start, i));
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  // last line
+  if start <= text.len() { out.push(text.slice(start, text.len())); }
+  return out;
+}
+
+fn split_by_comma(text: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  let mut start: i32 = 0;
+  while i < text.len() {
+    if text.byte_at(i) == 44 { // ','
+      out.push(text.slice(start, i));
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  if start <= text.len() { out.push(text.slice(start, text.len())); }
+  return out;
+}

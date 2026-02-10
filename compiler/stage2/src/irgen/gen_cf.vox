@@ -1,0 +1,246 @@
+import "ast" as ast
+import "ir" as ir
+import "typecheck" as tc
+
+fn gen_stmt_if(g0: Gen, cond: i32, then_b: ast.Block, has_else: bool, else_b: ast.Block) -> GenStmtResult {
+  let mut g: Gen = g0;
+  let cr: GenExprResult = gen_expr(g, cond, g.ctx.ty_bool);
+  if !cr.ok { return GenStmtResult { ok: false, err: cr.err, g: cr.g }; }
+  g = cr.g;
+
+  let base: i32 = g.blocks.len();
+  let r_then: GenNewIdResult = gen_new_block(g, "if_then_".concat(base.to_string()));
+  g = r_then.g;
+  let then_idx: i32 = r_then.id;
+  let r_else: GenNewIdResult = gen_new_block(g, "if_else_".concat(base.to_string()));
+  g = r_else.g;
+  let else_idx: i32 = r_else.id;
+  let r_end: GenNewIdResult = gen_new_block(g, "if_end_".concat(base.to_string()));
+  g = r_end.g;
+  let end_idx: i32 = r_end.id;
+
+  g = gen_term(g, ir.Term.CondBr(cr.val, g.blocks.get(then_idx).name, g.blocks.get(else_idx).name));
+
+  // then
+  g = gen_set_block(g, then_idx);
+  let rt: GenStmtResult = gen_block(g, then_b);
+  if !rt.ok { return rt; }
+  g = rt.g;
+  if !g.blocks.get(g.cur).has_term {
+    g = gen_term(g, ir.Term.Br(g.blocks.get(end_idx).name));
+  }
+
+  // else
+  g = gen_set_block(g, else_idx);
+  if has_else {
+    let re: GenStmtResult = gen_block(g, else_b);
+    if !re.ok { return re; }
+    g = re.g;
+  }
+  if !g.blocks.get(g.cur).has_term {
+    g = gen_term(g, ir.Term.Br(g.blocks.get(end_idx).name));
+  }
+
+  g = gen_set_block(g, end_idx);
+  return GenStmtResult { ok: true, err: "", g: g };
+}
+
+fn gen_stmt_while(g0: Gen, cond: i32, body: ast.Block) -> GenStmtResult {
+  let mut g: Gen = g0;
+  let base: i32 = g.blocks.len();
+  let r_cond: GenNewIdResult = gen_new_block(g, "while_cond_".concat(base.to_string()));
+  g = r_cond.g;
+  let cond_idx: i32 = r_cond.id;
+  let r_body: GenNewIdResult = gen_new_block(g, "while_body_".concat(base.to_string()));
+  g = r_body.g;
+  let body_idx: i32 = r_body.id;
+  let r_end: GenNewIdResult = gen_new_block(g, "while_end_".concat(base.to_string()));
+  g = r_end.g;
+  let end_idx: i32 = r_end.id;
+
+  // jump to cond
+  g = gen_term(g, ir.Term.Br(g.blocks.get(cond_idx).name));
+
+  // cond
+  g = gen_set_block(g, cond_idx);
+  let cr: GenExprResult = gen_expr(g, cond, g.ctx.ty_bool);
+  if !cr.ok { return GenStmtResult { ok: false, err: cr.err, g: cr.g }; }
+  g = cr.g;
+  g = gen_term(g, ir.Term.CondBr(cr.val, g.blocks.get(body_idx).name, g.blocks.get(end_idx).name));
+
+  // body
+  g = gen_set_block(g, body_idx);
+  let mut ls: Vec[LoopCtx] = g.loops;
+  ls.push(LoopCtx { break_blk: g.blocks.get(end_idx).name, cont_blk: g.blocks.get(cond_idx).name });
+  g.loops = ls;
+  let mut l0: tc.Locals = g.locals;
+  l0.loop_depth = l0.loop_depth + 1;
+  g.locals = l0;
+  let rb: GenStmtResult = gen_block(g, body);
+  if !rb.ok { return rb; }
+  g = rb.g;
+  let mut l1: tc.Locals = g.locals;
+  l1.loop_depth = l1.loop_depth - 1;
+  g.locals = l1;
+  // pop loop ctx (Vec has no slice/set in stage0, so rebuild without last).
+  let mut out: Vec[LoopCtx] = Vec();
+  let mut i: i32 = 0;
+  while i < g.loops.len() - 1 { out.push(g.loops.get(i)); i = i + 1; }
+  g.loops = out;
+
+  if !g.blocks.get(g.cur).has_term {
+    g = gen_term(g, ir.Term.Br(g.blocks.get(cond_idx).name));
+  }
+
+  g = gen_set_block(g, end_idx);
+  return GenStmtResult { ok: true, err: "", g: g };
+}
+
+fn gen_stmt_break(g0: Gen) -> GenStmtResult {
+  let mut g: Gen = g0;
+  if g.loops.len() == 0 { return GenStmtResult { ok: false, err: "break outside loop", g: g }; }
+  let lc: LoopCtx = g.loops.get(g.loops.len() - 1);
+  g = gen_term(g, ir.Term.Br(lc.break_blk));
+  return GenStmtResult { ok: true, err: "", g: g };
+}
+
+fn gen_stmt_continue(g0: Gen) -> GenStmtResult {
+  let mut g: Gen = g0;
+  if g.loops.len() == 0 { return GenStmtResult { ok: false, err: "continue outside loop", g: g }; }
+  let lc: LoopCtx = g.loops.get(g.loops.len() - 1);
+  g = gen_term(g, ir.Term.Br(lc.cont_blk));
+  return GenStmtResult { ok: true, err: "", g: g };
+}
+
+fn gen_expr_if(g0: Gen, c: i32, t: i32, e: i32, out_ty: i32) -> GenExprResult {
+  let mut g: Gen = g0;
+  let cr: GenExprResult = gen_expr(g, c, g.ctx.ty_bool);
+  if !cr.ok { return cr; }
+  g = cr.g;
+
+  let mut res_slot: i32 = -1;
+  if out_ty != g.ctx.ty_unit {
+    let rs: GenNewIdResult = gen_new_slot(g);
+    g = rs.g;
+    res_slot = rs.id;
+    g = gen_emit(g, ir.Instr.SlotDecl(res_slot, out_ty));
+    // deterministic init: needed for non-exhaustive match or early break in CFG lowering.
+    let zr: GenExprResult = gen_zero_value(g, out_ty);
+    if !zr.ok { return zr; }
+    g = zr.g;
+    g = gen_emit(g, ir.Instr.Store(res_slot, zr.val));
+  }
+
+  let base: i32 = g.blocks.len();
+  let r_then: GenNewIdResult = gen_new_block(g, "ifexpr_then_".concat(base.to_string()));
+  g = r_then.g;
+  let then_idx: i32 = r_then.id;
+  let r_else: GenNewIdResult = gen_new_block(g, "ifexpr_else_".concat(base.to_string()));
+  g = r_else.g;
+  let else_idx: i32 = r_else.id;
+  let r_end: GenNewIdResult = gen_new_block(g, "ifexpr_end_".concat(base.to_string()));
+  g = r_end.g;
+  let end_idx: i32 = r_end.id;
+
+  g = gen_term(g, ir.Term.CondBr(cr.val, g.blocks.get(then_idx).name, g.blocks.get(else_idx).name));
+
+  // then
+  g = gen_set_block(g, then_idx);
+  let tr: GenExprResult = gen_expr(g, t, out_ty);
+  if !tr.ok { return tr; }
+  g = tr.g;
+  if !g.blocks.get(g.cur).has_term && res_slot != -1 {
+    g = gen_emit(g, ir.Instr.Store(res_slot, tr.val));
+  }
+  if !g.blocks.get(g.cur).has_term {
+    g = gen_term(g, ir.Term.Br(g.blocks.get(end_idx).name));
+  }
+
+  // else
+  g = gen_set_block(g, else_idx);
+  let er: GenExprResult = gen_expr(g, e, out_ty);
+  if !er.ok { return er; }
+  g = er.g;
+  if !g.blocks.get(g.cur).has_term && res_slot != -1 {
+    g = gen_emit(g, ir.Instr.Store(res_slot, er.val));
+  }
+  if !g.blocks.get(g.cur).has_term {
+    g = gen_term(g, ir.Term.Br(g.blocks.get(end_idx).name));
+  }
+
+  // end
+  g = gen_set_block(g, end_idx);
+  if res_slot == -1 {
+    return GenExprResult { ok: true, err: "", g: g, val: ir.v_int(0), ty: out_ty };
+  }
+  let rt: GenNewIdResult = gen_new_temp(g);
+  g = rt.g;
+  let tid: i32 = rt.id;
+  g = gen_emit(g, ir.Instr.Load(tid, out_ty, res_slot));
+  return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
+}
+
+fn gen_zero_value(g0: Gen, ty: i32) -> GenExprResult {
+  let mut g: Gen = g0;
+  if ty == g.ctx.ty_unit { return GenExprResult { ok: true, err: "", g: g, val: ir.v_int(0), ty: ty }; }
+  if ty == g.ctx.ty_bool { return GenExprResult { ok: true, err: "", g: g, val: ir.v_bool(false), ty: ty }; }
+  let t: ir.Ty = ir.ty_pool_get(g.ctx.pool, ty);
+  // For refined integer types, pick the lower bound as deterministic init value
+  // so temporary slots are always initialized with an in-range value.
+  if t.kind == ir.TyKind.Range {
+    return GenExprResult { ok: true, err: "", g: g, val: ir.v_i64(t.lo), ty: ty };
+  }
+  if tc.is_int_like_ty(g.ctx, ty) { return GenExprResult { ok: true, err: "", g: g, val: ir.v_i64(0), ty: ty }; }
+  if ty == g.ctx.ty_string { return GenExprResult { ok: true, err: "", g: g, val: ir.v_str(""), ty: ty }; }
+  if t.kind == ir.TyKind.Vec {
+    let nt: GenNewIdResult = gen_new_temp(g);
+    g = nt.g;
+    let tid: i32 = nt.id;
+    g = gen_emit(g, ir.Instr.VecNew(tid, ty, t.elem));
+    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: ty };
+  }
+
+  if t.kind == ir.TyKind.Struct {
+    let fs: tc.FindStructResult = tc.find_struct(g.ctx, t.mod_path, t.name);
+    if !fs.found { return GenExprResult { ok: false, err: "zero: unknown struct", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    let mut inits: Vec[ir.StructInitField] = Vec();
+    let mut i: i32 = 0;
+    while i < fs.sig.fields.len() {
+      let f: tc.StructFieldSig = fs.sig.fields.get(i);
+      let zr: GenExprResult = gen_zero_value(g, f.ty);
+      if !zr.ok { return zr; }
+      g = zr.g;
+      inits.push(ir.StructInitField { name: f.name, val: zr.val });
+      i = i + 1;
+    }
+    let nt: GenNewIdResult = gen_new_temp(g);
+    g = nt.g;
+    let tid: i32 = nt.id;
+    g = gen_emit(g, ir.Instr.StructInit(tid, ty, inits));
+    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: ty };
+  }
+
+  if t.kind == ir.TyKind.Enum {
+    let fe: tc.FindEnumResult = tc.find_enum(g.ctx, t.mod_path, t.name);
+    if !fe.found { return GenExprResult { ok: false, err: "zero: unknown enum", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    let es: tc.EnumSig = fe.sig;
+    if es.vars.len() == 0 { return GenExprResult { ok: false, err: "zero: empty enum", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    let v0: tc.EnumVariantSig = es.vars.get(0);
+    let mut payload: Vec[ir.Value] = Vec();
+    let mut pi: i32 = 0;
+    while pi < v0.fields.len() {
+      let zr: GenExprResult = gen_zero_value(g, v0.fields.get(pi));
+      if !zr.ok { return zr; }
+      g = zr.g;
+      payload.push(zr.val);
+      pi = pi + 1;
+    }
+    let nt: GenNewIdResult = gen_new_temp(g);
+    g = nt.g;
+    let tid: i32 = nt.id;
+    g = gen_emit(g, ir.Instr.EnumInit(tid, ty, v0.name, payload));
+    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: ty };
+  }
+
+  return GenExprResult { ok: false, err: "zero: unsupported type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+}

@@ -23,6 +23,10 @@ func stage1ToolDir() string {
 	return filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
 }
 
+func stage2ToolDir() string {
+	return filepath.Clean(filepath.Join("..", "..", "..", "stage2"))
+}
+
 func stage1ToolBin(t *testing.T) string {
 	t.Helper()
 	stage1ToolOnce.Do(func() {
@@ -1159,6 +1163,68 @@ edition = "2026"
 	}
 	if got := strings.TrimSpace(string(b2)); got != "" {
 		t.Fatalf("expected no output on success, got:\n%s", got)
+	}
+}
+
+func TestStage1BuildsStage2AndBuildsPackage(t *testing.T) {
+	requireSelfhostTests(t)
+
+	// 1) Build stage1 compiler A (tool driver) using stage0.
+	stage1BinA := stage1ToolBin(t)
+
+	// 2) Use stage1 A to build stage2 compiler B in stage2/target/debug so
+	// __exe_path-based std discovery resolves stage2/src/std.
+	stage2Dir := stage2ToolDir()
+	stage2DirAbs, err := filepath.Abs(stage2Dir)
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	outRel := filepath.Join("target", "debug", "vox_stage2_b_tool")
+	if err := os.MkdirAll(filepath.Join(stage2DirAbs, "target", "debug"), 0o755); err != nil {
+		t.Fatalf("mkdir target/debug: %v", err)
+	}
+	cmd := exec.Command(stage1BinA, "build-pkg", "--driver=tool", outRel)
+	cmd.Dir = stage2DirAbs
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage1 -> stage2 build failed: %v\n%s", err, string(b))
+	}
+
+	stage2BinB := filepath.Join(stage2DirAbs, outRel)
+	if _, err := os.Stat(stage2BinB); err != nil {
+		t.Fatalf("missing stage2 tool binary: %v", err)
+	}
+
+	// 3) Use stage2 B to build and run a tiny package.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("import \"std/prelude\" as prelude\nfn main() -> i32 { prelude.assert(true); return 7; }\n"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	outBin := filepath.Join(root, "out")
+	cmd2 := exec.Command(stage2BinB, "build-pkg", outBin)
+	cmd2.Dir = root
+	b2, err := cmd2.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 build-pkg failed: %v\n%s", err, string(b2))
+	}
+	run := exec.Command(outBin)
+	run.Dir = root
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run built program failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "7" {
+		t.Fatalf("unexpected output: %q", got)
 	}
 }
 

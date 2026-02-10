@@ -1,0 +1,652 @@
+import "ir" as ir
+
+pub struct ReflectIntResult { pub ok: bool, pub err: String, pub iv: i64 }
+pub struct ReflectTextResult { pub ok: bool, pub err: String, pub text: String }
+pub struct ReflectBoolResult { pub ok: bool, pub err: String, pub bv: bool }
+
+struct TyLayoutResult { ok: bool, err: String, size: i64, align: i64 }
+
+pub fn is_reflect_intrinsic_name(name: String) -> bool {
+  return
+    name == "@size_of" ||
+    name == "@align_of" ||
+    name == "@type" ||
+    name == "@type_name" ||
+    name == "@field_count" ||
+    name == "@field_name" ||
+    name == "@field_type" ||
+    name == "@field_type_id" ||
+    name == "@same_type" ||
+    name == "@assignable_to" ||
+    name == "@castable_to" ||
+    name == "@eq_comparable_with" ||
+    name == "@same_layout" ||
+    name == "@bitcastable" ||
+    name == "@ordered_with" ||
+    name == "@is_integer" ||
+    name == "@is_signed_int" ||
+    name == "@is_unsigned_int" ||
+    name == "@is_float" ||
+    name == "@is_bool" ||
+    name == "@is_string" ||
+    name == "@is_struct" ||
+    name == "@is_enum" ||
+    name == "@is_vec" ||
+    name == "@is_range" ||
+    name == "@is_eq_comparable" ||
+    name == "@is_ordered" ||
+    name == "@is_unit" ||
+    name == "@is_numeric" ||
+    name == "@is_zero_sized";
+}
+
+fn layout_ok(size: i64, align: i64) -> TyLayoutResult {
+  return TyLayoutResult { ok: true, err: "", size: size, align: align };
+}
+
+fn layout_err(msg: String) -> TyLayoutResult {
+  return TyLayoutResult { ok: false, err: msg, size: 0, align: 1 };
+}
+
+fn contains_str_reflect(xs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if xs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn max_i64_reflect(a: i64, b: i64) -> i64 { return if a > b { a } else { b }; }
+
+fn align_up_i64(v: i64, a0: i64) -> i64 {
+  let a: i64 = if a0 <= 1 { 1 } else { a0 };
+  let r: i64 = v % a;
+  if r == 0 { return v; }
+  return v + (a - r);
+}
+
+fn scalar_layout(k: ir.TyKind) -> TyLayoutResult {
+  if k == ir.TyKind.Bool || k == ir.TyKind.I8 || k == ir.TyKind.U8 { return layout_ok(1, 1); }
+  if k == ir.TyKind.I16 || k == ir.TyKind.U16 { return layout_ok(2, 2); }
+  if k == ir.TyKind.I32 || k == ir.TyKind.U32 || k == ir.TyKind.F32 { return layout_ok(4, 4); }
+  if k == ir.TyKind.I64 || k == ir.TyKind.U64 || k == ir.TyKind.ISize || k == ir.TyKind.USize || k == ir.TyKind.F64 {
+    return layout_ok(8, 8);
+  }
+  return layout_err("not scalar");
+}
+
+fn nominal_key(prefix: String, mod_path: String, name: String) -> String {
+  return prefix.concat(":").concat(mod_path).concat("::").concat(name);
+}
+
+fn layout_fields_seen(ctx: Ctx, fields: Vec[i32], seen: Vec[String]) -> TyLayoutResult {
+  if fields.len() == 0 { return layout_ok(1, 1); }
+  let mut size: i64 = 0;
+  let mut align: i64 = 1;
+  let mut i: i32 = 0;
+  while i < fields.len() {
+    let lr: TyLayoutResult = layout_of_ty_seen(ctx, fields.get(i), seen);
+    if !lr.ok { return lr; }
+    size = align_up_i64(size, lr.align);
+    size = size + lr.size;
+    align = max_i64_reflect(align, lr.align);
+    i = i + 1;
+  }
+  size = align_up_i64(size, align);
+  return layout_ok(size, align);
+}
+
+fn layout_struct_seen(ctx: Ctx, mod_path: String, name: String, seen0: Vec[String]) -> TyLayoutResult {
+  let key: String = nominal_key("S", mod_path, name);
+  if contains_str_reflect(seen0, key) {
+    return layout_err("cyclic nominal layout");
+  }
+  let fs: FindStructResult = find_struct(ctx, mod_path, name);
+  if !fs.found {
+    return layout_err("unknown struct layout");
+  }
+  let mut seen: Vec[String] = seen0;
+  seen.push(key);
+  let mut tys: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < fs.sig.fields.len() {
+    tys.push(fs.sig.fields.get(i).ty);
+    i = i + 1;
+  }
+  return layout_fields_seen(ctx, tys, seen);
+}
+
+fn layout_enum_seen(ctx: Ctx, mod_path: String, name: String, seen0: Vec[String]) -> TyLayoutResult {
+  let key: String = nominal_key("E", mod_path, name);
+  if contains_str_reflect(seen0, key) {
+    return layout_err("cyclic nominal layout");
+  }
+  let fe: FindEnumResult = find_enum(ctx, mod_path, name);
+  if !fe.found {
+    return layout_err("unknown enum layout");
+  }
+
+  let mut seen: Vec[String] = seen0;
+  seen.push(key);
+
+  let mut has_payload: bool = false;
+  let mut vi: i32 = 0;
+  while vi < fe.sig.vars.len() {
+    if fe.sig.vars.get(vi).fields.len() != 0 { has_payload = true; }
+    vi = vi + 1;
+  }
+  if !has_payload {
+    // typedef struct { int32_t tag; } E;
+    return layout_ok(4, 4);
+  }
+
+  // typedef struct { int32_t tag; union { struct {...} V; ... } payload; } E;
+  let mut payload_size: i64 = 1;
+  let mut payload_align: i64 = 1;
+  vi = 0;
+  while vi < fe.sig.vars.len() {
+    let vr: EnumVariantSig = fe.sig.vars.get(vi);
+    let lr: TyLayoutResult = layout_fields_seen(ctx, vr.fields, seen);
+    if !lr.ok { return lr; }
+    payload_size = max_i64_reflect(payload_size, lr.size);
+    payload_align = max_i64_reflect(payload_align, lr.align);
+    vi = vi + 1;
+  }
+
+  let outer_align: i64 = max_i64_reflect(4, payload_align);
+  let payload_off: i64 = align_up_i64(4, payload_align);
+  let outer_size: i64 = align_up_i64(payload_off + payload_size, outer_align);
+  return layout_ok(outer_size, outer_align);
+}
+
+fn layout_of_ty_seen(ctx: Ctx, ty: i32, seen: Vec[String]) -> TyLayoutResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+
+  let sl: TyLayoutResult = scalar_layout(t.kind);
+  if sl.ok { return sl; }
+
+  if t.kind == ir.TyKind.Unit { return layout_ok(0, 1); }
+  if t.kind == ir.TyKind.String { return layout_ok(8, 8); } // const char*
+  if t.kind == ir.TyKind.Vec { return layout_ok(24, 8); }   // vox_vec
+  if t.kind == ir.TyKind.Struct { return layout_struct_seen(ctx, t.mod_path, t.name, seen); }
+  if t.kind == ir.TyKind.Enum { return layout_enum_seen(ctx, t.mod_path, t.name, seen); }
+  if t.kind == ir.TyKind.Param {
+    return layout_err("intrinsic requires concrete type");
+  }
+  return layout_err("unsupported type for intrinsic");
+}
+
+pub fn intrinsic_size_of(ctx: Ctx, ty: i32) -> ReflectIntResult {
+  let lr: TyLayoutResult = layout_of_ty_seen(ctx, ty, Vec());
+  if !lr.ok { return ReflectIntResult { ok: false, err: lr.err, iv: 0 }; }
+  return ReflectIntResult { ok: true, err: "", iv: lr.size };
+}
+
+pub fn intrinsic_align_of(ctx: Ctx, ty: i32) -> ReflectIntResult {
+  let lr: TyLayoutResult = layout_of_ty_seen(ctx, ty, Vec());
+  if !lr.ok { return ReflectIntResult { ok: false, err: lr.err, iv: 0 }; }
+  return ReflectIntResult { ok: true, err: "", iv: lr.align };
+}
+
+pub fn intrinsic_type_name_of(ctx: Ctx, ty: i32) -> ReflectTextResult {
+  if ty < 0 || ty >= ctx.pool.tys.len() {
+    return ReflectTextResult { ok: false, err: "bad type for intrinsic", text: "" };
+  }
+  return ReflectTextResult { ok: true, err: "", text: ty_inst_str(ctx, ty) };
+}
+
+pub fn intrinsic_type_id_of(ctx: Ctx, ty: i32) -> ReflectIntResult {
+  if ty < 0 || ty >= ctx.pool.tys.len() {
+    return ReflectIntResult { ok: false, err: "bad type for intrinsic", iv: 0 };
+  }
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return ReflectIntResult { ok: false, err: "intrinsic requires concrete type", iv: 0 };
+  }
+  return ReflectIntResult { ok: true, err: "", iv: ty as i64 };
+}
+
+pub fn intrinsic_field_count_of(ctx: Ctx, ty: i32) -> ReflectIntResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return ReflectIntResult { ok: false, err: "intrinsic requires concrete type", iv: 0 };
+  }
+  if t.kind == ir.TyKind.Struct {
+    let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+    if !fs.found { return ReflectIntResult { ok: false, err: "unknown struct layout", iv: 0 }; }
+    return ReflectIntResult { ok: true, err: "", iv: fs.sig.fields.len() as i64 };
+  }
+  if t.kind == ir.TyKind.Enum {
+    let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+    if !fe.found { return ReflectIntResult { ok: false, err: "unknown enum layout", iv: 0 }; }
+    return ReflectIntResult { ok: true, err: "", iv: fe.sig.vars.len() as i64 };
+  }
+  return ReflectIntResult { ok: false, err: "field_count expects struct or enum", iv: 0 };
+}
+
+pub fn intrinsic_field_name_of(ctx: Ctx, ty: i32, idx: i64) -> ReflectTextResult {
+  if idx < 0 { return ReflectTextResult { ok: false, err: "field_name index out of range", text: "" }; }
+  let i: i32 = idx as i32;
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return ReflectTextResult { ok: false, err: "intrinsic requires concrete type", text: "" };
+  }
+  if t.kind == ir.TyKind.Struct {
+    let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+    if !fs.found { return ReflectTextResult { ok: false, err: "unknown struct layout", text: "" }; }
+    if i < 0 || i >= fs.sig.fields.len() {
+      return ReflectTextResult { ok: false, err: "field_name index out of range", text: "" };
+    }
+    return ReflectTextResult { ok: true, err: "", text: fs.sig.fields.get(i).name };
+  }
+  if t.kind == ir.TyKind.Enum {
+    let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+    if !fe.found { return ReflectTextResult { ok: false, err: "unknown enum layout", text: "" }; }
+    if i < 0 || i >= fe.sig.vars.len() {
+      return ReflectTextResult { ok: false, err: "field_name index out of range", text: "" };
+    }
+    return ReflectTextResult { ok: true, err: "", text: fe.sig.vars.get(i).name };
+  }
+  return ReflectTextResult { ok: false, err: "field_name expects struct or enum", text: "" };
+}
+
+fn enum_variant_type_text(ctx: Ctx, v: EnumVariantSig) -> String {
+  if v.fields.len() == 0 { return "()"; }
+  if v.fields.len() == 1 { return ty_inst_str(ctx, v.fields.get(0)); }
+  let mut out: String = "(";
+  let mut i: i32 = 0;
+  while i < v.fields.len() {
+    if i > 0 { out = out.concat(", "); }
+    out = out.concat(ty_inst_str(ctx, v.fields.get(i)));
+    i = i + 1;
+  }
+  return out.concat(")");
+}
+
+pub fn intrinsic_field_type_of(ctx: Ctx, ty: i32, idx: i64) -> ReflectTextResult {
+  if idx < 0 { return ReflectTextResult { ok: false, err: "field_type index out of range", text: "" }; }
+  let i: i32 = idx as i32;
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return ReflectTextResult { ok: false, err: "intrinsic requires concrete type", text: "" };
+  }
+  if t.kind == ir.TyKind.Struct {
+    let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+    if !fs.found { return ReflectTextResult { ok: false, err: "unknown struct layout", text: "" }; }
+    if i < 0 || i >= fs.sig.fields.len() {
+      return ReflectTextResult { ok: false, err: "field_type index out of range", text: "" };
+    }
+    return ReflectTextResult { ok: true, err: "", text: ty_inst_str(ctx, fs.sig.fields.get(i).ty) };
+  }
+  if t.kind == ir.TyKind.Enum {
+    let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+    if !fe.found { return ReflectTextResult { ok: false, err: "unknown enum layout", text: "" }; }
+    if i < 0 || i >= fe.sig.vars.len() {
+      return ReflectTextResult { ok: false, err: "field_type index out of range", text: "" };
+    }
+    return ReflectTextResult { ok: true, err: "", text: enum_variant_type_text(ctx, fe.sig.vars.get(i)) };
+  }
+  return ReflectTextResult { ok: false, err: "field_type expects struct or enum", text: "" };
+}
+
+pub fn intrinsic_field_type_id_of(ctx: Ctx, ty: i32, idx: i64) -> ReflectIntResult {
+  if idx < 0 { return ReflectIntResult { ok: false, err: "field_type_id index out of range", iv: 0 }; }
+  let i: i32 = idx as i32;
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return ReflectIntResult { ok: false, err: "intrinsic requires concrete type", iv: 0 };
+  }
+  if t.kind == ir.TyKind.Struct {
+    let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+    if !fs.found { return ReflectIntResult { ok: false, err: "unknown struct layout", iv: 0 }; }
+    if i < 0 || i >= fs.sig.fields.len() {
+      return ReflectIntResult { ok: false, err: "field_type_id index out of range", iv: 0 };
+    }
+    return intrinsic_type_id_of(ctx, fs.sig.fields.get(i).ty);
+  }
+  if t.kind == ir.TyKind.Enum {
+    let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+    if !fe.found { return ReflectIntResult { ok: false, err: "unknown enum layout", iv: 0 }; }
+    if i < 0 || i >= fe.sig.vars.len() {
+      return ReflectIntResult { ok: false, err: "field_type_id index out of range", iv: 0 };
+    }
+    let v: EnumVariantSig = fe.sig.vars.get(i);
+    if v.fields.len() == 0 {
+      return intrinsic_type_id_of(ctx, ctx.ty_unit);
+    }
+    if v.fields.len() == 1 {
+      return intrinsic_type_id_of(ctx, v.fields.get(0));
+    }
+    return ReflectIntResult { ok: false, err: "field_type_id for multi-field enum variant not supported", iv: 0 };
+  }
+  return ReflectIntResult { ok: false, err: "field_type_id expects struct or enum", iv: 0 };
+}
+
+fn reflect_bool_ok(v: bool) -> ReflectBoolResult {
+  return ReflectBoolResult { ok: true, err: "", bv: v };
+}
+
+fn reflect_bool_err(msg: String) -> ReflectBoolResult {
+  return ReflectBoolResult { ok: false, err: msg, bv: false };
+}
+
+pub fn intrinsic_same_type_of(ctx: Ctx, a: i32, b: i32) -> ReflectBoolResult {
+  let aa: i32 = strip_range(ctx, a);
+  let bb: i32 = strip_range(ctx, b);
+  let ta: ir.Ty = ir.ty_pool_get(ctx.pool, aa);
+  let tb: ir.Ty = ir.ty_pool_get(ctx.pool, bb);
+  if ta.kind == ir.TyKind.Param || tb.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(aa == bb);
+}
+
+pub fn intrinsic_assignable_to_of(ctx: Ctx, src: i32, dst: i32) -> ReflectBoolResult {
+  let ss: i32 = strip_range(ctx, src);
+  let dd: i32 = strip_range(ctx, dst);
+  let ts: ir.Ty = ir.ty_pool_get(ctx.pool, ss);
+  let td: ir.Ty = ir.ty_pool_get(ctx.pool, dd);
+  if ts.kind == ir.TyKind.Param || td.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(assignable_to(ctx, dst, src));
+}
+
+fn is_int_scalar_kind_reflect(k: ir.TyKind) -> bool {
+  return
+    k == ir.TyKind.I8 ||
+    k == ir.TyKind.U8 ||
+    k == ir.TyKind.I16 ||
+    k == ir.TyKind.U16 ||
+    k == ir.TyKind.I32 ||
+    k == ir.TyKind.U32 ||
+    k == ir.TyKind.I64 ||
+    k == ir.TyKind.U64 ||
+    k == ir.TyKind.ISize ||
+    k == ir.TyKind.USize;
+}
+
+fn castable_between_types(ctx: Ctx, src: i32, dst: i32) -> bool {
+  let from_float: bool = is_float_ty(ctx, src);
+  let to_float: bool = is_float_ty(ctx, dst);
+  if from_float || to_float {
+    let from_ok: bool = from_float || is_int_like_ty(ctx, src);
+    let to_ok: bool = to_float || is_int_like_ty(ctx, dst);
+    return from_ok && to_ok;
+  }
+  if !is_int_like_ty(ctx, src) || !is_int_like_ty(ctx, dst) { return false; }
+
+  let from_base: i32 = strip_range(ctx, src);
+  let to_base: i32 = strip_range(ctx, dst);
+  if from_base == to_base { return true; }
+
+  let fk: ir.TyKind = ir.ty_pool_get(ctx.pool, from_base).kind;
+  let tk: ir.TyKind = ir.ty_pool_get(ctx.pool, to_base).kind;
+  return is_int_scalar_kind_reflect(fk) && is_int_scalar_kind_reflect(tk);
+}
+
+fn eq_ty_capable_reflect(ctx: Ctx, ty: i32, seen0: Vec[String]) -> bool {
+  let base: i32 = strip_range(ctx, ty);
+  if base == ctx.ty_bool || base == ctx.ty_string { return true; }
+  if is_int_like_ty(ctx, base) || is_float_ty(ctx, base) { return true; }
+
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  let is_enum: bool = t.kind == ir.TyKind.Enum;
+  let is_struct: bool = t.kind == ir.TyKind.Struct;
+  if !is_enum && !is_struct { return false; }
+
+  let kind_prefix: String = if is_enum { "E:" } else { "S:" };
+  let qn: String = kind_prefix.concat(t.mod_path).concat("::").concat(t.name);
+  if contains_str_reflect(seen0, qn) { return true; }
+  let mut seen: Vec[String] = seen0;
+  seen.push(qn);
+
+  if is_struct {
+    let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+    if !fs.found { return false; }
+    let mut fi: i32 = 0;
+    while fi < fs.sig.fields.len() {
+      if !eq_ty_capable_reflect(ctx, fs.sig.fields.get(fi).ty, seen) { return false; }
+      fi = fi + 1;
+    }
+    return true;
+  }
+
+  let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+  if !fe.found { return false; }
+  let mut vi: i32 = 0;
+  while vi < fe.sig.vars.len() {
+    let v: EnumVariantSig = fe.sig.vars.get(vi);
+    let mut fi: i32 = 0;
+    while fi < v.fields.len() {
+      if !eq_ty_capable_reflect(ctx, v.fields.get(fi), seen) { return false; }
+      fi = fi + 1;
+    }
+    vi = vi + 1;
+  }
+  return true;
+}
+
+pub fn intrinsic_castable_to_of(ctx: Ctx, src: i32, dst: i32) -> ReflectBoolResult {
+  let ss: i32 = strip_range(ctx, src);
+  let dd: i32 = strip_range(ctx, dst);
+  let ts: ir.Ty = ir.ty_pool_get(ctx.pool, ss);
+  let td: ir.Ty = ir.ty_pool_get(ctx.pool, dd);
+  if ts.kind == ir.TyKind.Param || td.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(castable_between_types(ctx, src, dst));
+}
+
+fn eq_comparable_between_types(ctx: Ctx, a: i32, b: i32) -> bool {
+  let aa: i32 = strip_range(ctx, a);
+  let bb: i32 = strip_range(ctx, b);
+  if aa != bb { return false; }
+  return eq_ty_capable_reflect(ctx, aa, Vec());
+}
+
+fn ordered_between_types(ctx: Ctx, a: i32, b: i32) -> bool {
+  let aa: i32 = strip_range(ctx, a);
+  let bb: i32 = strip_range(ctx, b);
+  if aa != bb { return false; }
+  return is_int_like_ty(ctx, aa) || is_float_ty(ctx, aa) || aa == ctx.ty_string;
+}
+
+pub fn intrinsic_eq_comparable_with_of(ctx: Ctx, a: i32, b: i32) -> ReflectBoolResult {
+  let aa: i32 = strip_range(ctx, a);
+  let bb: i32 = strip_range(ctx, b);
+  let ta: ir.Ty = ir.ty_pool_get(ctx.pool, aa);
+  let tb: ir.Ty = ir.ty_pool_get(ctx.pool, bb);
+  if ta.kind == ir.TyKind.Param || tb.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(eq_comparable_between_types(ctx, a, b));
+}
+
+pub fn intrinsic_ordered_with_of(ctx: Ctx, a: i32, b: i32) -> ReflectBoolResult {
+  let aa: i32 = strip_range(ctx, a);
+  let bb: i32 = strip_range(ctx, b);
+  let ta: ir.Ty = ir.ty_pool_get(ctx.pool, aa);
+  let tb: ir.Ty = ir.ty_pool_get(ctx.pool, bb);
+  if ta.kind == ir.TyKind.Param || tb.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(ordered_between_types(ctx, a, b));
+}
+
+pub fn intrinsic_same_layout_of(ctx: Ctx, a: i32, b: i32) -> ReflectBoolResult {
+  let aa: i32 = strip_range(ctx, a);
+  let bb: i32 = strip_range(ctx, b);
+  let ta: ir.Ty = ir.ty_pool_get(ctx.pool, aa);
+  let tb: ir.Ty = ir.ty_pool_get(ctx.pool, bb);
+  if ta.kind == ir.TyKind.Param || tb.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+
+  let la: TyLayoutResult = layout_of_ty_seen(ctx, aa, Vec());
+  if !la.ok { return reflect_bool_err(la.err); }
+  let lb: TyLayoutResult = layout_of_ty_seen(ctx, bb, Vec());
+  if !lb.ok { return reflect_bool_err(lb.err); }
+  return reflect_bool_ok(la.size == lb.size && la.align == lb.align);
+}
+
+pub fn intrinsic_bitcastable_of(ctx: Ctx, a: i32, b: i32) -> ReflectBoolResult {
+  return intrinsic_same_layout_of(ctx, a, b);
+}
+
+pub fn intrinsic_is_integer_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(is_int_like_ty(ctx, base));
+}
+
+pub fn intrinsic_is_signed_int_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  let out: bool =
+    t.kind == ir.TyKind.I8 ||
+    t.kind == ir.TyKind.I16 ||
+    t.kind == ir.TyKind.I32 ||
+    t.kind == ir.TyKind.I64 ||
+    t.kind == ir.TyKind.ISize;
+  return reflect_bool_ok(out);
+}
+
+pub fn intrinsic_is_unsigned_int_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  let out: bool =
+    t.kind == ir.TyKind.U8 ||
+    t.kind == ir.TyKind.U16 ||
+    t.kind == ir.TyKind.U32 ||
+    t.kind == ir.TyKind.U64 ||
+    t.kind == ir.TyKind.USize;
+  return reflect_bool_ok(out);
+}
+
+pub fn intrinsic_is_float_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(is_float_ty(ctx, base));
+}
+
+pub fn intrinsic_is_bool_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(base == ctx.ty_bool);
+}
+
+pub fn intrinsic_is_string_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(base == ctx.ty_string);
+}
+
+pub fn intrinsic_is_struct_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(t.kind == ir.TyKind.Struct);
+}
+
+pub fn intrinsic_is_enum_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(t.kind == ir.TyKind.Enum);
+}
+
+pub fn intrinsic_is_vec_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(t.kind == ir.TyKind.Vec);
+}
+
+pub fn intrinsic_is_range_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(t.kind == ir.TyKind.Range);
+}
+
+pub fn intrinsic_is_eq_comparable_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(eq_ty_capable_reflect(ctx, base, Vec()));
+}
+
+pub fn intrinsic_is_ordered_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  let out: bool = is_int_like_ty(ctx, base) || is_float_ty(ctx, base) || base == ctx.ty_string;
+  return reflect_bool_ok(out);
+}
+
+pub fn intrinsic_is_unit_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(base == ctx.ty_unit);
+}
+
+pub fn intrinsic_is_numeric_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(is_int_like_ty(ctx, base) || is_float_ty(ctx, base));
+}
+
+pub fn intrinsic_is_zero_sized_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  let lr: TyLayoutResult = layout_of_ty_seen(ctx, base, Vec());
+  if !lr.ok { return reflect_bool_err(lr.err); }
+  return reflect_bool_ok(lr.size == 0);
+}

@@ -1,0 +1,122 @@
+import "ast" as ast
+import "ir" as ir
+
+fn find_enum_for_member(ctx: Ctx, enum_mod: String, enum_name: String, expected: i32) -> FindEnumResult {
+  let fe0: FindEnumResult = find_enum(ctx, enum_mod, enum_name);
+  if fe0.found { return fe0; }
+  if expected == -1 || !is_enum_ty(ctx, expected) { return fe0; }
+
+  let et: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
+  if ty_mod(et) != enum_mod { return fe0; }
+  let fe1: FindEnumResult = find_enum(ctx, enum_mod, ty_name(et));
+  if !fe1.found { return fe0; }
+  if fe1.sig.base_name == enum_name || fe1.sig.name == enum_name { return fe1; }
+  return fe0;
+}
+
+fn tc_expr_member(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv: i32, name: String, expected: i32) -> ExprTyResult {
+  // 1) Field access: `value.field`
+  let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv, -1);
+  if rr.ok && is_struct_ty(ctx, rr.ty) {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, rr.ty);
+    let fm: FindStructResult = find_struct(ctx, ty_mod(t), ty_name(t));
+    if !fm.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let sig: StructSig = fm.sig;
+
+    // Visibility: crossing modules requires both the type and the field to be visible.
+    if !vis_allows(sig.vis, sig.mod_path, mod_path) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+    let mut i: i32 = 0;
+    while i < sig.fields.len() {
+      let f: StructFieldSig = sig.fields.get(i);
+      if f.name == name {
+        if !vis_allows(f.vis, sig.mod_path, mod_path) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        if expected != -1 && !assignable_to(ctx, expected, f.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        return ExprTyResult { ok: true, ty: f.ty, err: TcError.None };
+      }
+      i = i + 1;
+    }
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+  }
+
+  // 2) Unit enum variant value: `Enum.None` / `alias.Enum.None` / `Enum[T].None`
+  let pr: ExprTypePathResult = expr_type_path(exprs, recv);
+  if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  let mut parts: Vec[String] = pr.parts;
+  let enum_targs: Vec[ast.TypeName] = pr.targs;
+  parts.push(name);
+
+  if parts.len() != 2 && parts.len() != 3 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+  // 2.1) Module const: `alias.NAME` / `alias.mod.NAME` (only when alias resolves).
+  let base_mod: String = find_alias(imps.aliases, parts.get(0));
+  if base_mod != "" && enum_targs.len() == 0 {
+    let const_mod: String = if parts.len() == 2 { base_mod } else { base_mod.concat("/").concat(parts.get(1)) };
+    let const_name: String = if parts.len() == 2 { parts.get(1) } else { parts.get(2) };
+    let cs: ConstSig = find_const(ctx, const_mod, const_name);
+    if cs.name != "" {
+      if !vis_allows(cs.vis, const_mod, mod_path) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      if expected != -1 && !assignable_to(ctx, expected, cs.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      return ExprTyResult { ok: true, ty: cs.ty, err: TcError.None };
+    }
+  }
+
+  let mut enum_mod: String = "";
+  let mut enum_name: String = "";
+  if parts.len() == 2 {
+    enum_mod = mod_path;
+    enum_name = parts.get(0);
+    let nt: NamedTypeImport = find_named_type(imps.named_types, enum_name);
+    if nt.local != "" {
+      if nt.kind != named_type_kind_enum() { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      enum_mod = nt.mod_path;
+      enum_name = nt.name;
+    }
+  } else {
+    enum_mod = find_alias(imps.aliases, parts.get(0));
+    if enum_mod == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    enum_name = parts.get(1);
+  }
+  let var_name: String = if parts.len() == 2 { parts.get(1) } else { parts.get(2) };
+
+  let mut ty_idx_hint: i32 = -1;
+  let mut fe: FindEnumResult = find_enum_for_member(ctx, enum_mod, enum_name, expected);
+  if enum_targs.len() != 0 {
+    let mut enum_type_parts: Vec[String] = Vec();
+    if parts.len() == 2 {
+      enum_type_parts.push(parts.get(0));
+    } else {
+      enum_type_parts.push(parts.get(0));
+      enum_type_parts.push(parts.get(1));
+    }
+    let tn: ast.TypeName = ast.TypeName { parts: enum_type_parts, args: enum_targs };
+    let tr: ResolveTyResult = resolve_type(ctx, w, mod_path, imps, l0.type_params, tn);
+    if !tr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if tr.idx < 0 || tr.idx >= ctx.pool.tys.len() { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if !is_enum_ty(ctx, tr.idx) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    ty_idx_hint = tr.idx;
+    let et0: ir.Ty = ir.ty_pool_get(ctx.pool, tr.idx);
+    enum_mod = ty_mod(et0);
+    enum_name = ty_name(et0);
+    fe = find_enum(ctx, enum_mod, enum_name);
+  }
+  if !fe.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  let es: EnumSig = fe.sig;
+  if !vis_allows(es.vis, es.mod_path, mod_path) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+  let mut vi: i32 = 0;
+  while vi < es.vars.len() {
+    let v: EnumVariantSig = es.vars.get(vi);
+    if v.name == var_name {
+      // Only unit variants are values without a call: `E.None`.
+      if v.fields.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      let ty_idx: i32 = if ty_idx_hint != -1 { ty_idx_hint } else { find_enum_ty_idx(ctx, enum_mod, es.name) };
+      if ty_idx == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      if expected != -1 && !assignable_to(ctx, expected, ty_idx) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      return ExprTyResult { ok: true, ty: ty_idx, err: TcError.None };
+    }
+    vi = vi + 1;
+  }
+
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+}

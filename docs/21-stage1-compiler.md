@@ -9,6 +9,12 @@
 - `compiler/stage1/src/**/**_test.vox`：Stage1 自身的单元测试，与实现代码同目录同包（由 Stage0 的 `vox test` 运行）。
 - `compiler/stage1/src/compile/**`：Stage1 的最小“串联管线”（parse -> typecheck -> irgen -> codegen）入口，便于在无 IO 的前提下做端到端测试。
 
+与 Stage2 的关系（当前仓库约定）：
+
+- `compiler/stage2` 以 `compiler/stage1` 当前实现为基线复制维护。
+- Stage2 编译器由 Stage1 编译生成（已在 Stage0 集成测试覆盖 `stage1 -> stage2` 引导链路）。
+- 这条链路用于承接“Stage0 无法直接承载”的语言演进（例如更激进的泛型标准库抽象）。
+
 ## 近期顺序（可迭代）
 
 1. 词法（lexer）：把 `String` 解析为 token 流，包含位置（byte offset）。

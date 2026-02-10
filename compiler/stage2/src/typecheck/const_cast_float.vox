@@ -1,0 +1,146 @@
+import "ir" as ir
+
+// Const int<->float cast helpers.
+//
+// Stage1 keeps const float values as canonical decimal text; these helpers
+// bridge that representation to checked integer casts and back.
+
+struct ConstFloatTruncIntTextResult { ok: bool, err: String, neg: bool, abs: String }
+struct CastConstFloatToIntResult { ok: bool, err: String, v: i64 }
+
+fn i64_min_text() -> String { return "9223372036854775808"; }
+fn i64_min_value() -> i64 { return -9223372036854775807 - 1; }
+
+fn dec_digit_from_u64_small(v: i64) -> i32 {
+  if v == 0 { return 0; }
+  if v == 1 { return 1; }
+  if v == 2 { return 2; }
+  if v == 3 { return 3; }
+  if v == 4 { return 4; }
+  if v == 5 { return 5; }
+  if v == 6 { return 6; }
+  if v == 7 { return 7; }
+  if v == 8 { return 8; }
+  return 9;
+}
+
+fn u64_bits_to_dec_text(v0: i64) -> String {
+  if v0 == 0 { return "0"; }
+  let mut v: i64 = v0;
+  let mut out: String = "";
+  while v != 0 {
+    let q: i64 = u64_div_bits(v, 10);
+    let r: i64 = u64_mod_bits(v, 10);
+    out = digit_char(dec_digit_from_u64_small(r)).concat(out);
+    v = q;
+  }
+  return out;
+}
+
+fn signed_abs_dec_text(v: i64) -> String {
+  if v >= 0 { return v.to_string(); }
+  if v == i64_min_value() { return i64_min_text(); }
+  let abs_v: i64 = -v;
+  return abs_v.to_string();
+}
+
+fn float_trunc_to_int_text(s0: String) -> ConstFloatTruncIntTextResult {
+  let mut s: String = float_norm_text(s0);
+  let mut neg: bool = false;
+  if s.len() > 0 && s.byte_at(0) == 45 {
+    neg = true;
+    s = s.slice(1, s.len());
+  }
+
+  let mut dot: i32 = -1;
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == 46 {
+      dot = i;
+      i = s.len();
+    } else {
+      i = i + 1;
+    }
+  }
+
+  let mut intp: String = if dot == -1 { s } else { s.slice(0, dot) };
+  if intp.len() == 0 { intp = "0"; }
+  let abs: String = udec_trim(intp);
+  if abs == "0" { neg = false; }
+  return ConstFloatTruncIntTextResult { ok: true, err: "", neg: neg, abs: abs };
+}
+
+fn unsigned_max_text_of_kind(k: ir.TyKind) -> String {
+  if k == ir.TyKind.U8 { return "255"; }
+  if k == ir.TyKind.U16 { return "65535"; }
+  if k == ir.TyKind.U32 { return "4294967295"; }
+  return "18446744073709551615";
+}
+
+fn signed_abs_limit_text_of_kind(k: ir.TyKind) -> String {
+  if k == ir.TyKind.I8 { return "128"; }
+  if k == ir.TyKind.I16 { return "32768"; }
+  if k == ir.TyKind.I32 { return "2147483648"; }
+  return i64_min_text();
+}
+
+fn const_int_to_float_text(ctx: Ctx, from_ty: i32, v: i64) -> String {
+  let k: ir.TyKind = int_kind(ctx, from_ty);
+  if is_unsigned_int_kind(k) {
+    return float_norm_text(u64_bits_to_dec_text(v).concat(".0"));
+  }
+  let mut out: String = signed_abs_dec_text(v).concat(".0");
+  if v < 0 { out = "-".concat(out); }
+  return float_norm_text(out);
+}
+
+fn cast_const_float_to_int_checked(ctx: Ctx, to_ty: i32, s0: String) -> CastConstFloatToIntResult {
+  let tk: ir.TyKind = int_kind(ctx, to_ty);
+  if !is_int_scalar_kind(tk) {
+    return CastConstFloatToIntResult { ok: false, err: "const expression: int cast overflow", v: 0 };
+  }
+
+  let tr: ConstFloatTruncIntTextResult = float_trunc_to_int_text(s0);
+  if !tr.ok { return CastConstFloatToIntResult { ok: false, err: tr.err, v: 0 }; }
+
+  if is_unsigned_int_kind(tk) {
+    if tr.neg && tr.abs != "0" {
+      return CastConstFloatToIntResult { ok: false, err: "const expression: int cast overflow", v: 0 };
+    }
+    if udec_cmp(tr.abs, unsigned_max_text_of_kind(tk)) > 0 {
+      return CastConstFloatToIntResult { ok: false, err: "const expression: int cast overflow", v: 0 };
+    }
+    let pu: ParseU64DecResult = parse_u64_dec(tr.abs);
+    if !pu.ok { return CastConstFloatToIntResult { ok: false, err: "const expression: int cast overflow", v: 0 }; }
+    let wr: WrapResult = wrap_value_for_type(ctx, "", to_ty, pu.val);
+    if !wr.ok { return CastConstFloatToIntResult { ok: false, err: "const expression: int cast overflow", v: 0 }; }
+    return CastConstFloatToIntResult { ok: true, err: "", v: wr.v };
+  }
+
+  let mut x: i64 = 0;
+  if tr.neg {
+    if udec_cmp(tr.abs, signed_abs_limit_text_of_kind(tk)) > 0 {
+      return CastConstFloatToIntResult { ok: false, err: "const expression: int cast overflow", v: 0 };
+    }
+      if (tk == ir.TyKind.I64 || tk == ir.TyKind.ISize) && tr.abs == i64_min_text() {
+        x = i64_min_value();
+      } else {
+        let ps: ParseI64DecResult = parse_i64_dec(tr.abs);
+        if !ps.ok { return CastConstFloatToIntResult { ok: false, err: "const expression: int cast overflow", v: 0 }; }
+        x = -ps.val;
+      }
+  } else {
+    let ps2: ParseI64DecResult = parse_i64_dec(tr.abs);
+    if !ps2.ok { return CastConstFloatToIntResult { ok: false, err: "const expression: int cast overflow", v: 0 }; }
+    x = ps2.val;
+  }
+
+  let lo: i64 = signed_min_of_kind(tk);
+  let hi: i64 = signed_max_of_kind(tk);
+  if x < lo || x > hi {
+    return CastConstFloatToIntResult { ok: false, err: "const expression: int cast overflow", v: 0 };
+  }
+  let wr2: WrapResult = wrap_value_for_type(ctx, "", to_ty, x);
+  if !wr2.ok { return CastConstFloatToIntResult { ok: false, err: "const expression: int cast overflow", v: 0 }; }
+  return CastConstFloatToIntResult { ok: true, err: "", v: wr2.v };
+}
