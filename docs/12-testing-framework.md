@@ -18,6 +18,7 @@ vox test
 vox test --engine=c
 vox test --engine=interp
 vox test --run='regex'
+vox test --jobs=4
 vox test --rerun-failed
 vox test --list
 vox test --json
@@ -31,6 +32,7 @@ Stage0 行为：
  - `vox test --engine=c`（默认）：编译生成测试可执行文件并执行（更贴近最终语义）
  - `vox test --engine=interp`：解释执行测试（用于快速对照；能力可能更受限）
  - `vox test --run=<regex>`：仅运行匹配的测试（匹配限定名 `mod::test_x` 与短名 `test_x`）
+ - `vox test --jobs=N`（或 `-j N`）：设置模块级并行度；默认 `GOMAXPROCS`，始终保持“模块内串行”
  - `vox test --rerun-failed`：仅重跑上次失败测试（缓存文件：`target/debug/.vox_failed_tests`）
  - `vox test --list`：仅列出当前筛选后的测试，不执行
 - `vox test --json`：输出机器可读 JSON 报告（包含 selection/results/modules/module_details/failed_tests/slowest/summary）
@@ -44,7 +46,7 @@ Stage0 行为：
 
 `--json` 的关键字段：
 
-- `selection`：发现数、筛选后数量、`--run/--rerun-failed` 元信息
+- `selection`：发现数、筛选后数量、`--run/--jobs/--rerun-failed` 元信息
 - `results`：逐测试结果（状态、耗时、错误）
 - `modules`：模块级汇总（passed/failed/duration）
 - `module_details`：模块级测试清单（`tests`）与失败子集（`failed_tests`）

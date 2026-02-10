@@ -317,6 +317,18 @@ func TestSummarizeInterpTestResults_ModuleAndSlowest(t *testing.T) {
 	}
 }
 
+func TestInterpModuleWorkers(t *testing.T) {
+	if got := interpModuleWorkers(0, 0); got != 1 {
+		t.Fatalf("workers(0,0) = %d, want 1", got)
+	}
+	if got := interpModuleWorkers(3, 2); got != 2 {
+		t.Fatalf("workers(3,2) = %d, want 2", got)
+	}
+	if got := interpModuleWorkers(3, 8); got != 3 {
+		t.Fatalf("workers(3,8) = %d, want 3", got)
+	}
+}
+
 func TestInterpVecPushLenGet(t *testing.T) {
 	out := runMain(t, `fn main() -> i32 {
   let mut v: Vec[i32] = Vec();

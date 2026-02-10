@@ -46,6 +46,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --interp            alias for --engine=interp")
 	fmt.Fprintln(os.Stderr, "test flags:")
 	fmt.Fprintln(os.Stderr, "  --run=<regex>       run tests whose qualified name (or short name) matches regex")
+	fmt.Fprintln(os.Stderr, "  --jobs=N, -j N      module-level test parallelism (default: GOMAXPROCS)")
 	fmt.Fprintln(os.Stderr, "  --rerun-failed      rerun only tests failed in previous run")
 	fmt.Fprintln(os.Stderr, "  --list              list selected tests and exit without running")
 	fmt.Fprintln(os.Stderr, "  --json              emit machine-readable JSON report")
@@ -62,6 +63,7 @@ type testOptions struct {
 	eng         engine
 	dir         string
 	runPattern  string
+	jobs        int
 	rerunFailed bool
 	listOnly    bool
 	jsonOutput  bool
@@ -157,6 +159,27 @@ func parseTestOptionsAndDir(args []string) (opts testOptions, err error) {
 			opts.runPattern = strings.TrimPrefix(a, "--run=")
 			continue
 		}
+		if a == "-j" || a == "--jobs" {
+			if i+1 >= len(args) {
+				return testOptions{}, fmt.Errorf("missing value for --jobs")
+			}
+			i++
+			n, err := parsePositiveInt(args[i])
+			if err != nil {
+				return testOptions{}, fmt.Errorf("invalid --jobs value: %q", args[i])
+			}
+			opts.jobs = n
+			continue
+		}
+		if strings.HasPrefix(a, "--jobs=") {
+			v := strings.TrimPrefix(a, "--jobs=")
+			n, err := parsePositiveInt(v)
+			if err != nil {
+				return testOptions{}, fmt.Errorf("invalid --jobs value: %q", v)
+			}
+			opts.jobs = n
+			continue
+		}
 		if a == "--rerun-failed" {
 			opts.rerunFailed = true
 			continue
@@ -179,6 +202,27 @@ func parseTestOptionsAndDir(args []string) (opts testOptions, err error) {
 		setDir = true
 	}
 	return opts, nil
+}
+
+func parsePositiveInt(s string) (int, error) {
+	if s == "" {
+		return 0, fmt.Errorf("empty")
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if b < '0' || b > '9' {
+			return 0, fmt.Errorf("non-digit")
+		}
+		n = n*10 + int(b-'0')
+		if n <= 0 {
+			return 0, fmt.Errorf("overflow")
+		}
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("non-positive")
+	}
+	return n, nil
 }
 
 func parseDirArg(args []string) (string, error) {
@@ -500,7 +544,7 @@ func testWithOptions(opts testOptions) error {
 	}
 
 	if opts.eng == engineInterp {
-		log, failedNames, err := interp.RunTestsNamed(res.Program, testNames)
+		log, failedNames, err := interp.RunTestsNamedWithJobs(res.Program, testNames, opts.jobs)
 		if !opts.jsonOutput {
 			if log != "" {
 				fmt.Fprint(os.Stdout, log)
@@ -537,7 +581,7 @@ func testWithOptions(opts testOptions) error {
 	}
 
 	groups := names.GroupQualifiedTestsByModule(testNames)
-	results := runCompiledTestsByModule(bin, groups)
+	results := runCompiledTestsByModule(bin, groups, opts.jobs)
 
 	passed := 0
 	failed := 0
@@ -624,6 +668,9 @@ func printSelectionSummary(out io.Writer, discovered int, selected int, opts tes
 	if opts.runPattern != "" {
 		fmt.Fprintf(out, "[select] --run: %q\n", opts.runPattern)
 	}
+	if opts.jobs > 0 {
+		fmt.Fprintf(out, "[select] --jobs: %d\n", opts.jobs)
+	}
 	if opts.rerunFailed {
 		fmt.Fprintf(out, "[select] --rerun-failed: %d cached\n", prevFailedCount)
 	}
@@ -650,6 +697,7 @@ type jsonSelection struct {
 	Discovered      int    `json:"discovered"`
 	Selected        int    `json:"selected"`
 	RunPattern      string `json:"run_pattern,omitempty"`
+	Jobs            int    `json:"jobs,omitempty"`
 	RerunFailed     bool   `json:"rerun_failed,omitempty"`
 	PrevFailedCount int    `json:"prev_failed_count,omitempty"`
 }
@@ -801,6 +849,9 @@ func buildJSONTestReport(
 	if opts.runPattern != "" {
 		rep.Selection.RunPattern = opts.runPattern
 	}
+	if opts.jobs > 0 {
+		rep.Selection.Jobs = opts.jobs
+	}
 	if opts.rerunFailed {
 		rep.Selection.RerunFailed = true
 		rep.Selection.PrevFailedCount = prevFailedCount
@@ -904,7 +955,7 @@ func summarizeTestResults(testNames []string, results map[string]testExecResult)
 	return mods, slowest
 }
 
-func runCompiledTestsByModule(bin string, groups []names.TestModuleGroup) map[string]testExecResult {
+func runCompiledTestsByModule(bin string, groups []names.TestModuleGroup, jobs int) map[string]testExecResult {
 	total := 0
 	for _, g := range groups {
 		total += len(g.Tests)
@@ -914,15 +965,9 @@ func runCompiledTestsByModule(bin string, groups []names.TestModuleGroup) map[st
 		return out
 	}
 
-	workers := runtime.GOMAXPROCS(0)
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > len(groups) {
-		workers = len(groups)
-	}
+	workers := moduleTestWorkers(len(groups), jobs)
 
-	jobs := make(chan names.TestModuleGroup, len(groups))
+	workq := make(chan names.TestModuleGroup, len(groups))
 	type namedResult struct {
 		name string
 		res  testExecResult
@@ -933,7 +978,7 @@ func runCompiledTestsByModule(bin string, groups []names.TestModuleGroup) map[st
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for g := range jobs {
+			for g := range workq {
 				for _, name := range g.Tests {
 					cmd := exec.Command(bin, name)
 					cmd.Stdout = os.Stdout
@@ -947,9 +992,9 @@ func runCompiledTestsByModule(bin string, groups []names.TestModuleGroup) map[st
 		}()
 	}
 	for _, g := range groups {
-		jobs <- g
+		workq <- g
 	}
-	close(jobs)
+	close(workq)
 	go func() {
 		wg.Wait()
 		close(results)
@@ -958,6 +1003,26 @@ func runCompiledTestsByModule(bin string, groups []names.TestModuleGroup) map[st
 		out[r.name] = r.res
 	}
 	return out
+}
+
+func moduleTestWorkers(moduleCount int, jobs int) int {
+	if moduleCount <= 0 {
+		return 1
+	}
+	if jobs > 0 {
+		if jobs > moduleCount {
+			return moduleCount
+		}
+		return jobs
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > moduleCount {
+		workers = moduleCount
+	}
+	return workers
 }
 
 func formatTestDuration(d time.Duration) string {

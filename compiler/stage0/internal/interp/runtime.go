@@ -139,11 +139,15 @@ func RunTests(p *typecheck.CheckedProgram) (string, error) {
 }
 
 func RunTestsNamed(p *typecheck.CheckedProgram, testNames []string) (string, []string, error) {
+	return RunTestsNamedWithJobs(p, testNames, 0)
+}
+
+func RunTestsNamedWithJobs(p *typecheck.CheckedProgram, testNames []string, jobs int) (string, []string, error) {
 	if len(testNames) == 0 {
 		return "[test] no tests found\n", nil, nil
 	}
 
-	results := runInterpTestsByModule(p, names.GroupQualifiedTestsByModule(testNames))
+	results := runInterpTestsByModule(p, names.GroupQualifiedTestsByModule(testNames), jobs)
 	var log strings.Builder
 	failed := 0
 	failedNames := make([]string, 0)
@@ -248,7 +252,7 @@ func runtimeForTests(p *typecheck.CheckedProgram) *Runtime {
 	return rt
 }
 
-func runInterpTestsByModule(p *typecheck.CheckedProgram, groups []names.TestModuleGroup) map[string]interpTestResult {
+func runInterpTestsByModule(p *typecheck.CheckedProgram, groups []names.TestModuleGroup, jobs int) map[string]interpTestResult {
 	total := 0
 	for _, g := range groups {
 		total += len(g.Tests)
@@ -258,15 +262,9 @@ func runInterpTestsByModule(p *typecheck.CheckedProgram, groups []names.TestModu
 		return out
 	}
 
-	workers := runtime.GOMAXPROCS(0)
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > len(groups) {
-		workers = len(groups)
-	}
+	workers := interpModuleWorkers(len(groups), jobs)
 
-	jobs := make(chan names.TestModuleGroup, len(groups))
+	workq := make(chan names.TestModuleGroup, len(groups))
 	type namedResult struct {
 		name string
 		res  interpTestResult
@@ -277,7 +275,7 @@ func runInterpTestsByModule(p *typecheck.CheckedProgram, groups []names.TestModu
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for g := range jobs {
+			for g := range workq {
 				rt := runtimeForTests(p)
 				for _, name := range g.Tests {
 					start := time.Now()
@@ -296,9 +294,9 @@ func runInterpTestsByModule(p *typecheck.CheckedProgram, groups []names.TestModu
 		}()
 	}
 	for _, g := range groups {
-		jobs <- g
+		workq <- g
 	}
-	close(jobs)
+	close(workq)
 	go func() {
 		wg.Wait()
 		close(results)
@@ -307,6 +305,26 @@ func runInterpTestsByModule(p *typecheck.CheckedProgram, groups []names.TestModu
 		out[r.name] = r.res
 	}
 	return out
+}
+
+func interpModuleWorkers(moduleCount int, jobs int) int {
+	if moduleCount <= 0 {
+		return 1
+	}
+	if jobs > 0 {
+		if jobs > moduleCount {
+			return moduleCount
+		}
+		return jobs
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > moduleCount {
+		workers = moduleCount
+	}
+	return workers
 }
 
 func formatTestDuration(d time.Duration) string {

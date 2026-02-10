@@ -42,6 +42,39 @@ func TestParseTestOptionsAndDir_RunAndRerun(t *testing.T) {
 	if opts.listOnly {
 		t.Fatalf("listOnly = true, want false")
 	}
+	if opts.jobs != 0 {
+		t.Fatalf("jobs = %d, want 0", opts.jobs)
+	}
+}
+
+func TestParseTestOptionsAndDir_Jobs(t *testing.T) {
+	opts, err := parseTestOptionsAndDir([]string{"--jobs=3", "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.jobs != 3 {
+		t.Fatalf("jobs = %d, want 3", opts.jobs)
+	}
+
+	opts2, err := parseTestOptionsAndDir([]string{"-j", "4", "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts2.jobs != 4 {
+		t.Fatalf("jobs = %d, want 4", opts2.jobs)
+	}
+}
+
+func TestParseTestOptionsAndDir_InvalidJobs(t *testing.T) {
+	if _, err := parseTestOptionsAndDir([]string{"--jobs=0", "."}); err == nil {
+		t.Fatalf("expected error for jobs=0")
+	}
+	if _, err := parseTestOptionsAndDir([]string{"--jobs=-1", "."}); err == nil {
+		t.Fatalf("expected error for jobs=-1")
+	}
+	if _, err := parseTestOptionsAndDir([]string{"-j", "x", "."}); err == nil {
+		t.Fatalf("expected error for non-digit jobs")
+	}
 }
 
 func TestParseTestOptionsAndDir_List(t *testing.T) {
@@ -293,7 +326,7 @@ func TestPrintSelectedTests(t *testing.T) {
 
 func TestPrintSelectionSummary(t *testing.T) {
 	var b bytes.Buffer
-	printSelectionSummary(&b, 7, 2, testOptions{runPattern: "foo", rerunFailed: true}, 3)
+	printSelectionSummary(&b, 7, 2, testOptions{runPattern: "foo", jobs: 2, rerunFailed: true}, 3)
 	out := b.String()
 	if !strings.Contains(out, "[select] discovered: 7, selected: 2") {
 		t.Fatalf("missing discover/selected summary: %q", out)
@@ -301,8 +334,23 @@ func TestPrintSelectionSummary(t *testing.T) {
 	if !strings.Contains(out, "[select] --run: \"foo\"") {
 		t.Fatalf("missing run summary: %q", out)
 	}
+	if !strings.Contains(out, "[select] --jobs: 2") {
+		t.Fatalf("missing jobs summary: %q", out)
+	}
 	if !strings.Contains(out, "[select] --rerun-failed: 3 cached") {
 		t.Fatalf("missing rerun summary: %q", out)
+	}
+}
+
+func TestModuleTestWorkers(t *testing.T) {
+	if got := moduleTestWorkers(0, 0); got != 1 {
+		t.Fatalf("workers(0,0) = %d, want 1", got)
+	}
+	if got := moduleTestWorkers(3, 1); got != 1 {
+		t.Fatalf("workers(3,1) = %d, want 1", got)
+	}
+	if got := moduleTestWorkers(3, 8); got != 3 {
+		t.Fatalf("workers(3,8) = %d, want 3", got)
 	}
 }
 
@@ -393,7 +441,7 @@ func TestBuildJSONTestReport(t *testing.T) {
 		"mod.a::test_fail": {dur: 3 * time.Millisecond, err: os.ErrInvalid},
 	}
 	mods, slowest := summarizeTestResults(testNames, results)
-	rep := buildJSONTestReport(testOptions{eng: engineC, dir: "."}, "/tmp/p", 2, 2, 0, testNames, results, mods, "rerun", "")
+	rep := buildJSONTestReport(testOptions{eng: engineC, dir: ".", jobs: 2}, "/tmp/p", 2, 2, 0, testNames, results, mods, "rerun", "")
 	rep.Slowest = jsonSlowestFromNamed(slowest)
 	rep.TotalDurationMicros = 5000
 
@@ -407,6 +455,13 @@ func TestBuildJSONTestReport(t *testing.T) {
 	}
 	if got["engine"] != "c" {
 		t.Fatalf("engine = %v, want c", got["engine"])
+	}
+	selection, ok := got["selection"].(map[string]any)
+	if !ok {
+		t.Fatalf("selection not object: %+v", got["selection"])
+	}
+	if selection["jobs"] != float64(2) {
+		t.Fatalf("selection.jobs = %v, want 2", selection["jobs"])
 	}
 	if got["passed"] != float64(1) || got["failed"] != float64(1) {
 		t.Fatalf("unexpected pass/fail: %+v", got)
