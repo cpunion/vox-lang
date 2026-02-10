@@ -82,12 +82,159 @@ fn subs_add(subs0: Vec[TySub], name: String, ty: i32) -> Vec[TySub] {
 
 fn is_param_ty(t: ir.Ty) -> bool { return match t.kind { ir.TyKind.Param => true, _ => false }; }
 fn is_vec_ty2(t: ir.Ty) -> bool { return match t.kind { ir.TyKind.Vec => true, _ => false }; }
+fn is_struct_ty2(t: ir.Ty) -> bool { return match t.kind { ir.TyKind.Struct => true, _ => false }; }
+fn is_enum_ty2(t: ir.Ty) -> bool { return match t.kind { ir.TyKind.Enum => true, _ => false }; }
+
+fn find_nominal_ty_idx_subst(ctx: Ctx, kind: ir.TyKind, mod_path: String, name: String) -> i32 {
+  let tys: Vec[ir.Ty] = ctx.pool.tys;
+  let mut i: i32 = 0;
+  while i < tys.len() {
+    let t: ir.Ty = tys.get(i);
+    let kind_ok: bool =
+      match kind {
+        ir.TyKind.Struct => t.kind == ir.TyKind.Struct,
+        ir.TyKind.Enum => t.kind == ir.TyKind.Enum,
+        _ => false,
+      };
+    if kind_ok && t.mod_path == mod_path && t.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn subst_struct_nominal_ty(ctx: Ctx, ty_idx: i32, subs: Vec[TySub]) -> i32 {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty_idx);
+  let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+  if !fs.found { return ty_idx; }
+
+  let mut changed: bool = false;
+  let mut want_tys: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < fs.sig.fields.len() {
+    let f: StructFieldSig = fs.sig.fields.get(i);
+    let st: i32 = subst_ty(ctx, f.ty, subs);
+    if st == ctx.ty_bad { return ctx.ty_bad; }
+    if st != f.ty { changed = true; }
+    want_tys.push(st);
+    i = i + 1;
+  }
+  if !changed { return ty_idx; }
+
+  let mut si: i32 = 0;
+  while si < ctx.structs.len() {
+    let s: StructSig = ctx.structs.get(si);
+    if s.mod_path == fs.sig.mod_path && s.base_name == fs.sig.base_name && s.fields.len() == fs.sig.fields.len() {
+      let mut ok: bool = true;
+      let mut fi: i32 = 0;
+      while fi < s.fields.len() {
+        let sf: StructFieldSig = s.fields.get(fi);
+        let pf: StructFieldSig = fs.sig.fields.get(fi);
+        if sf.name != pf.name || sf.ty != want_tys.get(fi) {
+          ok = false;
+          fi = s.fields.len();
+        } else {
+          fi = fi + 1;
+        }
+      }
+      if ok {
+        let idx: i32 = find_nominal_ty_idx_subst(ctx, ir.TyKind.Struct, s.mod_path, s.name);
+        if idx != -1 { return idx; }
+      }
+    }
+    si = si + 1;
+  }
+  return ctx.ty_bad;
+}
+
+fn subst_enum_nominal_ty(ctx: Ctx, ty_idx: i32, subs: Vec[TySub]) -> i32 {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty_idx);
+  let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+  if !fe.found { return ty_idx; }
+
+  let mut changed: bool = false;
+  let mut want_vars: Vec[EnumVariantSig] = Vec();
+  let mut vi: i32 = 0;
+  while vi < fe.sig.vars.len() {
+    let v: EnumVariantSig = fe.sig.vars.get(vi);
+    let mut ftys: Vec[i32] = Vec();
+    let mut fi: i32 = 0;
+    while fi < v.fields.len() {
+      let st: i32 = subst_ty(ctx, v.fields.get(fi), subs);
+      if st == ctx.ty_bad { return ctx.ty_bad; }
+      if st != v.fields.get(fi) { changed = true; }
+      ftys.push(st);
+      fi = fi + 1;
+    }
+    want_vars.push(EnumVariantSig { name: v.name, fields: ftys });
+    vi = vi + 1;
+  }
+  if !changed { return ty_idx; }
+
+  let mut ei: i32 = 0;
+  while ei < ctx.enums.len() {
+    let e: EnumSig = ctx.enums.get(ei);
+    if e.mod_path == fe.sig.mod_path && e.base_name == fe.sig.base_name && e.vars.len() == fe.sig.vars.len() {
+      let mut ok: bool = true;
+      let mut i2: i32 = 0;
+      while i2 < e.vars.len() {
+        let ev: EnumVariantSig = e.vars.get(i2);
+        let wv: EnumVariantSig = want_vars.get(i2);
+        if ev.name != wv.name || ev.fields.len() != wv.fields.len() {
+          ok = false;
+          i2 = e.vars.len();
+        } else {
+          let mut j: i32 = 0;
+          while j < ev.fields.len() {
+            if ev.fields.get(j) != wv.fields.get(j) {
+              ok = false;
+              j = ev.fields.len();
+            } else {
+              j = j + 1;
+            }
+          }
+          i2 = i2 + 1;
+        }
+      }
+      if ok {
+        let idx: i32 = find_nominal_ty_idx_subst(ctx, ir.TyKind.Enum, e.mod_path, e.name);
+        if idx != -1 { return idx; }
+      }
+    }
+    ei = ei + 1;
+  }
+  return ctx.ty_bad;
+}
 
 pub fn ty_has_param(ctx: Ctx, ty_idx: i32) -> bool {
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty_idx);
   if t.kind == ir.TyKind.Param { return true; }
   if t.kind == ir.TyKind.Vec { return ty_has_param(ctx, t.elem); }
   if t.kind == ir.TyKind.Range { return ty_has_param(ctx, t.elem); }
+  if t.kind == ir.TyKind.Struct {
+    let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+    if !fs.found { return false; }
+    let mut i: i32 = 0;
+    while i < fs.sig.fields.len() {
+      if ty_has_param(ctx, fs.sig.fields.get(i).ty) { return true; }
+      i = i + 1;
+    }
+    return false;
+  }
+  if t.kind == ir.TyKind.Enum {
+    let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+    if !fe.found { return false; }
+    let mut vi: i32 = 0;
+    while vi < fe.sig.vars.len() {
+      let v: EnumVariantSig = fe.sig.vars.get(vi);
+      let mut fi: i32 = 0;
+      while fi < v.fields.len() {
+        if ty_has_param(ctx, v.fields.get(fi)) { return true; }
+        fi = fi + 1;
+      }
+      vi = vi + 1;
+    }
+    return false;
+  }
   return false;
 }
 
@@ -109,6 +256,63 @@ pub fn unify_ty(ctx: Ctx, pattern: i32, got: i32, subs0: Vec[TySub]) -> UnifyRes
   }
 
   if pattern == got { return UnifyResult { ok: true, subs: subs0 }; }
+
+  if is_struct_ty2(pt) {
+    let gt: ir.Ty = ir.ty_pool_get(ctx.pool, got);
+    if !is_struct_ty2(gt) { return UnifyResult { ok: false, subs: subs0 }; }
+    if pt.mod_path != gt.mod_path { return UnifyResult { ok: false, subs: subs0 }; }
+
+    let fs0: FindStructResult = find_struct(ctx, pt.mod_path, pt.name);
+    let fs1: FindStructResult = find_struct(ctx, gt.mod_path, gt.name);
+    if !fs0.found || !fs1.found { return UnifyResult { ok: false, subs: subs0 }; }
+    if fs0.sig.base_name != fs1.sig.base_name { return UnifyResult { ok: false, subs: subs0 }; }
+    if fs0.sig.fields.len() != fs1.sig.fields.len() { return UnifyResult { ok: false, subs: subs0 }; }
+
+    let mut subs: Vec[TySub] = subs0;
+    let mut i: i32 = 0;
+    while i < fs0.sig.fields.len() {
+      let f0: StructFieldSig = fs0.sig.fields.get(i);
+      let f1: StructFieldSig = fs1.sig.fields.get(i);
+      if f0.name != f1.name { return UnifyResult { ok: false, subs: subs0 }; }
+      let ur: UnifyResult = unify_ty(ctx, f0.ty, f1.ty, subs);
+      if !ur.ok { return UnifyResult { ok: false, subs: subs0 }; }
+      subs = ur.subs;
+      i = i + 1;
+    }
+    return UnifyResult { ok: true, subs: subs };
+  }
+
+  if is_enum_ty2(pt) {
+    let gt: ir.Ty = ir.ty_pool_get(ctx.pool, got);
+    if !is_enum_ty2(gt) { return UnifyResult { ok: false, subs: subs0 }; }
+    if pt.mod_path != gt.mod_path { return UnifyResult { ok: false, subs: subs0 }; }
+
+    let fe0: FindEnumResult = find_enum(ctx, pt.mod_path, pt.name);
+    let fe1: FindEnumResult = find_enum(ctx, gt.mod_path, gt.name);
+    if !fe0.found || !fe1.found { return UnifyResult { ok: false, subs: subs0 }; }
+    if fe0.sig.base_name != fe1.sig.base_name { return UnifyResult { ok: false, subs: subs0 }; }
+    if fe0.sig.vars.len() != fe1.sig.vars.len() { return UnifyResult { ok: false, subs: subs0 }; }
+
+    let mut subs2: Vec[TySub] = subs0;
+    let mut vi: i32 = 0;
+    while vi < fe0.sig.vars.len() {
+      let v0: EnumVariantSig = fe0.sig.vars.get(vi);
+      let v1: EnumVariantSig = fe1.sig.vars.get(vi);
+      if v0.name != v1.name || v0.fields.len() != v1.fields.len() {
+        return UnifyResult { ok: false, subs: subs0 };
+      }
+      let mut fi: i32 = 0;
+      while fi < v0.fields.len() {
+        let ur2: UnifyResult = unify_ty(ctx, v0.fields.get(fi), v1.fields.get(fi), subs2);
+        if !ur2.ok { return UnifyResult { ok: false, subs: subs0 }; }
+        subs2 = ur2.subs;
+        fi = fi + 1;
+      }
+      vi = vi + 1;
+    }
+    return UnifyResult { ok: true, subs: subs2 };
+  }
+
   return UnifyResult { ok: false, subs: subs0 };
 }
 
@@ -197,6 +401,12 @@ pub fn subst_ty(ctx: Ctx, ty_idx: i32, subs: Vec[TySub]) -> i32 {
     let ridx: i32 = find_range_ty_idx_subst(ctx, e2, t.lo, t.hi);
     if ridx == -1 { return ctx.ty_bad; }
     return ridx;
+  }
+  if t.kind == ir.TyKind.Struct {
+    return subst_struct_nominal_ty(ctx, ty_idx, subs);
+  }
+  if t.kind == ir.TyKind.Enum {
+    return subst_enum_nominal_ty(ctx, ty_idx, subs);
   }
   return ty_idx;
 }
