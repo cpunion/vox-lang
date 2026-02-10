@@ -1284,6 +1284,9 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(b), "[test]") {
 		t.Fatalf("expected stage2 test summary, got:\n%s", string(b))
 	}
+	if !strings.Contains(string(b), "[module]") {
+		t.Fatalf("expected stage2 module summary, got:\n%s", string(b))
+	}
 
 	cmdRerun := exec.Command(stage2BinB, "test-pkg", "--rerun-failed", outRel)
 	cmdRerun.Dir = stage2DirAbs
