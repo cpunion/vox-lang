@@ -9,8 +9,46 @@ pub struct SourceFile {
 
 pub struct LoadWorldResult {
   pub ok: bool,
+  pub err_kind: i32,
+  pub err_code: String,
+  pub err_message: String,
   pub err: String,
   pub world: tc.World,
+}
+
+pub fn load_diag_kind_none() -> i32 { return 0; }
+pub fn load_diag_kind_parse() -> i32 { return 1; }
+pub fn load_diag_kind_lex() -> i32 { return 2; }
+pub fn load_diag_kind_loader() -> i32 { return 3; }
+
+fn load_code_bad_path() -> String { return "E_LOAD_0001"; }
+
+fn load_ok(mods: Vec[tc.WorldModule]) -> LoadWorldResult {
+  return LoadWorldResult {
+    ok: true,
+    err_kind: load_diag_kind_none(),
+    err_code: "",
+    err_message: "",
+    err: "",
+    world: tc.World { mods: mods },
+  };
+}
+
+fn load_err(kind: i32, code: String, msg: String, rendered: String) -> LoadWorldResult {
+  return LoadWorldResult {
+    ok: false,
+    err_kind: kind,
+    err_code: code,
+    err_message: msg,
+    err: rendered,
+    world: tc.World { mods: Vec() },
+  };
+}
+
+fn load_kind_from_parse(k: i32) -> i32 {
+  if k == p.parse_diag_kind_parse() { return load_diag_kind_parse(); }
+  if k == p.parse_diag_kind_lex() { return load_diag_kind_lex(); }
+  return load_diag_kind_none();
 }
 
 pub fn world_from_files(files: Vec[SourceFile]) -> LoadWorldResult {
@@ -21,19 +59,22 @@ pub fn world_from_files(files: Vec[SourceFile]) -> LoadWorldResult {
     let f: SourceFile = files.get(i);
     let mp: String = mod_path_from_file_path(f.path);
     if mp == "" {
-      return LoadWorldResult { ok: false, err: "unsupported file path: ".concat(f.path), world: tc.World { mods: Vec() } };
+      let code: String = load_code_bad_path();
+      let msg: String = "unsupported file path: ".concat(f.path);
+      return load_err(load_diag_kind_loader(), code, msg, msg.concat(" [").concat(code).concat("]"));
     }
 
     let r: p.ParseResult = p.parse_text_with_path(f.path, f.text);
     if r.err != p.ParseError.None {
-      return LoadWorldResult { ok: false, err: p.parse_error_to_string_with_source(f.path, f.text, r.err), world: tc.World { mods: Vec() } };
+      let d: p.ParseDiag = p.parse_error_diag(f.path, f.text, r.err);
+      return load_err(load_kind_from_parse(d.kind), d.code, d.message, d.rendered);
     }
 
     mods = upsert_mod(mods, mp, r.prog);
     i = i + 1;
   }
 
-  return LoadWorldResult { ok: true, err: "", world: tc.World { mods: mods } };
+  return load_ok(mods);
 }
 
 fn upsert_mod(mods: Vec[tc.WorldModule], mp: String, prog: ast.Program) -> Vec[tc.WorldModule] {
