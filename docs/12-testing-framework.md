@@ -40,6 +40,7 @@ Stage0 行为：
 - 输出包含最慢测试 TopN（当前 N=5，`[slowest] <test> (<dur>)`）
 - 输出包含选择摘要（`[select] discovered: N, selected: M`，并在使用 `--run/--rerun-failed` 时打印过滤来源）
 - 测试失败后输出重跑提示（`[hint] rerun failed: vox test --engine=... --rerun-failed <dir>`）
+- `target/debug/.vox_failed_tests` 当前采用 JSON 元数据格式（包含失败测试列表与更新时间）；读取端兼容旧版纯文本行列表
 
 `--json` 的关键字段：
 

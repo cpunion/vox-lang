@@ -1338,6 +1338,29 @@ func failedTestsPath(root string) string {
 	return filepath.Join(root, "target", "debug", ".vox_failed_tests")
 }
 
+type failedTestsCache struct {
+	Version         int      `json:"version"`
+	UpdatedUnixUsec int64    `json:"updated_unix_us"`
+	Tests           []string `json:"tests"`
+}
+
+func normalizeFailedTests(names []string) []string {
+	out := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
 func readFailedTests(root string) ([]string, error) {
 	path := failedTestsPath(root)
 	b, err := os.ReadFile(path)
@@ -1347,24 +1370,20 @@ func readFailedTests(root string) ([]string, error) {
 		}
 		return nil, err
 	}
-	lines := strings.Split(string(b), "\n")
-	out := make([]string, 0, len(lines))
-	seen := map[string]struct{}{}
-	for _, ln := range lines {
-		ln = strings.TrimSpace(ln)
-		if ln == "" {
-			continue
-		}
-		if _, ok := seen[ln]; ok {
-			continue
-		}
-		seen[ln] = struct{}{}
-		out = append(out, ln)
+	text := strings.TrimSpace(string(b))
+	if text == "" {
+		return nil, nil
 	}
-	return out, nil
+	// v1 json cache; fallback to legacy plaintext list for compatibility.
+	var cache failedTestsCache
+	if err := json.Unmarshal(b, &cache); err == nil {
+		return normalizeFailedTests(cache.Tests), nil
+	}
+	return normalizeFailedTests(strings.Split(text, "\n")), nil
 }
 
 func writeFailedTests(root string, failed []string) error {
+	failed = normalizeFailedTests(failed)
 	path := failedTestsPath(root)
 	if len(failed) == 0 {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -1375,12 +1394,16 @@ func writeFailedTests(root string, failed []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	var b strings.Builder
-	for _, name := range failed {
-		b.WriteString(name)
-		b.WriteByte('\n')
+	cache := failedTestsCache{
+		Version:         1,
+		UpdatedUnixUsec: time.Now().UnixMicro(),
+		Tests:           failed,
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	buf, err := json.Marshal(cache)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf, 0o644)
 }
 
 func intersectTests(all []string, keep []string) []string {

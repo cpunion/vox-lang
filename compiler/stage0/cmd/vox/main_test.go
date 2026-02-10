@@ -122,6 +122,61 @@ func TestFailedTestsReadWrite(t *testing.T) {
 	}
 }
 
+func TestReadFailedTests_LegacyTextFormat(t *testing.T) {
+	root := t.TempDir()
+	path := failedTestsPath(root)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := "tests::test_a\n\ntests::test_b\ntests::test_a\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readFailedTests(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"tests::test_a", "tests::test_b"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got[%d]=%q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestWriteFailedTests_JSONCacheFormat(t *testing.T) {
+	root := t.TempDir()
+	want := []string{"tests::test_a", "tests::test_b"}
+	if err := writeFailedTests(root, want); err != nil {
+		t.Fatal(err)
+	}
+	path := failedTestsPath(root)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cache map[string]any
+	if err := json.Unmarshal(b, &cache); err != nil {
+		t.Fatalf("cache should be json: %v\n%s", err, string(b))
+	}
+	if cache["version"] != float64(1) {
+		t.Fatalf("version = %v, want 1", cache["version"])
+	}
+	tests, ok := cache["tests"].([]any)
+	if !ok || len(tests) != 2 {
+		t.Fatalf("tests = %+v, want len 2", cache["tests"])
+	}
+	if tests[0] != "tests::test_a" || tests[1] != "tests::test_b" {
+		t.Fatalf("tests order/content mismatch: %+v", tests)
+	}
+	if _, ok := cache["updated_unix_us"]; !ok {
+		t.Fatalf("missing updated_unix_us: %+v", cache)
+	}
+}
+
 func TestInterpTestRerunFailed(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte("[package]\nname = \"t\"\n"), 0o644); err != nil {
