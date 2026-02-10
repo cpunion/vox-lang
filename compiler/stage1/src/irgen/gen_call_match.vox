@@ -298,12 +298,35 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
     return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
   }
 
-  // Generic call: split generic args into [type args..., const args...].
-  if type_args.len() < sig.const_params.len() {
+  // Generic call args:
+  // - type args prefix
+  // - const args suffix (missing values can use defaults)
+  let mut explicit_targ_n: i32 = type_args.len();
+  let mut first_const: i32 = -1;
+  let mut xi: i32 = 0;
+  while xi < type_args.len() {
+    if tc.is_const_generic_arg_tn(type_args.get(xi)) {
+      first_const = xi;
+      xi = type_args.len();
+    } else {
+      xi = xi + 1;
+    }
+  }
+  if first_const != -1 {
+    explicit_targ_n = first_const;
+    let mut xj: i32 = first_const;
+    while xj < type_args.len() {
+      if !tc.is_const_generic_arg_tn(type_args.get(xj)) {
+        return GenExprResult { ok: false, err: "type arg arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+      }
+      xj = xj + 1;
+    }
+  }
+  if explicit_targ_n > sig.type_params.len() {
     return GenExprResult { ok: false, err: "type arg arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
   }
-  let explicit_targ_n: i32 = type_args.len() - sig.const_params.len();
-  if explicit_targ_n > sig.type_params.len() {
+  let explicit_const_n: i32 = type_args.len() - explicit_targ_n;
+  if explicit_const_n > sig.const_params.len() {
     return GenExprResult { ok: false, err: "type arg arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
   }
   let mut explicit_targs: Vec[ast.TypeName] = Vec();
@@ -321,15 +344,19 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   let mut ci: i32 = 0;
   while ci < sig.const_params.len() {
     let cp: tc.ConstParamSig = sig.const_params.get(ci);
-    let atn: ast.TypeName = type_args.get(explicit_targ_n + ci);
-    if !tc.is_const_generic_arg_tn(atn) {
-      return GenExprResult { ok: false, err: "missing const generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    if ci < explicit_const_n {
+      let atn: ast.TypeName = type_args.get(explicit_targ_n + ci);
+      let pr: tc.ParseConstGenericArgResult = tc.parse_const_generic_arg(g.ctx, atn, cp.ty);
+      if !pr.ok {
+        return GenExprResult { ok: false, err: "bad const generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+      }
+      csubs.push(tc.ConstSub { name: cp.name, ty: cp.ty, iv: pr.iv, text: pr.text });
+    } else {
+      if !cp.has_default {
+        return GenExprResult { ok: false, err: "missing const generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+      }
+      csubs.push(tc.ConstSub { name: cp.name, ty: cp.ty, iv: cp.default_iv, text: cp.default_text });
     }
-    let pr: tc.ParseConstGenericArgResult = tc.parse_const_generic_arg(g.ctx, atn, cp.ty);
-    if !pr.ok {
-      return GenExprResult { ok: false, err: "bad const generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
-    }
-    csubs.push(tc.ConstSub { name: cp.name, ty: cp.ty, iv: pr.iv, text: pr.text });
     ci = ci + 1;
   }
 
@@ -409,7 +436,7 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   }
   let rty: i32 = tc.subst_ty(g.ctx, sig.ret, subs);
   if rty == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad substituted ret type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-  let inst_sig: tc.FuncSig = tc.FuncSig { params: ps, ret: rty, vis: sig.vis, is_pub: sig.is_pub, type_params: Vec(), const_params: sig.const_params, type_param_bounds: Vec() };
+  let inst_sig: tc.FuncSig = tc.FuncSig { params: ps, ret: rty, vis: sig.vis, is_pub: sig.is_pub, type_params: Vec(), const_params: sig.const_params, type_param_bounds: Vec(), const_where_bounds: sig.const_where_bounds };
 
   let inst: String = tc.inst_name_ex(g.ctx, name, sig.type_params, sig.const_params, subs, csubs);
   let inst_qn: String = qname(target_mod, inst);

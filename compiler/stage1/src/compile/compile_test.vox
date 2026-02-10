@@ -655,6 +655,17 @@ fn test_compile_trait_const_generic_method_smoke() -> () {
   t.assert(contains(r.c, cg.c_fn_name("impl$main$AddN$addn$0$gN_3d5_3ai32")));
 }
 
+fn test_compile_trait_const_generic_method_default_const_arg_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "trait AddN { fn addn[const N: i32 = 3](x: Self, v: i32) -> i32; }\nstruct I { v: i32 }\nimpl AddN for I { fn addn[const N: i32](x: I, v: i32) -> i32 { return v + N; } }\nfn main() -> i32 { let x: I = I { v: 1 }; let a: i32 = AddN.addn(x, 4); let b: i32 = I { v: 2 }.addn(6); return a + b; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(r.ok);
+  t.assert(contains(r.c, cg.c_fn_name("impl$main$AddN$addn$0$gN_3d3_3ai32")));
+}
+
 fn test_compile_trait_const_generic_method_impl_name_mismatch_rejected() -> () {
   let mut fs: Vec[ld.SourceFile] = Vec();
   fs.push(ld.SourceFile {
@@ -664,6 +675,17 @@ fn test_compile_trait_const_generic_method_impl_name_mismatch_rejected() -> () {
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
   t.assert(!r.ok);
   t.assert(contains(r.err, "impl method const param name mismatch"));
+}
+
+fn test_compile_trait_const_generic_method_default_mismatch_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "trait AddN { fn addn[const N: i32 = 3](x: Self, v: i32) -> i32; }\nstruct I { v: i32 }\nimpl AddN for I { fn addn[const N: i32 = 4](x: I, v: i32) -> i32 { return v + N; } }\nfn main() -> i32 { return 0; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "default mismatch"));
 }
 
 fn test_compile_trait_generic_method_impl_type_param_rename_smoke() -> () {
@@ -998,6 +1020,86 @@ fn test_compile_const_generic_fn_smoke() -> () {
   t.assert(r.ok);
   // C backend mangles IR symbols: '$' -> '_24', '_' -> '_5f'.
   t.assert(contains(r.c, "addn_24gN_5f3d3_5f3ai32"));
+}
+
+fn test_compile_const_generic_fn_comptime_where_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn addn[const N: i32](x: i32) -> i32 where comptime N > 0, comptime N <= 8 { return x + N; }\nfn main() -> i32 { return addn[3](4); }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+
+fn test_compile_const_generic_fn_comptime_where_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn addn[const N: i32](x: i32) -> i32 where comptime N > 0, comptime N <= 8 { return x + N; }\nfn main() -> i32 { return addn[0](4); }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "constraint failed"));
+}
+
+fn test_compile_const_generic_fn_comptime_where_rhs_param_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn addnm[const N: i32, const M: i32](x: i32) -> i32 where comptime N < M { return x + N; }\nfn main() -> i32 { return addnm[3, 5](4); }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+
+fn test_compile_const_generic_fn_comptime_where_rhs_param_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn addnm[const N: i32, const M: i32](x: i32) -> i32 where comptime N < M { return x + N; }\nfn main() -> i32 { return addnm[5, 3](4); }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "constraint failed"));
+}
+
+fn test_compile_const_generic_fn_default_violates_comptime_where_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn addn[const N: i32 = 0](x: i32) -> i32 where comptime N > 0 { return x + N; }\nfn main() -> i32 { return 0; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "default violates comptime where"));
+}
+
+fn test_compile_const_generic_fn_default_const_arg_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn addn[const N: i32 = 3](x: i32) -> i32 { return x + N; }\nfn main() -> i32 { return addn(4); }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(contains(r.c, "addn_24gN_5f3d3_5f3ai32"));
+}
+
+fn test_compile_const_generic_fn_default_const_arg_override_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn addn[const N: i32 = 3](x: i32) -> i32 { return x + N; }\nfn main() -> i32 { let a: i32 = addn(4); let b: i32 = addn[9](4); return a + b; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(contains(r.c, "addn_24gN_5f3d3_5f3ai32"));
+  t.assert(contains(r.c, "addn_24gN_5f3d9_5f3ai32"));
 }
 
 fn test_compile_const_generic_fn_missing_const_arg_rejected() -> () {

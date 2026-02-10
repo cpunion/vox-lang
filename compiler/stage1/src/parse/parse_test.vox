@@ -203,6 +203,35 @@ fn test_parse_fn_const_params() -> () {
   let cp: ast.ConstParamDecl = f.const_params.get(0);
   t.assert_eq(cp.name, "N");
   t.assert(ty_is0(cp.ty, "i32"));
+  t.assert(!cp.has_default);
+}
+
+fn test_parse_fn_const_params_default_value() -> () {
+  let src: String = "fn addn[const N: i32 = 3](x: i32) -> i32 { return x + N; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  t.assert_eq(f.const_params.len(), 1);
+  let cp: ast.ConstParamDecl = f.const_params.get(0);
+  t.assert(cp.has_default);
+  t.assert_eq(cp.default_text, "3");
+}
+
+fn test_parse_fn_const_params_default_value_negative() -> () {
+  let src: String = "fn addn[const N: i32 = -5](x: i32) -> i32 { return x + N; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  t.assert_eq(f.const_params.len(), 1);
+  let cp: ast.ConstParamDecl = f.const_params.get(0);
+  t.assert(cp.has_default);
+  t.assert_eq(cp.default_text, "-5");
+}
+
+fn test_parse_fn_const_params_default_must_be_trailing() -> () {
+  let src: String = "fn addn[const A: i32 = 1, const B: i32](x: i32) -> i32 { return x + A + B; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(!ok(r.err));
 }
 
 fn test_parse_fn_type_param_trait_bounds() -> () {
@@ -233,6 +262,42 @@ fn test_parse_fn_where_trait_bounds() -> () {
   t.assert_eq(b0.bounds.len(), 2);
   t.assert_eq(b0.bounds.get(0).parts.get(0), "Eq");
   t.assert_eq(b0.bounds.get(1).parts.get(0), "Show");
+  t.assert_eq(f.const_where_bounds.len(), 0);
+}
+
+fn test_parse_fn_where_comptime_bounds() -> () {
+  let src: String = "fn addn[const N: i32](x: i32) -> i32 where comptime N > 0, comptime N <= 8 { return x + N; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  t.assert_eq(f.const_params.len(), 1);
+  t.assert_eq(f.const_where_bounds.len(), 2);
+  let c0: ast.ConstWhereDecl = f.const_where_bounds.get(0);
+  t.assert_eq(c0.name, "N");
+  t.assert(match c0.op { ast.BinaryOp.Gt => true, _ => false });
+  t.assert(!c0.rhs_is_param);
+  t.assert_eq(c0.rhs_param, "");
+  t.assert_eq(c0.rhs_text, "0");
+  let c1: ast.ConstWhereDecl = f.const_where_bounds.get(1);
+  t.assert_eq(c1.name, "N");
+  t.assert(match c1.op { ast.BinaryOp.Le => true, _ => false });
+  t.assert(!c1.rhs_is_param);
+  t.assert_eq(c1.rhs_param, "");
+  t.assert_eq(c1.rhs_text, "8");
+}
+
+fn test_parse_fn_where_comptime_bound_rhs_param() -> () {
+  let src: String = "fn addnm[const N: i32, const M: i32](x: i32) -> i32 where comptime N < M { return x + N; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  t.assert_eq(f.const_where_bounds.len(), 1);
+  let c0: ast.ConstWhereDecl = f.const_where_bounds.get(0);
+  t.assert_eq(c0.name, "N");
+  t.assert(match c0.op { ast.BinaryOp.Lt => true, _ => false });
+  t.assert(c0.rhs_is_param);
+  t.assert_eq(c0.rhs_param, "M");
+  t.assert_eq(c0.rhs_text, "M");
 }
 
 fn test_parse_struct_decl_and_pub_fields() -> () {
@@ -484,6 +549,22 @@ fn test_parse_trait_method_type_params_and_where_bounds() -> () {
   t.assert_eq(md.type_param_bounds.len(), 2);
   t.assert_eq(md.type_param_bounds.get(0).name, "T");
   t.assert_eq(md.type_param_bounds.get(1).name, "T");
+  t.assert_eq(md.const_where_bounds.len(), 0);
+}
+
+fn test_parse_trait_method_where_comptime_bounds() -> () {
+  let src: String = "trait AddN { fn addn[const N: i32](x: Self, v: i32) -> i32 where comptime N >= 1; }\nstruct I { v: i32 }\nimpl AddN for I { fn addn[const N: i32](x: I, v: i32) -> i32 where comptime N >= 1 { return v + N; } }\nfn main() -> i32 { return 0; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+  let td: ast.TraitDecl = r.prog.traits.get(0);
+  let md: ast.TraitMethodDecl = td.methods.get(0);
+  t.assert_eq(md.const_where_bounds.len(), 1);
+  let c0: ast.ConstWhereDecl = md.const_where_bounds.get(0);
+  t.assert_eq(c0.name, "N");
+  t.assert(match c0.op { ast.BinaryOp.Ge => true, _ => false });
+  t.assert(!c0.rhs_is_param);
+  t.assert_eq(c0.rhs_param, "");
+  t.assert_eq(c0.rhs_text, "1");
 }
 
 fn test_parse_trait_method_const_params() -> () {

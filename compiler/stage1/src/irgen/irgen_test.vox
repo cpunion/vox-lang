@@ -113,6 +113,50 @@ fn test_irgen_const_fn_call_const_generic_inlined() -> () {
   t.assert(contains(s, "const i32 7"));
 }
 
+fn test_irgen_const_fn_call_const_generic_comptime_where_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addn[const N: i32](x: i32) -> i32 where comptime N > 0, comptime N <= 8 { return x + N; }\nconst M: i32 = addn[3](4)\nfn main() -> i32 { return M; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+
+fn test_irgen_const_fn_call_const_generic_comptime_where_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addn[const N: i32](x: i32) -> i32 where comptime N > 0, comptime N <= 8 { return x + N; }\nconst M: i32 = addn[0](4)\nfn main() -> i32 { return M; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "constraint failed"));
+}
+
+fn test_irgen_const_fn_call_const_generic_comptime_where_rhs_param_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addnm[const N: i32, const M: i32](x: i32) -> i32 where comptime N < M { return x + N; }\nconst V: i32 = addnm[3, 5](4)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+
+fn test_irgen_const_fn_call_const_generic_comptime_where_rhs_param_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addnm[const N: i32, const M: i32](x: i32) -> i32 where comptime N < M { return x + N; }\nconst V: i32 = addnm[5, 3](4)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "constraint failed"));
+}
+
+fn test_irgen_const_fn_call_const_generic_default_violates_comptime_where_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addn[const N: i32 = 0](x: i32) -> i32 where comptime N > 0 { return x + N; }\nconst M: i32 = 1\nfn main() -> i32 { return M; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "default violates comptime where"));
+}
+
 fn test_irgen_const_unary_not_int_inlined() -> () {
   let mut w: tc.World = tc.world();
   w = add_mod(w, "main", "const N: i32 = !0\nfn main() -> i32 { return N; }");
@@ -459,6 +503,26 @@ fn test_irgen_monomorphizes_const_generic_call() -> () {
   t.assert(prog_has_func(r.prog, "main"));
   t.assert(prog_has_func(r.prog, "addn$gN_3d3_3ai32"));
   t.assert(!prog_has_func(r.prog, "addn"));
+}
+
+fn test_irgen_monomorphizes_const_generic_default_arg_call() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addn[const N: i32 = 3](x: i32) -> i32 { return x + N; } fn main() -> i32 { return addn(1); }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(prog_has_func(r.prog, "addn$gN_3d3_3ai32"));
+}
+
+fn test_irgen_monomorphizes_const_generic_default_arg_override() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn addn[const N: i32 = 3](x: i32) -> i32 { return x + N; }\nfn main() -> i32 {\n  let a: i32 = addn(1);\n  let b: i32 = addn[9](1);\n  return a + b;\n}";
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(prog_has_func(r.prog, "addn$gN_3d3_3ai32"));
+  t.assert(prog_has_func(r.prog, "addn$gN_3d9_3ai32"));
 }
 
 fn test_irgen_monomorphizes_const_generic_multiple_instantiations() -> () {

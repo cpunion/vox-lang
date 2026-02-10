@@ -6,6 +6,12 @@ struct TcCtxResult {
   ctx: Ctx,
 }
 
+struct CollectConstWhereResult {
+  ok: bool,
+  err: TcError,
+  bounds: Vec[ConstWhereBoundSig],
+}
+
 struct AliasItem { mod_path: String, decl: ast.TypeAliasDecl }
 
 fn alias_qname(mod_path: String, name: String) -> String {
@@ -552,24 +558,160 @@ fn has_bound_sig(bs: Vec[TypeParamBoundSig], tp: String, trait_mod: String, trai
   return false;
 }
 
+fn find_const_param_sig(cps: Vec[ConstParamSig], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < cps.len() {
+    if cps.get(i).name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn const_where_op_supported(op: ast.BinaryOp) -> bool {
+  return
+    match op {
+      ast.BinaryOp.Eq => true,
+      ast.BinaryOp.Ne => true,
+      ast.BinaryOp.Lt => true,
+      ast.BinaryOp.Le => true,
+      ast.BinaryOp.Gt => true,
+      ast.BinaryOp.Ge => true,
+      _ => false,
+    };
+}
+
+fn has_const_where_sig(bs: Vec[ConstWhereBoundSig], name: String, op: ast.BinaryOp, rhs_is_param: bool, rhs_param: String, rhs_iv: i64) -> bool {
+  let mut i: i32 = 0;
+  while i < bs.len() {
+    let b: ConstWhereBoundSig = bs.get(i);
+    let rhs_ok: bool =
+      if b.rhs_is_param != rhs_is_param {
+        false
+      } else if rhs_is_param {
+        b.rhs_param == rhs_param
+      } else {
+        b.rhs_iv == rhs_iv
+      };
+    if b.name == name && rhs_ok {
+      if match b.op { ast.BinaryOp.Eq => true, _ => false } && match op { ast.BinaryOp.Eq => true, _ => false } { return true; }
+      if match b.op { ast.BinaryOp.Ne => true, _ => false } && match op { ast.BinaryOp.Ne => true, _ => false } { return true; }
+      if match b.op { ast.BinaryOp.Lt => true, _ => false } && match op { ast.BinaryOp.Lt => true, _ => false } { return true; }
+      if match b.op { ast.BinaryOp.Le => true, _ => false } && match op { ast.BinaryOp.Le => true, _ => false } { return true; }
+      if match b.op { ast.BinaryOp.Gt => true, _ => false } && match op { ast.BinaryOp.Gt => true, _ => false } { return true; }
+      if match b.op { ast.BinaryOp.Ge => true, _ => false } && match op { ast.BinaryOp.Ge => true, _ => false } { return true; }
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn collect_const_where_bounds(file: String, cps: Vec[ConstParamSig], ds: Vec[ast.ConstWhereDecl]) -> CollectConstWhereResult {
+  let mut out: Vec[ConstWhereBoundSig] = Vec();
+  let mut i: i32 = 0;
+  while i < ds.len() {
+    let d: ast.ConstWhereDecl = ds.get(i);
+    if !const_where_op_supported(d.op) {
+      return CollectConstWhereResult { ok: false, err: type_error(file, "unsupported comptime where operator"), bounds: out };
+    }
+    if find_const_param_sig(cps, d.name) == -1 {
+      return CollectConstWhereResult { ok: false, err: type_error(file, "unknown const param in comptime where: ".concat(d.name)), bounds: out };
+    }
+    if d.rhs_is_param {
+      if find_const_param_sig(cps, d.rhs_param) == -1 {
+        return CollectConstWhereResult { ok: false, err: type_error(file, "unknown const param in comptime where rhs: ".concat(d.rhs_param)), bounds: out };
+      }
+      out.push(ConstWhereBoundSig {
+        name: d.name,
+        op: d.op,
+        rhs_is_param: true,
+        rhs_param: d.rhs_param,
+        rhs_iv: 0,
+        rhs_text: d.rhs_text,
+      });
+    } else {
+      let pr: ParseI64DecResult = parse_i64_dec(d.rhs_text);
+      if !pr.ok {
+        return CollectConstWhereResult { ok: false, err: type_error(file, "comptime where rhs out of range: ".concat(d.rhs_text)), bounds: out };
+      }
+      out.push(ConstWhereBoundSig {
+        name: d.name,
+        op: d.op,
+        rhs_is_param: false,
+        rhs_param: "",
+        rhs_iv: pr.val,
+        rhs_text: d.rhs_text,
+      });
+    }
+    i = i + 1;
+  }
+
+  // Validate defaults eagerly: if a const param has default, it must satisfy all
+  // comptime where constraints at declaration time.
+  let mut defaults: Vec[ConstSub] = Vec();
+  i = 0;
+  while i < cps.len() {
+    let cp: ConstParamSig = cps.get(i);
+    if cp.has_default {
+      defaults.push(ConstSub { name: cp.name, ty: cp.ty, iv: cp.default_iv, text: cp.default_text });
+    }
+    i = i + 1;
+  }
+  let mut wi: i32 = 0;
+  while wi < out.len() {
+    let wb: ConstWhereBoundSig = out.get(wi);
+    let mut cfi: i32 = 0;
+    while cfi < cps.len() {
+      let cp2: ConstParamSig = cps.get(cfi);
+      if cp2.name == wb.name && cp2.has_default {
+        // Eagerly validate only when every value used by the bound has defaults.
+        let mut can_check: bool = true;
+        if wb.rhs_is_param {
+          let mut has_rhs_default: bool = false;
+          let mut di: i32 = 0;
+          while di < defaults.len() {
+            if defaults.get(di).name == wb.rhs_param { has_rhs_default = true; }
+            di = di + 1;
+          }
+          can_check = has_rhs_default;
+        }
+        if can_check {
+          let chk: ConstWhereCheckResult = check_const_where_bounds(vec1_const_where(wb), defaults);
+          if !chk.ok {
+            return CollectConstWhereResult { ok: false, err: type_error(file, "const param default violates comptime where: ".concat(wb.name)), bounds: out };
+          }
+        }
+      }
+      cfi = cfi + 1;
+    }
+    wi = wi + 1;
+  }
+  return CollectConstWhereResult { ok: true, err: TcError.None, bounds: out };
+}
+
+fn vec1_const_where(x: ConstWhereBoundSig) -> Vec[ConstWhereBoundSig] {
+  let mut v: Vec[ConstWhereBoundSig] = Vec();
+  v.push(x);
+  return v;
+}
+
 fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
   let mut c: Ctx = ctx;
 
   // Builtins (stage1): keep minimal and stable.
   // Higher-level helpers should live in stdlib Vox sources.
-  c.funcs.push(FuncSym { mod_path: "", name: "panic", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "print", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "panic", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "print", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
   // Tooling/stdlib support builtins (stage1): used by std/fs and std/process.
   // Keep these low-level and prefer std wrappers.
   let v1: ResolveTyResult = intern_vec(c, c.ty_string);
   c = v1.ctx;
   let vec_string: i32 = v1.idx;
-  c.funcs.push(FuncSym { mod_path: "", name: "__args", sig: FuncSig { params: Vec(), ret: vec_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__exe_path", sig: FuncSig { params: Vec(), ret: c.ty_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__read_file", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__write_file", sig: FuncSig { params: vec2(c.ty_string, c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__exec", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_i32, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
-  c.funcs.push(FuncSym { mod_path: "", name: "__walk_vox_files", sig: FuncSig { params: vec1(c.ty_string), ret: vec_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__args", sig: FuncSig { params: Vec(), ret: vec_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__exe_path", sig: FuncSig { params: Vec(), ret: c.ty_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__read_file", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__write_file", sig: FuncSig { params: vec2(c.ty_string, c.ty_string), ret: c.ty_unit, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__exec", sig: FuncSig { params: vec1(c.ty_string), ret: c.ty_i32, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
+  c.funcs.push(FuncSym { mod_path: "", name: "__walk_vox_files", sig: FuncSig { params: vec1(c.ty_string), ret: vec_string, vis: ast.vis_pub(), is_pub: true, type_params: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() } });
 
   let mut mi: i32 = 0;
   while mi < w.mods.len() {
@@ -607,7 +749,22 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
         if !is_int_like_ty(c, cpr.idx) {
           return TcCtxResult { ok: false, err: type_error(fd.file, "const param type must be integer"), ctx: c };
         }
-        cps.push(ConstParamSig { name: cp.name, ty: cpr.idx });
+        let mut has_default: bool = false;
+        let mut default_iv: i64 = 0;
+        let mut default_text: String = "";
+        if cp.has_default {
+          let mut dparts: Vec[String] = Vec();
+          dparts.push("@const");
+          dparts.push(cp.default_text);
+          let dpr: ParseConstGenericArgResult = parse_const_generic_arg(c, ast.TypeName { parts: dparts, args: Vec() }, cpr.idx);
+          if !dpr.ok {
+            return TcCtxResult { ok: false, err: type_error(fd.file, "const param default out of range"), ctx: c };
+          }
+          has_default = true;
+          default_iv = dpr.iv;
+          default_text = dpr.text;
+        }
+        cps.push(ConstParamSig { name: cp.name, ty: cpr.idx, has_default: has_default, default_iv: default_iv, default_text: default_text });
         cpi = cpi + 1;
       }
       // Resolve signature types (skip bodies for generic fns; still collect signature).
@@ -667,7 +824,10 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       let perr1: String = projection_bound_issue(c, fd.type_params, tbs, fd.ret);
       if perr1 != "" { return TcCtxResult { ok: false, err: type_error(fd.file, perr1), ctx: c }; }
 
-      let sig: FuncSig = FuncSig { params: ps, ret: rr.idx, vis: fd.vis, is_pub: fd.is_pub, type_params: fd.type_params, const_params: cps, type_param_bounds: tbs };
+      let cwr: CollectConstWhereResult = collect_const_where_bounds(fd.file, cps, fd.const_where_bounds);
+      if !cwr.ok { return TcCtxResult { ok: false, err: cwr.err, ctx: c }; }
+
+      let sig: FuncSig = FuncSig { params: ps, ret: rr.idx, vis: fd.vis, is_pub: fd.is_pub, type_params: fd.type_params, const_params: cps, type_param_bounds: tbs, const_where_bounds: cwr.bounds };
       c.funcs.push(FuncSym { mod_path: m.path, name: fd.name, sig: sig });
       fi = fi + 1;
     }

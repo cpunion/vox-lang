@@ -72,8 +72,7 @@ Stage0/Stage1 v0 的 `Vec[T]` 在 C 后端中被表示为一个 by-value 的小�
 
 这保证“复制后的 header”仍然指向有效 buffer，从而让 stage1 自举稳定。后续可用 move-only 语义、共享 buffer（RC）或真正的所有权/借用模型替换。
 
-下一步（按依赖顺序）：
+当前补充：
 
-1. 工具链：把 Stage1 产出的 C 源码接入实际编译/链接，产出可执行文件（先 `main` 模块 + 最小 std）。
-2. 诊断：为 Stage1 AST 增加最小 span/位置模型，提升 loader/typecheck/irgen 报错可用性。
-3. 逐步扩展 Stage0 子集覆盖：更多类型、更多内建/stdlib（保持测试优先）。
+1. Const 泛型默认值：已支持函数/trait 方法声明默认 const 参数，并支持调用端省略/覆盖。
+2. 包管理：`vox.toml` 依赖项支持 `path` 与 `version` 字段解析；`build-pkg`/`test-pkg` 会生成 `vox.lock`。

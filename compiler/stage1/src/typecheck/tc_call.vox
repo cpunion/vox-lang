@@ -207,7 +207,7 @@ fn subst_self_in_sig(ctx: Ctx, sig: FuncSig, recv_ty: i32) -> FuncSig {
     i = i + 1;
   }
   let rr: i32 = subst_self_ty(ctx, sig.ret, recv_ty);
-  return FuncSig { params: ps, ret: rr, vis: sig.vis, is_pub: sig.is_pub, type_params: sig.type_params, const_params: sig.const_params, type_param_bounds: sig.type_param_bounds };
+  return FuncSig { params: ps, ret: rr, vis: sig.vis, is_pub: sig.is_pub, type_params: sig.type_params, const_params: sig.const_params, type_param_bounds: sig.type_param_bounds, const_where_bounds: sig.const_where_bounds };
 }
 
 struct AssocProjSubsResult { ok: bool, err: TcError, subs: Vec[TySub] }
@@ -606,14 +606,36 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: a
     return ExprTyResult { ok: true, ty: sig.ret, err: TcError.None };
   }
 
-  // Generic call: split explicit generic args into:
-  // - optional type args prefix (for type params)
-  // - required const args suffix (for const params)
-  if type_args.len() < sig.const_params.len() {
+  // Generic call args:
+  // - type args prefix: `T, U`
+  // - const args suffix: `3, -5`
+  // Missing const args are filled from const param defaults when available.
+  let mut explicit_targ_n: i32 = type_args.len();
+  let mut first_const: i32 = -1;
+  let mut xi: i32 = 0;
+  while xi < type_args.len() {
+    if is_const_generic_arg_tn(type_args.get(xi)) {
+      first_const = xi;
+      xi = type_args.len();
+    } else {
+      xi = xi + 1;
+    }
+  }
+  if first_const != -1 {
+    explicit_targ_n = first_const;
+    let mut xj: i32 = first_const;
+    while xj < type_args.len() {
+      if !is_const_generic_arg_tn(type_args.get(xj)) {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+      }
+      xj = xj + 1;
+    }
+  }
+  if explicit_targ_n > sig.type_params.len() {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
   }
-  let explicit_targ_n: i32 = type_args.len() - sig.const_params.len();
-  if explicit_targ_n > sig.type_params.len() {
+  let explicit_const_n: i32 = type_args.len() - explicit_targ_n;
+  if explicit_const_n > sig.const_params.len() {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
   }
 
@@ -627,14 +649,22 @@ fn tc_call_func_sig(ctx: Ctx, w: World, cur_mod: String, imps: Imports, exprs: a
   }
 
   let mut cidx: i32 = 0;
+  let mut csubs: Vec[ConstSub] = Vec();
   while cidx < sig.const_params.len() {
-    let ctn: ast.TypeName = type_args.get(explicit_targ_n + cidx);
-    if !is_const_generic_arg_tn(ctn) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     let cp: ConstParamSig = sig.const_params.get(cidx);
-    let pr: ParseConstGenericArgResult = parse_const_generic_arg(ctx, ctn, cp.ty);
-    if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if cidx < explicit_const_n {
+      let ctn: ast.TypeName = type_args.get(explicit_targ_n + cidx);
+      let pr: ParseConstGenericArgResult = parse_const_generic_arg(ctx, ctn, cp.ty);
+      if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      csubs.push(ConstSub { name: cp.name, ty: cp.ty, iv: pr.iv, text: pr.text });
+    } else {
+      if !cp.has_default { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      csubs.push(ConstSub { name: cp.name, ty: cp.ty, iv: cp.default_iv, text: cp.default_text });
+    }
     cidx = cidx + 1;
   }
+  let cwr: ConstWhereCheckResult = check_const_where_bounds(sig.const_where_bounds, csubs);
+  if !cwr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, cwr.err) }; }
 
   let mut subs: Vec[TySub] = Vec();
   // Use expected return type as a constraint when available.

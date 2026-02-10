@@ -18,6 +18,13 @@ struct Buffer[T, const N: usize = 1024] {
 }
 ```
 
+当前 Stage1 已实现（函数/trait 方法）：
+
+- `fn addn[const N: i32 = 3](x: i32) -> i32 { ... }`
+- 调用可省略有默认值的 const 实参：`addn(4)`
+- 也可显式覆盖默认值：`addn[9](4)`
+- 规则：一旦某个 const 参数声明了默认值，后续 const 参数也必须声明默认值（避免位置调用歧义）
+
 ## 2. 编译期约束（comptime where）
 
 ```vox
@@ -38,6 +45,16 @@ where
   data: [T; N],
 }
 ```
+
+当前 Stage1 已实现（函数/trait 方法）：
+
+- 语法：`where comptime N > 0, comptime N <= 256`
+- 约束对象：仅限已声明的 `const` 泛型参数
+- 右值：十进制整数字面量（支持负号）或另一个 `const` 参数（如 `comptime N < M`）
+- 运算符：`== != < <= > >=`
+- 校验时机：调用点（含默认 const 实参）
+- 默认值一致性：声明阶段会校验“默认 const 值是否满足 comptime where”（当约束涉及的参数都有默认值时）
+- impl 一致性：`impl Trait for Type` 的方法必须与 trait 方法声明的 `comptime where` 约束一致
 
 ## 3. 泛型偏特化 / 专门化（未定）
 

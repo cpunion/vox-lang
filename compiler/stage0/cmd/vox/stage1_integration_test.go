@@ -632,6 +632,102 @@ dep = { path = "dep2" }
 	}
 }
 
+func TestStage1BuildPkgWritesLockfile(t *testing.T) {
+	stage1Bin := stage1ToolBin(t)
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir root src: %v", err)
+	}
+	depRoot := filepath.Join(root, "dep_pkg")
+	if err := os.MkdirAll(filepath.Join(depRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir dep src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "vox.toml"), []byte(`[package]
+name = "dep"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write dep vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "src", "dep.vox"), []byte("pub fn two() -> i32 { return 2; }\n"), 0o644); err != nil {
+		t.Fatalf("write dep source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = { path = "dep_pkg", version = "0.1.0" }
+`), 0o644); err != nil {
+		t.Fatalf("write root vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("import \"dep\" as dep\nfn main() -> i32 { return dep.two(); }\n"), 0o644); err != nil {
+		t.Fatalf("write root source: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("stage1 build-pkg failed: %v\n%s", err, string(b))
+	}
+
+	lockPath := filepath.Join(root, "vox.lock")
+	lockBytes, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("read vox.lock: %v", err)
+	}
+	lock := string(lockBytes)
+	if !strings.Contains(lock, "[[dependency]]") {
+		t.Fatalf("expected lockfile dependency section, got:\n%s", lock)
+	}
+	if !strings.Contains(lock, `name = "dep"`) {
+		t.Fatalf("expected dep name in lockfile, got:\n%s", lock)
+	}
+	if !strings.Contains(lock, "dep_pkg") {
+		t.Fatalf("expected dep path in lockfile, got:\n%s", lock)
+	}
+}
+
+func TestStage1BuildPkgFailsOnNonPathDependency(t *testing.T) {
+	stage1Bin := stage1ToolBin(t)
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = "1.2.3"
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("fn main() -> i32 { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	b, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected stage1 build-pkg to fail on non-path dependency")
+	}
+	out := string(b)
+	if !strings.Contains(out, "invalid vox.toml") {
+		t.Fatalf("expected invalid vox.toml message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "non-path dependency unsupported in stage1") {
+		t.Fatalf("expected non-path dependency error detail, got:\n%s", out)
+	}
+}
+
 func TestStage1ToolchainTestPkgRunsTests(t *testing.T) {
 	// 1) Build the stage1 compiler (vox_stage1) using stage0.
 	stage1Bin := stage1ToolBin(t)
