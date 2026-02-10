@@ -511,6 +511,8 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 - `@same_type(A, B) -> bool`
 - `@assignable_to(Src, Dst) -> bool`
 - `@castable_to(Src, Dst) -> bool`
+- `@eq_comparable_with(A, B) -> bool`
+- `@ordered_with(A, B) -> bool`
 - `@is_integer(Type) -> bool`
 - `@is_signed_int(Type) -> bool`
 - `@is_unsigned_int(Type) -> bool`
@@ -531,7 +533,7 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 - 语法按 intrinsic 不同：
   - `@name(Type)`：`@size_of/@align_of/@type/@type_name/@field_count/@is_*`
   - `@name(Type, I)`：`@field_name/@field_type/@field_type_id`
-  - `@name(A, B)`：`@same_type/@assignable_to/@castable_to`
+  - `@name(A, B)`：`@same_type/@assignable_to/@castable_to/@eq_comparable_with/@ordered_with`
 - 这些 intrinsic 会在 IR 生成时折叠为常量；在 `const` 上下文同样可用。
 - `@size_of/@align_of` 采用 Stage1 当前 C 后端的目标布局模型。
 

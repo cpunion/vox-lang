@@ -45,6 +45,8 @@ fn crc_table() -> [u32; 256] { ... }
 @same_type(A, B) -> bool
 @assignable_to(Src, Dst) -> bool
 @castable_to(Src, Dst) -> bool
+@eq_comparable_with(A, B) -> bool
+@ordered_with(A, B) -> bool
 @is_integer(T) -> bool
 @is_signed_int(T) -> bool
 @is_unsigned_int(T) -> bool
@@ -66,7 +68,7 @@ fn crc_table() -> [u32; 256] { ... }
 - 调用形态按 intrinsic 不同：
   - `@name(Type)`：如 `@size_of/@align_of/@type/@type_name/@field_count/@is_*`
   - `@name(Type, I)`：`@field_name/@field_type/@field_type_id`（`I` 为 `usize` const 实参）
-  - `@name(A, B)`：`@same_type/@assignable_to/@castable_to`
+  - `@name(A, B)`：`@same_type/@assignable_to/@castable_to/@eq_comparable_with/@ordered_with`
 - 可用于普通表达式与 `const` 初始化（均会折叠为常量）。
 - `@size_of/@align_of` 当前按 Stage1 C 后端目标布局模型计算。
 - `@type` 返回编译期 `TypeId`（Stage1 当前表示为 `usize`）。
@@ -77,6 +79,8 @@ fn crc_table() -> [u32; 256] { ... }
 - `@field_type_id` 当前支持 `struct` 字段与 `enum` 的 0/1 payload variant（多 payload variant 暂不支持）。
 - `@assignable_to(Src, Dst)` 复用当前类型系统赋值规则（如 `@range` 到 base 的 widening）。
 - `@castable_to(Src, Dst)` 复用当前 `as` 显式转换规则（int/float/range 相关）。
+- `@eq_comparable_with(A, B)` 与 `==/!=` 二元规则对齐。
+- `@ordered_with(A, B)` 与 `< <= > >=` 二元规则对齐。
 - `@is_*` 返回类型分类判定（当前要求 `T` 为 concrete type）。
 - `@is_eq_comparable` 与 `==/!=` 能力对齐（含递归 struct/enum 字段检查）。
 - `@is_ordered` 与 `< <= > >=` 能力对齐（当前 `int/float/string`）。
