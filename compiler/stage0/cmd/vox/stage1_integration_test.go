@@ -1355,6 +1355,24 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(bj), "\"jobs\":2") {
 		t.Fatalf("expected jobs in selection json output, got:\n%s", string(bj))
 	}
+	cmdFailFastList := exec.Command(stage2BinB, "test-pkg", "--fail-fast", "--run=*std_sync_runtime_generic_api_smoke", "--list", outRel)
+	cmdFailFastList.Dir = stage2DirAbs
+	bffList, err := cmdFailFastList.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg --fail-fast --list failed: %v\n%s", err, string(bffList))
+	}
+	if !strings.Contains(string(bffList), "[select] --fail-fast: true") {
+		t.Fatalf("expected fail-fast selection in text output, got:\n%s", string(bffList))
+	}
+	cmdFailFastJSON := exec.Command(stage2BinB, "test-pkg", "--fail-fast", "--run=*std_sync_runtime_generic_api_smoke", "--list", "--json", outRel)
+	cmdFailFastJSON.Dir = stage2DirAbs
+	bffJSON, err := cmdFailFastJSON.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg --fail-fast --json failed: %v\n%s", err, string(bffJSON))
+	}
+	if !strings.Contains(string(bffJSON), "\"fail_fast\":true") {
+		t.Fatalf("expected fail_fast in selection json output, got:\n%s", string(bffJSON))
+	}
 	cmdJSONModule := exec.Command(stage2BinB, "test-pkg", "--module=typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list", "--json", outRel)
 	cmdJSONModule.Dir = stage2DirAbs
 	bjm, err := cmdJSONModule.CombinedOutput()
@@ -1457,6 +1475,50 @@ edition = "2026"
 	}
 	if !strings.Contains(string(bf), "--jobs=2") {
 		t.Fatalf("expected rerun hint to preserve jobs in stage2 output, got:\n%s", string(bf))
+	}
+
+	// Ensure fail-fast stops scheduling remaining tests and reports skipped count.
+	failFastRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(failFastRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir fail-fast src: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(failFastRoot, "tests"), 0o755); err != nil {
+		t.Fatalf("mkdir fail-fast tests: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(failFastRoot, "target", "debug"), 0o755); err != nil {
+		t.Fatalf("mkdir fail-fast target/debug: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(failFastRoot, "vox.toml"), []byte(`[package]
+name = "fail_fast_app"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write fail-fast vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(failFastRoot, "src", "main.vox"), []byte("fn main() -> i32 { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("write fail-fast main: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(failFastRoot, "tests", "fail_fast.vox"), []byte(`import "std/testing" as t
+fn test_a_fail() -> () { t.fail("STAGE2_FAIL_FAST_MARKER"); }
+fn test_b_should_skip() -> () { t.assert(true); }
+`), 0o644); err != nil {
+		t.Fatalf("write fail-fast test: %v", err)
+	}
+	failFastOutRel := filepath.Join("target", "debug", "vox_stage2_fail_fast.test")
+	cmdFailFast := exec.Command(stage2BinB, "test-pkg", "--fail-fast", "--jobs=1", "--json", failFastOutRel)
+	cmdFailFast.Dir = failFastRoot
+	bff, err := cmdFailFast.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected stage2 test-pkg --fail-fast to fail with non-zero exit code, got success:\n%s", string(bff))
+	}
+	if !strings.Contains(string(bff), "\"fail_fast\":true") {
+		t.Fatalf("expected fail_fast selection metadata, got:\n%s", string(bff))
+	}
+	if !strings.Contains(string(bff), "\"skipped\":1") {
+		t.Fatalf("expected skipped count in summary for fail-fast run, got:\n%s", string(bff))
+	}
+	if strings.Contains(string(bff), "\"name\":\"tests::test_b_should_skip\"") {
+		t.Fatalf("expected fail-fast to skip second test execution, got:\n%s", string(bff))
 	}
 }
 

@@ -111,10 +111,10 @@ make test
 - 仓库已增加 `compiler/stage2`（以 `compiler/stage1` 当前实现为基线复制）。
 - 自举门禁新增 `TestStage1BuildsStage2AndBuildsPackage`：验证 `stage1 -> stage2` 编译链路可用。
 - 自举门禁新增 `TestStage1BuildsStage2AndRunsStage2Tests`：验证 `stage2` 工具可运行 `test-pkg` 并通过其自身测试集。
-- `stage2 test-pkg` 当前支持最小选择参数：`--module=<glob>`、`--run=<glob>`、`--filter=<text>`、`--jobs=N`（模块级并行，模块内串行）、`--list`、`--rerun-failed` 与 `--json`（用于缩小迭代验证范围与机器可读报告）。
+- `stage2 test-pkg` 当前支持最小选择参数：`--module=<glob>`、`--run=<glob>`、`--filter=<text>`、`--jobs=N`（模块级并行，模块内串行）、`--fail-fast`（首个失败后停止调度新测试）、`--list`、`--rerun-failed` 与 `--json`（用于缩小迭代验证范围与机器可读报告）。
 - `test-pkg` 当前文本输出包含：单测耗时、模块汇总耗时、slowest 列表与总耗时。
 - `test-pkg` 并行执行下，失败测试会回显其捕获的 stdout/stderr 片段，便于定位问题。
 - 失败重跑提示（`[hint] rerun failed: ...`）基于当前可执行名生成，并在并行运行时保留 `--jobs` 参数。
-- `--json` 当前输出 `selection/selected_tests/results/modules/module_details/slowest/failed_tests/summary`，并附带 `duration_us` 字段；失败时附带 `hint`。
+- `--json` 当前输出 `selection/selected_tests/results/modules/module_details/slowest/failed_tests/summary`，并附带 `duration_us` 字段；`selection` 包含 `fail_fast`，`summary` 包含 `skipped`；失败时附带 `hint`。
 - `--rerun-failed` 缓存文件位于 `target/debug/.vox_last_failed_tests`，当前使用 JSON 元数据（兼容旧文本行格式读取）。
 - 可通过 `make test-stage2-selfhost`（仅引导链路）与 `make test-stage2-tests`（stage2 测试套件）单独执行（依赖 `VOX_RUN_SELFHOST_TESTS=1`）。
