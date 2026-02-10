@@ -5,18 +5,45 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"voxlang/internal/codegen"
 )
 
+const selfhostTestsEnv = "VOX_RUN_SELFHOST_TESTS"
+
+var (
+	stage1ToolOnce     sync.Once
+	stage1ToolBinPath  string
+	stage1ToolBuildErr error
+)
+
+func stage1ToolDir() string {
+	return filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
+}
+
+func stage1ToolBin(t *testing.T) string {
+	t.Helper()
+	stage1ToolOnce.Do(func() {
+		stage1ToolBinPath, stage1ToolBuildErr = compileWithDriver(stage1ToolDir(), codegen.DriverMainTool)
+	})
+	if stage1ToolBuildErr != nil {
+		t.Fatalf("build stage1 failed: %v", stage1ToolBuildErr)
+	}
+	return stage1ToolBinPath
+}
+
+func requireSelfhostTests(t *testing.T) {
+	t.Helper()
+	if os.Getenv(selfhostTestsEnv) != "1" {
+		t.Skipf("set %s=1 to run self-host tests", selfhostTestsEnv)
+	}
+}
+
 func TestStage1ToolchainBuildsMultiModuleProgram(t *testing.T) {
 	// 1) Build the stage1 compiler (vox_stage1) using stage0.
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	// 2) Create a tiny multi-module program.
 	root := t.TempDir()
@@ -84,11 +111,7 @@ dep = { path = "dep_pkg" }
 
 func TestStage1ToolchainEmitCAndBuildCommands(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
@@ -157,11 +180,7 @@ func TestStage1ToolchainEmitCAndBuildCommands(t *testing.T) {
 
 func TestStage1ToolchainBuildPkgAndTestPkgUseLocalStd(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "src", "std", "prelude"), 0o755); err != nil {
@@ -237,11 +256,7 @@ pub fn assert(cond: bool) -> () { prelude.assert(cond); }
 
 func TestStage1CliArgumentValidation(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
@@ -297,11 +312,7 @@ func TestStage1CliArgumentValidation(t *testing.T) {
 
 func TestStage1ToolchainBuildsWithTransitivePathDeps(t *testing.T) {
 	// 1) Build the stage1 compiler (vox_stage1) using stage0 (tool driver).
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	// 2) Create a package with transitive path dependencies:
 	// app -> dep -> b
@@ -385,11 +396,7 @@ dep = { path = "dep_pkg" }
 
 func TestStage1BuildPkgNoSymbolCollisionBetweenQualifiedAndPlainNames(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	// root package with a path dep.
 	root := t.TempDir()
@@ -453,11 +460,7 @@ dep = { path = "dep_pkg" }
 
 func TestStage1BuildPkgImportSchemesDisambiguateDepAndLocalModule(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	// Root package with a local module "dep" and a dependency package also named "dep".
 	// Plain `import "dep"` must be ambiguous and require `pkg:`/`mod:`.
@@ -559,11 +562,7 @@ dep = { path = "dep_pkg" }
 
 func TestStage1BuildPkgFailsOnInvalidManifest(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
@@ -599,11 +598,7 @@ this is not valid
 
 func TestStage1BuildPkgFailsOnDuplicateDependencyName(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0 (tool driver).
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
@@ -639,11 +634,7 @@ dep = { path = "dep2" }
 
 func TestStage1ToolchainTestPkgRunsTests(t *testing.T) {
 	// 1) Build the stage1 compiler (vox_stage1) using stage0.
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	// 2) Create a tiny package with:
 	// - internal test file under src/**_test.vox (same package, can access private symbols)
@@ -699,12 +690,10 @@ edition = "2026"
 }
 
 func TestStage1ToolchainSelfBuildsStage1AndBuildsPackage(t *testing.T) {
+	requireSelfhostTests(t)
 	// 1) Build stage1 compiler A (vox_stage1) using stage0.
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1BinA, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Dir := stage1ToolDir()
+	stage1BinA := stage1ToolBin(t)
 
 	stage1DirAbs, err := filepath.Abs(stage1Dir)
 	if err != nil {
@@ -791,12 +780,10 @@ dep = { path = "dep_pkg" }
 }
 
 func TestStage1SelfBuiltCompilerIsQuietOnSuccess(t *testing.T) {
+	requireSelfhostTests(t)
 	// 1) Build stage1 compiler A (vox_stage1) using stage0 (tool driver).
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1BinA, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Dir := stage1ToolDir()
+	stage1BinA := stage1ToolBin(t)
 
 	stage1DirAbs, err := filepath.Abs(stage1Dir)
 	if err != nil {
@@ -849,11 +836,7 @@ edition = "2026"
 
 func TestStage1ExitCodeNonZeroOnBuildPkgFailure(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0.
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	// Create a package with a syntax error so Stage1 reports a compile error
 	// via return code (not panic), and ensure the process exit code is non-zero.
@@ -897,11 +880,7 @@ edition = "2026"
 
 func TestStage1BuildPkgIsQuietOnSuccess(t *testing.T) {
 	// Build stage1 compiler (vox_stage1) using stage0.
-	stage1Dir := filepath.Clean(filepath.Join("..", "..", "..", "stage1"))
-	stage1Bin, err := compileWithDriver(stage1Dir, codegen.DriverMainTool)
-	if err != nil {
-		t.Fatalf("build stage1 failed: %v", err)
-	}
+	stage1Bin := stage1ToolBin(t)
 
 	// Create a tiny package that successfully builds; stage1 CLI should not
 	// print a trailing "0" (driver return value) on success.
