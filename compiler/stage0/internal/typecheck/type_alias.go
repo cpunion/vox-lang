@@ -8,6 +8,7 @@ import (
 
 type TypeAliasSig struct {
 	Name     string // qualified name
+	Vis      ast.Visibility
 	Pub      bool
 	OwnerPkg string
 	OwnerMod []string
@@ -38,6 +39,7 @@ func (c *checker) collectTypeAliasSigs() {
 
 		c.typeAliases[qname] = TypeAliasSig{
 			Name:     qname,
+			Vis:      td.Vis,
 			Pub:      td.Pub,
 			OwnerPkg: pkg,
 			OwnerMod: mod,
@@ -63,7 +65,7 @@ func (c *checker) resolveTypeAliasType(qname string, useFile *source.File, useSp
 
 	// Visibility of the alias itself.
 	if useFile != nil && sig.File != nil {
-		if !c.canAccess(useFile, sig.OwnerPkg, sig.OwnerMod, sig.Pub) {
+		if !c.canAccess(useFile, sig.OwnerPkg, sig.OwnerMod, sig.Vis) {
 			c.errorAt(useSpan, "type is private: "+qname)
 			return Type{K: TyBad}
 		}
@@ -77,7 +79,7 @@ func (c *checker) resolveTypeAliasType(qname string, useFile *source.File, useSp
 	// Don't allow the alias to bypass underlying nominal-type privacy.
 	if useFile != nil && out.K == TyStruct {
 		if ss, ok := c.structSigs[out.Name]; ok {
-			if !c.canAccess(useFile, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+			if !c.canAccess(useFile, ss.OwnerPkg, ss.OwnerMod, ss.Vis) {
 				c.errorAt(useSpan, "type is private: "+out.Name)
 				return Type{K: TyBad}
 			}
@@ -85,7 +87,7 @@ func (c *checker) resolveTypeAliasType(qname string, useFile *source.File, useSp
 	}
 	if useFile != nil && out.K == TyEnum {
 		if es, ok := c.enumSigs[out.Name]; ok {
-			if !c.canAccess(useFile, es.OwnerPkg, es.OwnerMod, es.Pub) {
+			if !c.canAccess(useFile, es.OwnerPkg, es.OwnerMod, es.Vis) {
 				c.errorAt(useSpan, "type is private: "+out.Name)
 				return Type{K: TyBad}
 			}

@@ -1,6 +1,7 @@
 package typecheck
 
 import (
+	"voxlang/internal/ast"
 	"voxlang/internal/names"
 	"voxlang/internal/source"
 )
@@ -13,11 +14,49 @@ func (c *checker) isSameModule(file *source.File, ownerPkg string, ownerMod []st
 	return pkg == ownerPkg && sameModPath(mod, ownerMod)
 }
 
-func (c *checker) canAccess(file *source.File, ownerPkg string, ownerMod []string, pub bool) bool {
-	if c.isSameModule(file, ownerPkg, ownerMod) {
+func moduleParent(mod []string) []string {
+	if len(mod) == 0 {
+		return nil
+	}
+	return mod[:len(mod)-1]
+}
+
+func moduleInScope(mod []string, scope []string) bool {
+	if len(scope) == 0 {
 		return true
 	}
-	return pub
+	if len(mod) < len(scope) {
+		return false
+	}
+	for i := 0; i < len(scope); i++ {
+		if mod[i] != scope[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *checker) canAccess(file *source.File, ownerPkg string, ownerMod []string, vis ast.Visibility) bool {
+	if file == nil {
+		return false
+	}
+	userPkg, userMod, _ := names.SplitOwnerAndModule(file.Name)
+	if userPkg == ownerPkg && sameModPath(userMod, ownerMod) {
+		return true
+	}
+
+	switch vis {
+	case ast.VisPrivate:
+		return false
+	case ast.VisPub:
+		return true
+	case ast.VisCrate:
+		return userPkg == ownerPkg
+	case ast.VisSuper:
+		return userPkg == ownerPkg && moduleInScope(userMod, moduleParent(ownerMod))
+	default:
+		return false
+	}
 }
 
 func (c *checker) checkPubInterfaces() {

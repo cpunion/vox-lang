@@ -276,7 +276,7 @@ func (c *checker) resolveNamedImports() {
 			// const
 			if cs, ok := c.constSigs[target]; ok {
 				found++
-				if !c.canAccess(pi.File, cs.OwnerPkg, cs.OwnerMod, cs.Pub) {
+				if !c.canAccess(pi.File, cs.OwnerPkg, cs.OwnerMod, cs.Vis) {
 					c.errorAt(pi.Span, "const is private: "+target)
 					continue
 				}
@@ -285,7 +285,7 @@ func (c *checker) resolveNamedImports() {
 			// function
 			if sig, ok := c.funcSigs[target]; ok {
 				found++
-				if !c.canAccess(pi.File, sig.OwnerPkg, sig.OwnerMod, sig.Pub) {
+				if !c.canAccess(pi.File, sig.OwnerPkg, sig.OwnerMod, sig.Vis) {
 					c.errorAt(pi.Span, "function is private: "+target)
 					continue
 				}
@@ -294,7 +294,7 @@ func (c *checker) resolveNamedImports() {
 			// struct
 			if ss, ok := c.structSigs[target]; ok {
 				found++
-				if !c.canAccess(pi.File, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+				if !c.canAccess(pi.File, ss.OwnerPkg, ss.OwnerMod, ss.Vis) {
 					c.errorAt(pi.Span, "type is private: "+target)
 					continue
 				}
@@ -303,7 +303,7 @@ func (c *checker) resolveNamedImports() {
 			// enum
 			if es, ok := c.enumSigs[target]; ok {
 				found++
-				if !c.canAccess(pi.File, es.OwnerPkg, es.OwnerMod, es.Pub) {
+				if !c.canAccess(pi.File, es.OwnerPkg, es.OwnerMod, es.Vis) {
 					c.errorAt(pi.Span, "type is private: "+target)
 					continue
 				}

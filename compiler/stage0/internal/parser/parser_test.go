@@ -546,14 +546,52 @@ fn main() -> i32 { return f(); }
 	if len(prog.Structs) != 1 || !prog.Structs[0].Pub {
 		t.Fatalf("expected 1 pub struct")
 	}
+	if prog.Structs[0].Vis != ast.VisPub {
+		t.Fatalf("expected struct vis pub, got %v", prog.Structs[0].Vis)
+	}
 	if len(prog.Structs[0].Fields) != 2 || !prog.Structs[0].Fields[0].Pub || prog.Structs[0].Fields[1].Pub {
 		t.Fatalf("expected struct fields to have pub flags")
+	}
+	if prog.Structs[0].Fields[0].Vis != ast.VisPub || prog.Structs[0].Fields[1].Vis != ast.VisPrivate {
+		t.Fatalf("unexpected field vis flags: %#v", prog.Structs[0].Fields)
 	}
 	if len(prog.Enums) != 1 || !prog.Enums[0].Pub {
 		t.Fatalf("expected 1 pub enum")
 	}
+	if prog.Enums[0].Vis != ast.VisPub {
+		t.Fatalf("expected enum vis pub, got %v", prog.Enums[0].Vis)
+	}
 	if len(prog.Funcs) != 2 || !prog.Funcs[0].Pub {
 		t.Fatalf("expected pub fn f and non-pub main")
+	}
+	if prog.Funcs[0].Vis != ast.VisPub {
+		t.Fatalf("expected fn vis pub, got %v", prog.Funcs[0].Vis)
+	}
+}
+
+func TestParseRestrictedPubDecls(t *testing.T) {
+	f := source.NewFile("test.vox", `pub(crate) const N: i32 = 1
+pub(super) fn f() -> i32 { return N; }
+pub(crate) struct S { pub(super) x: i32, pub(crate) y: i32 }
+fn main() -> i32 { return f(); }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Consts) != 1 || prog.Consts[0].Vis != ast.VisCrate || !prog.Consts[0].Pub {
+		t.Fatalf("unexpected const vis: %#v", prog.Consts)
+	}
+	if len(prog.Funcs) != 2 || prog.Funcs[0].Vis != ast.VisSuper || !prog.Funcs[0].Pub {
+		t.Fatalf("unexpected fn vis: %#v", prog.Funcs)
+	}
+	if len(prog.Structs) != 1 || prog.Structs[0].Vis != ast.VisCrate {
+		t.Fatalf("unexpected struct vis: %#v", prog.Structs)
+	}
+	if len(prog.Structs[0].Fields) != 2 {
+		t.Fatalf("unexpected struct fields: %#v", prog.Structs[0].Fields)
+	}
+	if prog.Structs[0].Fields[0].Vis != ast.VisSuper || prog.Structs[0].Fields[1].Vis != ast.VisCrate {
+		t.Fatalf("unexpected field vis: %#v", prog.Structs[0].Fields)
 	}
 }
 

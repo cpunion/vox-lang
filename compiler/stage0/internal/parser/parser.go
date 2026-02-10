@@ -60,44 +60,52 @@ func (p *Parser) parseProgram() *ast.Program {
 
 		// Optional visibility modifier.
 		if p.match(lexer.TokenPub) {
+			vis := p.parseVisibilityAfterPub()
 			switch {
 			case p.match(lexer.TokenType):
 				r := p.parseTypeDecl()
 				if r.alias != nil {
-					r.alias.Pub = true
+					r.alias.Vis = vis
+					r.alias.Pub = vis.IsPub()
 					prog.Types = append(prog.Types, r.alias)
 				} else if r.en != nil {
-					r.en.Pub = true
+					r.en.Vis = vis
+					r.en.Pub = vis.IsPub()
 					prog.Enums = append(prog.Enums, r.en)
 				}
 			case p.match(lexer.TokenConst):
 				cd := p.parseConstDecl()
 				if cd != nil {
-					cd.Pub = true
+					cd.Vis = vis
+					cd.Pub = vis.IsPub()
 					prog.Consts = append(prog.Consts, cd)
 				}
 			case p.match(lexer.TokenStruct):
 				st := p.parseStructDecl()
 				if st != nil {
-					st.Pub = true
+					st.Vis = vis
+					st.Pub = vis.IsPub()
 					prog.Structs = append(prog.Structs, st)
 				}
 			case p.match(lexer.TokenEnum):
 				en := p.parseEnumDecl()
 				if en != nil {
-					en.Pub = true
+					en.Vis = vis
+					en.Pub = vis.IsPub()
 					prog.Enums = append(prog.Enums, en)
 				}
 			case p.match(lexer.TokenFn):
 				fn := p.parseFuncDecl()
 				if fn != nil {
-					fn.Pub = true
+					fn.Vis = vis
+					fn.Pub = vis.IsPub()
 					prog.Funcs = append(prog.Funcs, fn)
 				}
 			case p.match(lexer.TokenTrait):
 				td := p.parseTraitDecl()
 				if td != nil {
-					td.Pub = true
+					td.Vis = vis
+					td.Pub = vis.IsPub()
 					prog.Traits = append(prog.Traits, td)
 				}
 			default:
@@ -162,6 +170,26 @@ func (p *Parser) parseProgram() *ast.Program {
 		p.advance()
 	}
 	return prog
+}
+
+func (p *Parser) parseVisibilityAfterPub() ast.Visibility {
+	if !p.match(lexer.TokenLParen) {
+		return ast.VisPub
+	}
+	kw := p.expect(lexer.TokenIdent, "expected `crate` or `super` in `pub(...)`")
+	vis := ast.VisPub
+	if kw.Kind == lexer.TokenIdent {
+		switch kw.Lexeme {
+		case "crate":
+			vis = ast.VisCrate
+		case "super":
+			vis = ast.VisSuper
+		default:
+			p.errorAt(kw.Span, "expected `crate` or `super` in `pub(...)`")
+		}
+	}
+	p.expect(lexer.TokenRParen, "expected `)` after `pub(...)`")
+	return vis
 }
 
 type typeDeclResult struct {
@@ -316,11 +344,14 @@ func (p *Parser) parseStructDecl() *ast.StructDecl {
 	}
 	fields := []ast.StructField{}
 	for !p.at(lexer.TokenRBrace) && !p.at(lexer.TokenEOF) {
-		fpub := p.match(lexer.TokenPub)
+		fvis := ast.VisPrivate
+		if p.match(lexer.TokenPub) {
+			fvis = p.parseVisibilityAfterPub()
+		}
 		fname := p.expect(lexer.TokenIdent, "expected field name")
 		p.expect(lexer.TokenColon, "expected `:` after field name")
 		ty := p.parseType()
-		fields = append(fields, ast.StructField{Pub: fpub, Name: fname.Lexeme, Type: ty, Span: joinSpan(fname.Span, ty.Span())})
+		fields = append(fields, ast.StructField{Vis: fvis, Pub: fvis.IsPub(), Name: fname.Lexeme, Type: ty, Span: joinSpan(fname.Span, ty.Span())})
 		if p.match(lexer.TokenComma) {
 			// allow trailing comma before }
 			continue

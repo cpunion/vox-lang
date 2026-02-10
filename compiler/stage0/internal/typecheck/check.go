@@ -456,7 +456,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			}
 			ety, es, found := c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1])
 			if found {
-				if !c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Pub) {
+				if !c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Vis) {
 					c.errorAt(e.S, "type is private: "+ety.Name)
 					return c.setExprType(ex, Type{K: TyBad})
 				}
@@ -577,7 +577,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			c.errorAt(e.S, "type arguments provided for non-generic function: "+target)
 			return c.setExprType(ex, Type{K: TyBad})
 		}
-		if c.curFn != nil && c.curFn.Span.File != nil && !c.canAccess(c.curFn.Span.File, sig.OwnerPkg, sig.OwnerMod, sig.Pub) {
+		if c.curFn != nil && c.curFn.Span.File != nil && !c.canAccess(c.curFn.Span.File, sig.OwnerPkg, sig.OwnerMod, sig.Vis) {
 			c.errorAt(e.S, "function is private: "+target)
 			return c.setExprType(ex, Type{K: TyBad})
 		}
@@ -638,11 +638,11 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				alias := parts[0]
 				if _, ok := c.lookupVar(alias); !ok {
 					ety, es, found := c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1])
-					if found && !c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Pub) {
+					if found && !c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Vis) {
 						c.errorAt(e.S, "type is private: "+ety.Name)
 						return c.setExprType(ex, Type{K: TyBad})
 					}
-					if found && c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Pub) {
+					if found && c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Vis) {
 						vname := parts[len(parts)-1]
 						vidx, vok := es.VariantIndex[vname]
 						if vok && len(es.Variants[vidx].Fields) == 0 {
@@ -669,7 +669,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			c.errorAt(e.S, "unknown field: "+e.Name)
 			return c.setExprType(ex, Type{K: TyBad})
 		}
-		if c.curFn != nil && c.curFn.Span.File != nil && !c.isSameModule(c.curFn.Span.File, ss.OwnerPkg, ss.OwnerMod) && !ss.Fields[idx].Pub {
+		if c.curFn != nil && c.curFn.Span.File != nil && !c.canAccess(c.curFn.Span.File, ss.OwnerPkg, ss.OwnerMod, ss.Fields[idx].Vis) {
 			c.errorAt(e.S, "field is private: "+recvTy.Name+"."+e.Name)
 			return c.setExprType(ex, Type{K: TyBad})
 		}
@@ -685,7 +685,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 		}
 		if !c.isSameModule(e.S.File, ss.OwnerPkg, ss.OwnerMod) {
 			for _, f := range ss.Fields {
-				if !f.Pub {
+				if !c.canAccess(e.S.File, ss.OwnerPkg, ss.OwnerMod, f.Vis) {
 					c.errorAt(e.S, "cannot construct struct "+sty.Name+": field "+f.Name+" is private")
 					return c.setExprType(ex, Type{K: TyBad})
 				}
@@ -703,7 +703,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				c.errorAt(init.Span, "unknown field: "+init.Name)
 				continue
 			}
-			if !c.isSameModule(e.S.File, ss.OwnerPkg, ss.OwnerMod) && !ss.Fields[idx].Pub {
+			if !c.canAccess(e.S.File, ss.OwnerPkg, ss.OwnerMod, ss.Fields[idx].Vis) {
 				c.errorAt(init.Span, "field is private: "+sty.Name+"."+init.Name)
 				continue
 			}

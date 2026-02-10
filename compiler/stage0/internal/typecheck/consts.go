@@ -26,7 +26,7 @@ func (c *checker) collectConstSigs() {
 		}
 		pkg, mod, _ := names.SplitOwnerAndModule(cd.Span.File.Name)
 		ty := c.typeFromAstInFile(cd.Type, cd.Span.File)
-		c.constSigs[qname] = ConstSig{Pub: cd.Pub, OwnerPkg: pkg, OwnerMod: mod, Ty: ty}
+		c.constSigs[qname] = ConstSig{Vis: cd.Vis, Pub: cd.Pub, OwnerPkg: pkg, OwnerMod: mod, Ty: ty}
 		c.constDecls[qname] = cd
 	}
 }
@@ -108,7 +108,7 @@ func (c *checker) lookupConstName(file *source.File, name string, s source.Span)
 				c.errorAt(s, "unknown const: "+tgt)
 				return "", ConstSig{}, ConstValue{K: ConstBad}, false
 			}
-			if !c.canAccess(file, sig.OwnerPkg, sig.OwnerMod, sig.Pub) {
+			if !c.canAccess(file, sig.OwnerPkg, sig.OwnerMod, sig.Vis) {
 				c.errorAt(s, "const is private: "+tgt)
 				return "", ConstSig{}, ConstValue{K: ConstBad}, false
 			}
@@ -143,7 +143,7 @@ func (c *checker) lookupConstByParts(file *source.File, parts []string, s source
 	if !ok3 {
 		return "", ConstSig{}, ConstValue{K: ConstBad}, false
 	}
-	if !c.canAccess(file, sig.OwnerPkg, sig.OwnerMod, sig.Pub) {
+	if !c.canAccess(file, sig.OwnerPkg, sig.OwnerMod, sig.Vis) {
 		c.errorAt(s, "const is private: "+q)
 		return "", ConstSig{}, ConstValue{K: ConstBad}, false
 	}

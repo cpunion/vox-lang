@@ -1321,6 +1321,92 @@ pub fn f() -> Hidden { return Hidden { x: 1 }; }`),
 	}
 }
 
+func TestPubCrateAllowsCrossModuleInsidePackage(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import "a"
+fn main() -> i32 { return a.f(); }`),
+		source.NewFile("src/a/a.vox", `pub(crate) fn f() -> i32 { return 1; }`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestPubCrateRejectsCrossPackage(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import "dep"
+fn main() -> i32 { return dep.f(); }`),
+		source.NewFile("dep/src/dep.vox", `pub(crate) fn f() -> i32 { return 1; }`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "function is private: pkg.dep::f" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected private function diagnostic, got: %+v", tdiags.Items)
+	}
+}
+
+func TestPubSuperAllowsParentModuleScope(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import "a"
+fn main() -> i32 { return a.call(); }`),
+		source.NewFile("src/a/a.vox", `import "a/b" as b
+pub fn call() -> i32 { return b.f(); }`),
+		source.NewFile("src/a/b/b.vox", `pub(super) fn f() -> i32 { return 1; }`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestPubSuperRejectsOutsideParentScope(t *testing.T) {
+	files := []*source.File{
+		source.NewFile("src/main.vox", `import "a/b" as b
+fn main() -> i32 { return b.f(); }`),
+		source.NewFile("src/a/b/b.vox", `pub(super) fn f() -> i32 { return 1; }`),
+	}
+	prog, pdiags := parser.ParseFiles(files)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if it.Msg == "function is private: a.b::f" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected private function diagnostic, got: %+v", tdiags.Items)
+	}
+}
+
 func TestQualifiedTypePathInSignature(t *testing.T) {
 	files := []*source.File{
 		source.NewFile("src/main.vox", `import "a"

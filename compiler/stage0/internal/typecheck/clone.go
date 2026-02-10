@@ -168,6 +168,7 @@ func cloneFuncDecl(fn *ast.FuncDecl) *ast.FuncDecl {
 		return nil
 	}
 	cp := &ast.FuncDecl{
+		Vis:        fn.Vis,
 		Pub:        fn.Pub,
 		Name:       fn.Name,
 		TypeParams: append([]string{}, fn.TypeParams...),

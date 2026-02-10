@@ -85,6 +85,7 @@ type ConstValue struct {
 }
 
 type FuncSig struct {
+	Vis        ast.Visibility
 	Pub        bool
 	OwnerPkg   string
 	OwnerMod   []string
@@ -95,6 +96,7 @@ type FuncSig struct {
 
 type StructSig struct {
 	Name       string
+	Vis        ast.Visibility
 	Pub        bool
 	OwnerPkg   string
 	OwnerMod   []string
@@ -103,6 +105,7 @@ type StructSig struct {
 }
 
 type StructFieldSig struct {
+	Vis  ast.Visibility
 	Pub  bool
 	Name string
 	Ty   Type
@@ -110,6 +113,7 @@ type StructFieldSig struct {
 
 type EnumSig struct {
 	Name         string
+	Vis          ast.Visibility
 	Pub          bool
 	OwnerPkg     string
 	OwnerMod     []string
@@ -260,6 +264,7 @@ func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 }
 
 type ConstSig struct {
+	Vis      ast.Visibility
 	Pub      bool
 	OwnerPkg string
 	OwnerMod []string

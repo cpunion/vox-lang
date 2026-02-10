@@ -78,3 +78,41 @@ func TestParseStmtRecoveryAfterBadToken(t *testing.T) {
 		t.Fatalf("expected return x, got %T", ret.Expr)
 	}
 }
+
+func TestParsePubRestrictedErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "unknown_scope",
+			src:  `pub(foo) fn main() -> i32 { return 0; }`,
+			want: "expected `crate` or `super` in `pub(...)`",
+		},
+		{
+			name: "missing_rparen",
+			src:  `pub(crate fn main() -> i32 { return 0; }`,
+			want: "expected `)` after `pub(...)`",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := source.NewFile("test.vox", tc.src)
+			_, diags := Parse(f)
+			if diags == nil || len(diags.Items) == 0 {
+				t.Fatalf("expected diagnostics")
+			}
+			found := false
+			for _, it := range diags.Items {
+				if it.Msg == tc.want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected %q, got: %+v", tc.want, diags.Items)
+			}
+		})
+	}
+}

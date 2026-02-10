@@ -60,14 +60,14 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 			mod := append(append([]string{}, tgt.Mod...), extraMods...)
 			q := names.QualifyParts(tgt.Pkg, mod, name)
 			if ss, ok := c.structSigs[q]; ok {
-				if !c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+				if !c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Vis) {
 					c.errorAt(tt.S, "type is private: "+q)
 					return Type{K: TyBad}
 				}
 				return Type{K: TyStruct, Name: q}
 			}
 			if es, ok := c.enumSigs[q]; ok {
-				if !c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Pub) {
+				if !c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Vis) {
 					c.errorAt(tt.S, "type is private: "+q)
 					return Type{K: TyBad}
 				}
@@ -123,13 +123,13 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 				pkg, mod, _ := names.SplitOwnerAndModule(file.Name)
 				q1 := names.QualifyParts(pkg, mod, name)
 				if ss, ok := c.structSigs[q1]; ok {
-					if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+					if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Vis) {
 						return Type{K: TyStruct, Name: q1}
 					}
 					private = q1
 				}
 				if es, ok := c.enumSigs[q1]; ok {
-					if c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Pub) {
+					if c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Vis) {
 						return Type{K: TyEnum, Name: q1}
 					}
 					if private == "" {
@@ -146,7 +146,7 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 				}
 				q2 := names.QualifyParts(pkg, nil, name)
 				if ss, ok := c.structSigs[q2]; ok {
-					if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+					if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Vis) {
 						return Type{K: TyStruct, Name: q2}
 					}
 					if private == "" {
@@ -154,7 +154,7 @@ func (c *checker) typeFromAstInFile(t ast.Type, file *source.File) Type {
 					}
 				}
 				if es, ok := c.enumSigs[q2]; ok {
-					if c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Pub) {
+					if c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Vis) {
 						return Type{K: TyEnum, Name: q2}
 					}
 					if private == "" {
@@ -188,14 +188,14 @@ func (c *checker) resolveStructByParts(file *source.File, parts []string, s sour
 		pkg, mod, _ := names.SplitOwnerAndModule(file.Name)
 		q1 := names.QualifyParts(pkg, mod, parts[0])
 		if ss, ok := c.structSigs[q1]; ok {
-			if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+			if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Vis) {
 				return Type{K: TyStruct, Name: q1}, ss, true
 			}
 			private = q1
 		}
 		q2 := names.QualifyParts(pkg, nil, parts[0])
 		if ss, ok := c.structSigs[q2]; ok {
-			if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+			if c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Vis) {
 				return Type{K: TyStruct, Name: q2}, ss, true
 			}
 			if private == "" {
@@ -236,7 +236,7 @@ func (c *checker) resolveStructByParts(file *source.File, parts []string, s sour
 		c.errorAt(s, "unknown type: "+q)
 		return Type{K: TyBad}, StructSig{}, false
 	}
-	if !c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Pub) {
+	if !c.canAccess(file, ss.OwnerPkg, ss.OwnerMod, ss.Vis) {
 		c.errorAt(s, "type is private: "+q)
 		return Type{K: TyBad}, StructSig{}, false
 	}
@@ -293,7 +293,7 @@ func (c *checker) resolveEnumByParts(file *source.File, parts []string, s source
 		return Type{K: TyBad}, EnumSig{}, false
 	}
 	if ty, es, found := c.findEnumByParts(file, parts); found {
-		if c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Pub) {
+		if c.canAccess(file, es.OwnerPkg, es.OwnerMod, es.Vis) {
 			return ty, es, true
 		}
 		c.errorAt(s, "type is private: "+ty.Name)

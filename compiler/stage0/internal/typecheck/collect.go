@@ -3,6 +3,7 @@ package typecheck
 import (
 	"strings"
 
+	"voxlang/internal/ast"
 	"voxlang/internal/names"
 )
 
@@ -24,6 +25,7 @@ func (c *checker) collectNominalSigs() {
 		}
 		c.structSigs[qname] = StructSig{
 			Name:       qname,
+			Vis:        st.Vis,
 			Pub:        st.Pub,
 			OwnerPkg:   pkg,
 			OwnerMod:   mod,
@@ -46,6 +48,7 @@ func (c *checker) collectNominalSigs() {
 		}
 		c.enumSigs[qname] = EnumSig{
 			Name:         qname,
+			Vis:          en.Vis,
 			Pub:          en.Pub,
 			OwnerPkg:     pkg,
 			OwnerMod:     mod,
@@ -70,7 +73,7 @@ func (c *checker) fillStructSigs() {
 			}
 			fty := c.typeFromAstInFile(f.Type, st.Span.File)
 			sig.FieldIndex[f.Name] = len(sig.Fields)
-			sig.Fields = append(sig.Fields, StructFieldSig{Pub: f.Pub, Name: f.Name, Ty: fty})
+			sig.Fields = append(sig.Fields, StructFieldSig{Vis: f.Vis, Pub: f.Pub, Name: f.Name, Ty: fty})
 		}
 		c.structSigs[qname] = sig
 	}
@@ -106,16 +109,16 @@ func (c *checker) fillEnumSigs() {
 func (c *checker) collectFuncSigs() {
 	// Builtins (stage0): keep minimal and stable.
 	// Higher-level helpers (assert/testing/etc.) should live in stdlib Vox sources.
-	c.funcSigs["panic"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["print"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["panic"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["print"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
 	// Tooling/stdlib support builtins (stage0): used to bootstrap stage1 toolchain.
 	// These are intentionally low-level; prefer std wrappers (e.g. std/fs, std/process).
-	c.funcSigs["__read_file"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyString}}
-	c.funcSigs["__write_file"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}, {K: TyString}}, Ret: Type{K: TyUnit}}
-	c.funcSigs["__exec"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyI32}}
-	c.funcSigs["__args"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
-	c.funcSigs["__walk_vox_files"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
-	c.funcSigs["__exe_path"] = FuncSig{Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyString}}
+	c.funcSigs["__read_file"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyString}}
+	c.funcSigs["__write_file"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}, {K: TyString}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["__exec"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyI32}}
+	c.funcSigs["__args"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
+	c.funcSigs["__walk_vox_files"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
+	c.funcSigs["__exe_path"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyString}}
 
 	for _, fn := range c.prog.Funcs {
 		if strings.HasPrefix(fn.Name, "__") {
@@ -130,6 +133,7 @@ func (c *checker) collectFuncSigs() {
 		}
 		sig := FuncSig{}
 		pkg, mod, _ := names.SplitOwnerAndModule(fn.Span.File.Name)
+		sig.Vis = fn.Vis
 		sig.Pub = fn.Pub
 		sig.OwnerPkg = pkg
 		sig.OwnerMod = mod

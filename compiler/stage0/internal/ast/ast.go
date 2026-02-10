@@ -13,6 +13,17 @@ type Program struct {
 	Funcs   []*FuncDecl
 }
 
+type Visibility uint8
+
+const (
+	VisPrivate Visibility = iota
+	VisPub
+	VisCrate
+	VisSuper
+)
+
+func (v Visibility) IsPub() bool { return v != VisPrivate }
+
 type ImportDecl struct {
 	Path  string // string literal content, unquoted
 	Alias string // optional; when empty, defaults to last path segment
@@ -27,6 +38,7 @@ type ImportName struct {
 }
 
 type TypeAliasDecl struct {
+	Vis  Visibility
 	Pub  bool
 	Name string
 	Type Type
@@ -34,6 +46,7 @@ type TypeAliasDecl struct {
 }
 
 type ConstDecl struct {
+	Vis  Visibility
 	Pub  bool
 	Name string
 	Type Type
@@ -42,6 +55,7 @@ type ConstDecl struct {
 }
 
 type FuncDecl struct {
+	Vis        Visibility
 	Pub        bool
 	Name       string
 	TypeParams []string // generic type parameters, e.g. fn id[T](x: T) -> T
@@ -52,6 +66,7 @@ type FuncDecl struct {
 }
 
 type StructDecl struct {
+	Vis    Visibility
 	Pub    bool
 	Name   string
 	Fields []StructField
@@ -59,6 +74,7 @@ type StructDecl struct {
 }
 
 type StructField struct {
+	Vis  Visibility
 	Pub  bool
 	Name string
 	Type Type
@@ -66,6 +82,7 @@ type StructField struct {
 }
 
 type EnumDecl struct {
+	Vis      Visibility
 	Pub      bool
 	Name     string
 	Variants []EnumVariant
@@ -79,6 +96,7 @@ type EnumVariant struct {
 }
 
 type TraitDecl struct {
+	Vis     Visibility
 	Pub     bool
 	Name    string
 	Methods []TraitMethodSig
