@@ -541,6 +541,7 @@ fn tc_expr_ident(ctx: Ctx, mod_path: String, imps: Imports, l0: Locals, name: St
 
 fn tc_expr_unary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, op: ast.UnaryOp, a: i32, expected: i32) -> ExprTyResult {
   let is_not: bool = match op { ast.UnaryOp.Not => true, _ => false };
+  let is_pos: bool = match op { ast.UnaryOp.Pos => true, _ => false };
   if is_not {
     let mut a_expected0: i32 = -1;
     if expected != -1 {
@@ -563,6 +564,21 @@ fn tc_expr_unary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
     if !is_int_like_ty(ctx, out0) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     if expected != -1 && !assignable_to(ctx, expected, out0) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     return ExprTyResult { ok: true, ty: out0, err: TcError.None };
+  }
+  if is_pos {
+    let mut a_expected1: i32 = -1;
+    if expected != -1 {
+      let eb1: i32 = strip_range(ctx, expected);
+      if is_int_like_ty(ctx, eb1) || is_float_ty(ctx, eb1) { a_expected1 = eb1; }
+    }
+    let ar1: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, a_expected1);
+    if !ar1.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let out1: i32 = strip_range(ctx, ar1.ty);
+    if !is_int_like_ty(ctx, out1) && !is_float_ty(ctx, out1) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+    }
+    if expected != -1 && !assignable_to(ctx, expected, out1) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: out1, err: TcError.None };
   }
   let mut a_expected: i32 = -1;
   if expected != -1 {
@@ -741,7 +757,7 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
       ast.ExprNode.Int(_s) => true,
       ast.ExprNode.Float(_s) => true,
       ast.ExprNode.Unary(op0, a0) => {
-        if op0 == ast.UnaryOp.Neg {
+        if op0 == ast.UnaryOp.Neg || op0 == ast.UnaryOp.Pos {
           match ast.expr_pool_get(exprs, a0) {
             ast.ExprNode.Int(_s2) => true,
             ast.ExprNode.Float(_s2) => true,
@@ -755,7 +771,7 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
       ast.ExprNode.Int(_s) => true,
       ast.ExprNode.Float(_s) => true,
       ast.ExprNode.Unary(op0, a0) => {
-        if op0 == ast.UnaryOp.Neg {
+        if op0 == ast.UnaryOp.Neg || op0 == ast.UnaryOp.Pos {
           match ast.expr_pool_get(exprs, a0) {
             ast.ExprNode.Int(_s2) => true,
             ast.ExprNode.Float(_s2) => true,
@@ -786,7 +802,7 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
     let lbase: i32 = strip_range(ctx, lr.ty);
     let rbase: i32 = strip_range(ctx, rr.ty);
     if lbase != rbase { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if !is_int_like_ty(ctx, lbase) && !is_float_ty(ctx, lbase) {
+    if !is_int_like_ty(ctx, lbase) && !is_float_ty(ctx, lbase) && lbase != ctx.ty_string {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
     }
     if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
@@ -846,8 +862,14 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   let rbase: i32 = strip_range(ctx, rr.ty);
   if rbase != out { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
 
+  let is_bitop: bool = match op { ast.BinaryOp.BitAnd => true, ast.BinaryOp.BitOr => true, ast.BinaryOp.BitXor => true, _ => false };
+  if is_bitop && out == ctx.ty_bool {
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
+  }
+
+  let is_mod: bool = match op { ast.BinaryOp.Mod => true, _ => false };
   let int_only: bool = match op {
-    ast.BinaryOp.Mod => true,
     ast.BinaryOp.BitAnd => true,
     ast.BinaryOp.BitOr => true,
     ast.BinaryOp.BitXor => true,
@@ -857,6 +879,10 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   };
   if int_only {
     if !is_int_like_ty(ctx, out) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  } else if is_mod {
+    if !is_int_like_ty(ctx, out) && !is_float_ty(ctx, out) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+    }
   } else {
     if !is_int_like_ty(ctx, out) && !is_float_ty(ctx, out) {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };

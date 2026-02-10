@@ -231,6 +231,20 @@ fn float_neg_text(s: String) -> String {
   return "-".concat(n);
 }
 
+fn string_cmp_text(a: String, b: String) -> i32 {
+  if a == b { return 0; }
+  let mut i: i32 = 0;
+  let n: i32 = if a.len() < b.len() { a.len() } else { b.len() };
+  while i < n {
+    let ba: i32 = a.byte_at(i);
+    let bb: i32 = b.byte_at(i);
+    if ba < bb { return -1; }
+    if ba > bb { return 1; }
+    i = i + 1;
+  }
+  return if a.len() < b.len() { -1 } else { 1 };
+}
+
 fn signed_min_of_kind(k: ir.TyKind) -> i64 {
   if k == ir.TyKind.I8 { return -128; }
   if k == ir.TyKind.I16 { return -32768; }
@@ -1784,7 +1798,9 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
   if match n { ast.ExprNode.Unary(_op, _a) => true, _ => false } {
     let op: ast.UnaryOp = match n { ast.ExprNode.Unary(o, _a) => o, _ => ast.UnaryOp.Not };
     let a: i32 = match n { ast.ExprNode.Unary(_o, x) => x, _ => -1 };
-    if match op { ast.UnaryOp.Not => true, _ => false } {
+    let is_not: bool = match op { ast.UnaryOp.Not => true, _ => false };
+    let is_pos: bool = match op { ast.UnaryOp.Pos => true, _ => false };
+    if is_not {
       let mut a_expected0: i32 = -1;
       if expected != -1 {
         let eb0: i32 = strip_range(ctx, expected);
@@ -1818,6 +1834,15 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
         return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: out_tyi, iv: wr0.v, bv: false, sv: "", sigs: ar.sigs, states: ar.states };
       }
       return EvalConstExprResult { ok: false, err: type_error(file, "const ! expects bool or int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states };
+    }
+    if is_pos {
+      let ar1: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, expected, locals);
+      if !ar1.ok { return ar1; }
+      let out_ty1: i32 = strip_range(ctx, ar1.ty);
+      if !is_int_like_ty(ctx, out_ty1) && !is_float_scalar_ty(ctx, out_ty1) {
+        return EvalConstExprResult { ok: false, err: type_error(file, "const + expects int/float"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: ar1.sigs, states: ar1.states };
+      }
+      return ar1;
     }
     // neg
     let ar2: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, a, -1, locals);
@@ -1994,7 +2019,35 @@ fn eval_const_expr_in_mod_locals(ctx: Ctx, w: World, items: Vec[ConstItem], sigs
       if !rr2.ok { return rr2; }
       let out_ty: i32 = if is_cmp { strip_range(ctx, lr2.ty) } else if expected != -1 { strip_range(ctx, expected) } else { strip_range(ctx, lr2.ty) };
       if strip_range(ctx, lr2.ty) != out_ty || strip_range(ctx, rr2.ty) != out_ty {
-        return EvalConstExprResult { ok: false, err: type_error(file, "const numeric op type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+        return EvalConstExprResult { ok: false, err: type_error(file, "const op type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+      }
+
+      if is_cmp && out_ty == ctx.ty_string {
+        if lr2.kind != const_kind_str() || rr2.kind != const_kind_str() {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const string compare expects string"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+        }
+        let c: i32 = string_cmp_text(lr2.sv, rr2.sv);
+        let outb: bool =
+          match op {
+            ast.BinaryOp.Lt => c < 0,
+            ast.BinaryOp.Le => c <= 0,
+            ast.BinaryOp.Gt => c > 0,
+            _ => c >= 0,
+          };
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: outb, sv: "", sigs: rr2.sigs, states: rr2.states };
+      }
+
+      if is_bit && out_ty == ctx.ty_bool {
+        if lr2.kind != const_kind_bool() || rr2.kind != const_kind_bool() {
+          return EvalConstExprResult { ok: false, err: type_error(file, "const bit op expects bool or int"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: rr2.sigs, states: rr2.states };
+        }
+        let outb2: bool =
+          match op {
+            ast.BinaryOp.BitAnd => lr2.bv && rr2.bv,
+            ast.BinaryOp.BitOr => lr2.bv || rr2.bv,
+            _ => lr2.bv != rr2.bv,
+          };
+        return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: ctx.ty_bool, iv: 0, bv: outb2, sv: "", sigs: rr2.sigs, states: rr2.states };
       }
 
       if lr2.kind == const_kind_float() || rr2.kind == const_kind_float() {
