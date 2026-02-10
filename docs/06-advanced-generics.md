@@ -56,21 +56,24 @@ where
 - 默认值一致性：声明阶段会校验“默认 const 值是否满足 comptime where”（当约束涉及的参数都有默认值时）
 - impl 一致性：`impl Trait for Type` 的方法必须与 trait 方法声明的 `comptime where` 约束一致
 
-## 3. 泛型偏特化 / 专门化（未定）
+## 3. 泛型偏特化 / 专门化（Stage1 最小可用）
 
-目标：允许在不引入通用 lifetime 系统的前提下，对特定类型/常量参数选择更优实现。
+目标：允许对同一 trait 的 impl 在“更具体类型”上覆盖通用实现，同时保持可判定性和稳定诊断。
 
-选项（待讨论）：
+当前 Stage1 已实现（受控 specialization，接近 `min_specialization`）：
 
-1. 受控 specialization（类似 Rust `min_specialization` 思路）：允许有限重叠 impl，并要求“更特化”关系可判定、无歧义。
-2. comptime 分派：通过 `comptime if` 在泛型实现内部选择路径（可实现但可能影响可读性/可组合性）。
-3. 仅允许“同名内在方法”的手写特化（不开放重叠 trait impl），减少一致性复杂度。
+- 允许同一 trait 出现重叠 impl，但必须存在**严格特化**关系。
+- 严格特化判定基于 impl 头部 `for` 类型（当前以 `unify_ty` 可判定域为准）：
+  - `A` 比 `B` 更特化，当且仅当：`B` 可匹配 `A`，且 `A` 不能匹配所有 `B`。
+  - 直观例子：`impl[T] Tag for Vec[T]` 与 `impl Tag for Vec[i32]`，后者更特化。
+- 对同一接收者类型，分派选择“最特化且唯一”的 impl。
+- 若重叠但不存在严格偏序（不可比较或等价重叠），编译期报错：
+  - `overlapping impl without strict specialization: ...`
 
-本章后续会补充：
+当前限制（后续可扩展）：
 
-- 重叠规则
-- 选择优先级
-- 与包升级/向后兼容的约束
+- 偏序只看 impl 头部 `for` 类型，不比较方法体与 where 子句的语义强弱。
+- 仅在当前 `unify_ty` 支持的类型构造上参与判定（如 `Vec[T]` 场景）。
 
 ## 4. 可变参数泛型（deferred）
 

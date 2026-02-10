@@ -255,6 +255,15 @@ fn impl_for_ty_overlap(ctx: Ctx, a: i32, b: i32) -> bool {
   return ur2.ok;
 }
 
+// `a` is strictly more specific than `b` when `b` can match `a` but `a` cannot
+// match every `b` (min-specialization style partial order on impl heads).
+fn impl_for_ty_more_specific(ctx: Ctx, a: i32, b: i32) -> bool {
+  let b_to_a: UnifyResult = unify_ty(ctx, b, a, Vec());
+  if !b_to_a.ok { return false; }
+  let a_to_b: UnifyResult = unify_ty(ctx, a, b, Vec());
+  return !a_to_b.ok;
+}
+
 fn impl_decl_file(w: World, mod_path: String, decl_idx: i32) -> String {
   let fm: FindModResult = find_mod(w, mod_path);
   if !fm.found { return ""; }
@@ -641,7 +650,12 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let ds: ImplSig = c.impls.get(di);
         if ds.trait_mod_path == trr.mod_path && ds.trait_name == trr.name {
           if impl_for_ty_overlap(c, ds.for_ty, for_ty) {
-            return TcCtxResult { ok: false, err: type_error(id.file, "duplicate impl"), ctx: c };
+            let new_more: bool = impl_for_ty_more_specific(c, for_ty, ds.for_ty);
+            let old_more: bool = impl_for_ty_more_specific(c, ds.for_ty, for_ty);
+            if !new_more && !old_more {
+              let msg_ov: String = "overlapping impl without strict specialization: ".concat(ty_inst_str(c, for_ty)).concat(" vs ").concat(ty_inst_str(c, ds.for_ty));
+              return TcCtxResult { ok: false, err: type_error(id.file, msg_ov), ctx: c };
+            }
           }
         }
         di = di + 1;
