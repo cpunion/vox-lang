@@ -37,6 +37,7 @@ fn crc_table() -> [u32; 256] { ... }
 @size_of(T) -> usize
 @align_of(T) -> usize
 @type_name(T) -> String
+@field_count(T) -> usize
 @is_integer(T) -> bool
 @is_float(T) -> bool
 @is_struct(T) -> bool
@@ -49,12 +50,12 @@ fn crc_table() -> [u32; 256] { ... }
 - 可用于普通表达式与 `const` 初始化（均会折叠为常量）。
 - `@size_of/@align_of` 当前按 Stage1 C 后端目标布局模型计算。
 - `@type_name` 返回编译器的类型显示字符串。
+- `@field_count` 当前支持 `struct/enum`（分别返回字段数/variant 数）。
 - `@is_*` 返回类型分类判定（当前要求 `T` 为 concrete type）。
 
 暂未实现（保留方向）：
 
 ```vox
-@field_count(T) -> usize
 @field_name(T, index: usize) -> String
 @field_type(T, index: usize) -> type
 ```
