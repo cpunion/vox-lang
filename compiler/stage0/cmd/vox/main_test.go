@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"voxlang/internal/ast"
+	"voxlang/internal/source"
 )
 
 func containsString(xs []string, s string) bool {
@@ -234,5 +237,85 @@ func TestPrintSelectionSummary(t *testing.T) {
 	}
 	if !strings.Contains(out, "[select] --rerun-failed: 3 cached") {
 		t.Fatalf("missing rerun summary: %q", out)
+	}
+}
+
+func TestParseDirArg(t *testing.T) {
+	dir, err := parseDirArg(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != "." {
+		t.Fatalf("dir = %q, want %q", dir, ".")
+	}
+	dir, err = parseDirArg([]string{"pkg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != "pkg" {
+		t.Fatalf("dir = %q, want %q", dir, "pkg")
+	}
+	if _, err := parseDirArg([]string{"a", "b"}); err == nil {
+		t.Fatalf("expected parseDirArg to reject extra args")
+	}
+}
+
+func TestFormatVoxSource(t *testing.T) {
+	in := "fn main() -> i32 {  \r\n  return 0; \t\r\n}\r\n\r\n"
+	got := formatVoxSource(in)
+	want := "fn main() -> i32 {\n  return 0;\n}\n"
+	if got != want {
+		t.Fatalf("formatted text mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestRunFmt(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(root, "src", "main.vox")
+	if err := os.WriteFile(p, []byte("fn main() -> i32 {  \n  return 0; \t\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runFmt(root); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "fn main() -> i32 {\n  return 0;\n}\n" {
+		t.Fatalf("unexpected formatted file:\n%s", string(b))
+	}
+}
+
+func TestRenderAPIDoc(t *testing.T) {
+	fRoot := source.NewFile("src/main.vox", "")
+	fMod := source.NewFile("src/math/add.vox", "")
+	prog := &ast.Program{
+		Funcs: []*ast.FuncDecl{
+			{Pub: true, Name: "main", Ret: &ast.NamedType{Parts: []string{"i32"}}, Span: source.Span{File: fRoot}},
+			{Pub: true, Name: "add", Params: []ast.Param{{Name: "a", Type: &ast.NamedType{Parts: []string{"i32"}}}, {Name: "b", Type: &ast.NamedType{Parts: []string{"i32"}}}}, Ret: &ast.NamedType{Parts: []string{"i32"}}, Span: source.Span{File: fMod}},
+		},
+		Structs: []*ast.StructDecl{
+			{Pub: true, Name: "Point", TypeParams: []string{"T"}, Span: source.Span{File: fMod}},
+		},
+	}
+	md := renderAPIDoc("demo", prog)
+	if !strings.Contains(md, "# API: demo") {
+		t.Fatalf("missing doc title: %q", md)
+	}
+	if !strings.Contains(md, "## Module (root)") {
+		t.Fatalf("missing root module section: %q", md)
+	}
+	if !strings.Contains(md, "## Module math") {
+		t.Fatalf("missing module section: %q", md)
+	}
+	if !strings.Contains(md, "`fn add(a: i32, b: i32) -> i32`") {
+		t.Fatalf("missing function signature: %q", md)
+	}
+	if !strings.Contains(md, "`struct Point[T]`") {
+		t.Fatalf("missing struct line: %q", md)
 	}
 }

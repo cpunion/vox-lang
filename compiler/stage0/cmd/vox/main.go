@@ -3,15 +3,19 @@ package main
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"unicode/utf8"
+
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"voxlang/internal/ast"
 
 	"voxlang/internal/codegen"
 	"voxlang/internal/diag"
@@ -31,6 +35,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  vox build [--engine=c|interp] [dir]")
 	fmt.Fprintln(os.Stderr, "  vox run [--engine=c|interp] [dir]")
 	fmt.Fprintln(os.Stderr, "  vox test [--engine=c|interp] [dir]")
+	fmt.Fprintln(os.Stderr, "  vox fmt [dir]")
+	fmt.Fprintln(os.Stderr, "  vox lint [dir]")
+	fmt.Fprintln(os.Stderr, "  vox doc [dir]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  --engine=c|interp   execution engine (default: c)")
@@ -167,6 +174,20 @@ func parseTestOptionsAndDir(args []string) (opts testOptions, err error) {
 	return opts, nil
 }
 
+func parseDirArg(args []string) (string, error) {
+	switch len(args) {
+	case 0:
+		return ".", nil
+	case 1:
+		if strings.HasPrefix(args[0], "-") {
+			return "", fmt.Errorf("unknown flag: %s", args[0])
+		}
+		return args[0], nil
+	default:
+		return "", fmt.Errorf("unexpected extra arg: %s", args[1])
+	}
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -238,6 +259,36 @@ func main() {
 			os.Exit(1)
 		}
 		if err := testWithOptions(opts); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+	case "fmt":
+		dir, err := parseDirArg(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		if err := runFmt(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+	case "lint":
+		dir, err := parseDirArg(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		if err := runLint(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+	case "doc":
+		dir, err := parseDirArg(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		if err := runDoc(dir); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
@@ -652,6 +703,267 @@ func formatTestDuration(d time.Duration) string {
 		return fmt.Sprintf("%.2fms", float64(us)/1000.0)
 	}
 	return fmt.Sprintf("%.2fs", float64(us)/1000.0/1000.0)
+}
+
+func collectPackageVoxFiles(root string, includeTests bool) ([]string, error) {
+	srcDir := filepath.Join(root, "src")
+	if st, err := os.Stat(srcDir); err != nil || !st.IsDir() {
+		return nil, fmt.Errorf("missing src/ in %s", root)
+	}
+	dirs := []string{srcDir}
+	if includeTests {
+		testsDir := filepath.Join(root, "tests")
+		if st, err := os.Stat(testsDir); err == nil && st.IsDir() {
+			dirs = append(dirs, testsDir)
+		}
+	}
+	var out []string
+	for _, dir := range dirs {
+		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if filepath.Ext(path) != ".vox" {
+				return nil
+			}
+			out = append(out, path)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func formatVoxSource(src string) string {
+	s := strings.ReplaceAll(src, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " \t")
+	}
+	out := strings.Join(lines, "\n")
+	out = strings.TrimRight(out, "\n")
+	return out + "\n"
+}
+
+func runFmt(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	files, err := collectPackageVoxFiles(abs, true)
+	if err != nil {
+		return err
+	}
+	changed := 0
+	for _, path := range files {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		formatted := formatVoxSource(string(b))
+		if string(b) == formatted {
+			continue
+		}
+		if err := os.WriteFile(path, []byte(formatted), 0o644); err != nil {
+			return err
+		}
+		changed++
+	}
+	fmt.Fprintf(os.Stdout, "[fmt] files: %d, changed: %d\n", len(files), changed)
+	return nil
+}
+
+func runLint(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	_, diags, err := loader.BuildPackage(abs, false)
+	if err != nil {
+		return err
+	}
+	if diags != nil && len(diags.Items) > 0 {
+		diag.Print(os.Stderr, diags)
+		return fmt.Errorf("lint failed")
+	}
+
+	files, err := collectPackageVoxFiles(abs, true)
+	if err != nil {
+		return err
+	}
+	warnCount := 0
+	for _, path := range files {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		line := 1
+		for _, ln := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+			if utf8.RuneCountInString(ln) > 160 {
+				fmt.Fprintf(os.Stdout, "%s:%d: warning: line too long (>160 runes)\n", path, line)
+				warnCount++
+			}
+			line++
+		}
+	}
+	fmt.Fprintf(os.Stdout, "[lint] ok (%d warning(s))\n", warnCount)
+	return nil
+}
+
+func docModuleForFile(fileName string) (string, bool) {
+	if names.PackageFromFileName(fileName) != "" {
+		return "", false
+	}
+	_, mod, _ := names.SplitOwnerAndModule(fileName)
+	if len(mod) == 0 {
+		return "(root)", true
+	}
+	if len(mod) > 0 && mod[0] == "tests" {
+		return "", false
+	}
+	return strings.Join(mod, "."), true
+}
+
+func docTypeString(t ast.Type) string {
+	switch x := t.(type) {
+	case *ast.NamedType:
+		base := strings.Join(x.Parts, ".")
+		if len(x.Args) == 0 {
+			return base
+		}
+		args := make([]string, 0, len(x.Args))
+		for _, a := range x.Args {
+			args = append(args, docTypeString(a))
+		}
+		return base + "[" + strings.Join(args, ", ") + "]"
+	case *ast.UnitType:
+		return "()"
+	case *ast.RangeType:
+		return fmt.Sprintf("@range(%d..=%d) %s", x.Lo, x.Hi, docTypeString(x.Base))
+	default:
+		return "<type>"
+	}
+}
+
+func docTypeParams(tps []string) string {
+	if len(tps) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(tps, ", ") + "]"
+}
+
+func docFuncSig(fn *ast.FuncDecl) string {
+	parts := make([]string, 0, len(fn.Params))
+	for _, p := range fn.Params {
+		parts = append(parts, p.Name+": "+docTypeString(p.Type))
+	}
+	return "fn " + fn.Name + docTypeParams(fn.TypeParams) + "(" + strings.Join(parts, ", ") + ") -> " + docTypeString(fn.Ret)
+}
+
+func renderAPIDoc(pkg string, p *ast.Program) string {
+	if pkg == "" {
+		pkg = "app"
+	}
+	var b strings.Builder
+	b.WriteString("# API: " + pkg + "\n\n")
+	if p == nil {
+		b.WriteString("_No API symbols found._\n")
+		return b.String()
+	}
+
+	byModule := map[string][]string{}
+	add := func(fileName string, line string) {
+		mod, ok := docModuleForFile(fileName)
+		if !ok {
+			return
+		}
+		byModule[mod] = append(byModule[mod], "- `"+line+"`")
+	}
+
+	for _, td := range p.Types {
+		if td != nil && td.Pub {
+			add(td.Span.File.Name, "type "+td.Name+" = "+docTypeString(td.Type))
+		}
+	}
+	for _, cd := range p.Consts {
+		if cd != nil && cd.Pub {
+			add(cd.Span.File.Name, "const "+cd.Name+": "+docTypeString(cd.Type))
+		}
+	}
+	for _, sd := range p.Structs {
+		if sd != nil && sd.Pub {
+			add(sd.Span.File.Name, "struct "+sd.Name+docTypeParams(sd.TypeParams))
+		}
+	}
+	for _, ed := range p.Enums {
+		if ed != nil && ed.Pub {
+			add(ed.Span.File.Name, "enum "+ed.Name+docTypeParams(ed.TypeParams))
+		}
+	}
+	for _, td := range p.Traits {
+		if td != nil && td.Pub {
+			add(td.Span.File.Name, "trait "+td.Name)
+		}
+	}
+	for _, fn := range p.Funcs {
+		if fn != nil && fn.Pub {
+			add(fn.Span.File.Name, docFuncSig(fn))
+		}
+	}
+
+	if len(byModule) == 0 {
+		b.WriteString("_No public symbols found._\n")
+		return b.String()
+	}
+
+	mods := make([]string, 0, len(byModule))
+	for mod := range byModule {
+		mods = append(mods, mod)
+	}
+	sort.Strings(mods)
+	for _, mod := range mods {
+		b.WriteString("## Module " + mod + "\n\n")
+		lines := byModule[mod]
+		sort.Strings(lines)
+		for _, ln := range lines {
+			b.WriteString(ln + "\n")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func runDoc(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	res, diags, err := loader.BuildPackage(abs, false)
+	if err != nil {
+		return err
+	}
+	if diags != nil && len(diags.Items) > 0 {
+		diag.Print(os.Stderr, diags)
+		return fmt.Errorf("doc failed")
+	}
+	md := renderAPIDoc(res.Manifest.Package.Name, res.Program.Prog)
+	outDir := filepath.Join(res.Root, "target", "doc")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	outPath := filepath.Join(outDir, "API.md")
+	if err := os.WriteFile(outPath, []byte(md), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "[doc] wrote %s\n", outPath)
+	return nil
 }
 
 func compile(dir string) (string, error) {

@@ -42,6 +42,15 @@ Stage0 提供两套执行/验证引擎，便于在“快（解释器）”与“
 - `vox build`：
   - `--engine=c`：产出 C 与可执行文件（见下方“Stage0 产物”）
   - `--engine=interp`：仅加载/解析/类型检查（不产出二进制）
+- `vox fmt`：
+  - 递归格式化 `src/**/*.vox` 与 `tests/**/*.vox`
+  - 当前规则为“最小可逆格式化”：去除行尾空白、统一换行为 `\n`、确保文件末尾单个换行
+- `vox lint`：
+  - 执行包级语义检查（等价于 build 的加载/解析/类型检查，不产出二进制）
+  - 额外输出文本告警（当前包含超长行提示）
+- `vox doc`：
+  - 从包源码生成最小 API 文档到 `target/doc/API.md`
+  - 当前覆盖公开 `type/const/struct/enum/trait/fn` 符号（按模块分组）
 
 输出目录（草案）：`target/`
 
