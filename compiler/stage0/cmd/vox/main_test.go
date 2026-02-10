@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,16 @@ func TestParseTestOptionsAndDir_List(t *testing.T) {
 	}
 	if !opts.listOnly {
 		t.Fatalf("listOnly = false, want true")
+	}
+}
+
+func TestParseTestOptionsAndDir_JSON(t *testing.T) {
+	opts, err := parseTestOptionsAndDir([]string{"--json", "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.jsonOutput {
+		t.Fatalf("jsonOutput = false, want true")
 	}
 }
 
@@ -317,5 +328,32 @@ func TestRenderAPIDoc(t *testing.T) {
 	}
 	if !strings.Contains(md, "`struct Point[T]`") {
 		t.Fatalf("missing struct line: %q", md)
+	}
+}
+
+func TestBuildJSONTestReport(t *testing.T) {
+	testNames := []string{"mod.a::test_ok", "mod.a::test_fail"}
+	results := map[string]testExecResult{
+		"mod.a::test_ok":   {dur: 2 * time.Millisecond, err: nil},
+		"mod.a::test_fail": {dur: 3 * time.Millisecond, err: os.ErrInvalid},
+	}
+	mods, slowest := summarizeTestResults(testNames, results)
+	rep := buildJSONTestReport(testOptions{eng: engineC, dir: "."}, "/tmp/p", 2, 2, 0, testNames, results, mods, "rerun", "")
+	rep.Slowest = jsonSlowestFromNamed(slowest)
+	rep.TotalDurationMicros = 5000
+
+	var b bytes.Buffer
+	if err := emitJSONReport(&b, rep); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["engine"] != "c" {
+		t.Fatalf("engine = %v, want c", got["engine"])
+	}
+	if got["passed"] != float64(1) || got["failed"] != float64(1) {
+		t.Fatalf("unexpected pass/fail: %+v", got)
 	}
 }

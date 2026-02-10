@@ -20,6 +20,7 @@ vox test --engine=interp
 vox test --run='regex'
 vox test --rerun-failed
 vox test --list
+vox test --json
 ```
 
 Stage0 行为：
@@ -32,6 +33,7 @@ Stage0 行为：
  - `vox test --run=<regex>`：仅运行匹配的测试（匹配限定名 `mod::test_x` 与短名 `test_x`）
  - `vox test --rerun-failed`：仅重跑上次失败测试（缓存文件：`target/debug/.vox_failed_tests`）
  - `vox test --list`：仅列出当前筛选后的测试，不执行
+ - `vox test --json`：输出机器可读 JSON 报告（包含 selection/results/modules/slowest/summary）
  - 调度策略：模块间并行、模块内串行（稳定日志顺序与共享状态可控）
  - 输出包含每个测试耗时（如 `([OK] mod::test_x (0.42ms))`）
  - 输出包含模块级汇总（`[module] <mod>: <passed> passed, <failed> failed (<dur>)`）

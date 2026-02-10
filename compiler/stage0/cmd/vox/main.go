@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -47,6 +48,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --run=<regex>       run tests whose qualified name (or short name) matches regex")
 	fmt.Fprintln(os.Stderr, "  --rerun-failed      rerun only tests failed in previous run")
 	fmt.Fprintln(os.Stderr, "  --list              list selected tests and exit without running")
+	fmt.Fprintln(os.Stderr, "  --json              emit machine-readable JSON report")
 }
 
 type engine int
@@ -62,6 +64,7 @@ type testOptions struct {
 	runPattern  string
 	rerunFailed bool
 	listOnly    bool
+	jsonOutput  bool
 }
 
 func parseEngineAndDir(args []string) (eng engine, dir string, err error) {
@@ -160,6 +163,10 @@ func parseTestOptionsAndDir(args []string) (opts testOptions, err error) {
 		}
 		if a == "--list" {
 			opts.listOnly = true
+			continue
+		}
+		if a == "--json" {
+			opts.jsonOutput = true
 			continue
 		}
 		if strings.HasPrefix(a, "-") {
@@ -441,7 +448,14 @@ func testWithOptions(opts testOptions) error {
 		}
 		prevFailedCount = len(prevFailed)
 		if len(prevFailed) == 0 {
-			fmt.Fprintf(os.Stdout, "[test] no previous failed tests (%s)\n", failedTestsPath(abs))
+			if opts.jsonOutput {
+				rep := buildJSONTestReport(opts, abs, discoveredTests, 0, prevFailedCount, nil, nil, nil, "", "no previous failed tests")
+				if err := emitJSONReport(os.Stdout, rep); err != nil {
+					return err
+				}
+			} else {
+				fmt.Fprintf(os.Stdout, "[test] no previous failed tests (%s)\n", failedTestsPath(abs))
+			}
 			return nil
 		}
 		testNames = intersectTests(testNames, prevFailed)
@@ -452,31 +466,64 @@ func testWithOptions(opts testOptions) error {
 			return err
 		}
 	}
-	printSelectionSummary(os.Stdout, discoveredTests, len(testNames), opts, prevFailedCount)
+	if !opts.jsonOutput {
+		printSelectionSummary(os.Stdout, discoveredTests, len(testNames), opts, prevFailedCount)
+	}
 	if len(testNames) == 0 {
-		fmt.Fprintln(os.Stdout, "[test] no tests found")
-		fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
+		if opts.jsonOutput {
+			rep := buildJSONTestReport(opts, abs, discoveredTests, 0, prevFailedCount, testNames, nil, nil, "", "no tests found")
+			rep.TotalDurationMicros = time.Since(runStart).Microseconds()
+			if err := emitJSONReport(os.Stdout, rep); err != nil {
+				return err
+			}
+		} else {
+			fmt.Fprintln(os.Stdout, "[test] no tests found")
+			fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
+		}
 		if err := writeFailedTests(abs, nil); err != nil {
 			return err
 		}
 		return nil
 	}
 	if opts.listOnly {
-		printSelectedTests(os.Stdout, testNames)
-		fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
+		if opts.jsonOutput {
+			rep := buildJSONTestReport(opts, abs, discoveredTests, len(testNames), prevFailedCount, testNames, nil, nil, "", "")
+			rep.TotalDurationMicros = time.Since(runStart).Microseconds()
+			if err := emitJSONReport(os.Stdout, rep); err != nil {
+				return err
+			}
+		} else {
+			printSelectedTests(os.Stdout, testNames)
+			fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
+		}
 		return nil
 	}
 
 	if opts.eng == engineInterp {
 		log, failedNames, err := interp.RunTestsNamed(res.Program, testNames)
-		if log != "" {
-			fmt.Fprint(os.Stdout, log)
+		if !opts.jsonOutput {
+			if log != "" {
+				fmt.Fprint(os.Stdout, log)
+			}
+			fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
 		}
-		fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
 		if werr := writeFailedTests(abs, failedNames); werr != nil {
 			return werr
 		}
+		hint := ""
 		if len(failedNames) != 0 {
+			hint = testRerunCommand(opts.eng, abs)
+		}
+		if opts.jsonOutput {
+			results := interpResultsFromFailed(testNames, failedNames)
+			moduleSummaries, slowest := summarizeTestResults(testNames, results)
+			rep := buildJSONTestReport(opts, abs, discoveredTests, len(testNames), prevFailedCount, testNames, results, moduleSummaries, hint, "")
+			rep.Slowest = jsonSlowestFromNamed(slowest)
+			rep.TotalDurationMicros = time.Since(runStart).Microseconds()
+			if err := emitJSONReport(os.Stdout, rep); err != nil {
+				return err
+			}
+		} else if len(failedNames) != 0 {
 			fmt.Fprintf(os.Stdout, "[hint] rerun failed: %s\n", testRerunCommand(opts.eng, abs))
 		}
 		return err
@@ -500,32 +547,54 @@ func testWithOptions(opts testOptions) error {
 		if !ok {
 			failed++
 			failedNames = append(failedNames, name)
-			fmt.Fprintf(os.Stdout, "[FAIL] %s (%s)\n", name, formatTestDuration(0))
+			if !opts.jsonOutput {
+				fmt.Fprintf(os.Stdout, "[FAIL] %s (%s)\n", name, formatTestDuration(0))
+			}
 			continue
 		}
 		if r.err != nil {
 			failed++
 			failedNames = append(failedNames, name)
-			fmt.Fprintf(os.Stdout, "[FAIL] %s (%s)\n", name, formatTestDuration(r.dur))
+			if !opts.jsonOutput {
+				fmt.Fprintf(os.Stdout, "[FAIL] %s (%s)\n", name, formatTestDuration(r.dur))
+			}
 			continue
 		}
 		passed++
-		fmt.Fprintf(os.Stdout, "[OK] %s (%s)\n", name, formatTestDuration(r.dur))
+		if !opts.jsonOutput {
+			fmt.Fprintf(os.Stdout, "[OK] %s (%s)\n", name, formatTestDuration(r.dur))
+		}
 	}
 	moduleSummaries, slowest := summarizeTestResults(testNames, results)
-	for _, ms := range moduleSummaries {
-		fmt.Fprintf(os.Stdout, "[module] %s: %d passed, %d failed (%s)\n", displayModuleName(ms.module), ms.passed, ms.failed, formatTestDuration(ms.dur))
+	if !opts.jsonOutput {
+		for _, ms := range moduleSummaries {
+			fmt.Fprintf(os.Stdout, "[module] %s: %d passed, %d failed (%s)\n", displayModuleName(ms.module), ms.passed, ms.failed, formatTestDuration(ms.dur))
+		}
+		for _, s := range slowest {
+			fmt.Fprintf(os.Stdout, "[slowest] %s (%s)\n", s.name, formatTestDuration(s.dur))
+		}
+		fmt.Fprintf(os.Stdout, "[test] %d passed, %d failed\n", passed, failed)
+		fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
 	}
-	for _, s := range slowest {
-		fmt.Fprintf(os.Stdout, "[slowest] %s (%s)\n", s.name, formatTestDuration(s.dur))
-	}
-	fmt.Fprintf(os.Stdout, "[test] %d passed, %d failed\n", passed, failed)
-	fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
 	if err := writeFailedTests(abs, failedNames); err != nil {
 		return err
 	}
+	hint := ""
 	if failed != 0 {
-		fmt.Fprintf(os.Stdout, "[hint] rerun failed: %s\n", testRerunCommand(opts.eng, abs))
+		hint = testRerunCommand(opts.eng, abs)
+		if !opts.jsonOutput {
+			fmt.Fprintf(os.Stdout, "[hint] rerun failed: %s\n", hint)
+		}
+	}
+	if opts.jsonOutput {
+		rep := buildJSONTestReport(opts, abs, discoveredTests, len(testNames), prevFailedCount, testNames, results, moduleSummaries, hint, "")
+		rep.Slowest = jsonSlowestFromNamed(slowest)
+		rep.TotalDurationMicros = time.Since(runStart).Microseconds()
+		if err := emitJSONReport(os.Stdout, rep); err != nil {
+			return err
+		}
+	}
+	if failed != 0 {
 		return fmt.Errorf("%d test(s) failed", failed)
 	}
 	return nil
@@ -575,6 +644,151 @@ type moduleTestSummary struct {
 type namedTestDuration struct {
 	name string
 	dur  time.Duration
+}
+
+type jsonSelection struct {
+	Discovered      int    `json:"discovered"`
+	Selected        int    `json:"selected"`
+	RunPattern      string `json:"run_pattern,omitempty"`
+	RerunFailed     bool   `json:"rerun_failed,omitempty"`
+	PrevFailedCount int    `json:"prev_failed_count,omitempty"`
+}
+
+type jsonTestResult struct {
+	Name           string `json:"name"`
+	Module         string `json:"module"`
+	Status         string `json:"status"`
+	DurationMicros int64  `json:"duration_us"`
+	Error          string `json:"error,omitempty"`
+}
+
+type jsonModuleSummary struct {
+	Module         string `json:"module"`
+	Passed         int    `json:"passed"`
+	Failed         int    `json:"failed"`
+	DurationMicros int64  `json:"duration_us"`
+}
+
+type jsonSlowest struct {
+	Name           string `json:"name"`
+	DurationMicros int64  `json:"duration_us"`
+}
+
+type jsonTestReport struct {
+	Engine              string              `json:"engine"`
+	Dir                 string              `json:"dir"`
+	Selection           jsonSelection       `json:"selection"`
+	ListOnly            bool                `json:"list_only,omitempty"`
+	SelectedTests       []string            `json:"selected_tests,omitempty"`
+	Results             []jsonTestResult    `json:"results,omitempty"`
+	Modules             []jsonModuleSummary `json:"modules,omitempty"`
+	Slowest             []jsonSlowest       `json:"slowest,omitempty"`
+	Passed              int                 `json:"passed"`
+	Failed              int                 `json:"failed"`
+	TotalDurationMicros int64               `json:"total_duration_us"`
+	Hint                string              `json:"hint,omitempty"`
+	Message             string              `json:"message,omitempty"`
+}
+
+func emitJSONReport(out io.Writer, rep jsonTestReport) error {
+	enc := json.NewEncoder(out)
+	enc.SetEscapeHTML(false)
+	return enc.Encode(rep)
+}
+
+func interpResultsFromFailed(testNames []string, failedNames []string) map[string]testExecResult {
+	failed := make(map[string]struct{}, len(failedNames))
+	for _, n := range failedNames {
+		failed[n] = struct{}{}
+	}
+	out := make(map[string]testExecResult, len(testNames))
+	for _, n := range testNames {
+		if _, ok := failed[n]; ok {
+			out[n] = testExecResult{dur: 0, err: fmt.Errorf("failed")}
+		} else {
+			out[n] = testExecResult{dur: 0, err: nil}
+		}
+	}
+	return out
+}
+
+func jsonSlowestFromNamed(slowest []namedTestDuration) []jsonSlowest {
+	out := make([]jsonSlowest, 0, len(slowest))
+	for _, s := range slowest {
+		out = append(out, jsonSlowest{Name: s.name, DurationMicros: s.dur.Microseconds()})
+	}
+	return out
+}
+
+func buildJSONTestReport(
+	opts testOptions,
+	abs string,
+	discovered int,
+	selected int,
+	prevFailedCount int,
+	testNames []string,
+	results map[string]testExecResult,
+	moduleSummaries []moduleTestSummary,
+	hint string,
+	message string,
+) jsonTestReport {
+	engineName := "c"
+	if opts.eng == engineInterp {
+		engineName = "interp"
+	}
+	rep := jsonTestReport{
+		Engine: engineName,
+		Dir:    abs,
+		Selection: jsonSelection{
+			Discovered: discovered,
+			Selected:   selected,
+		},
+		ListOnly:      opts.listOnly,
+		SelectedTests: append([]string{}, testNames...),
+		Hint:          hint,
+		Message:       message,
+	}
+	if opts.runPattern != "" {
+		rep.Selection.RunPattern = opts.runPattern
+	}
+	if opts.rerunFailed {
+		rep.Selection.RerunFailed = true
+		rep.Selection.PrevFailedCount = prevFailedCount
+	}
+	if results != nil {
+		rep.Results = make([]jsonTestResult, 0, len(testNames))
+		for _, n := range testNames {
+			r, ok := results[n]
+			j := jsonTestResult{Name: n, Module: displayModuleName(moduleFromQualifiedTest(n)), DurationMicros: 0}
+			if !ok {
+				j.Status = "fail"
+				j.Error = "missing result"
+				rep.Failed++
+			} else if r.err != nil {
+				j.Status = "fail"
+				j.DurationMicros = r.dur.Microseconds()
+				j.Error = r.err.Error()
+				rep.Failed++
+			} else {
+				j.Status = "pass"
+				j.DurationMicros = r.dur.Microseconds()
+				rep.Passed++
+			}
+			rep.Results = append(rep.Results, j)
+		}
+	}
+	if moduleSummaries != nil {
+		rep.Modules = make([]jsonModuleSummary, 0, len(moduleSummaries))
+		for _, ms := range moduleSummaries {
+			rep.Modules = append(rep.Modules, jsonModuleSummary{
+				Module:         displayModuleName(ms.module),
+				Passed:         ms.passed,
+				Failed:         ms.failed,
+				DurationMicros: ms.dur.Microseconds(),
+			})
+		}
+	}
+	return rep
 }
 
 func moduleFromQualifiedTest(name string) string {
