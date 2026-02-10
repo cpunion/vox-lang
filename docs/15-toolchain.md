@@ -20,6 +20,14 @@ vox lint
 vox doc
 ```
 
+仓库开发辅助（Makefile）：
+
+```bash
+make test
+make audit-vox-lines
+make audit-vox-lines MAX=180
+```
+
 ## 执行引擎（Stage0：已实现）
 
 Stage0 提供两套执行/验证引擎，便于在“快（解释器）”与“准（后端编译）”之间切换：
