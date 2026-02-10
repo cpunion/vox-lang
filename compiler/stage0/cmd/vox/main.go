@@ -669,6 +669,14 @@ type jsonModuleSummary struct {
 	DurationMicros int64  `json:"duration_us"`
 }
 
+type jsonModuleDetail struct {
+	Module      string   `json:"module"`
+	Tests       []string `json:"tests"`
+	FailedTests []string `json:"failed_tests,omitempty"`
+	Passed      int      `json:"passed"`
+	Failed      int      `json:"failed"`
+}
+
 type jsonSlowest struct {
 	Name           string `json:"name"`
 	DurationMicros int64  `json:"duration_us"`
@@ -682,6 +690,8 @@ type jsonTestReport struct {
 	SelectedTests       []string            `json:"selected_tests,omitempty"`
 	Results             []jsonTestResult    `json:"results,omitempty"`
 	Modules             []jsonModuleSummary `json:"modules,omitempty"`
+	ModuleDetails       []jsonModuleDetail  `json:"module_details,omitempty"`
+	FailedTests         []string            `json:"failed_tests,omitempty"`
 	Slowest             []jsonSlowest       `json:"slowest,omitempty"`
 	Passed              int                 `json:"passed"`
 	Failed              int                 `json:"failed"`
@@ -720,6 +730,45 @@ func jsonSlowestFromNamed(slowest []namedTestDuration) []jsonSlowest {
 	return out
 }
 
+func buildJSONModuleDetails(testNames []string, results map[string]testExecResult) []jsonModuleDetail {
+	if len(testNames) == 0 {
+		return nil
+	}
+	detailMap := make(map[string]*jsonModuleDetail, len(testNames))
+	for _, name := range testNames {
+		mod := moduleFromQualifiedTest(name)
+		d, ok := detailMap[mod]
+		if !ok {
+			d = &jsonModuleDetail{
+				Module: displayModuleName(mod),
+				Tests:  make([]string, 0, 1),
+			}
+			detailMap[mod] = d
+		}
+		d.Tests = append(d.Tests, name)
+		if results == nil {
+			continue
+		}
+		r, rok := results[name]
+		if !rok || r.err != nil {
+			d.Failed++
+			d.FailedTests = append(d.FailedTests, name)
+		} else {
+			d.Passed++
+		}
+	}
+	keys := make([]string, 0, len(detailMap))
+	for k := range detailMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]jsonModuleDetail, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, *detailMap[k])
+	}
+	return out
+}
+
 func buildJSONTestReport(
 	opts testOptions,
 	abs string,
@@ -748,6 +797,7 @@ func buildJSONTestReport(
 		Hint:          hint,
 		Message:       message,
 	}
+	rep.ModuleDetails = buildJSONModuleDetails(testNames, results)
 	if opts.runPattern != "" {
 		rep.Selection.RunPattern = opts.runPattern
 	}
@@ -763,11 +813,13 @@ func buildJSONTestReport(
 			if !ok {
 				j.Status = "fail"
 				j.Error = "missing result"
+				rep.FailedTests = append(rep.FailedTests, n)
 				rep.Failed++
 			} else if r.err != nil {
 				j.Status = "fail"
 				j.DurationMicros = r.dur.Microseconds()
 				j.Error = r.err.Error()
+				rep.FailedTests = append(rep.FailedTests, n)
 				rep.Failed++
 			} else {
 				j.Status = "pass"

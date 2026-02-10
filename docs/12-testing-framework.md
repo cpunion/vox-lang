@@ -33,13 +33,21 @@ Stage0 行为：
  - `vox test --run=<regex>`：仅运行匹配的测试（匹配限定名 `mod::test_x` 与短名 `test_x`）
  - `vox test --rerun-failed`：仅重跑上次失败测试（缓存文件：`target/debug/.vox_failed_tests`）
  - `vox test --list`：仅列出当前筛选后的测试，不执行
- - `vox test --json`：输出机器可读 JSON 报告（包含 selection/results/modules/slowest/summary）
+- `vox test --json`：输出机器可读 JSON 报告（包含 selection/results/modules/module_details/failed_tests/slowest/summary）
  - 调度策略：模块间并行、模块内串行（稳定日志顺序与共享状态可控）
  - 输出包含每个测试耗时（如 `([OK] mod::test_x (0.42ms))`）
  - 输出包含模块级汇总（`[module] <mod>: <passed> passed, <failed> failed (<dur>)`）
- - 输出包含最慢测试 TopN（当前 N=5，`[slowest] <test> (<dur>)`）
- - 输出包含选择摘要（`[select] discovered: N, selected: M`，并在使用 `--run/--rerun-failed` 时打印过滤来源）
- - 测试失败后输出重跑提示（`[hint] rerun failed: vox test --engine=... --rerun-failed <dir>`）
+- 输出包含最慢测试 TopN（当前 N=5，`[slowest] <test> (<dur>)`）
+- 输出包含选择摘要（`[select] discovered: N, selected: M`，并在使用 `--run/--rerun-failed` 时打印过滤来源）
+- 测试失败后输出重跑提示（`[hint] rerun failed: vox test --engine=... --rerun-failed <dir>`）
+
+`--json` 的关键字段：
+
+- `selection`：发现数、筛选后数量、`--run/--rerun-failed` 元信息
+- `results`：逐测试结果（状态、耗时、错误）
+- `modules`：模块级汇总（passed/failed/duration）
+- `module_details`：模块级测试清单（`tests`）与失败子集（`failed_tests`）
+- `failed_tests`：全局失败测试名列表（便于外部工具做后续重跑/分片）
 
 ## 2. 断言（Stage0）
 

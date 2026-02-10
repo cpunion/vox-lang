@@ -356,4 +356,58 @@ func TestBuildJSONTestReport(t *testing.T) {
 	if got["passed"] != float64(1) || got["failed"] != float64(1) {
 		t.Fatalf("unexpected pass/fail: %+v", got)
 	}
+	failedTests, ok := got["failed_tests"].([]any)
+	if !ok {
+		t.Fatalf("missing failed_tests: %+v", got)
+	}
+	if len(failedTests) != 1 || failedTests[0] != "mod.a::test_fail" {
+		t.Fatalf("failed_tests = %+v, want [mod.a::test_fail]", failedTests)
+	}
+	moduleDetails, ok := got["module_details"].([]any)
+	if !ok || len(moduleDetails) != 1 {
+		t.Fatalf("module_details = %+v, want len 1", got["module_details"])
+	}
+	md0, ok := moduleDetails[0].(map[string]any)
+	if !ok {
+		t.Fatalf("module_details[0] not object: %+v", moduleDetails[0])
+	}
+	if md0["module"] != "mod.a" {
+		t.Fatalf("module_details[0].module = %v, want mod.a", md0["module"])
+	}
+	testsAny, ok := md0["tests"].([]any)
+	if !ok || len(testsAny) != 2 {
+		t.Fatalf("module_details[0].tests = %+v, want len 2", md0["tests"])
+	}
+	failedAny, ok := md0["failed_tests"].([]any)
+	if !ok || len(failedAny) != 1 || failedAny[0] != "mod.a::test_fail" {
+		t.Fatalf("module_details[0].failed_tests = %+v, want [mod.a::test_fail]", md0["failed_tests"])
+	}
+}
+
+func TestBuildJSONTestReport_ListOnlyIncludesModuleDetails(t *testing.T) {
+	testNames := []string{"mod.a::test_a", "mod.b::test_b", "mod.b::test_c"}
+	rep := buildJSONTestReport(
+		testOptions{eng: engineInterp, dir: ".", listOnly: true},
+		"/tmp/p",
+		3,
+		3,
+		0,
+		testNames,
+		nil,
+		nil,
+		"",
+		"",
+	)
+	if len(rep.ModuleDetails) != 2 {
+		t.Fatalf("module_details len = %d, want 2", len(rep.ModuleDetails))
+	}
+	if rep.ModuleDetails[0].Module != "mod.a" || len(rep.ModuleDetails[0].Tests) != 1 {
+		t.Fatalf("unexpected module_details[0]: %+v", rep.ModuleDetails[0])
+	}
+	if rep.ModuleDetails[1].Module != "mod.b" || len(rep.ModuleDetails[1].Tests) != 2 {
+		t.Fatalf("unexpected module_details[1]: %+v", rep.ModuleDetails[1])
+	}
+	if len(rep.FailedTests) != 0 {
+		t.Fatalf("failed_tests len = %d, want 0", len(rep.FailedTests))
+	}
 }
