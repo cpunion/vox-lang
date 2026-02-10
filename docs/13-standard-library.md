@@ -16,8 +16,8 @@
 
 - `std::prelude` 已提供默认 trait：`Eq`、`Ord`、`Show`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
 - 未显式 import 时，函数名会回退到 `std/prelude`；trait 静态调用与 `impl Trait for ...` 也支持回退到 `std/prelude` 的公开 trait。
-- `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、`.vox` 枚举、命令执行、参数读取）。
+- `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取）。
 - `std::io` 已提供最小输出接口：`out`、`out_ln`、`fail`。
-- `std::sync` 已提供 stage1 单线程占位类型：`MutexI32`、`AtomicI32`（接口先行，泛型与真实并发语义后续补齐）。
+- `std::sync` 已提供 stage1 单线程占位类型：`MutexI32`、`AtomicI32`（接口先行；后续补齐可扩展的泛型版本与真实并发语义）。
 
 重要：由于 Vox 的“临时借用”规则，标准库应优先提供“可长期保存的拥有型视图”（例如 `StrView`），避免 API 设计依赖 `&T` 返回值。

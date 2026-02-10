@@ -691,7 +691,7 @@ dep = { path = "dep_pkg", version = "0.1.0" }
 	}
 }
 
-func TestStage1BuildPkgFailsOnNonPathDependency(t *testing.T) {
+func TestStage1BuildPkgFailsOnMissingRegistryDependency(t *testing.T) {
 	stage1Bin := stage1ToolBin(t)
 
 	root := t.TempDir()
@@ -717,14 +717,133 @@ dep = "1.2.3"
 	cmd.Dir = root
 	b, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("expected stage1 build-pkg to fail on non-path dependency")
+		t.Fatalf("expected stage1 build-pkg to fail when registry dependency is missing")
 	}
 	out := string(b)
 	if !strings.Contains(out, "invalid vox.toml") {
 		t.Fatalf("expected invalid vox.toml message, got:\n%s", out)
 	}
-	if !strings.Contains(out, "non-path dependency unsupported in stage1") {
-		t.Fatalf("expected non-path dependency error detail, got:\n%s", out)
+	if !strings.Contains(out, "registry dependency not found") {
+		t.Fatalf("expected registry dependency error detail, got:\n%s", out)
+	}
+}
+
+func TestStage1BuildPkgSupportsVersionDependencyFromRegistryCache(t *testing.T) {
+	stage1Bin := stage1ToolBin(t)
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	regDep := filepath.Join(root, ".vox", "deps", "registry", "dep", "1.2.3")
+	if err := os.MkdirAll(filepath.Join(regDep, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir registry dep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(regDep, "vox.toml"), []byte(`[package]
+name = "dep"
+version = "1.2.3"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write dep vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(regDep, "src", "dep.vox"), []byte("pub fn two() -> i32 { return 2; }\n"), 0o644); err != nil {
+		t.Fatalf("write dep source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = "1.2.3"
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("import \"dep\" as dep\nfn main() -> i32 { return dep.two(); }\n"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("stage1 build-pkg failed: %v\n%s", err, string(b))
+	}
+	run := exec.Command(outBin)
+	got, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run output failed: %v\n%s", err, string(got))
+	}
+	if strings.TrimSpace(string(got)) != "2" {
+		t.Fatalf("unexpected output: %q", string(got))
+	}
+}
+
+func TestStage1BuildPkgSupportsGitDependency(t *testing.T) {
+	stage1Bin := stage1ToolBin(t)
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	depRepo := filepath.Join(root, "dep_git_repo")
+	if err := os.MkdirAll(filepath.Join(depRepo, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir dep repo: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRepo, "vox.toml"), []byte(`[package]
+name = "dep"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write dep vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRepo, "src", "dep.vox"), []byte("pub fn one() -> i32 { return 1; }\n"), 0o644); err != nil {
+		t.Fatalf("write dep source: %v", err)
+	}
+	init := exec.Command("git", "init")
+	init.Dir = depRepo
+	if b, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v\n%s", err, string(b))
+	}
+	add := exec.Command("git", "add", ".")
+	add.Dir = depRepo
+	if b, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v\n%s", err, string(b))
+	}
+	commit := exec.Command("git", "-c", "user.email=vox@example.com", "-c", "user.name=vox", "commit", "-m", "init")
+	commit.Dir = depRepo
+	if b, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed: %v\n%s", err, string(b))
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = { git = "dep_git_repo" }
+`), 0o644); err != nil {
+		t.Fatalf("write vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("import \"dep\" as dep\nfn main() -> i32 { return dep.one() + 2; }\n"), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage1Bin, "build-pkg", outBin)
+	cmd.Dir = root
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("stage1 build-pkg failed: %v\n%s", err, string(b))
+	}
+	run := exec.Command(outBin)
+	got, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run output failed: %v\n%s", err, string(got))
+	}
+	if strings.TrimSpace(string(got)) != "3" {
+		t.Fatalf("unexpected output: %q", string(got))
 	}
 }
 

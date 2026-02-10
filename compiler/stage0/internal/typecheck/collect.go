@@ -115,6 +115,8 @@ func (c *checker) collectFuncSigs() {
 	// These are intentionally low-level; prefer std wrappers (e.g. std/fs, std/process).
 	c.funcSigs["__read_file"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyString}}
 	c.funcSigs["__write_file"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}, {K: TyString}}, Ret: Type{K: TyUnit}}
+	c.funcSigs["__path_exists"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyBool}}
+	c.funcSigs["__mkdir_p"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyUnit}}
 	c.funcSigs["__exec"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyI32}}
 	c.funcSigs["__args"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
 	c.funcSigs["__walk_vox_files"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}

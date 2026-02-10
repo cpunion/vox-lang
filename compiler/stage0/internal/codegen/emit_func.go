@@ -540,6 +540,29 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 			out.WriteString(");\n")
 			return nil
 		}
+		if i.Name == "__path_exists" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__path_exists expects 1 arg")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__path_exists must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_path_exists(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
+		if i.Name == "__mkdir_p" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__mkdir_p expects 1 arg")
+			}
+			out.WriteString("  vox_builtin_mkdir_p(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
 		if i.Name == "__exec" {
 			if len(i.Args) != 1 {
 				return fmt.Errorf("__exec expects 1 arg")

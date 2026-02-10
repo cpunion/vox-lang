@@ -189,6 +189,48 @@ fn resolve_dep_root(base: String, p: String) -> String {
   return path_join(base, p);
 }
 
+fn is_alnum(ch: i32) -> bool {
+  if ch >= 48 && ch <= 57 { return true; } // 0..9
+  if ch >= 65 && ch <= 90 { return true; } // A..Z
+  if ch >= 97 && ch <= 122 { return true; } // a..z
+  return false;
+}
+
+fn sanitize_path_part(s: String) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    if is_alnum(ch) || ch == 45 || ch == 95 || ch == 46 { // - _ .
+      out = out.concat(s.slice(i, i + 1));
+    } else {
+      out = out.concat("_");
+    }
+    i = i + 1;
+  }
+  if out == "" { return "_"; }
+  return out;
+}
+
+fn shell_quote(s: String) -> String {
+  let mut out: String = "'";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    if ch == 39 { // '\''
+      out = out.concat("'\"'\"'");
+    } else {
+      out = out.concat(s.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  return out.concat("'");
+}
+
+fn dep_cache_root(base: String) -> String {
+  return path_join(base, ".vox/deps");
+}
+
 fn load_dep_sources(dep_name: String, dep_root: String) -> Vec[ld.SourceFile] {
   let rels: Vec[String] = fs.walk_vox_files(dep_root);
   let mut out: Vec[ld.SourceFile] = Vec();
@@ -204,6 +246,119 @@ fn load_dep_sources(dep_name: String, dep_root: String) -> Vec[ld.SourceFile] {
     j = j + 1;
   }
   return out;
+}
+
+struct ResolveDepResult { ok: bool, err: String, dep_root: String, dep: mf.Dependency }
+
+fn dep_res_ok(dep_root: String, dep: mf.Dependency) -> ResolveDepResult {
+  return ResolveDepResult { ok: true, err: "", dep_root: dep_root, dep: dep };
+}
+
+fn dep_res_err(msg: String) -> ResolveDepResult {
+  return ResolveDepResult {
+    ok: false,
+    err: msg,
+    dep_root: "",
+    dep: mf.Dependency {
+      name: "",
+      path: "",
+      has_path: false,
+      git: "",
+      has_git: false,
+      rev: "",
+      has_rev: false,
+      registry: "",
+      has_registry: false,
+      version: "",
+      has_version: false,
+    },
+  };
+}
+
+fn resolve_dep_source(base: String, d: mf.Dependency) -> ResolveDepResult {
+  if d.has_path {
+    let dep_root: String = resolve_dep_root(base, d.path);
+    if !fs.exists(path_join(dep_root, "vox.toml")) {
+      return dep_res_err("dependency missing vox.toml: ".concat(d.name));
+    }
+    return dep_res_ok(dep_root, mf.Dependency {
+      name: d.name,
+      path: dep_root,
+      has_path: true,
+      git: d.git,
+      has_git: d.has_git,
+      rev: d.rev,
+      has_rev: d.has_rev,
+      registry: d.registry,
+      has_registry: d.has_registry,
+      version: d.version,
+      has_version: d.has_version,
+    });
+  }
+
+  if d.has_git {
+    let mut git_src: String = d.git;
+    if !is_abs_path(git_src) && !has_prefix(git_src, "http://") && !has_prefix(git_src, "https://") && !has_prefix(git_src, "ssh://") && !has_prefix(git_src, "git@") {
+      git_src = resolve_dep_root(base, git_src);
+    }
+    let cache_base: String = path_join(path_join(dep_cache_root(base), "git"), sanitize_path_part(d.name).concat("-").concat(sanitize_path_part(git_src)));
+    fs.mkdir_p(path_join(dep_cache_root(base), "git"));
+    if !fs.exists(path_join(cache_base, ".git")) {
+      let clone_cmd: String = "git clone ".concat(shell_quote(git_src)).concat(" ").concat(shell_quote(cache_base));
+      if proc.exec(clone_cmd) != 0 {
+        return dep_res_err("git clone failed: ".concat(d.name));
+      }
+    } else {
+      let fetch_cmd: String = "git -C ".concat(shell_quote(cache_base)).concat(" fetch --all --tags --prune");
+      proc.exec(fetch_cmd);
+    }
+    let mut target: String = "";
+    if d.has_rev { target = d.rev; } else if d.has_version { target = d.version; }
+    if target != "" {
+      let checkout_cmd: String = "git -C ".concat(shell_quote(cache_base)).concat(" checkout ").concat(shell_quote(target));
+      if proc.exec(checkout_cmd) != 0 {
+        return dep_res_err("git checkout failed: ".concat(d.name));
+      }
+    }
+    if !fs.exists(path_join(cache_base, "vox.toml")) {
+      return dep_res_err("dependency missing vox.toml: ".concat(d.name));
+    }
+    return dep_res_ok(cache_base, mf.Dependency {
+      name: d.name,
+      path: cache_base,
+      has_path: true,
+      git: git_src,
+      has_git: true,
+      rev: d.rev,
+      has_rev: d.has_rev,
+      registry: d.registry,
+      has_registry: d.has_registry,
+      version: d.version,
+      has_version: d.has_version,
+    });
+  }
+
+  if !d.has_version {
+    return dep_res_err("dependency requires path/git/version: ".concat(d.name));
+  }
+  let registry_root: String = if d.has_registry { resolve_dep_root(base, d.registry) } else { path_join(dep_cache_root(base), "registry") };
+  let dep_root: String = path_join(path_join(registry_root, d.name), d.version);
+  if !fs.exists(path_join(dep_root, "vox.toml")) {
+    return dep_res_err("registry dependency not found: ".concat(d.name).concat("@").concat(d.version));
+  }
+  return dep_res_ok(dep_root, mf.Dependency {
+    name: d.name,
+    path: dep_root,
+    has_path: true,
+    git: d.git,
+    has_git: d.has_git,
+    rev: d.rev,
+    has_rev: d.has_rev,
+    registry: d.registry,
+    has_registry: d.has_registry,
+    version: d.version,
+    has_version: d.has_version,
+  });
 }
 
 fn load_deps_from_manifest_at(base: String, files0: Vec[ld.SourceFile], seen0: Vec[String], resolved0: Vec[mf.Dependency]) -> DepsResult {
@@ -224,25 +379,17 @@ fn load_deps_from_manifest_at(base: String, files0: Vec[ld.SourceFile], seen0: V
       return deps_err("duplicate dependency: ".concat(d.name));
     }
     local_seen.push(d.name);
-    if !d.has_path {
-      return deps_err("non-path dependency unsupported in stage1: ".concat(d.name));
-    }
     if contains_str(seen, d.name) { i = i + 1; continue; }
     seen.push(d.name);
 
-    let dep_root: String = resolve_dep_root(base, d.path);
-    resolved.push(mf.Dependency {
-      name: d.name,
-      path: dep_root,
-      has_path: true,
-      version: d.version,
-      has_version: d.has_version,
-    });
-    let dep_files: Vec[ld.SourceFile] = load_dep_sources(d.name, dep_root);
+    let rr0: ResolveDepResult = resolve_dep_source(base, d);
+    if !rr0.ok { return deps_err(rr0.err); }
+    resolved.push(rr0.dep);
+    let dep_files: Vec[ld.SourceFile] = load_dep_sources(d.name, rr0.dep_root);
     let mut di: i32 = 0;
     while di < dep_files.len() { files.push(dep_files.get(di)); di = di + 1; }
 
-    let rr: DepsResult = load_deps_from_manifest_at(dep_root, files, seen, resolved);
+    let rr: DepsResult = load_deps_from_manifest_at(rr0.dep_root, files, seen, resolved);
     if !rr.ok { return rr; }
     files = rr.files;
     seen = rr.seen;
@@ -267,6 +414,15 @@ fn write_lockfile(deps: Vec[mf.Dependency]) -> () {
     out = out.concat("name = ").concat(toml_quote(d.name)).concat("\n");
     if d.has_path {
       out = out.concat("path = ").concat(toml_quote(d.path)).concat("\n");
+    }
+    if d.has_git {
+      out = out.concat("git = ").concat(toml_quote(d.git)).concat("\n");
+    }
+    if d.has_rev {
+      out = out.concat("rev = ").concat(toml_quote(d.rev)).concat("\n");
+    }
+    if d.has_registry {
+      out = out.concat("registry = ").concat(toml_quote(d.registry)).concat("\n");
     }
     if d.has_version {
       out = out.concat("version = ").concat(toml_quote(d.version)).concat("\n");

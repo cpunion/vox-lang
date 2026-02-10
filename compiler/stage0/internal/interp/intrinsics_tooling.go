@@ -47,6 +47,26 @@ func (rt *Runtime) callToolIntrinsic(name string, args []Value) (Value, bool, er
 			return unit(), true, err
 		}
 		return unit(), true, nil
+	case "__path_exists":
+		if len(args) != 1 || args[0].K != VString {
+			return unit(), true, fmt.Errorf("__path_exists expects (String)")
+		}
+		_, err := os.Stat(args[0].S)
+		if err == nil {
+			return Value{K: VBool, B: true}, true, nil
+		}
+		if os.IsNotExist(err) {
+			return Value{K: VBool, B: false}, true, nil
+		}
+		return unit(), true, err
+	case "__mkdir_p":
+		if len(args) != 1 || args[0].K != VString {
+			return unit(), true, fmt.Errorf("__mkdir_p expects (String)")
+		}
+		if err := os.MkdirAll(args[0].S, 0o755); err != nil {
+			return unit(), true, err
+		}
+		return unit(), true, nil
 	case "__exec":
 		if len(args) != 1 || args[0].K != VString {
 			return unit(), true, fmt.Errorf("__exec expects (String)")
