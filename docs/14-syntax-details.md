@@ -507,7 +507,9 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 - `@field_count(Type) -> usize`（当前支持 `struct/enum`）
 - `@field_name(Type, I) -> String`（当前支持 `struct/enum`，`I` 为 const 索引）
 - `@field_type(Type, I) -> String`（当前支持 `struct/enum`，`I` 为 const 索引）
+- `@field_type_id(Type, I) -> TypeId`（当前支持 `struct` 字段与 `enum` 的 0/1 payload variant）
 - `@same_type(A, B) -> bool`
+- `@assignable_to(Src, Dst) -> bool`
 - `@is_integer(Type) -> bool`
 - `@is_signed_int(Type) -> bool`
 - `@is_unsigned_int(Type) -> bool`
@@ -521,7 +523,10 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 
 说明：
 
-- 语法是 `@name(Type)`，不是普通函数调用语法。
+- 语法按 intrinsic 不同：
+  - `@name(Type)`：`@size_of/@align_of/@type/@type_name/@field_count/@is_*`
+  - `@name(Type, I)`：`@field_name/@field_type/@field_type_id`
+  - `@name(A, B)`：`@same_type/@assignable_to`
 - 这些 intrinsic 会在 IR 生成时折叠为常量；在 `const` 上下文同样可用。
 - `@size_of/@align_of` 采用 Stage1 当前 C 后端的目标布局模型。
 

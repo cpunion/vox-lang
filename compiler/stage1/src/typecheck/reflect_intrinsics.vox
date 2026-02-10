@@ -15,7 +15,9 @@ pub fn is_reflect_intrinsic_name(name: String) -> bool {
     name == "@field_count" ||
     name == "@field_name" ||
     name == "@field_type" ||
+    name == "@field_type_id" ||
     name == "@same_type" ||
+    name == "@assignable_to" ||
     name == "@is_integer" ||
     name == "@is_signed_int" ||
     name == "@is_unsigned_int" ||
@@ -283,6 +285,40 @@ pub fn intrinsic_field_type_of(ctx: Ctx, ty: i32, idx: i64) -> ReflectTextResult
   return ReflectTextResult { ok: false, err: "field_type expects struct or enum", text: "" };
 }
 
+pub fn intrinsic_field_type_id_of(ctx: Ctx, ty: i32, idx: i64) -> ReflectIntResult {
+  if idx < 0 { return ReflectIntResult { ok: false, err: "field_type_id index out of range", iv: 0 }; }
+  let i: i32 = idx as i32;
+  let base: i32 = strip_range(ctx, ty);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  if t.kind == ir.TyKind.Param {
+    return ReflectIntResult { ok: false, err: "intrinsic requires concrete type", iv: 0 };
+  }
+  if t.kind == ir.TyKind.Struct {
+    let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+    if !fs.found { return ReflectIntResult { ok: false, err: "unknown struct layout", iv: 0 }; }
+    if i < 0 || i >= fs.sig.fields.len() {
+      return ReflectIntResult { ok: false, err: "field_type_id index out of range", iv: 0 };
+    }
+    return intrinsic_type_id_of(ctx, fs.sig.fields.get(i).ty);
+  }
+  if t.kind == ir.TyKind.Enum {
+    let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+    if !fe.found { return ReflectIntResult { ok: false, err: "unknown enum layout", iv: 0 }; }
+    if i < 0 || i >= fe.sig.vars.len() {
+      return ReflectIntResult { ok: false, err: "field_type_id index out of range", iv: 0 };
+    }
+    let v: EnumVariantSig = fe.sig.vars.get(i);
+    if v.fields.len() == 0 {
+      return intrinsic_type_id_of(ctx, ctx.ty_unit);
+    }
+    if v.fields.len() == 1 {
+      return intrinsic_type_id_of(ctx, v.fields.get(0));
+    }
+    return ReflectIntResult { ok: false, err: "field_type_id for multi-field enum variant not supported", iv: 0 };
+  }
+  return ReflectIntResult { ok: false, err: "field_type_id expects struct or enum", iv: 0 };
+}
+
 fn reflect_bool_ok(v: bool) -> ReflectBoolResult {
   return ReflectBoolResult { ok: true, err: "", bv: v };
 }
@@ -300,6 +336,17 @@ pub fn intrinsic_same_type_of(ctx: Ctx, a: i32, b: i32) -> ReflectBoolResult {
     return reflect_bool_err("intrinsic requires concrete type");
   }
   return reflect_bool_ok(aa == bb);
+}
+
+pub fn intrinsic_assignable_to_of(ctx: Ctx, src: i32, dst: i32) -> ReflectBoolResult {
+  let ss: i32 = strip_range(ctx, src);
+  let dd: i32 = strip_range(ctx, dst);
+  let ts: ir.Ty = ir.ty_pool_get(ctx.pool, ss);
+  let td: ir.Ty = ir.ty_pool_get(ctx.pool, dd);
+  if ts.kind == ir.TyKind.Param || td.kind == ir.TyKind.Param {
+    return reflect_bool_err("intrinsic requires concrete type");
+  }
+  return reflect_bool_ok(assignable_to(ctx, dst, src));
 }
 
 pub fn intrinsic_is_integer_of(ctx: Ctx, ty: i32) -> ReflectBoolResult {
