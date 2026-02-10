@@ -382,6 +382,26 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 	case *ast.CallExpr:
+		if cal, ok := e.Callee.(*ast.IdentExpr); ok && cal.Name == "@compile_error" {
+			if len(e.TypeArgs) != 0 || len(e.Args) != 1 {
+				c.errorAt(e.S, "@compile_error expects exactly one String argument")
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+			argTy := c.checkExpr(e.Args[0], Type{K: TyString})
+			if !assignableTo(Type{K: TyString}, argTy) {
+				c.errorAt(e.S, "@compile_error expects String argument")
+				return c.setExprType(ex, Type{K: TyBad})
+			}
+			msg := "compile_error triggered"
+			if sl, ok := e.Args[0].(*ast.StringLit); ok {
+				if u, err := strconv.Unquote(sl.Text); err == nil {
+					msg = u
+				}
+			}
+			c.errorAt(e.S, "compile_error: "+msg)
+			return c.setExprType(ex, Type{K: TyBad})
+		}
+
 		// Intrinsic method calls on values (stage0 subset).
 		//
 		// We only treat a callee as a value method call when the receiver expression

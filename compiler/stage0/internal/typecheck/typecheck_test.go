@@ -309,6 +309,51 @@ fn main() -> i32 { return 0; }`)
 	}
 }
 
+func TestCompileErrorIntrinsicRejectedWithMessage(t *testing.T) {
+	f := source.NewFile("src/main.vox", `fn main() -> i32 { @compile_error("boom"); return 0; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "compile_error: boom") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected compile_error message, got: %+v", tdiags.Items)
+	}
+}
+
+func TestConstCompileErrorIntrinsicRejectedWithMessage(t *testing.T) {
+	f := source.NewFile("src/main.vox", `const X: i32 = @compile_error("const-boom")
+fn main() -> i32 { return 0; }`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "compile_error: const-boom") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected const compile_error message, got: %+v", tdiags.Items)
+	}
+}
+
 func TestIfExprTypechecks(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

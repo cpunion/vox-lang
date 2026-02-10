@@ -724,6 +724,26 @@ func (c *checker) evalConstExprWithExpected(ex ast.Expr, file *source.File, expe
 
 		c.errorAt(e.S, "const expression: unsupported binary op: "+e.Op)
 		return ConstValue{K: ConstBad}, Type{K: TyBad}
+	case *ast.CallExpr:
+		cal, ok := e.Callee.(*ast.IdentExpr)
+		if !ok || cal.Name != "@compile_error" {
+			c.errorAt(ex.Span(), "const expression: unsupported form")
+			return ConstValue{K: ConstBad}, Type{K: TyBad}
+		}
+		if len(e.TypeArgs) != 0 || len(e.Args) != 1 {
+			c.errorAt(e.S, "@compile_error expects exactly one String argument")
+			return ConstValue{K: ConstBad}, Type{K: TyBad}
+		}
+		v, ty := c.evalConstExprWithExpected(e.Args[0], file, Type{K: TyString})
+		if v.K == ConstBad || ty.K == TyBad {
+			return ConstValue{K: ConstBad}, Type{K: TyBad}
+		}
+		if ty.K != TyString || v.K != ConstStr {
+			c.errorAt(e.S, "@compile_error expects String argument")
+			return ConstValue{K: ConstBad}, Type{K: TyBad}
+		}
+		c.errorAt(e.S, "compile_error: "+v.S)
+		return ConstValue{K: ConstBad}, Type{K: TyBad}
 	case *ast.IfExpr:
 		cv, cty := c.evalConstExprWithExpected(e.Cond, file, Type{K: TyBool})
 		if cv.K == ConstBad || cty.K != TyBool {

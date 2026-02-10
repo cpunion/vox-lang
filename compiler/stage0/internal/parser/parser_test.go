@@ -59,6 +59,39 @@ fn main() -> i32 { return dep.one(); }`)
 	}
 }
 
+func TestParseCompileErrorIntrinsicCall(t *testing.T) {
+	f := source.NewFile("test.vox", `fn main() -> i32 { @compile_error("boom"); return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Funcs) != 1 {
+		t.Fatalf("expected 1 func, got %d", len(prog.Funcs))
+	}
+	body := prog.Funcs[0].Body
+	if len(body.Stmts) < 1 {
+		t.Fatalf("expected at least 1 stmt")
+	}
+	es, ok := body.Stmts[0].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("expected first stmt expr, got %T", body.Stmts[0])
+	}
+	call, ok := es.Expr.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected call expr, got %T", es.Expr)
+	}
+	callee, ok := call.Callee.(*ast.IdentExpr)
+	if !ok || callee.Name != "@compile_error" {
+		t.Fatalf("expected @compile_error callee, got %T / %#v", call.Callee, call.Callee)
+	}
+	if len(call.Args) != 1 {
+		t.Fatalf("expected 1 arg, got %d", len(call.Args))
+	}
+	if _, ok := call.Args[0].(*ast.StringLit); !ok {
+		t.Fatalf("expected string arg, got %T", call.Args[0])
+	}
+}
+
 func TestParseNamedImportDecl(t *testing.T) {
 	f := source.NewFile("test.vox", `import { one as uno, two } from "dep"
 fn main() -> i32 { return uno(); }`)

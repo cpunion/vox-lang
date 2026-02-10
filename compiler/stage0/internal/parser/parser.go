@@ -1013,6 +1013,32 @@ func (p *Parser) parsePrefixWith(allowStructLit bool) ast.Expr {
 		// Block expression: `{ stmt*; expr }` in expression position.
 		p.advance()
 		return p.parsePostfix(p.parseBlockExpr(tok), allowStructLit)
+	case lexer.TokenAt:
+		at := p.advance()
+		if !p.at(lexer.TokenIdent) {
+			p.errorAt(p.peek().Span, "expected intrinsic name after `@`")
+			return &ast.IntLit{Text: "0", S: at.Span}
+		}
+		nameTok := p.advance()
+		if nameTok.Lexeme != "compile_error" {
+			p.errorAt(nameTok.Span, "unknown intrinsic: @"+nameTok.Lexeme)
+			return &ast.IntLit{Text: "0", S: joinSpan(at.Span, nameTok.Span)}
+		}
+		p.expect(lexer.TokenLParen, "expected `(` after `@compile_error`")
+		var args []ast.Expr
+		if !p.at(lexer.TokenRParen) {
+			for {
+				args = append(args, p.parseExpr(0))
+				if p.match(lexer.TokenComma) {
+					continue
+				}
+				break
+			}
+		}
+		rp := p.expect(lexer.TokenRParen, "expected `)`")
+		callee := ast.Expr(&ast.IdentExpr{Name: "@compile_error", S: joinSpan(at.Span, nameTok.Span)})
+		call := ast.Expr(&ast.CallExpr{Callee: callee, TypeArgs: nil, Args: args, S: joinSpan(at.Span, rp.Span)})
+		return p.parsePostfix(call, allowStructLit)
 	default:
 		p.errorHere("expected expression")
 		p.advance()
