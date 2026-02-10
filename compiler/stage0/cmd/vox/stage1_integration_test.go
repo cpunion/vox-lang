@@ -1296,6 +1296,15 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(brun), "[test] test_std_testing_smoke") {
 		t.Fatalf("expected run pattern to select std testing smoke, got:\n%s", string(brun))
 	}
+	cmdRunSplit := exec.Command(stage2BinB, "test-pkg", "--run", "*std_testing*", "--list", outRel)
+	cmdRunSplit.Dir = stage2DirAbs
+	brunSplit, err := cmdRunSplit.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg --run <value> failed: %v\n%s", err, string(brunSplit))
+	}
+	if !strings.Contains(string(brunSplit), "[test] test_std_testing_smoke") {
+		t.Fatalf("expected split run pattern to select std testing smoke, got:\n%s", string(brunSplit))
+	}
 	cmdModule := exec.Command(stage2BinB, "test-pkg", "--module=typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list", outRel)
 	cmdModule.Dir = stage2DirAbs
 	bmod, err := cmdModule.CombinedOutput()
@@ -1310,6 +1319,24 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	}
 	if strings.Contains(string(bmod), "[test] parse::test_parse_single_fn_return_int") {
 		t.Fatalf("expected module filter to exclude parse tests, got:\n%s", string(bmod))
+	}
+	cmdModuleSplit := exec.Command(stage2BinB, "test-pkg", "--module", "typecheck", "--run", "*typecheck_allows_generic_fn_sig", "--list", outRel)
+	cmdModuleSplit.Dir = stage2DirAbs
+	bmodSplit, err := cmdModuleSplit.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg --module <value> failed: %v\n%s", err, string(bmodSplit))
+	}
+	if !strings.Contains(string(bmodSplit), "[select] --module: \"typecheck\"") {
+		t.Fatalf("expected split module filter in selection output, got:\n%s", string(bmodSplit))
+	}
+	cmdFilterSplit := exec.Command(stage2BinB, "test-pkg", "--filter", "std_sync_runtime_generic_api_smoke", "--list", outRel)
+	cmdFilterSplit.Dir = stage2DirAbs
+	bfilterSplit, err := cmdFilterSplit.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg --filter <value> failed: %v\n%s", err, string(bfilterSplit))
+	}
+	if !strings.Contains(string(bfilterSplit), "[test] test_std_sync_runtime_generic_api_smoke") {
+		t.Fatalf("expected split filter to select target test, got:\n%s", string(bfilterSplit))
 	}
 
 	cmdJobs := exec.Command(stage2BinB, "test-pkg", "--jobs=2", "--run=*std_sync_runtime_generic_api_smoke", "--list", outRel)
