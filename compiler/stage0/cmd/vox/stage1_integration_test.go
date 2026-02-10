@@ -1257,6 +1257,18 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 
 	stage2DirAbs, stage2BinB := stage2ToolBinBuiltByStage1(t)
 	outRel := filepath.Join("target", "debug", "vox_stage2.test")
+	stage2BinName := filepath.Base(stage2BinB)
+
+	// Usage should reflect current binary name instead of hardcoded stage1 name.
+	cmdUsage := exec.Command(stage2BinB)
+	cmdUsage.Dir = stage2DirAbs
+	bu, err := cmdUsage.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected stage2 usage invocation without command to fail")
+	}
+	if !strings.Contains(string(bu), stage2BinName+" usage:") {
+		t.Fatalf("expected dynamic usage header with stage2 binary name, got:\n%s", string(bu))
+	}
 
 	// Ensure test selection flags are available in stage2 test-pkg.
 	cmdList := exec.Command(stage2BinB, "test-pkg", "--filter=std_sync_runtime_generic_api_smoke", "--list", outRel)
