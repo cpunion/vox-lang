@@ -233,17 +233,31 @@ func splitModPath(path string) []string {
 	return out
 }
 
-func calleeParts(ex ast.Expr) ([]string, bool) {
+func calleePartsWithTypeArgs(ex ast.Expr) ([]string, []ast.Type, bool) {
 	switch e := ex.(type) {
 	case *ast.IdentExpr:
-		return []string{e.Name}, true
+		return []string{e.Name}, nil, true
 	case *ast.MemberExpr:
-		p, ok := calleeParts(e.Recv)
+		p, targs, ok := calleePartsWithTypeArgs(e.Recv)
 		if !ok {
-			return nil, false
+			return nil, nil, false
 		}
-		return append(p, e.Name), true
+		return append(p, e.Name), targs, true
+	case *ast.TypeAppExpr:
+		p, prevArgs, ok := calleePartsWithTypeArgs(e.Expr)
+		if !ok {
+			return nil, nil, false
+		}
+		if len(prevArgs) != 0 {
+			return nil, nil, false
+		}
+		return p, e.TypeArgs, true
 	default:
-		return nil, false
+		return nil, nil, false
 	}
+}
+
+func calleeParts(ex ast.Expr) ([]string, bool) {
+	p, _, ok := calleePartsWithTypeArgs(ex)
+	return p, ok
 }

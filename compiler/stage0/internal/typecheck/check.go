@@ -440,7 +440,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, expected)
 		}
 
-		parts, ok := calleeParts(e.Callee)
+		parts, pathTypeArgs, ok := calleePartsWithTypeArgs(e.Callee)
 		if !ok || len(parts) == 0 {
 			c.errorAt(e.S, "callee must be an identifier or member path (stage0)")
 			return c.setExprType(ex, Type{K: TyBad})
@@ -457,7 +457,7 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				c.errorAt(e.S, "internal error: missing file for call resolution")
 				return c.setExprType(ex, Type{K: TyBad})
 			}
-			ety, es, found := c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1])
+			ety, es, found := c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1], pathTypeArgs, e.S)
 			if found {
 				if !c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Vis) {
 					c.errorAt(e.S, "type is private: "+ety.Name)
@@ -485,6 +485,10 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				c.enumCtors[e] = EnumCtorTarget{Enum: ety, Variant: varName, Tag: vidx, Fields: fields}
 				return c.setExprType(ex, ety)
 			}
+		}
+		if len(pathTypeArgs) != 0 {
+			c.errorAt(e.S, "type arguments in path are only supported for enum constructors")
+			return c.setExprType(ex, Type{K: TyBad})
 		}
 
 		target := ""
@@ -621,10 +625,10 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 	case *ast.MemberExpr:
 		// Module const: `alias.NAME` / `alias.mod.NAME` (only when base isn't a local variable).
 		if c.curFn != nil && c.curFn.Span.File != nil {
-			parts, ok := calleeParts(ex)
+			parts, pathTypeArgs, ok := calleePartsWithTypeArgs(ex)
 			if ok && len(parts) >= 2 {
 				alias := parts[0]
-				if _, ok := c.lookupVar(alias); !ok {
+				if _, ok := c.lookupVar(alias); !ok && len(pathTypeArgs) == 0 {
 					_, sig, v, ok2 := c.lookupConstByParts(c.curFn.Span.File, parts, e.S)
 					if ok2 && v.K != ConstBad {
 						c.constRefs[ex] = v
@@ -636,11 +640,11 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 
 		// Unit enum variant: `Enum.Variant` (including qualified enum types).
 		if c.curFn != nil && c.curFn.Span.File != nil {
-			parts, ok := calleeParts(ex)
+			parts, pathTypeArgs, ok := calleePartsWithTypeArgs(ex)
 			if ok && len(parts) >= 2 {
 				alias := parts[0]
 				if _, ok := c.lookupVar(alias); !ok {
-					ety, es, found := c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1])
+					ety, es, found := c.findEnumByParts(c.curFn.Span.File, parts[:len(parts)-1], pathTypeArgs, e.S)
 					if found && !c.canAccess(c.curFn.Span.File, es.OwnerPkg, es.OwnerMod, es.Vis) {
 						c.errorAt(e.S, "type is private: "+ety.Name)
 						return c.setExprType(ex, Type{K: TyBad})
@@ -677,12 +681,15 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
 		return c.setExprType(ex, ss.Fields[idx].Ty)
+	case *ast.TypeAppExpr:
+		c.errorAt(e.S, "type arguments in value position must be followed by member access, call, or struct literal")
+		return c.setExprType(ex, Type{K: TyBad})
 	case *ast.StructLitExpr:
 		if e.S.File == nil {
 			c.errorAt(e.S, "internal error: missing file for struct literal")
 			return c.setExprType(ex, Type{K: TyBad})
 		}
-		sty, ss, ok := c.resolveStructByParts(e.S.File, e.TypeParts, e.S)
+		sty, ss, ok := c.resolveStructByParts(e.S.File, e.TypeParts, e.TypeArgs, e.S)
 		if !ok {
 			return c.setExprType(ex, Type{K: TyBad})
 		}
@@ -885,7 +892,16 @@ func (c *checker) checkExpr(ex ast.Expr, expected Type) Type {
 				psig := esig
 				ok := true
 				if len(p.TypeParts) != 0 {
-					pty, psig, ok = c.resolveEnumByParts(c.curFn.Span.File, p.TypeParts, p.S)
+					if baseQ, bok := c.enumBaseQNameByParts(c.curFn.Span.File, p.TypeParts); bok {
+						if _, isGenericBase := c.genericEnumSigs[baseQ]; isGenericBase && strings.HasPrefix(scrutTy.Name, baseQ+"$") {
+							pty = scrutTy
+							psig = esig
+						} else {
+							pty, psig, ok = c.resolveEnumByParts(c.curFn.Span.File, p.TypeParts, nil, p.S)
+						}
+					} else {
+						pty, psig, ok = c.resolveEnumByParts(c.curFn.Span.File, p.TypeParts, nil, p.S)
+					}
 					if ok && !sameType(scrutTy, pty) {
 						c.errorAt(p.S, "pattern enum type does not match scrutinee")
 					}
@@ -1192,12 +1208,25 @@ func (c *checker) checkMatchPat(p ast.Pattern, expected Type) {
 			return
 		}
 		if len(x.TypeParts) != 0 {
-			pty2, psig2, ok2 := c.resolveEnumByParts(c.curFn.Span.File, x.TypeParts, x.S)
-			if !ok2 {
-				return
+			if baseQ, bok := c.enumBaseQNameByParts(c.curFn.Span.File, x.TypeParts); bok {
+				if _, isGenericBase := c.genericEnumSigs[baseQ]; isGenericBase && strings.HasPrefix(want.Name, baseQ+"$") {
+					// Keep inferred enum type from the expected field.
+				} else {
+					pty2, psig2, ok2 := c.resolveEnumByParts(c.curFn.Span.File, x.TypeParts, nil, x.S)
+					if !ok2 {
+						return
+					}
+					pty = pty2
+					psig = psig2
+				}
+			} else {
+				pty2, psig2, ok2 := c.resolveEnumByParts(c.curFn.Span.File, x.TypeParts, nil, x.S)
+				if !ok2 {
+					return
+				}
+				pty = pty2
+				psig = psig2
 			}
-			pty = pty2
-			psig = psig2
 			if !sameType(want, pty) {
 				c.errorAt(x.S, "pattern enum type does not match expected field type")
 			}
@@ -1237,6 +1266,8 @@ func rootIdentName(ex ast.Expr) (string, bool) {
 		return e.Name, true
 	case *ast.MemberExpr:
 		return rootIdentName(e.Recv)
+	case *ast.TypeAppExpr:
+		return rootIdentName(e.Expr)
 	default:
 		return "", false
 	}

@@ -35,6 +35,12 @@ func cloneExpr(e ast.Expr) ast.Expr {
 		return &cp
 	case *ast.MemberExpr:
 		return &ast.MemberExpr{Recv: cloneExpr(x.Recv), Name: x.Name, S: x.S}
+	case *ast.TypeAppExpr:
+		cp := &ast.TypeAppExpr{Expr: cloneExpr(x.Expr), S: x.S}
+		for _, ta := range x.TypeArgs {
+			cp.TypeArgs = append(cp.TypeArgs, cloneType(ta))
+		}
+		return cp
 	case *ast.IntLit:
 		cp := *x
 		return &cp
@@ -61,6 +67,9 @@ func cloneExpr(e ast.Expr) ast.Expr {
 		return cp
 	case *ast.StructLitExpr:
 		cp := &ast.StructLitExpr{TypeParts: append([]string{}, x.TypeParts...), S: x.S}
+		for _, ta := range x.TypeArgs {
+			cp.TypeArgs = append(cp.TypeArgs, cloneType(ta))
+		}
 		for _, it := range x.Inits {
 			cp.Inits = append(cp.Inits, ast.FieldInit{Name: it.Name, Expr: cloneExpr(it.Expr), Span: it.Span})
 		}

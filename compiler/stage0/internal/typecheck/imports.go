@@ -256,7 +256,15 @@ func (c *checker) resolveNamedImports() {
 				c.errorAt(pi.Span, "import name conflicts with local definition: "+local)
 				continue
 			}
+			if _, ok := c.genericStructSigs[qLocal]; ok {
+				c.errorAt(pi.Span, "import name conflicts with local definition: "+local)
+				continue
+			}
 			if _, ok := c.enumSigs[qLocal]; ok {
+				c.errorAt(pi.Span, "import name conflicts with local definition: "+local)
+				continue
+			}
+			if _, ok := c.genericEnumSigs[qLocal]; ok {
 				c.errorAt(pi.Span, "import name conflicts with local definition: "+local)
 				continue
 			}
@@ -300,8 +308,24 @@ func (c *checker) resolveNamedImports() {
 				}
 				tm[local] = Type{K: TyStruct, Name: target}
 			}
+			if ss, ok := c.genericStructSigs[target]; ok {
+				found++
+				if !c.canAccess(pi.File, ss.OwnerPkg, ss.OwnerMod, ss.Vis) {
+					c.errorAt(pi.Span, "type is private: "+target)
+					continue
+				}
+				tm[local] = Type{K: TyStruct, Name: target}
+			}
 			// enum
 			if es, ok := c.enumSigs[target]; ok {
+				found++
+				if !c.canAccess(pi.File, es.OwnerPkg, es.OwnerMod, es.Vis) {
+					c.errorAt(pi.Span, "type is private: "+target)
+					continue
+				}
+				tm[local] = Type{K: TyEnum, Name: target}
+			}
+			if es, ok := c.genericEnumSigs[target]; ok {
 				found++
 				if !c.canAccess(pi.File, es.OwnerPkg, es.OwnerMod, es.Vis) {
 					c.errorAt(pi.Span, "type is private: "+target)

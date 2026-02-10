@@ -1561,3 +1561,73 @@ func TestVecBasicTypecheck(t *testing.T) {
 		t.Fatalf("type diags: %+v", tdiags.Items)
 	}
 }
+
+func TestGenericNominalStructAndEnumTypedPathSmoke(t *testing.T) {
+	f := source.NewFile("src/main.vox", `struct Pair[T] { a: T, b: T }
+enum Option[T] { Some(T), None }
+fn main() -> i32 {
+  let p = Pair[i32] { a: 1, b: 2 };
+  let x: Option[i32] = Option[i32].Some(p.a + p.b);
+  return match x { Option.Some(v) => v, Option.None => 0 };
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags != nil && len(tdiags.Items) > 0 {
+		t.Fatalf("type diags: %+v", tdiags.Items)
+	}
+}
+
+func TestGenericNominalMissingTypeArgsRejected(t *testing.T) {
+	f := source.NewFile("src/main.vox", `struct Pair[T] { a: T, b: T }
+fn main() -> i32 {
+  let _p: Pair = Pair[i32] { a: 1, b: 2 };
+  return 0;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "generic type requires type arguments") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected missing generic type args diagnostic, got: %+v", tdiags.Items)
+	}
+}
+
+func TestGenericNominalWrongTypeArgCountRejected(t *testing.T) {
+	f := source.NewFile("src/main.vox", `struct Pair[T] { a: T, b: T }
+fn main() -> i32 {
+  let _p = Pair[i32, i64] { a: 1, b: 2 };
+  return 0;
+}`)
+	prog, pdiags := parser.Parse(f)
+	if pdiags != nil && len(pdiags.Items) > 0 {
+		t.Fatalf("parse diags: %+v", pdiags.Items)
+	}
+	_, tdiags := Check(prog, Options{})
+	if tdiags == nil || len(tdiags.Items) == 0 {
+		t.Fatalf("expected diagnostics")
+	}
+	found := false
+	for _, it := range tdiags.Items {
+		if strings.Contains(it.Msg, "wrong number of type arguments") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected wrong number of type arguments diagnostic, got: %+v", tdiags.Items)
+	}
+}

@@ -273,6 +273,11 @@ func substAstTypesInExpr(ex ast.Expr, subs map[string]Type) {
 		substAstTypesInExpr(e.Right, subs)
 	case *ast.MemberExpr:
 		substAstTypesInExpr(e.Recv, subs)
+	case *ast.TypeAppExpr:
+		substAstTypesInExpr(e.Expr, subs)
+		for i := range e.TypeArgs {
+			e.TypeArgs[i] = substAstType(e.TypeArgs[i], subs)
+		}
 	case *ast.CallExpr:
 		for i := range e.TypeArgs {
 			e.TypeArgs[i] = substAstType(e.TypeArgs[i], subs)
@@ -282,6 +287,9 @@ func substAstTypesInExpr(ex ast.Expr, subs map[string]Type) {
 			substAstTypesInExpr(a, subs)
 		}
 	case *ast.StructLitExpr:
+		for i := range e.TypeArgs {
+			e.TypeArgs[i] = substAstType(e.TypeArgs[i], subs)
+		}
 		for i := range e.Inits {
 			substAstTypesInExpr(e.Inits[i].Expr, subs)
 		}

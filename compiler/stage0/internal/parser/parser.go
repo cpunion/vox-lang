@@ -338,6 +338,7 @@ func (p *Parser) parseStructDecl() *ast.StructDecl {
 	if nameTok.Kind != lexer.TokenIdent {
 		return nil
 	}
+	typeParams := p.parseOptionalTypeParams()
 	lbrace := p.expect(lexer.TokenLBrace, "expected `{` after struct name")
 	if lbrace.Kind != lexer.TokenLBrace {
 		return nil
@@ -364,7 +365,7 @@ func (p *Parser) parseStructDecl() *ast.StructDecl {
 	if p.prev().Kind == lexer.TokenSemicolon {
 		endTok = p.prev()
 	}
-	return &ast.StructDecl{Name: nameTok.Lexeme, Fields: fields, Span: joinSpan(startTok.Span, endTok.Span)}
+	return &ast.StructDecl{Name: nameTok.Lexeme, TypeParams: typeParams, Fields: fields, Span: joinSpan(startTok.Span, endTok.Span)}
 }
 
 func (p *Parser) parseEnumDecl() *ast.EnumDecl {
@@ -373,6 +374,7 @@ func (p *Parser) parseEnumDecl() *ast.EnumDecl {
 	if nameTok.Kind != lexer.TokenIdent {
 		return nil
 	}
+	typeParams := p.parseOptionalTypeParams()
 	lbrace := p.expect(lexer.TokenLBrace, "expected `{` after enum name")
 	if lbrace.Kind != lexer.TokenLBrace {
 		return nil
@@ -410,7 +412,35 @@ func (p *Parser) parseEnumDecl() *ast.EnumDecl {
 	if p.prev().Kind == lexer.TokenSemicolon {
 		endTok = p.prev()
 	}
-	return &ast.EnumDecl{Name: nameTok.Lexeme, Variants: variants, Span: joinSpan(startTok.Span, endTok.Span)}
+	return &ast.EnumDecl{Name: nameTok.Lexeme, TypeParams: typeParams, Variants: variants, Span: joinSpan(startTok.Span, endTok.Span)}
+}
+
+func (p *Parser) parseOptionalTypeParams() []string {
+	var typeParams []string
+	if !p.match(lexer.TokenLBracket) {
+		return typeParams
+	}
+	if !p.at(lexer.TokenRBracket) {
+		for {
+			id := p.expect(lexer.TokenIdent, "expected type parameter name")
+			if id.Kind == lexer.TokenIdent {
+				typeParams = append(typeParams, id.Lexeme)
+			}
+			// Compatibility parse for bounds in declarations: `T: Eq + Show`.
+			if p.match(lexer.TokenColon) {
+				_ = p.parseType()
+				for p.match(lexer.TokenPlus) {
+					_ = p.parseType()
+				}
+			}
+			if p.match(lexer.TokenComma) {
+				continue
+			}
+			break
+		}
+	}
+	p.expect(lexer.TokenRBracket, "expected `]` to end type parameters")
+	return typeParams
 }
 
 func (p *Parser) parseTraitDecl() *ast.TraitDecl {
@@ -1289,13 +1319,18 @@ func (p *Parser) parsePostfix(ex ast.Expr, allowStructLit bool) ast.Expr {
 			if ok {
 				// Struct literals share the `{ ... }` token with blocks, so we only parse them when the
 				// caller has indicated it is safe (i.e. not in `if cond { ... }` / `match x { ... }`).
-				ex = p.parseStructLit(parts, ex.Span())
+				ex = p.parseStructLit(parts, pendingTypeArgs, ex.Span())
+				pendingTypeArgs = nil
 				continue
 			}
 		}
 		if p.match(lexer.TokenDot) {
 			if len(pendingTypeArgs) != 0 {
-				p.errorHere("type arguments must be followed by a call")
+				ex = &ast.TypeAppExpr{
+					Expr:     ex,
+					TypeArgs: pendingTypeArgs,
+					S:        ex.Span(),
+				}
 				pendingTypeArgs = nil
 			}
 			id := p.expect(lexer.TokenIdent, "expected identifier after `.`")
@@ -1349,7 +1384,7 @@ func (p *Parser) parsePostfix(ex ast.Expr, allowStructLit bool) ast.Expr {
 	return ex
 }
 
-func (p *Parser) parseStructLit(typeParts []string, typeSpan source.Span) ast.Expr {
+func (p *Parser) parseStructLit(typeParts []string, typeArgs []ast.Type, typeSpan source.Span) ast.Expr {
 	lb := p.expect(lexer.TokenLBrace, "expected `{`")
 	inits := []ast.FieldInit{}
 	if !p.at(lexer.TokenRBrace) {
@@ -1370,7 +1405,7 @@ func (p *Parser) parseStructLit(typeParts []string, typeSpan source.Span) ast.Ex
 	}
 	rb := p.expect(lexer.TokenRBrace, "expected `}`")
 	_ = lb
-	return &ast.StructLitExpr{TypeParts: typeParts, Inits: inits, S: joinSpan(typeSpan, rb.Span)}
+	return &ast.StructLitExpr{TypeParts: typeParts, TypeArgs: typeArgs, Inits: inits, S: joinSpan(typeSpan, rb.Span)}
 }
 
 func exprPathParts(ex ast.Expr) ([]string, bool) {
@@ -1383,6 +1418,8 @@ func exprPathParts(ex ast.Expr) ([]string, bool) {
 			return nil, false
 		}
 		return append(p, e.Name), true
+	case *ast.TypeAppExpr:
+		return exprPathParts(e.Expr)
 	default:
 		return nil, false
 	}

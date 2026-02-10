@@ -66,11 +66,12 @@ type FuncDecl struct {
 }
 
 type StructDecl struct {
-	Vis    Visibility
-	Pub    bool
-	Name   string
-	Fields []StructField
-	Span   source.Span
+	Vis        Visibility
+	Pub        bool
+	Name       string
+	TypeParams []string // generic type parameters, e.g. struct Pair[T] { ... }
+	Fields     []StructField
+	Span       source.Span
 }
 
 type StructField struct {
@@ -82,11 +83,12 @@ type StructField struct {
 }
 
 type EnumDecl struct {
-	Vis      Visibility
-	Pub      bool
-	Name     string
-	Variants []EnumVariant
-	Span     source.Span
+	Vis        Visibility
+	Pub        bool
+	Name       string
+	TypeParams []string // generic type parameters, e.g. enum Option[T] { ... }
+	Variants   []EnumVariant
+	Span       source.Span
 }
 
 type EnumVariant struct {
@@ -284,6 +286,17 @@ type MemberExpr struct {
 func (*MemberExpr) exprNode()           {}
 func (e *MemberExpr) Span() source.Span { return e.S }
 
+// TypeAppExpr carries type arguments on a path expression before member/call/struct-literal disambiguation.
+// Example source shape: `Option[i32].Some`.
+type TypeAppExpr struct {
+	Expr     Expr
+	TypeArgs []Type
+	S        source.Span
+}
+
+func (*TypeAppExpr) exprNode()           {}
+func (e *TypeAppExpr) Span() source.Span { return e.S }
+
 type IntLit struct {
 	Text string
 	S    source.Span
@@ -397,6 +410,7 @@ func (e *BlockExpr) Span() source.Span { return e.S }
 
 type StructLitExpr struct {
 	TypeParts []string
+	TypeArgs  []Type
 	Inits     []FieldInit
 	S         source.Span
 }

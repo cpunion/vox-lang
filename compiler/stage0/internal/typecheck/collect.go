@@ -15,21 +15,29 @@ func (c *checker) collectNominalSigs() {
 		}
 		pkg, mod, _ := names.SplitOwnerAndModule(st.Span.File.Name)
 		qname := names.QualifyFunc(st.Span.File.Name, st.Name)
-		if _, exists := c.enumSigs[qname]; exists {
-			c.errorAt(st.Span, "duplicate nominal type name (enum already exists): "+qname)
-			continue
-		}
-		if _, exists := c.structSigs[qname]; exists {
+		if c.hasNominalName(qname) {
 			c.errorAt(st.Span, "duplicate struct: "+qname)
 			continue
 		}
-		c.structSigs[qname] = StructSig{
-			Name:       qname,
-			Vis:        st.Vis,
-			Pub:        st.Pub,
-			OwnerPkg:   pkg,
-			OwnerMod:   mod,
-			FieldIndex: map[string]int{},
+		if len(st.TypeParams) == 0 {
+			c.structSigs[qname] = StructSig{
+				Name:       qname,
+				Vis:        st.Vis,
+				Pub:        st.Pub,
+				OwnerPkg:   pkg,
+				OwnerMod:   mod,
+				FieldIndex: map[string]int{},
+			}
+		} else {
+			c.genericStructSigs[qname] = GenericStructSig{
+				Name:       qname,
+				Vis:        st.Vis,
+				Pub:        st.Pub,
+				OwnerPkg:   pkg,
+				OwnerMod:   mod,
+				TypeParams: append([]string{}, st.TypeParams...),
+				FieldIndex: map[string]int{},
+			}
 		}
 	}
 	for _, en := range c.prog.Enums {
@@ -38,21 +46,29 @@ func (c *checker) collectNominalSigs() {
 		}
 		pkg, mod, _ := names.SplitOwnerAndModule(en.Span.File.Name)
 		qname := names.QualifyFunc(en.Span.File.Name, en.Name)
-		if _, exists := c.structSigs[qname]; exists {
-			c.errorAt(en.Span, "duplicate nominal type name (struct already exists): "+qname)
-			continue
-		}
-		if _, exists := c.enumSigs[qname]; exists {
+		if c.hasNominalName(qname) {
 			c.errorAt(en.Span, "duplicate enum: "+qname)
 			continue
 		}
-		c.enumSigs[qname] = EnumSig{
-			Name:         qname,
-			Vis:          en.Vis,
-			Pub:          en.Pub,
-			OwnerPkg:     pkg,
-			OwnerMod:     mod,
-			VariantIndex: map[string]int{},
+		if len(en.TypeParams) == 0 {
+			c.enumSigs[qname] = EnumSig{
+				Name:         qname,
+				Vis:          en.Vis,
+				Pub:          en.Pub,
+				OwnerPkg:     pkg,
+				OwnerMod:     mod,
+				VariantIndex: map[string]int{},
+			}
+		} else {
+			c.genericEnumSigs[qname] = GenericEnumSig{
+				Name:         qname,
+				Vis:          en.Vis,
+				Pub:          en.Pub,
+				OwnerPkg:     pkg,
+				OwnerMod:     mod,
+				TypeParams:   append([]string{}, en.TypeParams...),
+				VariantIndex: map[string]int{},
+			}
 		}
 	}
 }
@@ -63,19 +79,45 @@ func (c *checker) fillStructSigs() {
 			continue
 		}
 		qname := names.QualifyFunc(st.Span.File.Name, st.Name)
-		sig := c.structSigs[qname]
-		sig.Fields = nil
-		sig.FieldIndex = map[string]int{}
-		for _, f := range st.Fields {
-			if _, exists := sig.FieldIndex[f.Name]; exists {
-				c.errorAt(f.Span, "duplicate field: "+f.Name)
-				continue
+		prevTyVars := c.curTyVars
+		if len(st.TypeParams) > 0 {
+			c.curTyVars = map[string]bool{}
+			for _, tp := range st.TypeParams {
+				c.curTyVars[tp] = true
 			}
-			fty := c.typeFromAstInFile(f.Type, st.Span.File)
-			sig.FieldIndex[f.Name] = len(sig.Fields)
-			sig.Fields = append(sig.Fields, StructFieldSig{Vis: f.Vis, Pub: f.Pub, Name: f.Name, Ty: fty})
+		} else {
+			c.curTyVars = nil
 		}
-		c.structSigs[qname] = sig
+		if len(st.TypeParams) == 0 {
+			sig := c.structSigs[qname]
+			sig.Fields = nil
+			sig.FieldIndex = map[string]int{}
+			for _, f := range st.Fields {
+				if _, exists := sig.FieldIndex[f.Name]; exists {
+					c.errorAt(f.Span, "duplicate field: "+f.Name)
+					continue
+				}
+				fty := c.typeFromAstInFile(f.Type, st.Span.File)
+				sig.FieldIndex[f.Name] = len(sig.Fields)
+				sig.Fields = append(sig.Fields, StructFieldSig{Vis: f.Vis, Pub: f.Pub, Name: f.Name, Ty: fty})
+			}
+			c.structSigs[qname] = sig
+		} else {
+			sig := c.genericStructSigs[qname]
+			sig.Fields = nil
+			sig.FieldIndex = map[string]int{}
+			for _, f := range st.Fields {
+				if _, exists := sig.FieldIndex[f.Name]; exists {
+					c.errorAt(f.Span, "duplicate field: "+f.Name)
+					continue
+				}
+				fty := c.typeFromAstInFile(f.Type, st.Span.File)
+				sig.FieldIndex[f.Name] = len(sig.Fields)
+				sig.Fields = append(sig.Fields, StructFieldSig{Vis: f.Vis, Pub: f.Pub, Name: f.Name, Ty: fty})
+			}
+			c.genericStructSigs[qname] = sig
+		}
+		c.curTyVars = prevTyVars
 	}
 }
 
@@ -85,25 +127,70 @@ func (c *checker) fillEnumSigs() {
 			continue
 		}
 		qname := names.QualifyFunc(en.Span.File.Name, en.Name)
-		sig := c.enumSigs[qname]
-		sig.Variants = nil
-		sig.VariantIndex = map[string]int{}
-
-		for _, v := range en.Variants {
-			if _, exists := sig.VariantIndex[v.Name]; exists {
-				c.errorAt(v.Span, "duplicate variant: "+v.Name)
-				continue
+		prevTyVars := c.curTyVars
+		if len(en.TypeParams) > 0 {
+			c.curTyVars = map[string]bool{}
+			for _, tp := range en.TypeParams {
+				c.curTyVars[tp] = true
 			}
-			fields := []Type{}
-			for _, ft := range v.Fields {
-				fty := c.typeFromAstInFile(ft, en.Span.File)
-				fields = append(fields, fty)
-			}
-			sig.VariantIndex[v.Name] = len(sig.Variants)
-			sig.Variants = append(sig.Variants, EnumVariantSig{Name: v.Name, Fields: fields})
+		} else {
+			c.curTyVars = nil
 		}
-		c.enumSigs[qname] = sig
+		if len(en.TypeParams) == 0 {
+			sig := c.enumSigs[qname]
+			sig.Variants = nil
+			sig.VariantIndex = map[string]int{}
+			for _, v := range en.Variants {
+				if _, exists := sig.VariantIndex[v.Name]; exists {
+					c.errorAt(v.Span, "duplicate variant: "+v.Name)
+					continue
+				}
+				fields := []Type{}
+				for _, ft := range v.Fields {
+					fty := c.typeFromAstInFile(ft, en.Span.File)
+					fields = append(fields, fty)
+				}
+				sig.VariantIndex[v.Name] = len(sig.Variants)
+				sig.Variants = append(sig.Variants, EnumVariantSig{Name: v.Name, Fields: fields})
+			}
+			c.enumSigs[qname] = sig
+		} else {
+			sig := c.genericEnumSigs[qname]
+			sig.Variants = nil
+			sig.VariantIndex = map[string]int{}
+			for _, v := range en.Variants {
+				if _, exists := sig.VariantIndex[v.Name]; exists {
+					c.errorAt(v.Span, "duplicate variant: "+v.Name)
+					continue
+				}
+				fields := []Type{}
+				for _, ft := range v.Fields {
+					fty := c.typeFromAstInFile(ft, en.Span.File)
+					fields = append(fields, fty)
+				}
+				sig.VariantIndex[v.Name] = len(sig.Variants)
+				sig.Variants = append(sig.Variants, EnumVariantSig{Name: v.Name, Fields: fields})
+			}
+			c.genericEnumSigs[qname] = sig
+		}
+		c.curTyVars = prevTyVars
 	}
+}
+
+func (c *checker) hasNominalName(qname string) bool {
+	if _, exists := c.structSigs[qname]; exists {
+		return true
+	}
+	if _, exists := c.genericStructSigs[qname]; exists {
+		return true
+	}
+	if _, exists := c.enumSigs[qname]; exists {
+		return true
+	}
+	if _, exists := c.genericEnumSigs[qname]; exists {
+		return true
+	}
+	return false
 }
 
 func (c *checker) collectFuncSigs() {

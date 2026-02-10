@@ -28,7 +28,15 @@ func (c *checker) collectTypeAliasSigs() {
 			c.errorAt(td.Span, "duplicate nominal type name (struct already exists): "+qname)
 			continue
 		}
+		if _, exists := c.genericStructSigs[qname]; exists {
+			c.errorAt(td.Span, "duplicate nominal type name (struct already exists): "+qname)
+			continue
+		}
 		if _, exists := c.enumSigs[qname]; exists {
+			c.errorAt(td.Span, "duplicate nominal type name (enum already exists): "+qname)
+			continue
+		}
+		if _, exists := c.genericEnumSigs[qname]; exists {
 			c.errorAt(td.Span, "duplicate nominal type name (enum already exists): "+qname)
 			continue
 		}

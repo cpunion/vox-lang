@@ -867,3 +867,97 @@ fn main() -> i32 { return 0; }`)
 		t.Fatalf("unexpected generic func decl: %#v", fn)
 	}
 }
+
+func TestParseStructDeclTypeParams(t *testing.T) {
+	f := source.NewFile("test.vox", `struct Pair[T] { a: T, b: T }
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Structs) != 1 {
+		t.Fatalf("expected 1 struct, got %d", len(prog.Structs))
+	}
+	st := prog.Structs[0]
+	if st.Name != "Pair" || len(st.TypeParams) != 1 || st.TypeParams[0] != "T" {
+		t.Fatalf("unexpected struct type params: %#v", st)
+	}
+}
+
+func TestParseEnumDeclTypeParams(t *testing.T) {
+	f := source.NewFile("test.vox", `enum Option[T] { Some(T), None }
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Enums) != 1 {
+		t.Fatalf("expected 1 enum, got %d", len(prog.Enums))
+	}
+	en := prog.Enums[0]
+	if en.Name != "Option" || len(en.TypeParams) != 1 || en.TypeParams[0] != "T" {
+		t.Fatalf("unexpected enum type params: %#v", en)
+	}
+}
+
+func TestParseTypedPathGenericStructLit(t *testing.T) {
+	f := source.NewFile("test.vox", `struct Pair[T] { a: T, b: T }
+fn main() -> i32 {
+  let _p = Pair[i32] { a: 1, b: 2 };
+  return 0;
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	mainFn := prog.Funcs[0]
+	letSt, ok := mainFn.Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let stmt, got %T", mainFn.Body.Stmts[0])
+	}
+	lit, ok := letSt.Init.(*ast.StructLitExpr)
+	if !ok {
+		t.Fatalf("expected struct lit, got %T", letSt.Init)
+	}
+	if len(lit.TypeParts) != 1 || lit.TypeParts[0] != "Pair" {
+		t.Fatalf("unexpected struct lit path: %#v", lit.TypeParts)
+	}
+	if len(lit.TypeArgs) != 1 {
+		t.Fatalf("expected 1 struct type arg, got %d", len(lit.TypeArgs))
+	}
+}
+
+func TestParseTypedPathGenericEnumCtor(t *testing.T) {
+	f := source.NewFile("test.vox", `enum Option[T] { Some(T), None }
+fn main() -> i32 {
+  let _x = Option[i32].Some(7);
+  return 0;
+}`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	mainFn := prog.Funcs[0]
+	letSt, ok := mainFn.Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let stmt, got %T", mainFn.Body.Stmts[0])
+	}
+	call, ok := letSt.Init.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected call expr, got %T", letSt.Init)
+	}
+	if len(call.TypeArgs) != 0 {
+		t.Fatalf("expected call.TypeArgs empty for typed path constructor, got %d", len(call.TypeArgs))
+	}
+	mem, ok := call.Callee.(*ast.MemberExpr)
+	if !ok {
+		t.Fatalf("expected member callee, got %T", call.Callee)
+	}
+	ta, ok := mem.Recv.(*ast.TypeAppExpr)
+	if !ok {
+		t.Fatalf("expected type-app receiver, got %T", mem.Recv)
+	}
+	if len(ta.TypeArgs) != 1 {
+		t.Fatalf("expected 1 typed-path type arg, got %d", len(ta.TypeArgs))
+	}
+}

@@ -111,6 +111,17 @@ type StructFieldSig struct {
 	Ty   Type
 }
 
+type GenericStructSig struct {
+	Name       string
+	Vis        ast.Visibility
+	Pub        bool
+	OwnerPkg   string
+	OwnerMod   []string
+	TypeParams []string
+	Fields     []StructFieldSig
+	FieldIndex map[string]int
+}
+
 type EnumSig struct {
 	Name         string
 	Vis          ast.Visibility
@@ -124,6 +135,17 @@ type EnumSig struct {
 type EnumVariantSig struct {
 	Name   string
 	Fields []Type // tuple-like payload, arity 0..N
+}
+
+type GenericEnumSig struct {
+	Name         string
+	Vis          ast.Visibility
+	Pub          bool
+	OwnerPkg     string
+	OwnerMod     []string
+	TypeParams   []string
+	Variants     []EnumVariantSig
+	VariantIndex map[string]int
 }
 
 type EnumCtorTarget struct {
@@ -205,35 +227,37 @@ type Options struct {
 
 func Check(prog *ast.Program, opts Options) (*CheckedProgram, *diag.Bag) {
 	c := &checker{
-		prog:          prog,
-		diags:         &diag.Bag{},
-		funcSigs:      map[string]FuncSig{},
-		structSigs:    map[string]StructSig{},
-		enumSigs:      map[string]EnumSig{},
-		typeAliases:   map[string]TypeAliasSig{},
-		typeAliasTy:   map[string]Type{},
-		typeAliasBusy: map[string]bool{},
-		constSigs:     map[string]ConstSig{},
-		constDecls:    map[string]*ast.ConstDecl{},
-		constVals:     map[string]ConstValue{},
-		constBusy:     map[string]bool{},
-		exprTypes:     map[ast.Expr]Type{},
-		letTypes:      map[*ast.LetStmt]Type{},
-		vecCalls:      map[*ast.CallExpr]VecCallTarget{},
-		strCalls:      map[*ast.CallExpr]StrCallTarget{},
-		toStrCalls:    map[*ast.CallExpr]ToStrTarget{},
-		callTgts:      map[*ast.CallExpr]string{},
-		enumCtors:     map[*ast.CallExpr]EnumCtorTarget{},
-		enumUnits:     map[ast.Expr]EnumCtorTarget{},
-		constRefs:     map[ast.Expr]ConstValue{},
-		opts:          opts,
-		imports:       map[*source.File]map[string]importTarget{},
-		namedFuncs:    map[*source.File]map[string]string{},
-		namedTypes:    map[*source.File]map[string]Type{},
-		namedConsts:   map[*source.File]map[string]string{},
-		funcDecls:     map[string]*ast.FuncDecl{},
-		instantiated:  map[string]bool{},
-		instantiating: map[string]bool{},
+		prog:              prog,
+		diags:             &diag.Bag{},
+		funcSigs:          map[string]FuncSig{},
+		structSigs:        map[string]StructSig{},
+		genericStructSigs: map[string]GenericStructSig{},
+		enumSigs:          map[string]EnumSig{},
+		genericEnumSigs:   map[string]GenericEnumSig{},
+		typeAliases:       map[string]TypeAliasSig{},
+		typeAliasTy:       map[string]Type{},
+		typeAliasBusy:     map[string]bool{},
+		constSigs:         map[string]ConstSig{},
+		constDecls:        map[string]*ast.ConstDecl{},
+		constVals:         map[string]ConstValue{},
+		constBusy:         map[string]bool{},
+		exprTypes:         map[ast.Expr]Type{},
+		letTypes:          map[*ast.LetStmt]Type{},
+		vecCalls:          map[*ast.CallExpr]VecCallTarget{},
+		strCalls:          map[*ast.CallExpr]StrCallTarget{},
+		toStrCalls:        map[*ast.CallExpr]ToStrTarget{},
+		callTgts:          map[*ast.CallExpr]string{},
+		enumCtors:         map[*ast.CallExpr]EnumCtorTarget{},
+		enumUnits:         map[ast.Expr]EnumCtorTarget{},
+		constRefs:         map[ast.Expr]ConstValue{},
+		opts:              opts,
+		imports:           map[*source.File]map[string]importTarget{},
+		namedFuncs:        map[*source.File]map[string]string{},
+		namedTypes:        map[*source.File]map[string]Type{},
+		namedConsts:       map[*source.File]map[string]string{},
+		funcDecls:         map[string]*ast.FuncDecl{},
+		instantiated:      map[string]bool{},
+		instantiating:     map[string]bool{},
 	}
 	c.collectImports()
 	c.collectNominalSigs()
@@ -272,27 +296,29 @@ type ConstSig struct {
 }
 
 type checker struct {
-	prog          *ast.Program
-	diags         *diag.Bag
-	funcSigs      map[string]FuncSig
-	structSigs    map[string]StructSig
-	enumSigs      map[string]EnumSig
-	typeAliases   map[string]TypeAliasSig
-	typeAliasTy   map[string]Type
-	typeAliasBusy map[string]bool
-	constSigs     map[string]ConstSig
-	constDecls    map[string]*ast.ConstDecl
-	constVals     map[string]ConstValue
-	constBusy     map[string]bool
-	exprTypes     map[ast.Expr]Type
-	letTypes      map[*ast.LetStmt]Type
-	vecCalls      map[*ast.CallExpr]VecCallTarget
-	strCalls      map[*ast.CallExpr]StrCallTarget
-	toStrCalls    map[*ast.CallExpr]ToStrTarget
-	callTgts      map[*ast.CallExpr]string
-	enumCtors     map[*ast.CallExpr]EnumCtorTarget
-	enumUnits     map[ast.Expr]EnumCtorTarget
-	constRefs     map[ast.Expr]ConstValue
+	prog              *ast.Program
+	diags             *diag.Bag
+	funcSigs          map[string]FuncSig
+	structSigs        map[string]StructSig
+	genericStructSigs map[string]GenericStructSig
+	enumSigs          map[string]EnumSig
+	genericEnumSigs   map[string]GenericEnumSig
+	typeAliases       map[string]TypeAliasSig
+	typeAliasTy       map[string]Type
+	typeAliasBusy     map[string]bool
+	constSigs         map[string]ConstSig
+	constDecls        map[string]*ast.ConstDecl
+	constVals         map[string]ConstValue
+	constBusy         map[string]bool
+	exprTypes         map[ast.Expr]Type
+	letTypes          map[*ast.LetStmt]Type
+	vecCalls          map[*ast.CallExpr]VecCallTarget
+	strCalls          map[*ast.CallExpr]StrCallTarget
+	toStrCalls        map[*ast.CallExpr]ToStrTarget
+	callTgts          map[*ast.CallExpr]string
+	enumCtors         map[*ast.CallExpr]EnumCtorTarget
+	enumUnits         map[ast.Expr]EnumCtorTarget
+	constRefs         map[ast.Expr]ConstValue
 
 	curFn     *ast.FuncDecl
 	curTyVars map[string]bool
