@@ -1294,6 +1294,24 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(bjobs), "[select] --jobs: 2") {
 		t.Fatalf("expected jobs selection in text output, got:\n%s", string(bjobs))
 	}
+	cmdJobsShort := exec.Command(stage2BinB, "test-pkg", "-j", "2", "--run=*std_sync_runtime_generic_api_smoke", "--list", outRel)
+	cmdJobsShort.Dir = stage2DirAbs
+	bjobsShort, err := cmdJobsShort.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg -j failed: %v\n%s", err, string(bjobsShort))
+	}
+	if !strings.Contains(string(bjobsShort), "[select] --jobs: 2") {
+		t.Fatalf("expected short -j selection in text output, got:\n%s", string(bjobsShort))
+	}
+	cmdJobsBad := exec.Command(stage2BinB, "test-pkg", "--jobs=0", "--list", outRel)
+	cmdJobsBad.Dir = stage2DirAbs
+	bjobsBad, err := cmdJobsBad.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected stage2 test-pkg --jobs=0 to fail, got:\n%s", string(bjobsBad))
+	}
+	if !strings.Contains(string(bjobsBad), "invalid --jobs value") {
+		t.Fatalf("expected invalid --jobs diagnostic, got:\n%s", string(bjobsBad))
+	}
 
 	cmdJSON := exec.Command(stage2BinB, "test-pkg", "--jobs=2", "--run=*std_sync_runtime_generic_api_smoke", "--list", "--json", outRel)
 	cmdJSON.Dir = stage2DirAbs
