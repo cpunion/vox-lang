@@ -1567,9 +1567,35 @@ fn parse_where_bounds(p: Parser) -> ParseWhereBoundsResult {
   while !q.has_err {
     if kind_is(peek_kind(q), lex.TokenKind.KwComptime) {
       let ar0: AdvanceResult = advance(q);
-      let r1: ParseIdentResult = parse_ident(ar0.p);
-      q = r1.p;
-      let opk: lex.TokenKind = peek_kind(q);
+      let mut qlhs: Parser = ar0.p;
+      let mut lhs_kind: i32 = ast.comptime_where_lhs_const_param();
+      let mut lhs_name: String = "";
+      if kind_is(peek_kind(qlhs), lex.TokenKind.At) {
+        let ar_at: AdvanceResult = advance(qlhs);
+        qlhs = ar_at.p;
+        let rname: ParseIdentResult = parse_ident(qlhs);
+        qlhs = rname.p;
+        if rname.name == "size_of" {
+          lhs_kind = ast.comptime_where_lhs_size_of();
+        } else if rname.name == "align_of" {
+          lhs_kind = ast.comptime_where_lhs_align_of();
+        } else {
+          let mut qerr_name: Parser = qlhs;
+          qerr_name.has_err = true;
+          qerr_name.err = ParseError.UnexpectedToken(lex.TokenKind.Ident, lex.TokenKind.Ident, rname.at);
+          return ParseWhereBoundsResult { p: qerr_name, tpbs: out, cwbs: cwbs };
+        }
+        let ar_l: AdvanceResult = expect(qlhs, lex.TokenKind.LParen);
+        let rtp: ParseIdentResult = parse_ident(ar_l.p);
+        let ar_r: AdvanceResult = expect(rtp.p, lex.TokenKind.RParen);
+        qlhs = ar_r.p;
+        lhs_name = rtp.name;
+      } else {
+        let r1: ParseIdentResult = parse_ident(qlhs);
+        qlhs = r1.p;
+        lhs_name = r1.name;
+      }
+      let opk: lex.TokenKind = peek_kind(qlhs);
       let is_cmp: bool =
         kind_is(opk, lex.TokenKind.EqEq) ||
         kind_is(opk, lex.TokenKind.Ne) ||
@@ -1578,9 +1604,9 @@ fn parse_where_bounds(p: Parser) -> ParseWhereBoundsResult {
         kind_is(opk, lex.TokenKind.Gt) ||
         kind_is(opk, lex.TokenKind.Ge);
       if !is_cmp {
-        let mut qerr0: Parser = q;
+        let mut qerr0: Parser = qlhs;
         qerr0.has_err = true;
-        qerr0.err = ParseError.UnexpectedToken(lex.TokenKind.Lt, opk, peek(q).start);
+        qerr0.err = ParseError.UnexpectedToken(lex.TokenKind.Lt, opk, peek(qlhs).start);
         return ParseWhereBoundsResult { p: qerr0, tpbs: out, cwbs: cwbs };
       }
       let op: ast.BinaryOp =
@@ -1589,13 +1615,14 @@ fn parse_where_bounds(p: Parser) -> ParseWhereBoundsResult {
         if kind_is(opk, lex.TokenKind.Lt) { ast.BinaryOp.Lt } else
         if kind_is(opk, lex.TokenKind.Le) { ast.BinaryOp.Le } else
         if kind_is(opk, lex.TokenKind.Gt) { ast.BinaryOp.Gt } else { ast.BinaryOp.Ge };
-      let ar2: AdvanceResult = advance(q);
+      let ar2: AdvanceResult = advance(qlhs);
       let mut qrhs: Parser = ar2.p;
-      if kind_is(peek_kind(qrhs), lex.TokenKind.Ident) {
+      if lhs_kind == ast.comptime_where_lhs_const_param() && kind_is(peek_kind(qrhs), lex.TokenKind.Ident) {
         let rr: ParseIdentResult = parse_ident(qrhs);
         qrhs = rr.p;
         cwbs.push(ast.ConstWhereDecl {
-          name: r1.name,
+          lhs_kind: lhs_kind,
+          name: lhs_name,
           op: op,
           rhs_is_param: true,
           rhs_param: rr.name,
@@ -1611,7 +1638,8 @@ fn parse_where_bounds(p: Parser) -> ParseWhereBoundsResult {
         }
         qrhs = dr.p;
         cwbs.push(ast.ConstWhereDecl {
-          name: r1.name,
+          lhs_kind: lhs_kind,
+          name: lhs_name,
           op: op,
           rhs_is_param: false,
           rhs_param: "",

@@ -567,6 +567,15 @@ fn find_const_param_sig(cps: Vec[ConstParamSig], name: String) -> i32 {
   return -1;
 }
 
+fn find_type_param_name(tps: Vec[String], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < tps.len() {
+    if tps.get(i) == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 fn const_where_op_supported(op: ast.BinaryOp) -> bool {
   return
     match op {
@@ -580,7 +589,7 @@ fn const_where_op_supported(op: ast.BinaryOp) -> bool {
     };
 }
 
-fn has_const_where_sig(bs: Vec[ConstWhereBoundSig], name: String, op: ast.BinaryOp, rhs_is_param: bool, rhs_param: String, rhs_iv: i64) -> bool {
+fn has_const_where_sig(bs: Vec[ConstWhereBoundSig], lhs_kind: i32, name: String, op: ast.BinaryOp, rhs_is_param: bool, rhs_param: String, rhs_iv: i64) -> bool {
   let mut i: i32 = 0;
   while i < bs.len() {
     let b: ConstWhereBoundSig = bs.get(i);
@@ -592,7 +601,7 @@ fn has_const_where_sig(bs: Vec[ConstWhereBoundSig], name: String, op: ast.Binary
       } else {
         b.rhs_iv == rhs_iv
       };
-    if b.name == name && rhs_ok {
+    if b.lhs_kind == lhs_kind && b.name == name && rhs_ok {
       if match b.op { ast.BinaryOp.Eq => true, _ => false } && match op { ast.BinaryOp.Eq => true, _ => false } { return true; }
       if match b.op { ast.BinaryOp.Ne => true, _ => false } && match op { ast.BinaryOp.Ne => true, _ => false } { return true; }
       if match b.op { ast.BinaryOp.Lt => true, _ => false } && match op { ast.BinaryOp.Lt => true, _ => false } { return true; }
@@ -605,7 +614,7 @@ fn has_const_where_sig(bs: Vec[ConstWhereBoundSig], name: String, op: ast.Binary
   return false;
 }
 
-fn collect_const_where_bounds(file: String, cps: Vec[ConstParamSig], ds: Vec[ast.ConstWhereDecl]) -> CollectConstWhereResult {
+fn collect_const_where_bounds(file: String, tps: Vec[String], cps: Vec[ConstParamSig], ds: Vec[ast.ConstWhereDecl]) -> CollectConstWhereResult {
   let mut out: Vec[ConstWhereBoundSig] = Vec();
   let mut i: i32 = 0;
   while i < ds.len() {
@@ -613,40 +622,66 @@ fn collect_const_where_bounds(file: String, cps: Vec[ConstParamSig], ds: Vec[ast
     if !const_where_op_supported(d.op) {
       return CollectConstWhereResult { ok: false, err: type_error(file, "unsupported comptime where operator"), bounds: out };
     }
-    if find_const_param_sig(cps, d.name) == -1 {
-      return CollectConstWhereResult { ok: false, err: type_error(file, "unknown const param in comptime where: ".concat(d.name)), bounds: out };
-    }
-    if d.rhs_is_param {
-      if find_const_param_sig(cps, d.rhs_param) == -1 {
-        return CollectConstWhereResult { ok: false, err: type_error(file, "unknown const param in comptime where rhs: ".concat(d.rhs_param)), bounds: out };
+    if d.lhs_kind == ast.comptime_where_lhs_const_param() {
+      if find_const_param_sig(cps, d.name) == -1 {
+        return CollectConstWhereResult { ok: false, err: type_error(file, "unknown const param in comptime where: ".concat(d.name)), bounds: out };
       }
-      out.push(ConstWhereBoundSig {
-        name: d.name,
-        op: d.op,
-        rhs_is_param: true,
-        rhs_param: d.rhs_param,
-        rhs_iv: 0,
-        rhs_text: d.rhs_text,
-      });
-    } else {
-      let pr: ParseI64DecResult = parse_i64_dec(d.rhs_text);
-      if !pr.ok {
+      if d.rhs_is_param {
+        if find_const_param_sig(cps, d.rhs_param) == -1 {
+          return CollectConstWhereResult { ok: false, err: type_error(file, "unknown const param in comptime where rhs: ".concat(d.rhs_param)), bounds: out };
+        }
+        out.push(ConstWhereBoundSig {
+          lhs_kind: d.lhs_kind,
+          name: d.name,
+          op: d.op,
+          rhs_is_param: true,
+          rhs_param: d.rhs_param,
+          rhs_iv: 0,
+          rhs_text: d.rhs_text,
+        });
+      } else {
+        let pr: ParseI64DecResult = parse_i64_dec(d.rhs_text);
+        if !pr.ok {
+          return CollectConstWhereResult { ok: false, err: type_error(file, "comptime where rhs out of range: ".concat(d.rhs_text)), bounds: out };
+        }
+        out.push(ConstWhereBoundSig {
+          lhs_kind: d.lhs_kind,
+          name: d.name,
+          op: d.op,
+          rhs_is_param: false,
+          rhs_param: "",
+          rhs_iv: pr.val,
+          rhs_text: d.rhs_text,
+        });
+      }
+    } else if d.lhs_kind == ast.comptime_where_lhs_size_of() || d.lhs_kind == ast.comptime_where_lhs_align_of() {
+      if find_type_param_name(tps, d.name) == -1 {
+        return CollectConstWhereResult { ok: false, err: type_error(file, "unknown type param in comptime where: ".concat(d.name)), bounds: out };
+      }
+      if d.rhs_is_param {
+        return CollectConstWhereResult { ok: false, err: type_error(file, "type layout comptime where rhs must be integer literal"), bounds: out };
+      }
+      let pr2: ParseI64DecResult = parse_i64_dec(d.rhs_text);
+      if !pr2.ok {
         return CollectConstWhereResult { ok: false, err: type_error(file, "comptime where rhs out of range: ".concat(d.rhs_text)), bounds: out };
       }
       out.push(ConstWhereBoundSig {
+        lhs_kind: d.lhs_kind,
         name: d.name,
         op: d.op,
         rhs_is_param: false,
         rhs_param: "",
-        rhs_iv: pr.val,
+        rhs_iv: pr2.val,
         rhs_text: d.rhs_text,
       });
+    } else {
+      return CollectConstWhereResult { ok: false, err: type_error(file, "unsupported comptime where lhs"), bounds: out };
     }
     i = i + 1;
   }
 
-  // Validate defaults eagerly: if a const param has default, it must satisfy all
-  // comptime where constraints at declaration time.
+  // Validate defaults eagerly for const-param lhs constraints only: if a const
+  // param has default, it must satisfy comptime where constraints at declaration.
   let mut defaults: Vec[ConstSub] = Vec();
   i = 0;
   while i < cps.len() {
@@ -659,29 +694,66 @@ fn collect_const_where_bounds(file: String, cps: Vec[ConstParamSig], ds: Vec[ast
   let mut wi: i32 = 0;
   while wi < out.len() {
     let wb: ConstWhereBoundSig = out.get(wi);
-    let mut cfi: i32 = 0;
-    while cfi < cps.len() {
-      let cp2: ConstParamSig = cps.get(cfi);
-      if cp2.name == wb.name && cp2.has_default {
-        // Eagerly validate only when every value used by the bound has defaults.
-        let mut can_check: bool = true;
-        if wb.rhs_is_param {
-          let mut has_rhs_default: bool = false;
-          let mut di: i32 = 0;
-          while di < defaults.len() {
-            if defaults.get(di).name == wb.rhs_param { has_rhs_default = true; }
-            di = di + 1;
+    if wb.lhs_kind == ast.comptime_where_lhs_const_param() {
+      let mut cfi: i32 = 0;
+      while cfi < cps.len() {
+        let cp2: ConstParamSig = cps.get(cfi);
+        if cp2.name == wb.name && cp2.has_default {
+          // Eagerly validate only when every value used by the bound has defaults.
+          let mut can_check: bool = true;
+          if wb.rhs_is_param {
+            let mut has_rhs_default: bool = false;
+            let mut di: i32 = 0;
+            while di < defaults.len() {
+              if defaults.get(di).name == wb.rhs_param { has_rhs_default = true; }
+              di = di + 1;
+            }
+            can_check = has_rhs_default;
           }
-          can_check = has_rhs_default;
-        }
-        if can_check {
-          let chk: ConstWhereCheckResult = check_const_where_bounds(vec1_const_where(wb), defaults);
-          if !chk.ok {
-            return CollectConstWhereResult { ok: false, err: type_error(file, "const param default violates comptime where: ".concat(wb.name)), bounds: out };
+          if can_check {
+            let mut lhs_find: i64 = 0;
+            let mut lhs_ok: bool = false;
+            let mut li: i32 = 0;
+            while li < defaults.len() {
+              let dli: ConstSub = defaults.get(li);
+              if dli.name == wb.name {
+                lhs_ok = true;
+                lhs_find = dli.iv;
+                li = defaults.len();
+              } else {
+                li = li + 1;
+              }
+            }
+            if !lhs_ok {
+              return CollectConstWhereResult { ok: false, err: type_error(file, "const param default violates comptime where: ".concat(wb.name)), bounds: out };
+            }
+            let mut rhs_find: i64 = wb.rhs_iv;
+            if wb.rhs_is_param {
+              let mut rhs_ok: bool = false;
+              let mut ri: i32 = 0;
+              while ri < defaults.len() {
+                let dri: ConstSub = defaults.get(ri);
+                if dri.name == wb.rhs_param {
+                  rhs_ok = true;
+                  rhs_find = dri.iv;
+                  ri = defaults.len();
+                } else {
+                  ri = ri + 1;
+                }
+              }
+              if !rhs_ok {
+                return CollectConstWhereResult { ok: false, err: type_error(file, "const param default violates comptime where: ".concat(wb.name)), bounds: out };
+              }
+            }
+            if !const_where_eval_i64(wb.op, lhs_find, rhs_find) {
+              return CollectConstWhereResult { ok: false, err: type_error(file, "const param default violates comptime where: ".concat(wb.name)), bounds: out };
+            }
           }
         }
+        cfi = cfi + 1;
       }
-      cfi = cfi + 1;
+    } else {
+      // Type layout constraints are checked when type args are known.
     }
     wi = wi + 1;
   }
@@ -930,7 +1002,7 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       let perr1: String = projection_bound_issue(c, fd.type_params, tbs, fd.ret);
       if perr1 != "" { return TcCtxResult { ok: false, err: type_error(fd.file, perr1), ctx: c }; }
 
-      let cwr: CollectConstWhereResult = collect_const_where_bounds(fd.file, cps, fd.const_where_bounds);
+      let cwr: CollectConstWhereResult = collect_const_where_bounds(fd.file, fd.type_params, cps, fd.const_where_bounds);
       if !cwr.ok { return TcCtxResult { ok: false, err: cwr.err, ctx: c }; }
 
       let sig: FuncSig = FuncSig { params: ps, ret: rr.idx, vis: fd.vis, is_pub: fd.is_pub, type_params: fd.type_params, const_params: cps, type_param_bounds: tbs, const_where_bounds: cwr.bounds };

@@ -28,8 +28,13 @@ struct Buffer[T, const N: usize = 1024] {
 ## 2. 编译期约束（comptime where）
 
 ```vox
-// 计划方向（尚未实现）：
-// where comptime @size_of(T) <= 64
+fn fit[T](x: T) -> i32
+where
+  comptime @size_of(T) <= 64,
+  comptime @align_of(T) <= 8
+{
+  return 1;
+}
 ```
 
 ```vox
@@ -45,7 +50,9 @@ where
 当前 Stage1 已实现（函数/trait 方法）：
 
 - 语法：`where comptime N > 0, comptime N <= 256`
-- 约束对象：仅限已声明的 `const` 泛型参数
+- 约束对象：
+  - 已声明的 `const` 泛型参数（`comptime N < M`）
+  - 已声明的类型参数布局反射（`comptime @size_of(T) <= 64`、`comptime @align_of(T) <= 8`）
 - 右值：十进制整数字面量（支持负号）或另一个 `const` 参数（如 `comptime N < M`）
 - 运算符：`== != < <= > >=`
 - 校验时机：调用点（含默认 const 实参）

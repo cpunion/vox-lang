@@ -280,6 +280,16 @@ fn const_sub_lookup(csubs: Vec[ConstSub], name: String) -> ConstSub {
   return ConstSub { name: "", ty: -1, iv: 0, text: "" };
 }
 
+fn const_where_ty_lookup(subs: Vec[TySub], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < subs.len() {
+    let s: TySub = subs.get(i);
+    if s.name == name { return s.ty; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 fn const_where_op_text(op: ast.BinaryOp) -> String {
   if match op { ast.BinaryOp.Eq => true, _ => false } { return "=="; }
   if match op { ast.BinaryOp.Ne => true, _ => false } { return "!="; }
@@ -300,13 +310,43 @@ fn const_where_eval_i64(op: ast.BinaryOp, a: i64, b: i64) -> bool {
   return false;
 }
 
-pub fn check_const_where_bounds(bounds: Vec[ConstWhereBoundSig], csubs: Vec[ConstSub]) -> ConstWhereCheckResult {
+fn const_where_lhs_text(b: ConstWhereBoundSig) -> String {
+  if b.lhs_kind == ast.comptime_where_lhs_const_param() { return b.name; }
+  if b.lhs_kind == ast.comptime_where_lhs_size_of() { return "@size_of(".concat(b.name).concat(")"); }
+  if b.lhs_kind == ast.comptime_where_lhs_align_of() { return "@align_of(".concat(b.name).concat(")"); }
+  return b.name;
+}
+
+pub fn check_const_where_bounds(ctx: Ctx, bounds: Vec[ConstWhereBoundSig], subs: Vec[TySub], csubs: Vec[ConstSub]) -> ConstWhereCheckResult {
   let mut i: i32 = 0;
   while i < bounds.len() {
     let b: ConstWhereBoundSig = bounds.get(i);
-    let cs: ConstSub = const_sub_lookup(csubs, b.name);
-    if cs.name == "" {
-      return ConstWhereCheckResult { ok: false, err: "missing const generic arg for constraint: ".concat(b.name) };
+    let mut lhs_iv: i64 = 0;
+    let mut lhs_text: String = const_where_lhs_text(b);
+    if b.lhs_kind == ast.comptime_where_lhs_const_param() {
+      let cs: ConstSub = const_sub_lookup(csubs, b.name);
+      if cs.name == "" {
+        return ConstWhereCheckResult { ok: false, err: "missing const generic arg for constraint: ".concat(b.name) };
+      }
+      lhs_iv = cs.iv;
+      lhs_text = b.name;
+    } else if b.lhs_kind == ast.comptime_where_lhs_size_of() || b.lhs_kind == ast.comptime_where_lhs_align_of() {
+      let lhs_ty0: i32 = const_where_ty_lookup(subs, b.name);
+      if lhs_ty0 == -1 {
+        return ConstWhereCheckResult { ok: false, err: "missing type generic arg for constraint: ".concat(b.name) };
+      }
+      let lhs_ty: i32 = strip_range(ctx, lhs_ty0);
+      if b.lhs_kind == ast.comptime_where_lhs_size_of() {
+        let sr: ReflectIntResult = intrinsic_size_of(ctx, lhs_ty);
+        if !sr.ok { return ConstWhereCheckResult { ok: false, err: "comptime where size_of failed: ".concat(sr.err) }; }
+        lhs_iv = sr.iv;
+      } else {
+        let ar: ReflectIntResult = intrinsic_align_of(ctx, lhs_ty);
+        if !ar.ok { return ConstWhereCheckResult { ok: false, err: "comptime where align_of failed: ".concat(ar.err) }; }
+        lhs_iv = ar.iv;
+      }
+    } else {
+      return ConstWhereCheckResult { ok: false, err: "unsupported comptime where lhs" };
     }
     let mut rhs_iv: i64 = b.rhs_iv;
     if b.rhs_is_param {
@@ -316,12 +356,12 @@ pub fn check_const_where_bounds(bounds: Vec[ConstWhereBoundSig], csubs: Vec[Cons
       }
       rhs_iv = rhs_cs.iv;
     }
-    if !const_where_eval_i64(b.op, cs.iv, rhs_iv) {
+    if !const_where_eval_i64(b.op, lhs_iv, rhs_iv) {
       let msg: String =
-        "const generic constraint failed: "
-          .concat(b.name).concat(" ")
+        "comptime generic constraint failed: "
+          .concat(lhs_text).concat(" ")
           .concat(const_where_op_text(b.op)).concat(" ")
-          .concat(b.rhs_text).concat(" (got ").concat(cs.text).concat(")");
+          .concat(b.rhs_text).concat(" (got ").concat(lhs_iv.to_string()).concat(")");
       return ConstWhereCheckResult { ok: false, err: msg };
     }
     i = i + 1;
