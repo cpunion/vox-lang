@@ -507,6 +507,7 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 - `@field_count(Type) -> usize`（当前支持 `struct/enum`）
 - `@field_name(Type, I) -> String`（当前支持 `struct/enum`，`I` 为 const 索引）
 - `@field_type(Type, I) -> String`（当前支持 `struct/enum`，`I` 为 const 索引）
+- `@same_type(A, B) -> bool`
 - `@is_integer(Type) -> bool`
 - `@is_signed_int(Type) -> bool`
 - `@is_unsigned_int(Type) -> bool`

@@ -41,6 +41,7 @@ fn crc_table() -> [u32; 256] { ... }
 @field_count(T) -> usize
 @field_name(T, I) -> String
 @field_type(T, I) -> String
+@same_type(A, B) -> bool
 @is_integer(T) -> bool
 @is_signed_int(T) -> bool
 @is_unsigned_int(T) -> bool
