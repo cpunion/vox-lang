@@ -22,9 +22,11 @@ fn usage() -> () {
   print("\n");
   print("flags:\n");
   print("  --driver=user|tool  driver main mode for emitted binaries (default: user)\n");
+  print("  --run=<glob>        test-pkg: run tests by glob on qualified/short name (*, ?)\n");
   print("  --filter=<text>     test-pkg: keep tests whose name contains text\n");
   print("  --list              test-pkg: list selected tests and exit\n");
   print("  --rerun-failed      test-pkg: run only previously failed tests\n");
+  print("  --json              test-pkg: print JSON report\n");
 }
 
 fn has_prefix(s: String, pre: String) -> bool {
@@ -179,10 +181,74 @@ fn filter_tests_contains(tests: Vec[String], part: String) -> Vec[String] {
   return out;
 }
 
-fn print_test_selection(discovered: i32, selected: i32, filter: String) -> () {
+fn short_test_name(name: String) -> String {
+  let mut i: i32 = name.len() - 1;
+  while i >= 1 {
+    if name.byte_at(i - 1) == 58 && name.byte_at(i) == 58 {
+      return name.slice(i + 1, name.len());
+    }
+    i = i - 1;
+  }
+  return name;
+}
+
+fn glob_match(text: String, pat: String) -> bool {
+  let mut ti: i32 = 0;
+  let mut pi: i32 = 0;
+  let mut star: i32 = -1;
+  let mut star_ti: i32 = 0;
+  while ti < text.len() {
+    if pi < pat.len() {
+      let pc: i32 = pat.byte_at(pi);
+      if pc == 63 || pc == text.byte_at(ti) { // '?'
+        ti = ti + 1;
+        pi = pi + 1;
+        continue;
+      }
+      if pc == 42 { // '*'
+        star = pi;
+        pi = pi + 1;
+        star_ti = ti;
+        continue;
+      }
+    }
+    if star >= 0 {
+      pi = star + 1;
+      star_ti = star_ti + 1;
+      ti = star_ti;
+      continue;
+    }
+    return false;
+  }
+  while pi < pat.len() && pat.byte_at(pi) == 42 { pi = pi + 1; }
+  return pi == pat.len();
+}
+
+fn filter_tests_run_pattern(tests: Vec[String], pat: String) -> Vec[String] {
+  if pat == "" { return tests; }
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < tests.len() {
+    let name: String = tests.get(i);
+    let short: String = short_test_name(name);
+    if glob_match(name, pat) || glob_match(short, pat) {
+      out.push(name);
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn print_test_selection(discovered: i32, selected: i32, run_pat: String, filter: String, rerun_failed_count: i32) -> () {
   print("[select] discovered: ".concat(discovered.to_string()).concat(", selected: ").concat(selected.to_string()).concat("\n"));
+  if run_pat != "" {
+    print("[select] --run: \"".concat(run_pat).concat("\"\n"));
+  }
   if filter != "" {
     print("[select] --filter: \"".concat(filter).concat("\"\n"));
+  }
+  if rerun_failed_count >= 0 {
+    print("[select] --rerun-failed: ".concat(rerun_failed_count.to_string()).concat(" cached\n"));
   }
 }
 
@@ -199,6 +265,12 @@ struct ModuleSummary {
   module: String,
   passed: i32,
   failed: i32,
+}
+
+struct TestRunResult {
+  name: String,
+  module: String,
+  ok: bool,
 }
 
 fn test_module_name(name: String) -> String {
@@ -253,6 +325,106 @@ fn print_module_summaries(mods: Vec[ModuleSummary]) -> () {
     print("[module] ".concat(s.module).concat(": ").concat(s.passed.to_string()).concat(" passed, ").concat(s.failed.to_string()).concat(" failed\n"));
     i = i + 1;
   }
+}
+
+fn json_quote(s: String) -> String {
+  let mut out: String = "\"";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    if ch == 34 { out = out.concat("\\\""); i = i + 1; continue; } // "
+    if ch == 92 { out = out.concat("\\\\"); i = i + 1; continue; } // \
+    if ch == 10 { out = out.concat("\\n"); i = i + 1; continue; } // \n
+    if ch == 13 { out = out.concat("\\r"); i = i + 1; continue; } // \r
+    if ch == 9 { out = out.concat("\\t"); i = i + 1; continue; } // \t
+    out = out.concat(s.slice(i, i + 1));
+    i = i + 1;
+  }
+  return out.concat("\"");
+}
+
+fn json_bool(v: bool) -> String { return if v { "true" } else { "false" }; }
+
+fn json_of_tests(tests: Vec[String]) -> String {
+  let mut out: String = "[";
+  let mut i: i32 = 0;
+  while i < tests.len() {
+    if i > 0 { out = out.concat(","); }
+    out = out.concat(json_quote(tests.get(i)));
+    i = i + 1;
+  }
+  return out.concat("]");
+}
+
+fn json_of_results(rs: Vec[TestRunResult]) -> String {
+  let mut out: String = "[";
+  let mut i: i32 = 0;
+  while i < rs.len() {
+    if i > 0 { out = out.concat(","); }
+    let r: TestRunResult = rs.get(i);
+    out = out
+      .concat("{\"name\":").concat(json_quote(r.name))
+      .concat(",\"module\":").concat(json_quote(r.module))
+      .concat(",\"status\":").concat(json_quote(if r.ok { "ok" } else { "fail" }))
+      .concat("}");
+    i = i + 1;
+  }
+  return out.concat("]");
+}
+
+fn json_of_modules(ms: Vec[ModuleSummary]) -> String {
+  let mut out: String = "[";
+  let mut i: i32 = 0;
+  while i < ms.len() {
+    if i > 0 { out = out.concat(","); }
+    let m: ModuleSummary = ms.get(i);
+    out = out
+      .concat("{\"module\":").concat(json_quote(m.module))
+      .concat(",\"passed\":").concat(m.passed.to_string())
+      .concat(",\"failed\":").concat(m.failed.to_string())
+      .concat("}");
+    i = i + 1;
+  }
+  return out.concat("]");
+}
+
+fn print_json_report(
+  discovered: i32,
+  selected: i32,
+  run_pat: String,
+  filter: String,
+  rerun_failed: bool,
+  rerun_failed_count: i32,
+  list_only: bool,
+  selected_tests: Vec[String],
+  results: Vec[TestRunResult],
+  modules: Vec[ModuleSummary],
+  passed: i32,
+  failed: i32
+) -> () {
+  let mut out: String = "{";
+  out = out.concat("\"selection\":{");
+  out = out.concat("\"discovered\":").concat(discovered.to_string());
+  out = out.concat(",\"selected\":").concat(selected.to_string());
+  if run_pat != "" { out = out.concat(",\"run\":").concat(json_quote(run_pat)); }
+  if filter != "" { out = out.concat(",\"filter\":").concat(json_quote(filter)); }
+  if rerun_failed {
+    out = out.concat(",\"rerun_failed\":").concat(json_bool(true));
+    out = out.concat(",\"prev_failed_count\":").concat(rerun_failed_count.to_string());
+  }
+  out = out.concat("}");
+  out = out.concat(",\"list_only\":").concat(json_bool(list_only));
+  out = out.concat(",\"selected_tests\":").concat(json_of_tests(selected_tests));
+  if !list_only {
+    out = out.concat(",\"results\":").concat(json_of_results(results));
+    out = out.concat(",\"modules\":").concat(json_of_modules(modules));
+    out = out.concat(",\"summary\":{");
+    out = out.concat("\"passed\":").concat(passed.to_string());
+    out = out.concat(",\"failed\":").concat(failed.to_string());
+    out = out.concat("}");
+  }
+  out = out.concat("}");
+  print(out.concat("\n"));
 }
 
 fn failed_tests_path() -> String {
@@ -664,9 +836,11 @@ fn main() -> i32 {
   }
   let cmd: String = args.get(0);
   let mut driver: cg.DriverMainKind = cg.DriverMainKind.User;
+  let mut test_run_pat: String = "";
   let mut test_filter: String = "";
   let mut test_list_only: bool = false;
   let mut test_rerun_failed: bool = false;
+  let mut test_json: bool = false;
   let mut i: i32 = 1;
   while i < args.len() {
     let a: String = args.get(i);
@@ -677,6 +851,16 @@ fn main() -> i32 {
       usage();
       print("unknown driver: ".concat(v).concat("\n"));
       return 1;
+    }
+    if has_prefix(a, "--run=") {
+      if cmd != "test-pkg" {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      test_run_pat = a.slice(6, a.len());
+      i = i + 1;
+      continue;
     }
     if has_prefix(a, "--filter=") {
       if cmd != "test-pkg" {
@@ -705,6 +889,16 @@ fn main() -> i32 {
         return 1;
       }
       test_rerun_failed = true;
+      i = i + 1;
+      continue;
+    }
+    if a == "--json" {
+      if cmd != "test-pkg" {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      test_json = true;
       i = i + 1;
       continue;
     }
@@ -800,21 +994,33 @@ fn main() -> i32 {
     let discovered: Vec[String] = discover_tests(paths);
     let prev_failed: Vec[String] = if test_rerun_failed { read_failed_tests() } else { Vec() };
     if test_rerun_failed && prev_failed.len() == 0 {
-      print("[test] no previous failed tests\n");
+      if test_json {
+        print_json_report(discovered.len(), 0, test_run_pat, test_filter, true, 0, false, Vec(), Vec(), Vec(), 0, 0);
+      } else {
+        print("[test] no previous failed tests\n");
+      }
       return 0;
     }
     let base: Vec[String] = if test_rerun_failed { intersect_tests(discovered, prev_failed) } else { discovered };
-    let tests: Vec[String] = filter_tests_contains(base, test_filter);
-    print_test_selection(discovered.len(), tests.len(), test_filter);
-    if test_rerun_failed {
-      print("[select] --rerun-failed: ".concat(prev_failed.len().to_string()).concat(" cached\n"));
+    let by_run: Vec[String] = filter_tests_run_pattern(base, test_run_pat);
+    let tests: Vec[String] = filter_tests_contains(by_run, test_filter);
+    if !test_json {
+      print_test_selection(discovered.len(), tests.len(), test_run_pat, test_filter, if test_rerun_failed { prev_failed.len() } else { -1 });
     }
     if test_list_only {
-      print_test_list(tests);
+      if test_json {
+        print_json_report(discovered.len(), tests.len(), test_run_pat, test_filter, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, true, tests, Vec(), Vec(), 0, 0);
+      } else {
+        print_test_list(tests);
+      }
       return 0;
     }
     if tests.len() == 0 {
-      print("[test] no tests found\n");
+      if test_json {
+        print_json_report(discovered.len(), 0, test_run_pat, test_filter, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, Vec(), Vec(), Vec(), 0, 0);
+      } else {
+        print("[test] no tests found\n");
+      }
       write_failed_tests(Vec());
       return 0;
     }
@@ -858,6 +1064,7 @@ fn main() -> i32 {
     let mut failed: i32 = 0;
     let mut failed_names: Vec[String] = Vec();
     let mut module_summaries: Vec[ModuleSummary] = Vec();
+    let mut results: Vec[TestRunResult] = Vec();
     let mut ti: i32 = 0;
     while ti < tests.len() {
       let name: String = tests.get(ti);
@@ -866,17 +1073,23 @@ fn main() -> i32 {
         failed = failed + 1;
         failed_names.push(name);
         module_summaries = update_module_summary(module_summaries, name, false);
-        print("[FAIL] ".concat(name).concat("\n"));
+        results.push(TestRunResult { name: name, module: test_module_name(name), ok: false });
+        if !test_json { print("[FAIL] ".concat(name).concat("\n")); }
       } else {
         passed = passed + 1;
         module_summaries = update_module_summary(module_summaries, name, true);
-        print("[OK] ".concat(name).concat("\n"));
+        results.push(TestRunResult { name: name, module: test_module_name(name), ok: true });
+        if !test_json { print("[OK] ".concat(name).concat("\n")); }
       }
       ti = ti + 1;
     }
     write_failed_tests(failed_names);
-    print_module_summaries(module_summaries);
-    print("[test] ".concat(passed.to_string()).concat(" passed, ").concat(failed.to_string()).concat(" failed\n"));
+    if test_json {
+      print_json_report(discovered.len(), tests.len(), test_run_pat, test_filter, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, tests, results, module_summaries, passed, failed);
+    } else {
+      print_module_summaries(module_summaries);
+      print("[test] ".concat(passed.to_string()).concat(" passed, ").concat(failed.to_string()).concat(" failed\n"));
+    }
     if failed != 0 { return 1; }
     return 0;
   }
