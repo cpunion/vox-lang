@@ -264,12 +264,12 @@ fn impl_for_ty_more_specific(ctx: Ctx, a: i32, b: i32) -> bool {
   return !a_to_b.ok;
 }
 
-fn impl_decl_file(w: World, mod_path: String, decl_idx: i32) -> String {
+fn impl_decl_span(w: World, mod_path: String, decl_idx: i32) -> ast.Span {
   let fm: FindModResult = find_mod(w, mod_path);
-  if !fm.found { return ""; }
+  if !fm.found { return ast.span0(); }
   let m: WorldModule = w.mods.get(fm.idx);
-  if decl_idx < 0 || decl_idx >= m.prog.impls.len() { return ""; }
-  return m.prog.impls.get(decl_idx).file;
+  if decl_idx < 0 || decl_idx >= m.prog.impls.len() { return ast.span0(); }
+  return m.prog.impls.get(decl_idx).sp;
 }
 
 struct FindWorldTraitDeclResult { found: bool, vis: i32, is_pub: bool, file: String }
@@ -361,10 +361,10 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
     while ti < m.prog.traits.len() {
       let td: ast.TraitDecl = m.prog.traits.get(ti);
       if is_reserved_intrinsic_name(td.name) {
-        return TcCtxResult { ok: false, err: type_error(td.file, "reserved name: ".concat(td.name)), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(td.sp, "reserved name: ".concat(td.name)), ctx: c };
       }
       if has_trait_name(c, m.path, td.name) {
-        return TcCtxResult { ok: false, err: type_error(td.file, "duplicate trait: ".concat(td.name)), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(td.sp, "duplicate trait: ".concat(td.name)), ctx: c };
       }
       c.traits.push(TraitSig { mod_path: m.path, name: td.name, vis: td.vis, is_pub: td.is_pub, supers: Vec(), assoc_types: Vec(), methods: Vec() });
       ti = ti + 1;
@@ -380,7 +380,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
     while ti < m.prog.traits.len() {
       let td: ast.TraitDecl = m.prog.traits.get(ti);
       let idx: i32 = find_trait_idx(c.traits, m.path, td.name);
-      if idx < 0 { return TcCtxResult { ok: false, err: type_error(td.file, "internal: trait placeholder missing"), ctx: c }; }
+      if idx < 0 { return TcCtxResult { ok: false, err: type_error_at(td.sp, "internal: trait placeholder missing"), ctx: c }; }
 
       let ir: ImportsResult = build_imports(w, m.path, m.prog.imports, td.file);
       if !ir.ok { return TcCtxResult { ok: false, err: ir.err, ctx: c }; }
@@ -390,14 +390,14 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
       let mut si: i32 = 0;
       while si < td.supers.len() {
         let sr: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, td.supers.get(si));
-        if !sr.ok { return TcCtxResult { ok: false, err: type_error(td.file, "bad supertrait path"), ctx: c }; }
+        if !sr.ok { return TcCtxResult { ok: false, err: type_error_at(td.sp, "bad supertrait path"), ctx: c }; }
         let sfw: FindWorldTraitDeclResult = find_world_trait_decl(w, sr.mod_path, sr.name);
-        if !sfw.found { return TcCtxResult { ok: false, err: type_error(td.file, "unknown supertrait"), ctx: c }; }
+        if !sfw.found { return TcCtxResult { ok: false, err: type_error_at(td.sp, "unknown supertrait"), ctx: c }; }
         if !vis_allows(sfw.vis, sr.mod_path, m.path) {
-          return TcCtxResult { ok: false, err: type_error(td.file, "supertrait is private"), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(td.sp, "supertrait is private"), ctx: c };
         }
         if sr.mod_path == m.path && sr.name == td.name {
-          return TcCtxResult { ok: false, err: type_error(td.file, "trait cannot inherit from itself"), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(td.sp, "trait cannot inherit from itself"), ctx: c };
         }
         if !has_super_sig(supers, sr.mod_path, sr.name) {
           supers.push(TraitSuperSig { mod_path: sr.mod_path, name: sr.name });
@@ -410,7 +410,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
       while ai < td.assoc_types.len() {
         let ad: ast.TraitAssocTypeDecl = td.assoc_types.get(ai);
         if trait_assoc_type_exists(assocs, ad.name) {
-          return TcCtxResult { ok: false, err: type_error(td.file, "duplicate trait associated type: ".concat(ad.name)), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(td.sp, "duplicate trait associated type: ".concat(ad.name)), ctx: c };
         }
         assocs.push(TraitAssocTypeSig { name: ad.name });
         ai = ai + 1;
@@ -433,10 +433,10 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
       while fi < td.methods.len() {
         let md: ast.TraitMethodDecl = td.methods.get(fi);
         if trait_method_exists(ms, md.name) {
-          return TcCtxResult { ok: false, err: type_error(td.file, "duplicate trait method: ".concat(md.name)), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(td.sp, "duplicate trait method: ".concat(md.name)), ctx: c };
         }
         if trait_assoc_type_exists(assocs, md.name) {
-          return TcCtxResult { ok: false, err: type_error(td.file, "trait method conflicts with associated type: ".concat(md.name)), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(td.sp, "trait method conflicts with associated type: ".concat(md.name)), ctx: c };
         }
 
         let tps_self: Vec[String] = vec_self_tps(md.type_params);
@@ -445,7 +445,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         while cpi < md.const_params.len() {
           let cp: ast.ConstParamDecl = md.const_params.get(cpi);
           if contains_str_local(md.type_params, cp.name) {
-            return TcCtxResult { ok: false, err: type_error(td.file, "const param duplicates type param: ".concat(cp.name)), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(td.sp, "const param duplicates type param: ".concat(cp.name)), ctx: c };
           }
           let mut dup: bool = false;
           let mut cj: i32 = 0;
@@ -454,15 +454,15 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
             cj = cj + 1;
           }
           if dup {
-            return TcCtxResult { ok: false, err: type_error(td.file, "duplicate const param: ".concat(cp.name)), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(td.sp, "duplicate const param: ".concat(cp.name)), ctx: c };
           }
           let cpr: ResolveTyResult = resolve_type(c, w, m.path, imps, tps_self, cp.ty);
           c = cpr.ctx;
           if !cpr.ok {
-            return TcCtxResult { ok: false, err: type_error(td.file, "type resolve failed in trait method const param"), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(td.sp, "type resolve failed in trait method const param"), ctx: c };
           }
           if !is_int_like_ty(c, cpr.idx) {
-            return TcCtxResult { ok: false, err: type_error(td.file, "trait method const param type must be integer"), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(td.sp, "trait method const param type must be integer"), ctx: c };
           }
           let mut has_default: bool = false;
           let mut default_iv: i64 = 0;
@@ -473,7 +473,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
             dparts.push(cp.default_text);
             let dpr: ParseConstGenericArgResult = parse_const_generic_arg(c, ast.TypeName { parts: dparts, args: Vec() }, cpr.idx);
             if !dpr.ok {
-              return TcCtxResult { ok: false, err: type_error(td.file, "trait method const param default out of range"), ctx: c };
+              return TcCtxResult { ok: false, err: type_error_at(td.sp, "trait method const param default out of range"), ctx: c };
             }
             has_default = true;
             default_iv = dpr.iv;
@@ -488,24 +488,24 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
           let pr: ast.Param = md.params.get(pi);
           let bad_assoc0: String = type_unknown_self_assoc(pr.ty, assocs);
           if bad_assoc0 != "" {
-            return TcCtxResult { ok: false, err: type_error(td.file, "unknown associated type in trait method: ".concat(bad_assoc0)), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(td.sp, "unknown associated type in trait method: ".concat(bad_assoc0)), ctx: c };
           }
           let tr: ResolveTyResult = resolve_type(c, w, m.path, imps, tps_self, pr.ty);
           c = tr.ctx;
           if !tr.ok {
-            return TcCtxResult { ok: false, err: type_error(td.file, "type resolve failed in trait method param"), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(td.sp, "type resolve failed in trait method param"), ctx: c };
           }
           ps.push(tr.idx);
           pi = pi + 1;
         }
         let bad_assoc1: String = type_unknown_self_assoc(md.ret, assocs);
         if bad_assoc1 != "" {
-          return TcCtxResult { ok: false, err: type_error(td.file, "unknown associated type in trait method: ".concat(bad_assoc1)), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(td.sp, "unknown associated type in trait method: ".concat(bad_assoc1)), ctx: c };
         }
         let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, tps_self, md.ret);
         c = rr.ctx;
         if !rr.ok {
-          return TcCtxResult { ok: false, err: type_error(td.file, "type resolve failed in trait method ret"), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(td.sp, "type resolve failed in trait method ret"), ctx: c };
         }
 
         let mut tbs: Vec[TypeParamBoundSig] = Vec();
@@ -513,20 +513,20 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         while bi < md.type_param_bounds.len() {
           let bdecl: ast.TypeParamBoundsDecl = md.type_param_bounds.get(bi);
           if !contains_str_local(md.type_params, bdecl.name) {
-            return TcCtxResult { ok: false, err: type_error(td.file, "unknown type param in trait method bound: ".concat(bdecl.name)), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(td.sp, "unknown type param in trait method bound: ".concat(bdecl.name)), ctx: c };
           }
           let mut bj: i32 = 0;
           while bj < bdecl.bounds.len() {
             let rtr: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, bdecl.bounds.get(bj));
             if !rtr.ok {
-              return TcCtxResult { ok: false, err: type_error(td.file, "bad trait method bound"), ctx: c };
+              return TcCtxResult { ok: false, err: type_error_at(td.sp, "bad trait method bound"), ctx: c };
             }
             let tf2: FindTraitResult = find_trait(c, rtr.mod_path, rtr.name);
             if !tf2.found {
-              return TcCtxResult { ok: false, err: type_error(td.file, "unknown trait in method bound"), ctx: c };
+              return TcCtxResult { ok: false, err: type_error_at(td.sp, "unknown trait in method bound"), ctx: c };
             }
             if !vis_allows(tf2.sig.vis, rtr.mod_path, m.path) {
-              return TcCtxResult { ok: false, err: type_error(td.file, "trait method bound refers to private trait"), ctx: c };
+              return TcCtxResult { ok: false, err: type_error_at(td.sp, "trait method bound refers to private trait"), ctx: c };
             }
             if !has_bound_sig(tbs, bdecl.name, rtr.mod_path, rtr.name) {
               tbs.push(TypeParamBoundSig { type_param: bdecl.name, trait_mod_path: rtr.mod_path, trait_name: rtr.name });
@@ -540,13 +540,13 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
           let prj: ast.Param = md.params.get(pji);
           let perr0: String = projection_bound_issue(c, md.type_params, tbs, prj.ty);
           if perr0 != "" {
-            return TcCtxResult { ok: false, err: type_error(td.file, perr0), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(td.sp, perr0), ctx: c };
           }
           pji = pji + 1;
         }
         let perr1: String = projection_bound_issue(c, md.type_params, tbs, md.ret);
         if perr1 != "" {
-          return TcCtxResult { ok: false, err: type_error(td.file, perr1), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(td.sp, perr1), ctx: c };
         }
         let cwr: CollectConstWhereResult = collect_const_where_bounds(td.file, md.type_params, cps, md.const_where_bounds);
         if !cwr.ok {
@@ -598,14 +598,14 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
 
       let trr: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, id.trait_name);
       if !trr.ok {
-        return TcCtxResult { ok: false, err: type_error(id.file, "bad trait path in impl"), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(id.sp, "bad trait path in impl"), ctx: c };
       }
       let tf: FindTraitResult = find_trait(c, trr.mod_path, trr.name);
       if !tf.found {
-        return TcCtxResult { ok: false, err: type_error(id.file, "unknown trait in impl"), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(id.sp, "unknown trait in impl"), ctx: c };
       }
       if !vis_allows(tf.sig.vis, trr.mod_path, m.path) {
-        return TcCtxResult { ok: false, err: type_error(id.file, "trait is private"), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(id.sp, "trait is private"), ctx: c };
       }
 
       let mut head_tpbs: Vec[TypeParamBoundSig] = Vec();
@@ -613,16 +613,16 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
       while bi0 < id.type_param_bounds.len() {
         let bdecl0: ast.TypeParamBoundsDecl = id.type_param_bounds.get(bi0);
         if !contains_str_local(id.type_params, bdecl0.name) {
-          return TcCtxResult { ok: false, err: type_error(id.file, "unknown type param in impl bound: ".concat(bdecl0.name)), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, "unknown type param in impl bound: ".concat(bdecl0.name)), ctx: c };
         }
         let mut bj0: i32 = 0;
         while bj0 < bdecl0.bounds.len() {
           let rtr0: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, bdecl0.bounds.get(bj0));
-          if !rtr0.ok { return TcCtxResult { ok: false, err: type_error(id.file, "bad impl type bound"), ctx: c }; }
+          if !rtr0.ok { return TcCtxResult { ok: false, err: type_error_at(id.sp, "bad impl type bound"), ctx: c }; }
           let tf0: FindTraitResult = find_trait(c, rtr0.mod_path, rtr0.name);
-          if !tf0.found { return TcCtxResult { ok: false, err: type_error(id.file, "unknown trait in impl bound"), ctx: c }; }
+          if !tf0.found { return TcCtxResult { ok: false, err: type_error_at(id.sp, "unknown trait in impl bound"), ctx: c }; }
           if !vis_allows(tf0.sig.vis, rtr0.mod_path, m.path) {
-            return TcCtxResult { ok: false, err: type_error(id.file, "impl bound refers to private trait"), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(id.sp, "impl bound refers to private trait"), ctx: c };
           }
           if !has_bound_sig(head_tpbs, bdecl0.name, rtr0.mod_path, rtr0.name) {
             head_tpbs.push(TypeParamBoundSig { type_param: bdecl0.name, trait_mod_path: rtr0.mod_path, trait_name: rtr0.name });
@@ -635,14 +635,14 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
       let fr: ResolveTyResult = resolve_type(c, w, m.path, imps, id.type_params, id.for_ty);
       c = fr.ctx;
       if !fr.ok {
-        return TcCtxResult { ok: false, err: type_error(id.file, "bad impl target type"), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(id.sp, "bad impl target type"), ctx: c };
       }
       let for_ty: i32 = strip_range(c, fr.idx);
       let for_t: ir.Ty = ir.ty_pool_get(c.pool, for_ty);
       let trait_local: bool = trr.mod_path == m.path;
       let type_local: bool = ty_mod(for_t) == m.path;
       if !trait_local && !type_local {
-        return TcCtxResult { ok: false, err: type_error(id.file, "orphan impl is not allowed"), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(id.sp, "orphan impl is not allowed"), ctx: c };
       }
 
       let mut di: i32 = 0;
@@ -654,7 +654,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
             let old_more: bool = impl_for_ty_more_specific(c, ds.for_ty, for_ty);
             if !new_more && !old_more {
               let msg_ov: String = "overlapping impl without strict specialization: ".concat(ty_inst_str(c, for_ty)).concat(" vs ").concat(ty_inst_str(c, ds.for_ty));
-              return TcCtxResult { ok: false, err: type_error(id.file, msg_ov), ctx: c };
+              return TcCtxResult { ok: false, err: type_error_at(id.sp, msg_ov), ctx: c };
             }
           }
         }
@@ -666,15 +666,15 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
       while ai2 < id.assoc_types.len() {
         let ad2: ast.ImplAssocTypeBinding = id.assoc_types.get(ai2);
         if impl_assoc_type_exists(impl_assocs, ad2.name) {
-          return TcCtxResult { ok: false, err: type_error(id.file, "duplicate impl associated type: ".concat(ad2.name)), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, "duplicate impl associated type: ".concat(ad2.name)), ctx: c };
         }
         if !trait_assoc_type_exists(tf.sig.assoc_types, ad2.name) {
-          return TcCtxResult { ok: false, err: type_error(id.file, "impl associated type not in trait: ".concat(ad2.name)), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, "impl associated type not in trait: ".concat(ad2.name)), ctx: c };
         }
         let ar2: ResolveTyResult = resolve_type(c, w, m.path, imps, id.type_params, ad2.ty);
         c = ar2.ctx;
         if !ar2.ok {
-          return TcCtxResult { ok: false, err: type_error(id.file, "impl associated type resolve failed: ".concat(ad2.name)), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, "impl associated type resolve failed: ".concat(ad2.name)), ctx: c };
         }
         impl_assocs.push(ImplAssocTypeSig { name: ad2.name, ty: ar2.idx });
         ai2 = ai2 + 1;
@@ -683,7 +683,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
       while ai3 < tf.sig.assoc_types.len() {
         let ta: TraitAssocTypeSig = tf.sig.assoc_types.get(ai3);
         if !impl_assoc_type_exists(impl_assocs, ta.name) {
-          return TcCtxResult { ok: false, err: type_error(id.file, "impl missing associated type: ".concat(ta.name)), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, "impl missing associated type: ".concat(ta.name)), ctx: c };
         }
         ai3 = ai3 + 1;
       }
@@ -697,7 +697,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           if !tms.has_default {
             let ms: String = trait_method_candidates_text(tf.sig);
             let msg: String = "impl missing trait method: ".concat(tms.name).concat(" (required methods: ").concat(ms).concat(")");
-            return TcCtxResult { ok: false, err: type_error(id.file, msg), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(id.sp, msg), ctx: c };
           }
 
           let want0: FuncSig = trait_method_sig_for(c, tms, for_ty, impl_assocs);
@@ -718,38 +718,38 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           continue;
         }
         if !impl_method_decl_name_unique(id.methods, tms.name, mdi) {
-          return TcCtxResult { ok: false, err: type_error(id.file, "duplicate impl method: ".concat(tms.name)), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, "duplicate impl method: ".concat(tms.name)), ctx: c };
         }
 
         let md: ast.FuncDecl = id.methods.get(mdi);
         let want: FuncSig = trait_method_sig_for(c, tms, for_ty, impl_assocs);
         if md.const_params.len() != want.const_params.len() {
-          return TcCtxResult { ok: false, err: type_error(md.file, "impl method const param count mismatch"), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param count mismatch"), ctx: c };
         }
         let mut cpi2: i32 = 0;
         while cpi2 < md.const_params.len() {
           let cp2: ast.ConstParamDecl = md.const_params.get(cpi2);
           let wcp: ConstParamSig = want.const_params.get(cpi2);
           if cp2.name != wcp.name {
-            return TcCtxResult { ok: false, err: type_error(md.file, "impl method const param name mismatch"), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param name mismatch"), ctx: c };
           }
           let mut hpi0: i32 = 0;
           while hpi0 < id.type_params.len() {
             if id.type_params.get(hpi0) == cp2.name {
-              return TcCtxResult { ok: false, err: type_error(md.file, "impl method const param duplicates impl type param"), ctx: c };
+              return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param duplicates impl type param"), ctx: c };
             }
             hpi0 = hpi0 + 1;
           }
           let cpr2: ResolveTyResult = resolve_type(c, w, m.path, imps, concat_strs(id.type_params, md.type_params), cp2.ty);
           c = cpr2.ctx;
           if !cpr2.ok {
-            return TcCtxResult { ok: false, err: type_error(md.file, "impl method const param type resolve failed"), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param type resolve failed"), ctx: c };
           }
           if cpr2.idx != wcp.ty {
-            return TcCtxResult { ok: false, err: type_error(md.file, "impl method const param type mismatch"), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param type mismatch"), ctx: c };
           }
           if cp2.has_default && !wcp.has_default {
-            return TcCtxResult { ok: false, err: type_error(md.file, "impl method const param default not in trait"), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param default not in trait"), ctx: c };
           }
           if cp2.has_default && wcp.has_default {
             let mut dparts2: Vec[String] = Vec();
@@ -757,10 +757,10 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
             dparts2.push(cp2.default_text);
             let dpr2: ParseConstGenericArgResult = parse_const_generic_arg(c, ast.TypeName { parts: dparts2, args: Vec() }, wcp.ty);
             if !dpr2.ok {
-              return TcCtxResult { ok: false, err: type_error(md.file, "impl method const param default out of range"), ctx: c };
+              return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param default out of range"), ctx: c };
             }
             if dpr2.iv != wcp.default_iv {
-              return TcCtxResult { ok: false, err: type_error(md.file, "impl method const param default mismatch"), ctx: c };
+              return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param default mismatch"), ctx: c };
             }
           }
           cpi2 = cpi2 + 1;
@@ -768,14 +768,14 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let got_cwr: CollectConstWhereResult = collect_const_where_bounds(md.file, md.type_params, want.const_params, md.const_where_bounds);
         if !got_cwr.ok { return TcCtxResult { ok: false, err: got_cwr.err, ctx: c }; }
         if got_cwr.bounds.len() != want.const_where_bounds.len() {
-          return TcCtxResult { ok: false, err: type_error(md.file, "impl method comptime where bound count mismatch"), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method comptime where bound count mismatch"), ctx: c };
         }
         let mut cbi0: i32 = 0;
         while cbi0 < want.const_where_bounds.len() {
           let wb: ConstWhereBoundSig = want.const_where_bounds.get(cbi0);
           if !has_const_where_sig(got_cwr.bounds, wb.lhs_kind, wb.name, wb.op, wb.rhs_is_param, wb.rhs_param, wb.rhs_iv) {
             let msgw: String = "impl method missing comptime where bound: ".concat(wb.name);
-            return TcCtxResult { ok: false, err: type_error(md.file, msgw), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, msgw), ctx: c };
           }
           cbi0 = cbi0 + 1;
         }
@@ -784,19 +784,19 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           let gb: ConstWhereBoundSig = got_cwr.bounds.get(cbi0);
           if !has_const_where_sig(want.const_where_bounds, gb.lhs_kind, gb.name, gb.op, gb.rhs_is_param, gb.rhs_param, gb.rhs_iv) {
             let msgw2: String = "impl method has extra comptime where bound: ".concat(gb.name);
-            return TcCtxResult { ok: false, err: type_error(md.file, msgw2), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, msgw2), ctx: c };
           }
           cbi0 = cbi0 + 1;
         }
         let mut hpi: i32 = 0;
         while hpi < id.type_params.len() {
           if contains_str_local(md.type_params, id.type_params.get(hpi)) {
-            return TcCtxResult { ok: false, err: type_error(md.file, "impl method type param duplicates impl type param"), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method type param duplicates impl type param"), ctx: c };
           }
           hpi = hpi + 1;
         }
         if md.type_params.len() != want.type_params.len() {
-          return TcCtxResult { ok: false, err: type_error(md.file, "impl method type param count mismatch"), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method type param count mismatch"), ctx: c };
         }
 
         // Impl method generic param names may differ from trait method names;
@@ -806,7 +806,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         while tpi < md.type_params.len() {
           let trtp: ResolveTyResult = resolve_type(c, w, m.path, imps, want.type_params, type_name1(want.type_params.get(tpi)));
           c = trtp.ctx;
-          if !trtp.ok { return TcCtxResult { ok: false, err: type_error(md.file, "impl method type param resolve failed"), ctx: c }; }
+          if !trtp.ok { return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method type param resolve failed"), ctx: c }; }
           impl_to_trait_tps.push(TySub { name: md.type_params.get(tpi), ty: trtp.idx });
           tpi = tpi + 1;
         }
@@ -816,19 +816,19 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         while bi2 < md.type_param_bounds.len() {
           let bdecl2: ast.TypeParamBoundsDecl = md.type_param_bounds.get(bi2);
           if !contains_str_local(md.type_params, bdecl2.name) {
-            return TcCtxResult { ok: false, err: type_error(md.file, "unknown type param in impl method bound: ".concat(bdecl2.name)), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "unknown type param in impl method bound: ".concat(bdecl2.name)), ctx: c };
           }
           let bpos: i32 = type_param_pos(md.type_params, bdecl2.name);
-          if bpos < 0 { return TcCtxResult { ok: false, err: type_error(md.file, "unknown type param in impl method bound: ".concat(bdecl2.name)), ctx: c }; }
+          if bpos < 0 { return TcCtxResult { ok: false, err: type_error_at(md.sp, "unknown type param in impl method bound: ".concat(bdecl2.name)), ctx: c }; }
           let btp: String = want.type_params.get(bpos);
           let mut bj2: i32 = 0;
           while bj2 < bdecl2.bounds.len() {
             let rtr2: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, bdecl2.bounds.get(bj2));
-            if !rtr2.ok { return TcCtxResult { ok: false, err: type_error(md.file, "bad impl method bound"), ctx: c }; }
+            if !rtr2.ok { return TcCtxResult { ok: false, err: type_error_at(md.sp, "bad impl method bound"), ctx: c }; }
             let tf3: FindTraitResult = find_trait(c, rtr2.mod_path, rtr2.name);
-            if !tf3.found { return TcCtxResult { ok: false, err: type_error(md.file, "unknown trait in impl method bound"), ctx: c }; }
+            if !tf3.found { return TcCtxResult { ok: false, err: type_error_at(md.sp, "unknown trait in impl method bound"), ctx: c }; }
             if !vis_allows(tf3.sig.vis, rtr2.mod_path, m.path) {
-              return TcCtxResult { ok: false, err: type_error(md.file, "impl method bound refers to private trait"), ctx: c };
+              return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method bound refers to private trait"), ctx: c };
             }
             if !has_bound_sig(got_tbs, btp, rtr2.mod_path, rtr2.name) {
               got_tbs.push(TypeParamBoundSig { type_param: btp, trait_mod_path: rtr2.mod_path, trait_name: rtr2.name });
@@ -842,7 +842,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           let b: TypeParamBoundSig = want.type_param_bounds.get(bi3);
           if !has_bound_sig(got_tbs, b.type_param, b.trait_mod_path, b.trait_name) {
             let msg: String = "impl method missing type bound: ".concat(b.type_param).concat(": ").concat(b.trait_name);
-            return TcCtxResult { ok: false, err: type_error(md.file, msg), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, msg), ctx: c };
           }
           bi3 = bi3 + 1;
         }
@@ -851,13 +851,13 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           let b2: TypeParamBoundSig = got_tbs.get(bi4);
           if !has_bound_sig(want.type_param_bounds, b2.type_param, b2.trait_mod_path, b2.trait_name) {
             let msg2: String = "impl method has extra type bound: ".concat(b2.type_param).concat(": ").concat(b2.trait_name);
-            return TcCtxResult { ok: false, err: type_error(md.file, msg2), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, msg2), ctx: c };
           }
           bi4 = bi4 + 1;
         }
 
         if md.params.len() != want.params.len() {
-          return TcCtxResult { ok: false, err: type_error(md.file, "impl method param count mismatch"), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method param count mismatch"), ctx: c };
         }
 
         let mut pi: i32 = 0;
@@ -865,15 +865,15 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           let pr: ast.Param = md.params.get(pi);
           let rr: ResolveTyResult = resolve_type_bound(c, w, m.path, imps, concat_strs(id.type_params, md.type_params), impl_self_assoc_binds(for_ty, impl_assocs), pr.ty);
           c = rr.ctx;
-          if !rr.ok { return TcCtxResult { ok: false, err: type_error(md.file, "impl method param type resolve failed"), ctx: c }; }
+          if !rr.ok { return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method param type resolve failed"), ctx: c }; }
           let gotp: i32 = subst_ty(c, rr.idx, impl_to_trait_tps);
-          if gotp != want.params.get(pi) { return TcCtxResult { ok: false, err: type_error(md.file, "impl method param type mismatch"), ctx: c }; }
+          if gotp != want.params.get(pi) { return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method param type mismatch"), ctx: c }; }
           pi = pi + 1;
         }
         let ret_r: ResolveTyResult = resolve_type_bound(c, w, m.path, imps, concat_strs(id.type_params, md.type_params), impl_self_assoc_binds(for_ty, impl_assocs), md.ret);
         c = ret_r.ctx;
-        if !ret_r.ok { return TcCtxResult { ok: false, err: type_error(md.file, "impl method ret type resolve failed"), ctx: c }; }
-        if subst_ty(c, ret_r.idx, impl_to_trait_tps) != want.ret { return TcCtxResult { ok: false, err: type_error(md.file, "impl method ret type mismatch"), ctx: c }; }
+        if !ret_r.ok { return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method ret type resolve failed"), ctx: c }; }
+        if subst_ty(c, ret_r.idx, impl_to_trait_tps) != want.ret { return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method ret type mismatch"), ctx: c }; }
 
         let emit_sig: FuncSig = impl_method_emit_sig(id.type_params, head_tpbs, want);
         let lowered: String = fresh_impl_lowered_name(c, m.path, tf.sig, tms.name, c.impls.len() * 1000 + mdi);
@@ -899,7 +899,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         if !tmf.found {
           let ms2: String = trait_method_candidates_text(tf.sig);
           let msg2: String = "impl method not in trait: ".concat(md2.name).concat(" (available methods: ").concat(ms2).concat(")");
-          return TcCtxResult { ok: false, err: type_error(md2.file, msg2), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(md2.sp, msg2), ctx: c };
         }
         extra_i = extra_i + 1;
       }
@@ -924,7 +924,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
     let isg: ImplSig = c.impls.get(ii2);
     let tf2: FindTraitResult = find_trait(c, isg.trait_mod_path, isg.trait_name);
     if !tf2.found {
-      return TcCtxResult { ok: false, err: type_error(impl_decl_file(w, isg.mod_path, isg.decl_idx), "unknown trait in impl"), ctx: c };
+      return TcCtxResult { ok: false, err: type_error_at(impl_decl_span(w, isg.mod_path, isg.decl_idx), "unknown trait in impl"), ctx: c };
     }
     let mut si2: i32 = 0;
     while si2 < tf2.sig.supers.len() {
@@ -943,7 +943,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
       }
       if !has_sup {
         let msg: String = "impl of ".concat(isg.trait_name).concat(" requires supertrait ").concat(sup.name);
-        return TcCtxResult { ok: false, err: type_error(impl_decl_file(w, isg.mod_path, isg.decl_idx), msg), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(impl_decl_span(w, isg.mod_path, isg.decl_idx), msg), ctx: c };
       }
       si2 = si2 + 1;
     }
