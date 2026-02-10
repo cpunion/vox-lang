@@ -1,6 +1,6 @@
-# Stage1 编译器（Vox 实现，草案）
+# Stage1 编译器（Vox 实现，冻结维护线）
 
-本章描述 `compiler/stage1` 的工程结构与近期开发顺序。Stage1 的目标是在 Vox 语言子集内实现 Vox 编译器，并最终替代 Stage0（Go）。
+本章描述 `compiler/stage1` 的工程结构与维护边界。当前仓库策略是：Stage1 作为稳定 bootstrap 编译器冻结维护，不再承载新增语言能力；新增能力在 Stage2 演进。
 
 ## 目录约定
 
@@ -15,13 +15,11 @@
 - Stage2 编译器由 Stage1 编译生成（已在 Stage0 集成测试覆盖 `stage1 -> stage2` 引导链路）。
 - 这条链路用于承接“Stage0 无法直接承载”的语言演进（例如更激进的泛型标准库抽象）。
 
-## 近期顺序（可迭代）
+## 当前维护边界
 
-1. 词法（lexer）：把 `String` 解析为 token 流，包含位置（byte offset）。
-2. 语法（parser）：从 token 流构建 AST（使用 arena/index 建模递归结构）。
-3. 类型检查：覆盖 Stage0 子集。
-4. IR v0：对齐 `docs/19-ir-spec.md`，跑通从 AST 到 IR。
-5. 后端（C）：先复用 Stage0 的 C 后端策略（tagged union、by-value struct），产出单文件 C 源码，后续再接上编译/链接为可执行文件。
+1. 保持 `stage1 -> stage2` 引导链路稳定（优先级最高）。
+2. 仅修复回归、崩溃、错误诊断与明显性能退化。
+3. 不在 Stage1 新增语法/类型系统能力；相关开发在 `compiler/stage2` 进行。
 
 说明：
 

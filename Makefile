@@ -1,11 +1,15 @@
-.PHONY: fmt test test-go test-stage1 test-stage1-c test-stage1-interp test-examples \
-	test-examples-c test-examples-interp test-stage1-toolchain test-selfhost test-stage2-selfhost audit-vox-lines
+.PHONY: fmt test test-go test-stage1 test-stage1-c test-stage1-interp test-stage2 \
+	test-examples test-examples-c test-examples-interp test-stage1-toolchain test-selfhost test-stage2-selfhost \
+	test-active audit-vox-lines
 
 fmt:
 	cd compiler/stage0 && gofmt -w $$(find . -name '*.go' -type f)
 
 # Run all tests (stage0 Go unit tests + stage1 Vox tests via stage0 + example package tests).
 test: test-go test-stage1 test-examples
+
+# Active development gate (stage2-first): keep stage0/unit stable, validate stage2, and keep bootstrap chain green.
+test-active: test-go test-stage2
 
 test-go:
 	cd compiler/stage0 && go test ./...
@@ -27,6 +31,10 @@ test-stage1-interp:
 	go run ./cmd/vox test --engine=interp ../stage1; \
 	end=$$(date +%s); \
 	echo "[time] vox test --engine=interp ../stage1: $$((end-start))s"
+
+# Stage2 gate currently uses bootstrap E2E:
+# stage1 (built by stage0) -> build stage2 -> stage2 builds sample package.
+test-stage2: test-stage2-selfhost
 
 test-examples: test-examples-c test-examples-interp
 
