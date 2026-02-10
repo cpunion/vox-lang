@@ -364,7 +364,7 @@ pub const NAME: String = "vox";
     - 已支持 `while`/`break`/`continue`/`return`（最小子集，语义与运行时一致）
     - 在“需要值”的上下文中必须有 tail 表达式（无 tail 视为不支持）
     - 在 unit 上下文（例如 `if` 表达式分支仅用于语句执行）允许省略 tail
-  - `-x` / `!x`
+  - `-x` / `!x`（`!` 对 `bool` 是逻辑非，对整数是按位非）
   - `expr as <int>`、`expr as f32/f64`（运行时与 const 场景均支持整数与浮点互转；`float -> int` 为 checked cast）
   - `+ - * / %`、`& | ^ << >>`、比较、`== !=`、`&& ||`
   - `if cond { a } else { b }`（cond 必须为常量 bool）
@@ -375,6 +375,7 @@ pub const NAME: String = "vox";
   - 有符号整数在 `MIN / -1` 与 `MIN % -1` 时编译期报错（`division overflow`）。
   - `<< >>` 的移位位数必须在 `[0, bit_width(T)-1]`，否则编译期报错。
   - 浮点常量（`f32/f64`）在 v0 支持：字面量、常量引用、`-x`、`f32 <-> f64 as`、`+ - * /`、`< <= > >=`、`== !=`。
+  - `!x`：`bool` 上是逻辑非；整数上是按位非（按目标整数位宽 wrapping）。
   - 浮点常量的 `/` 在除数为 `0.0`（或规范化后为 `0.0`）时报错：`const division by zero`。
 - 支持在 const 初始化中调用普通函数（当前子集）：
   - 支持非泛型与泛型函数调用。
