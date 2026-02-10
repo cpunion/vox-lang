@@ -47,6 +47,8 @@ fn crc_table() -> [u32; 256] { ... }
 @castable_to(Src, Dst) -> bool
 @eq_comparable_with(A, B) -> bool
 @ordered_with(A, B) -> bool
+@same_layout(A, B) -> bool
+@bitcastable(A, B) -> bool
 @is_integer(T) -> bool
 @is_signed_int(T) -> bool
 @is_unsigned_int(T) -> bool
@@ -61,6 +63,7 @@ fn crc_table() -> [u32; 256] { ... }
 @is_ordered(T) -> bool
 @is_unit(T) -> bool
 @is_numeric(T) -> bool
+@is_zero_sized(T) -> bool
 ```
 
 语法与约束（当前）：
@@ -68,7 +71,7 @@ fn crc_table() -> [u32; 256] { ... }
 - 调用形态按 intrinsic 不同：
   - `@name(Type)`：如 `@size_of/@align_of/@type/@type_name/@field_count/@is_*`
   - `@name(Type, I)`：`@field_name/@field_type/@field_type_id`（`I` 为 `usize` const 实参）
-  - `@name(A, B)`：`@same_type/@assignable_to/@castable_to/@eq_comparable_with/@ordered_with`
+  - `@name(A, B)`：`@same_type/@assignable_to/@castable_to/@eq_comparable_with/@ordered_with/@same_layout/@bitcastable`
 - 可用于普通表达式与 `const` 初始化（均会折叠为常量）。
 - `@size_of/@align_of` 当前按 Stage1 C 后端目标布局模型计算。
 - `@type` 返回编译期 `TypeId`（Stage1 当前表示为 `usize`）。
@@ -81,11 +84,14 @@ fn crc_table() -> [u32; 256] { ... }
 - `@castable_to(Src, Dst)` 复用当前 `as` 显式转换规则（int/float/range 相关）。
 - `@eq_comparable_with(A, B)` 与 `==/!=` 二元规则对齐。
 - `@ordered_with(A, B)` 与 `< <= > >=` 二元规则对齐。
+- `@same_layout(A, B)` 判断两类型在当前 Stage1 布局模型下是否同尺寸且同对齐。
+- `@bitcastable(A, B)` 当前与 `@same_layout` 等价（可按位重解释的最小判定）。
 - `@is_*` 返回类型分类判定（当前要求 `T` 为 concrete type）。
 - `@is_eq_comparable` 与 `==/!=` 能力对齐（含递归 struct/enum 字段检查）。
 - `@is_ordered` 与 `< <= > >=` 能力对齐（当前 `int/float/string`）。
 - `@is_unit` 判断是否为 `()`。
 - `@is_numeric` 判断是否为数值类型（`int` 或 `float`，含 range）。
+- `@is_zero_sized` 判断当前布局下 size 是否为 0（如 `()`）。
 
 暂未实现（保留方向）：
 
