@@ -515,6 +515,18 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 			out.WriteString(" = vox_builtin_exe_path();\n")
 			return nil
 		}
+		if i.Name == "__now_ns" {
+			if len(i.Args) != 0 {
+				return fmt.Errorf("__now_ns expects 0 args")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__now_ns must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_now_ns();\n")
+			return nil
+		}
 		if i.Name == "__read_file" {
 			if len(i.Args) != 1 {
 				return fmt.Errorf("__read_file expects 1 arg")

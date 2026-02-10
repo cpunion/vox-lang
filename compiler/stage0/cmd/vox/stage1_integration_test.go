@@ -1307,6 +1307,9 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(bjr), "\"results\"") || !strings.Contains(string(bjr), "\"module_details\"") || !strings.Contains(string(bjr), "\"summary\"") {
 		t.Fatalf("expected json run report fields, got:\n%s", string(bjr))
 	}
+	if !strings.Contains(string(bjr), "\"slowest\"") || !strings.Contains(string(bjr), "\"duration_us\"") {
+		t.Fatalf("expected json timing fields, got:\n%s", string(bjr))
+	}
 
 	cmd := exec.Command(stage2BinB, "test-pkg", outRel)
 	cmd.Dir = stage2DirAbs
@@ -1319,6 +1322,9 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "[module]") {
 		t.Fatalf("expected stage2 module summary, got:\n%s", string(b))
+	}
+	if !strings.Contains(string(b), "[slowest]") || !strings.Contains(string(b), "[time] total:") {
+		t.Fatalf("expected stage2 timing summary, got:\n%s", string(b))
 	}
 	cachePath := filepath.Join(stage2DirAbs, "target", "debug", ".vox_last_failed_tests")
 	cache, err := os.ReadFile(cachePath)
