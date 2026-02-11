@@ -1999,6 +1999,126 @@ fn test_compile_trait_const_generic_method_comptime_where_rhs_unknown_reports_me
   t.assert(contains(r.err, "unknown const param in comptime where rhs"));
 }
 
+fn test_compile_trait_const_generic_method_comptime_where_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait AddN { fn addn[const N: i32](x: Self, v: i32) -> i32 where comptime N > 0; }
+      struct I { v: i32 }
+      impl AddN for I { fn addn[const N: i32](x: I, v: i32) -> i32 where comptime N > 0 { return v + N; } }
+      fn main() -> i32 { let x: I = I { v: 1 }; return AddN.addn[3](x, 4); }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+
+fn test_compile_trait_const_generic_method_comptime_where_impl_mismatch_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait AddN { fn addn[const N: i32](x: Self, v: i32) -> i32 where comptime N > 0; }
+      struct I { v: i32 }
+      impl AddN for I { fn addn[const N: i32](x: I, v: i32) -> i32 where comptime N >= 0 { return v + N; } }
+      fn main() -> i32 { return 0; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "comptime where"));
+}
+
+fn test_compile_trait_const_generic_method_comptime_where_rhs_param_impl_mismatch_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait AddNM { fn addnm[const N: i32, const M: i32](x: Self, v: i32) -> i32 where comptime N < M; }
+      struct I { v: i32 }
+      impl AddNM for I { fn addnm[const N: i32, const M: i32](x: I, v: i32) -> i32 where comptime N <= M { return v + N; } }
+      fn main() -> i32 { return 0; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "comptime where"));
+}
+
+fn test_compile_trait_const_generic_method_comptime_where_type_layout_impl_mismatch_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Fit { fn fit[T](x: Self, v: T) -> i32 where comptime @size_of(T) <= 8; }
+      struct I { v: i32 }
+      impl Fit for I { fn fit[T](x: I, v: T) -> i32 where comptime @size_of(T) <= 16 { return 1; } }
+      fn main() -> i32 { return 0; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "comptime where"));
+}
+
+fn test_compile_trait_const_generic_method_default_violates_comptime_where_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait AddN { fn addn[const N: i32 = 0](x: Self, v: i32) -> i32 where comptime N > 0; }
+      struct I { v: i32 }
+      impl AddN for I { fn addn[const N: i32](x: I, v: i32) -> i32 where comptime N > 0 { return v + N; } }
+      fn main() -> i32 { return 0; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "default violates comptime where"));
+}
+
+fn test_compile_trait_const_generic_method_comptime_where_rhs_reflect_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait FitRU {
+        fn fit[T, U](x: Self, a: T, b: U) -> i32 where comptime @size_of(T) <= @align_of(U);
+      }
+      struct I { v: i32 }
+      impl FitRU for I {
+        fn fit[T, U](x: I, a: T, b: U) -> i32 where comptime @size_of(T) <= @align_of(U) { return 1; }
+      }
+      fn main() -> i32 { let x: I = I { v: 1 }; let y: i64 = 0; return FitRU.fit(x, 3, y); }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+
+fn test_compile_trait_const_generic_method_comptime_where_rhs_reflect_impl_mismatch_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait FitRU {
+        fn fit[T, U](x: Self, a: T, b: U) -> i32 where comptime @size_of(T) <= @align_of(U);
+      }
+      struct I { v: i32 }
+      impl FitRU for I {
+        fn fit[T, U](x: I, a: T, b: U) -> i32 where comptime @size_of(T) < @align_of(U) { return 1; }
+      }
+      fn main() -> i32 { return 0; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "comptime where"));
+}
+
 fn test_compile_trait_const_generic_method_impl_name_mismatch_rejected() -> () {
   let mut fs: Vec[ld.SourceFile] = Vec();
   fs.push(ld.SourceFile {
