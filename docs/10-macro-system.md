@@ -67,8 +67,9 @@ let v = compile!(ast);
 - `macroexpand` 默认轮次上限为 `512`（`ExpandConfig.max_rounds`），避免“宏数量较多但可收敛”场景被过早截断；仍可通过配置收紧。
 - 当前内置最小规则集：
   - `compile!(expr)`：仅 1 个值参数、无 type args，直接把 `expr` 插回当前位置（支持链式场景，如 `compile!(compile!(...))`）。
-  - `quote!(expr)`：仅 1 个值参数、无 type args，表达式级 quote MVP（当前直接产出内联表达式节点）。
-  - `unquote!(expr)`：仅 1 个值参数、无 type args，表达式级 unquote MVP（当前直接产出内联表达式节点）。
+- `quote!(expr)`：仅 1 个值参数、无 type args，表达式级 quote MVP（当前直接产出内联表达式节点）。
+- `unquote!(expr)`：仅 1 个值参数、无 type args，表达式级 unquote MVP（当前直接产出内联表达式节点）。
+  - 覆盖形态已验证包含普通二元表达式、`if` 表达式与 `match` 表达式组合场景。
   - `panic!(msg)`：仅 1 个值参数，重写为 `panic(msg)`。
   - `compile_error!(msg)`：仅 1 个值参数，重写为 `@compile_error(msg)`。
   - `assert!(cond)` / `assert!(cond, msg)`：重写为 `assert(cond)` / `assert_with(cond, msg)`。
@@ -90,6 +91,7 @@ let v = compile!(ast);
     - 跨模块（`pkg.name!(...)`）：仅在模板对跨模块内联安全时启用（当前要求模板表达式只能依赖形参与其派生表达式），否则回退。
   - 其余情况回退为调用糖：`name!(...)` / `name[T]!(...)` -> `name(...)` / `name[T](...)`，再进入常规 typecheck。
   - 当发生“内联跳过并回退”时，编译失败场景会在错误文本追加 `[macroexpand] ...` 注记，包含具体跳过原因（如“callee function not found”、“generic arg count mismatch”）。
+  - 对“模板不支持 / 跨模块作用域不安全”场景，注记会带上模板根表达式类型（如 `root: Call`），便于快速定位。
 - 宏执行 v1（无 `macro` 关键字）：
   - 返回类型为 `AstExpr/AstStmt/AstItem/AstBlock` 的普通 `fn` 会被当作“宏执行函数”参与 `name!(...)` 展开流程。
   - 当前 `name!(...)` 调用位点是表达式位置，因此已稳定支持 `AstExpr` 形态的函数式宏模板执行。
