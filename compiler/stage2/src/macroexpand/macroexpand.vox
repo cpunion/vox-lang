@@ -1,0 +1,99 @@
+import "ast" as ast
+import "typecheck" as tc
+
+pub struct ExpandConfig {
+  pub max_rounds: i32,
+}
+
+pub struct ExpandResult {
+  pub ok: bool,
+  pub err: tc.TcError,
+  pub world: tc.World,
+  pub rounds: i32,
+}
+
+struct MacroSite {
+  found: bool,
+  sp: ast.Span,
+  name: String,
+}
+
+fn no_site() -> MacroSite {
+  return MacroSite {
+    found: false,
+    sp: ast.span0(),
+    name: "",
+  };
+}
+
+fn find_macro_callee_name(exprs: ast.ExprPool, callee: i32) -> String {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+  return match n {
+    ast.ExprNode.Ident(s) => s,
+    ast.ExprNode.Member(_recv, name) => name,
+    _ => "<expr>",
+  };
+}
+
+fn find_first_macro_site_in_prog(prog: ast.Program) -> MacroSite {
+  let mut i: i32 = 0;
+  while i < prog.exprs.nodes.len() {
+    let n: ast.ExprNode = ast.expr_pool_get(prog.exprs, i);
+    if match n { ast.ExprNode.MacroCall(_callee, _targs, _args) => true, _ => false } {
+      let callee: i32 = match n { ast.ExprNode.MacroCall(c, _targs, _args) => c, _ => -1 };
+      let name: String = find_macro_callee_name(prog.exprs, callee);
+      return MacroSite {
+        found: true,
+        sp: ast.expr_pool_span(prog.exprs, i),
+        name: name,
+      };
+    }
+    i = i + 1;
+  }
+  return no_site();
+}
+
+fn find_first_macro_site_in_world(w: tc.World) -> MacroSite {
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(i);
+    let s: MacroSite = find_first_macro_site_in_prog(m.prog);
+    if s.found { return s; }
+    i = i + 1;
+  }
+  return no_site();
+}
+
+pub fn default_config() -> ExpandConfig { return ExpandConfig { max_rounds: 32 }; }
+
+pub fn expand_world(w: tc.World, cfg0: ExpandConfig) -> ExpandResult {
+  // Stage2 skeleton:
+  // - reserves a dedicated expansion phase between parse/load and typecheck
+  // - will eventually execute macro fn bodies and iterate until fixed-point
+  // - for now, reports the first macro call with a precise span
+  let cfg: ExpandConfig =
+    if cfg0.max_rounds <= 0 {
+      default_config()
+    } else {
+      cfg0
+    };
+
+  let mut round: i32 = 0;
+  while round < cfg.max_rounds {
+    let site: MacroSite = find_first_macro_site_in_world(w);
+    if !site.found {
+      return ExpandResult { ok: true, err: tc.TcError.None, world: w, rounds: round };
+    }
+
+    let msg: String = "macro expansion is not supported in stage2 yet: ".concat(site.name).concat("!");
+    return ExpandResult { ok: false, err: tc.tc_type_error_at(site.sp, msg), world: w, rounds: round };
+  }
+
+  return ExpandResult {
+    ok: false,
+    err: tc.tc_type_error("",
+      "macro expansion exceeded max rounds: ".concat(cfg.max_rounds.to_string())),
+    world: w,
+    rounds: cfg.max_rounds,
+  };
+}
