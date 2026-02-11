@@ -93,6 +93,11 @@ impl StrView {
 
 同理 `ArcSlice[T]` 可用于共享子切片。
 
+当前实现注记（stage1/stage2）：
+
+- 标准库 `std/string` 已落地 `StrView`，当前字段模型为 `owner: String + lo/hi`（拥有型视图）。
+- 语法级 `&str` / `Arc[str]` 仍是后续演进方向；在当前阶段通过 `StrView` 先覆盖“可长期保存子串”的工程需求。
+
 ## Unsafe
 
 `unsafe` 仍然存在，用于：

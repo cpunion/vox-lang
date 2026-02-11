@@ -24,7 +24,7 @@
 说明：
 
 - Stage1 lexer 的 `Token` 不直接携带 `lexeme`，而是携带 `[start,end)` 的 byte offset。解析器需要通过 `source.slice(start, end)` 拉取 token 文本。
-- Stage0 已提供 `String.slice(start, end) -> String` 作为过渡能力；其内存行为在 Stage0/C 后端下会产生分配（临时泄漏可接受，后续再用切片/真实字符串模型替换）。
+- Stage0/Stage1/Stage2 当前仍使用 `String.slice(start, end) -> String` 作为子串基础操作；切片方向通过标准库 `std/string::StrView`（`owner + lo/hi`）补齐，避免在语言核心提前引入 `&str` 语法。
 
 当前进度（实现状态以代码为准）：
 
@@ -67,15 +67,18 @@ Stage1 的类型池（`TyPool`）在 typecheck 阶段会 intern 已知类型，�
 - IRGen 生成函数体时允许对 `Ctx.pool` 追加 intern 的类型
 - `ir.Program.pool` 在 IRGen 完成后与最终的 `Ctx.pool` 同步，保证 codegen 阶段访问的类型池完整
 
-### 4) `Vec[T]` 的值语义与运行时实现（临时方案）
+### 4) `Vec[T]` 的运行时内存模型（当前收敛方案）
 
-Stage0/Stage1 v0 的 `Vec[T]` 在 C 后端中被表示为一个 by-value 的小结构体（含 `data/len/cap/elem_size`）。由于语言子集里大量值按位复制，`Vec` 也会被浅拷贝。
+Stage1/Stage2 的 C runtime 已从“扩容链式泄漏”收敛到共享存储头模型：
 
-为避免浅拷贝 + `realloc/free` 触发悬垂指针/双重释放，本阶段采用了一个自举期的折中：
+- `vox_vec` 现在是 `{ h: vox_vec_data*, len }`，其中 `vox_vec_data` 持有 `data/cap/elem_size`。
+- 扩容改为 `realloc(h->data, ...)`，不再在每次 grow 保留旧 buffer。
+- 由于浅拷贝仍可能出现，`h` 作为间接层可避免 grow 后旧副本悬垂指针（UAF）。
 
-- `Vec` 扩容使用 `malloc + memcpy`，旧 buffer 不释放（故意泄漏）
+当前边界（仍是 stage1 冻结线的折中语义）：
 
-这保证“复制后的 header”仍然指向有效 buffer，从而让 stage1 自举稳定。后续可用 move-only 语义、共享 buffer（RC）或真正的所有权/借用模型替换。
+- 仍未引入通用 drop/release；进程结束前活跃容器及其缓冲区保持有效（不做完整生命周期回收）。
+- 复制后的值共享同一 backing storage（`h`），但持有各自的 `len`；这是为自举稳定与实现复杂度做的折中，后续如引入严格所有权/移动语义可再收敛为更强一致模型。
 
 当前补充：
 
