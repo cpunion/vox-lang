@@ -201,17 +201,47 @@ fn test_macroexpand_user_macro_inline_member_fallback_for_cross_module_ident_smo
   t.assert(tr.ok);
 }
 
-fn test_macroexpand_user_macro_inline_member_fallback_for_cross_module_block_template_smoke() -> () {
+fn test_macroexpand_user_macro_inline_member_block_template_smoke() -> () {
   let mut w: tc.World = tc.world();
   w = me_world_add(w, "dep",
     "pub fn add1(x: i32) -> i32 { return { let y: i32 = x + 1; y }; }");
   w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return dep.add1!(41); }");
   let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Block(_b) => true, _ => false }, "expected cross-module block template inline");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_member_match_template_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep",
+    "pub fn pick(x: i32) -> i32 { return match x { 0 => 1, _ => x }; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return dep.pick!(0); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
   t.assert(er.ok);
   let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
-  t.assert(match n { ast.ExprNode.Call(_c, _ta, _args) => true, _ => false });
+  t.assert(match n { ast.ExprNode.Match(_scrut, _arms) => true, _ => false });
   let tr: tc.TcResult = tc.typecheck_world(er.world);
   t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_member_try_block_template_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep",
+    "pub enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("pub fn id(x: Result[i32, String]) -> Result[i32, String] { return try { let v: i32 = x?; v }; }"));
+  w = me_world_add(w, "main",
+    "import \"dep\" as dep\n"
+      .concat("fn get() -> dep.Result[i32, String] { return dep.Result[i32, String].Ok(7); }\n")
+      .concat("fn main() -> dep.Result[i32, String] { return dep.id!(get()); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.TryBlock(_b) => true, _ => false }, "expected cross-module try-block template inline");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
 }
 
 fn test_macroexpand_user_macro_inline_generic_type_args_smoke() -> () {

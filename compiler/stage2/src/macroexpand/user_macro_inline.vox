@@ -146,55 +146,239 @@ fn param_exists(params: Vec[ast.Param], name: String) -> bool {
   return find_param_arg_idx(params, name) >= 0;
 }
 
-fn cross_mod_expr_list_safe(pool: ast.ExprPool, ids: Vec[i32], params: Vec[ast.Param]) -> bool {
+fn name_in_scope(scope: Vec[String], name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < scope.len() {
+    if scope.get(i) == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn scope_with_name(scope0: Vec[String], name: String) -> Vec[String] {
+  if name_in_scope(scope0, name) { return scope0; }
+  let mut scope: Vec[String] = scope0;
+  scope.push(name);
+  return scope;
+}
+
+fn scope_from_params(params: Vec[ast.Param]) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < params.len() {
+    out = scope_with_name(out, params.get(i).name);
+    i = i + 1;
+  }
+  return out;
+}
+
+fn cross_mod_expr_list_safe(pool: ast.ExprPool, ids: Vec[i32], scope: Vec[String]) -> bool {
   let mut i: i32 = 0;
   while i < ids.len() {
-    if !cross_mod_expr_safe(pool, ids.get(i), params) { return false; }
+    if !cross_mod_expr_safe_with_scope(pool, ids.get(i), scope) { return false; }
     i = i + 1;
   }
   return true;
 }
 
-fn cross_mod_struct_fields_safe(pool: ast.ExprPool, fields: Vec[ast.StructLitField], params: Vec[ast.Param]) -> bool {
+fn cross_mod_block_safe(pool: ast.ExprPool, b: ast.Block, scope0: Vec[String]) -> bool {
+  let mut scope: Vec[String] = scope0;
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    let st: ast.Stmt = b.stmts.get(i);
+    if match st { ast.Stmt.Let(_sp, _mut, _name, _has_ann, _ann, _init) => true, _ => false } {
+      let name: String = match st { ast.Stmt.Let(_sp, _mut, n, _ha, _ann, _init) => n, _ => "" };
+      let init: i32 = match st { ast.Stmt.Let(_sp, _mut, _n, _ha, _ann, ex) => ex, _ => -1 };
+      if !cross_mod_expr_safe_with_scope(pool, init, scope) { return false; }
+      scope = scope_with_name(scope, name);
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.Assign(_sp, _name, _ex) => true, _ => false } {
+      let name: String = match st { ast.Stmt.Assign(_sp, n, _ex) => n, _ => "" };
+      let ex: i32 = match st { ast.Stmt.Assign(_sp, _n, ex0) => ex0, _ => -1 };
+      if !name_in_scope(scope, name) { return false; }
+      if !cross_mod_expr_safe_with_scope(pool, ex, scope) { return false; }
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.AssignField(_sp, _recv, _field, _ex) => true, _ => false } {
+      let recv: String = match st { ast.Stmt.AssignField(_sp, r, _f, _ex) => r, _ => "" };
+      let ex: i32 = match st { ast.Stmt.AssignField(_sp, _r, _f, ex0) => ex0, _ => -1 };
+      if !name_in_scope(scope, recv) { return false; }
+      if !cross_mod_expr_safe_with_scope(pool, ex, scope) { return false; }
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.ExprStmt(_sp, _ex) => true, _ => false } {
+      let ex: i32 = match st { ast.Stmt.ExprStmt(_sp, ex0) => ex0, _ => -1 };
+      if !cross_mod_expr_safe_with_scope(pool, ex, scope) { return false; }
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.IfStmt(_sp, _cond, _then_b, _has_else, _else_b) => true, _ => false } {
+      let cond: i32 = match st { ast.Stmt.IfStmt(_sp, c, _t, _he, _e) => c, _ => -1 };
+      let then_b: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, t, _he, _e) => t, _ => ast.Block { stmts: Vec() } };
+      let has_else: bool = match st { ast.Stmt.IfStmt(_sp, _c, _t, he, _e) => he, _ => false };
+      let else_b: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, _t, _he, e) => e, _ => ast.Block { stmts: Vec() } };
+      if !cross_mod_expr_safe_with_scope(pool, cond, scope) { return false; }
+      if !cross_mod_block_safe(pool, then_b, scope) { return false; }
+      if has_else && !cross_mod_block_safe(pool, else_b, scope) { return false; }
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.WhileStmt(_sp, _cond, _body) => true, _ => false } {
+      let cond: i32 = match st { ast.Stmt.WhileStmt(_sp, c, _b) => c, _ => -1 };
+      let body: ast.Block = match st { ast.Stmt.WhileStmt(_sp, _c, b0) => b0, _ => ast.Block { stmts: Vec() } };
+      if !cross_mod_expr_safe_with_scope(pool, cond, scope) { return false; }
+      if !cross_mod_block_safe(pool, body, scope) { return false; }
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.ReturnStmt(_sp, _has_ex, _ex) => true, _ => false } {
+      let has_ex: bool = match st { ast.Stmt.ReturnStmt(_sp, he, _ex) => he, _ => false };
+      if has_ex {
+        let ex: i32 = match st { ast.Stmt.ReturnStmt(_sp, _he, ex0) => ex0, _ => -1 };
+        if !cross_mod_expr_safe_with_scope(pool, ex, scope) { return false; }
+      }
+      i = i + 1;
+      continue;
+    }
+    // break/continue
+    i = i + 1;
+  }
+  return true;
+}
+
+fn cross_mod_expr_block_safe(pool: ast.ExprPool, b: ast.ExprBlock, scope0: Vec[String]) -> bool {
+  let mut scope: Vec[String] = scope0;
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    let st: ast.Stmt = b.stmts.get(i);
+    if match st { ast.Stmt.Let(_sp, _mut, _name, _has_ann, _ann, _init) => true, _ => false } {
+      let name: String = match st { ast.Stmt.Let(_sp, _mut, n, _ha, _ann, _init) => n, _ => "" };
+      let init: i32 = match st { ast.Stmt.Let(_sp, _mut, _n, _ha, _ann, ex) => ex, _ => -1 };
+      if !cross_mod_expr_safe_with_scope(pool, init, scope) { return false; }
+      scope = scope_with_name(scope, name);
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.Assign(_sp, _name, _ex) => true, _ => false } {
+      let name: String = match st { ast.Stmt.Assign(_sp, n, _ex) => n, _ => "" };
+      let ex: i32 = match st { ast.Stmt.Assign(_sp, _n, ex0) => ex0, _ => -1 };
+      if !name_in_scope(scope, name) { return false; }
+      if !cross_mod_expr_safe_with_scope(pool, ex, scope) { return false; }
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.AssignField(_sp, _recv, _field, _ex) => true, _ => false } {
+      let recv: String = match st { ast.Stmt.AssignField(_sp, r, _f, _ex) => r, _ => "" };
+      let ex: i32 = match st { ast.Stmt.AssignField(_sp, _r, _f, ex0) => ex0, _ => -1 };
+      if !name_in_scope(scope, recv) { return false; }
+      if !cross_mod_expr_safe_with_scope(pool, ex, scope) { return false; }
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.ExprStmt(_sp, _ex) => true, _ => false } {
+      let ex: i32 = match st { ast.Stmt.ExprStmt(_sp, ex0) => ex0, _ => -1 };
+      if !cross_mod_expr_safe_with_scope(pool, ex, scope) { return false; }
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.IfStmt(_sp, _cond, _then_b, _has_else, _else_b) => true, _ => false } {
+      let cond: i32 = match st { ast.Stmt.IfStmt(_sp, c, _t, _he, _e) => c, _ => -1 };
+      let then_b: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, t, _he, _e) => t, _ => ast.Block { stmts: Vec() } };
+      let has_else: bool = match st { ast.Stmt.IfStmt(_sp, _c, _t, he, _e) => he, _ => false };
+      let else_b: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, _t, _he, e) => e, _ => ast.Block { stmts: Vec() } };
+      if !cross_mod_expr_safe_with_scope(pool, cond, scope) { return false; }
+      if !cross_mod_block_safe(pool, then_b, scope) { return false; }
+      if has_else && !cross_mod_block_safe(pool, else_b, scope) { return false; }
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.WhileStmt(_sp, _cond, _body) => true, _ => false } {
+      let cond: i32 = match st { ast.Stmt.WhileStmt(_sp, c, _b) => c, _ => -1 };
+      let body: ast.Block = match st { ast.Stmt.WhileStmt(_sp, _c, b0) => b0, _ => ast.Block { stmts: Vec() } };
+      if !cross_mod_expr_safe_with_scope(pool, cond, scope) { return false; }
+      if !cross_mod_block_safe(pool, body, scope) { return false; }
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.ReturnStmt(_sp, _has_ex, _ex) => true, _ => false } {
+      let has_ex: bool = match st { ast.Stmt.ReturnStmt(_sp, he, _ex) => he, _ => false };
+      if has_ex {
+        let ex: i32 = match st { ast.Stmt.ReturnStmt(_sp, _he, ex0) => ex0, _ => -1 };
+        if !cross_mod_expr_safe_with_scope(pool, ex, scope) { return false; }
+      }
+      i = i + 1;
+      continue;
+    }
+    // break/continue
+    i = i + 1;
+  }
+  if b.has_tail {
+    return cross_mod_expr_safe_with_scope(pool, b.tail, scope);
+  }
+  return true;
+}
+
+fn cross_mod_match_arms_safe(pool: ast.ExprPool, arms: Vec[ast.MatchArm], scope: Vec[String]) -> bool {
+  let mut i: i32 = 0;
+  while i < arms.len() {
+    if !cross_mod_expr_safe_with_scope(pool, arms.get(i).expr, scope) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn cross_mod_struct_fields_safe(pool: ast.ExprPool, fields: Vec[ast.StructLitField], scope: Vec[String]) -> bool {
   let mut i: i32 = 0;
   while i < fields.len() {
-    if !cross_mod_expr_safe(pool, fields.get(i).expr, params) { return false; }
+    if !cross_mod_expr_safe_with_scope(pool, fields.get(i).expr, scope) { return false; }
     i = i + 1;
   }
   return true;
 }
 
-fn cross_mod_expr_safe(pool: ast.ExprPool, id: i32, params: Vec[ast.Param]) -> bool {
+fn cross_mod_expr_safe_with_scope(pool: ast.ExprPool, id: i32, scope: Vec[String]) -> bool {
   let n: ast.ExprNode = ast.expr_pool_get(pool, id);
   return match n {
     ast.ExprNode.Int(_v) => true,
     ast.ExprNode.Float(_v) => true,
     ast.ExprNode.Bool(_v) => true,
     ast.ExprNode.Str(_s) => true,
-    ast.ExprNode.Ident(s) => param_exists(params, s),
+    ast.ExprNode.Ident(s) => name_in_scope(scope, s),
     ast.ExprNode.DotIdent(_s) => false,
     ast.ExprNode.If(c0, t0, e0) =>
-      cross_mod_expr_safe(pool, c0, params) &&
-      cross_mod_expr_safe(pool, t0, params) &&
-      cross_mod_expr_safe(pool, e0, params),
-    ast.ExprNode.Unary(_op, a) => cross_mod_expr_safe(pool, a, params),
+      cross_mod_expr_safe_with_scope(pool, c0, scope) &&
+      cross_mod_expr_safe_with_scope(pool, t0, scope) &&
+      cross_mod_expr_safe_with_scope(pool, e0, scope),
+    ast.ExprNode.Unary(_op, a) => cross_mod_expr_safe_with_scope(pool, a, scope),
     ast.ExprNode.As(_a, _tn) => false,
-    ast.ExprNode.Binary(_op, l, r) => cross_mod_expr_safe(pool, l, params) && cross_mod_expr_safe(pool, r, params),
-    ast.ExprNode.Member(recv, _name) => cross_mod_expr_safe(pool, recv, params),
+    ast.ExprNode.Binary(_op, l, r) => cross_mod_expr_safe_with_scope(pool, l, scope) && cross_mod_expr_safe_with_scope(pool, r, scope),
+    ast.ExprNode.Member(recv, _name) => cross_mod_expr_safe_with_scope(pool, recv, scope),
     ast.ExprNode.Call(callee, _ta, args) =>
-      cross_mod_expr_safe(pool, callee, params) &&
-      cross_mod_expr_list_safe(pool, args, params),
+      cross_mod_expr_safe_with_scope(pool, callee, scope) &&
+      cross_mod_expr_list_safe(pool, args, scope),
     ast.ExprNode.MacroCall(callee, _ta, args) =>
-      cross_mod_expr_safe(pool, callee, params) &&
-      cross_mod_expr_list_safe(pool, args, params),
-    ast.ExprNode.Try(a) => cross_mod_expr_safe(pool, a, params),
+      cross_mod_expr_safe_with_scope(pool, callee, scope) &&
+      cross_mod_expr_list_safe(pool, args, scope),
+    ast.ExprNode.Try(a) => cross_mod_expr_safe_with_scope(pool, a, scope),
     ast.ExprNode.StructLit(tyex, fields) =>
-      cross_mod_expr_safe(pool, tyex, params) &&
-      cross_mod_struct_fields_safe(pool, fields, params),
-    ast.ExprNode.Block(_b) => false,
-    ast.ExprNode.TryBlock(_b) => false,
-    ast.ExprNode.Match(_scrut, _arms) => false,
+      cross_mod_expr_safe_with_scope(pool, tyex, scope) &&
+      cross_mod_struct_fields_safe(pool, fields, scope),
+    ast.ExprNode.Block(b) =>
+      cross_mod_expr_block_safe(pool, b, scope),
+    ast.ExprNode.TryBlock(b) =>
+      cross_mod_expr_safe_with_scope(pool, b, scope),
+    ast.ExprNode.Match(scrut, arms) =>
+      cross_mod_expr_safe_with_scope(pool, scrut, scope) &&
+      cross_mod_match_arms_safe(pool, arms, scope),
   };
+}
+
+fn cross_mod_expr_safe(pool: ast.ExprPool, id: i32, params: Vec[ast.Param]) -> bool {
+  return cross_mod_expr_safe_with_scope(pool, id, scope_from_params(params));
 }
 
 fn find_param_arg_idx(params: Vec[ast.Param], name: String) -> i32 {
