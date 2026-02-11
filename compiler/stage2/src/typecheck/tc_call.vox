@@ -140,6 +140,27 @@ fn is_string_builtin_method(name: String) -> bool {
   return name == "len" || name == "byte_at" || name == "slice" || name == "concat" || name == "escape_c" || name == "to_string";
 }
 
+struct VecPushRecvPlaceResult { ok: bool, mutable: bool }
+
+fn vec_push_recv_place(exprs: ast.ExprPool, l0: Locals, recv_id: i32) -> VecPushRecvPlaceResult {
+  let mut cur: i32 = recv_id;
+  while true {
+    let n: ast.ExprNode = ast.expr_pool_get(exprs, cur);
+    if match n { ast.ExprNode.Ident(_s) => true, _ => false } {
+      let name: String = match n { ast.ExprNode.Ident(s) => s, _ => "" };
+      let vr: LookupVarResult = locals_lookup(l0, name);
+      if !vr.found { return VecPushRecvPlaceResult { ok: false, mutable: false }; }
+      return VecPushRecvPlaceResult { ok: true, mutable: vr.mutable };
+    }
+    if match n { ast.ExprNode.Member(r, _name) => true, _ => false } {
+      cur = match n { ast.ExprNode.Member(r, _name) => r, _ => -1 };
+      continue;
+    }
+    return VecPushRecvPlaceResult { ok: false, mutable: false };
+  }
+  return VecPushRecvPlaceResult { ok: false, mutable: false };
+}
+
 fn locals_has_type_param_bound(ctx: Ctx, l0: Locals, type_param: String, trait_mod: String, trait_name: String) -> bool {
   let mut i: i32 = 0;
   while i < l0.type_param_bounds.len() {
@@ -310,7 +331,7 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
 
     let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv_id, -1);
     if rr.ok && is_vec_ty(ctx, rr.ty) && is_vec_builtin_method(mname) {
-      return tc_call_vec_method(ctx, w, mod_path, imps, exprs, l0, rr.ty, mname, args, expected);
+      return tc_call_vec_method(ctx, w, mod_path, imps, exprs, l0, call_sp, recv_id, rr.ty, mname, args, expected);
     }
     if rr.ok && rr.ty == ctx.ty_string && is_string_builtin_method(mname) {
       return tc_call_string_method(ctx, w, mod_path, imps, exprs, l0, recv_id, mname, args, expected);
@@ -483,10 +504,17 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
   return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
 }
 
-fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv_ty: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
+fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, call_sp: ast.Span, recv_id: i32, recv_ty: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
   let elem: i32 = vec_elem(ctx, recv_ty);
 
   if mname == "push" {
+    let pr: VecPushRecvPlaceResult = vec_push_recv_place(exprs, l0, recv_id);
+    if !pr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.push receiver must be mutable place") };
+    }
+    if !pr.mutable {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.push receiver is immutable") };
+    }
     if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), elem);
     if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }

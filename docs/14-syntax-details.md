@@ -496,6 +496,7 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 
 - 非变更方法（`len/get/byte_at/slice`）：receiver 可以是任意表达式（例如 `ctx.items.len()`）。
 - 变更方法（`Vec.push`）：receiver 必须是 **place**（可写位置）。
+  - `Vec.push` 要求 receiver 的根绑定是 `let mut`（不可变绑定会报错）。
   - Stage0/Stage1：支持局部变量 `v.push(x)`，以及可变局部 struct 的直接字段 `s.items.push(x)`。
   - Stage2：额外支持可变局部 struct 的多级字段 `o.inner.items.push(x)`。
 
