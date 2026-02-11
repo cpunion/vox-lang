@@ -1280,11 +1280,31 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(bl), "[select] discovered:") {
 		t.Fatalf("expected stage2 selection summary, got:\n%s", string(bl))
 	}
+	if !strings.Contains(string(bl), "[list] (root) (") {
+		t.Fatalf("expected stage2 grouped list output for root module, got:\n%s", string(bl))
+	}
+	if !strings.Contains(string(bl), "[list] total:") {
+		t.Fatalf("expected stage2 list total footer, got:\n%s", string(bl))
+	}
 	if !strings.Contains(string(bl), "[test] test_std_sync_runtime_generic_api_smoke") {
 		t.Fatalf("expected filtered test in list output, got:\n%s", string(bl))
 	}
 	if strings.Contains(string(bl), "[test] test_std_testing_smoke") {
 		t.Fatalf("expected filter to exclude unrelated tests, got:\n%s", string(bl))
+	}
+	cmdListAll := exec.Command(stage2BinB, "test-pkg", "--list", outRel)
+	cmdListAll.Dir = stage2DirAbs
+	bla, err := cmdListAll.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg --list(all) failed: %v\n%s", err, string(bla))
+	}
+	iRoot := strings.Index(string(bla), "[list] (root) (")
+	iCodegen := strings.Index(string(bla), "[list] codegen (")
+	if iRoot < 0 || iCodegen < 0 {
+		t.Fatalf("expected root/codegen list groups in stage2 output, got:\n%s", string(bla))
+	}
+	if iRoot > iCodegen {
+		t.Fatalf("expected module groups to be sorted in list output, got:\n%s", string(bla))
 	}
 
 	cmdRun := exec.Command(stage2BinB, "test-pkg", "--run=*std_testing*", "--list", outRel)

@@ -114,6 +114,7 @@ make test
 - `stage2 test-pkg` 当前支持最小选择参数：`--module=<glob>`、`--run=<glob>`、`--filter=<text>`、`--jobs=N`（模块级并行，模块内串行）、`--fail-fast`（首个失败后停止调度新测试）、`--list`、`--rerun-failed` 与 `--json`（用于缩小迭代验证范围与机器可读报告）。
   - 其中 `--module/--run/--filter` 同时支持 `--flag=value` 与 `--flag value` 两种写法。
 - `test-pkg` 当前文本输出包含：单测耗时、模块汇总耗时、slowest 列表与总耗时。
+- `test-pkg --list` 文本输出按模块分组并稳定排序（模块与测试名按字典序），便于对比与脚本消费。
 - `test-pkg` 并行执行下，失败测试会回显其捕获的 stdout/stderr 片段，便于定位问题。
 - 失败重跑提示（`[hint] rerun failed: ...`）基于当前可执行名生成，并在并行运行时保留 `--jobs` 参数。
 - `--json` 当前输出 `selection/selected_tests/results/modules/module_details/slowest/failed_tests/summary`，并附带 `duration_us` 字段；`selection` 包含 `fail_fast`，`summary` 包含 `skipped`；失败时附带 `hint`。
