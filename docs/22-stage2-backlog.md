@@ -6,7 +6,7 @@ Rule: complete one item end-to-end (code + tests + commit), then move to the nex
 ## Items
 
 1. [x] Parser trailing comma completeness for generic call args (`f[T,](...)`, `f[3,](...)`, `m[T,]!(...)`).
-2. [ ] Macroexpand diagnostics: surface inline-fallback reason (why template inline was rejected).
+2. [x] Macroexpand diagnostics: surface inline-fallback reason (why template inline was rejected).
 3. [ ] Macro execution v1: support function-like macro bodies returning expandable AST values (without `macro` keyword).
 4. [ ] `quote` / unquote MVP: expression-level quote with `$x` interpolation.
 5. [ ] Comptime execution expansion: broaden compile-time evaluable function shapes (pure subset).
@@ -17,4 +17,3 @@ Rule: complete one item end-to-end (code + tests + commit), then move to the nex
 10. [ ] Stdlib `std/sync`: generic `Mutex[T]` / `Atomic[T]` runtime-backed semantics on stage2.
 11. [ ] Stdlib `std/io`: file + network minimal abstractions aligned with current runtime APIs.
 12. [ ] Package management hardening: registry/git lock verification and clearer mismatch diagnostics.
-

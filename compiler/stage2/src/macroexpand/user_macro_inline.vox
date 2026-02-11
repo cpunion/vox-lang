@@ -943,7 +943,13 @@ fn clone_expr_with_args(
   return clone_expr_err(dst0);
 }
 
+fn inline_skip(w0: tc.World, site0: MacroSite, reason: String) -> ExpandRoundResult {
+  let note: String = "macro ".concat(site0.name).concat("!: inline skipped: ").concat(reason);
+  return round_ok_with_notes(w0, false, notes1(note));
+}
+
 fn try_expand_local_user_macro_inline(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+
   let call_mod: tc.WorldModule = w.mods.get(site.mod_idx);
   let callee_node: ast.ExprNode = ast.expr_pool_get(call_mod.prog.exprs, site.callee);
 
@@ -957,42 +963,42 @@ fn try_expand_local_user_macro_inline(w: tc.World, site: MacroSite) -> ExpandRou
     let name1: String = match callee_node { ast.ExprNode.Member(_recv, name) => name, _ => "" };
     let recv_node: ast.ExprNode = ast.expr_pool_get(call_mod.prog.exprs, recv_id);
     if !match recv_node { ast.ExprNode.Ident(_a) => true, _ => false } {
-      return round_ok(w, false);
+      return inline_skip(w, site, "member macro callee receiver must be import alias identifier");
     }
     let alias: String = match recv_node { ast.ExprNode.Ident(a) => a, _ => "" };
     let ar: tc.ImportAliasesResult = tc.build_import_aliases(w, call_mod.prog.imports, site.sp.file);
     if !ar.ok { return round_err(w, ar.err); }
     let target_path: String = tc.find_alias(ar.aliases, alias);
-    if target_path == "" { return round_ok(w, false); }
+    if target_path == "" { return inline_skip(w, site, "member receiver alias not found in imports"); }
     let mi: i32 = find_world_mod_idx(w, target_path);
-    if mi < 0 { return round_ok(w, false); }
+    if mi < 0 { return inline_skip(w, site, "target module not loaded into world"); }
     callee_mod_idx = mi;
     callee_name = name1;
   } else {
-    return round_ok(w, false);
+    return inline_skip(w, site, "callee must be identifier or module member path");
   }
 
-  if callee_name == "" { return round_ok(w, false); }
+  if callee_name == "" { return inline_skip(w, site, "empty callee name"); }
 
   let callee_mod: tc.WorldModule = w.mods.get(callee_mod_idx);
   let fi: i32 = find_local_func_idx(callee_mod.prog, callee_name);
-  if fi < 0 { return round_ok(w, false); }
+  if fi < 0 { return inline_skip(w, site, "callee function not found in target module"); }
   let fd: ast.FuncDecl = callee_mod.prog.funcs.get(fi);
-  if callee_mod_idx != site.mod_idx && !fd.is_pub { return round_ok(w, false); }
-  if fd.params.len() != site.args.len() { return round_ok(w, false); }
+  if callee_mod_idx != site.mod_idx && !fd.is_pub { return inline_skip(w, site, "callee function is not public across modules"); }
+  if fd.params.len() != site.args.len() { return inline_skip(w, site, "arity mismatch between callee params and macro args"); }
 
   let tyc: i32 = fd.type_params.len();
   let cc: i32 = fd.const_params.len();
   let expect_targs: i32 = tyc + cc;
   if site.targs.len() != expect_targs {
-    return round_ok(w, false);
+    return inline_skip(w, site, "generic arg count mismatch for inline template");
   }
 
   let mut ty_subs: Vec[TypeArgSub] = Vec();
   let mut i: i32 = 0;
   while i < tyc {
     let ta: ast.TypeName = site.targs.get(i);
-    if is_const_arg_tn(ta) { return round_ok(w, false); }
+    if is_const_arg_tn(ta) { return inline_skip(w, site, "type arg position received const arg"); }
     ty_subs.push(TypeArgSub { name: fd.type_params.get(i), ty: ta });
     i = i + 1;
   }
@@ -1002,18 +1008,18 @@ fn try_expand_local_user_macro_inline(w: tc.World, site: MacroSite) -> ExpandRou
   while j < cc {
     let ta: ast.TypeName = site.targs.get(tyc + j);
     let text: String = const_arg_text(ta);
-    if text == "" { return round_ok(w, false); }
+    if text == "" { return inline_skip(w, site, "const arg position received non-const type arg"); }
     const_subs.push(ConstArgSub { name: fd.const_params.get(j).name, text: text });
     j = j + 1;
   }
 
   let mt: MacroTemplateExprResult = macro_template_expr(callee_mod.prog.exprs, fd);
-  if !mt.ok { return round_ok(w, false); }
+  if !mt.ok { return inline_skip(w, site, "callee body is not inline-template shape"); }
   let template_pool: ast.ExprPool = mt.pool;
   let template_id: i32 = mt.id;
-  if !template_expr_supported(template_pool, template_id) { return round_ok(w, false); }
+  if !template_expr_supported(template_pool, template_id) { return inline_skip(w, site, "template contains unsupported expression forms"); }
   if callee_mod_idx != site.mod_idx && !cross_mod_expr_safe(template_pool, template_id, fd.params) {
-    return round_ok(w, false);
+    return inline_skip(w, site, "cross-module template is not scope-safe");
   }
 
   let cr: CloneExprResult = clone_expr_with_args(
@@ -1024,7 +1030,7 @@ fn try_expand_local_user_macro_inline(w: tc.World, site: MacroSite) -> ExpandRou
     site.args,
     ty_subs,
     const_subs);
-  if !cr.ok { return round_ok(w, false); }
+  if !cr.ok { return inline_skip(w, site, "template cloning/substitution failed"); }
 
   let repl: ast.ExprNode = ast.expr_pool_get(cr.pool, cr.id);
   let exprs2: ast.ExprPool = expr_pool_replace(cr.pool, site.expr_id, repl, site.sp);

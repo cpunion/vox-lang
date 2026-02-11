@@ -10,6 +10,7 @@ pub struct ExpandResult {
   pub err: tc.TcError,
   pub world: tc.World,
   pub rounds: i32,
+  pub notes: Vec[String],
 }
 
 struct ExpandRoundResult {
@@ -17,6 +18,7 @@ struct ExpandRoundResult {
   err: tc.TcError,
   changed: bool,
   world: tc.World,
+  notes: Vec[String],
 }
 
 struct MacroSite {
@@ -290,12 +292,34 @@ fn world_replace_mod_prog(w: tc.World, mod_idx: i32, prog: ast.Program) -> tc.Wo
   return tc.World { mods: mods };
 }
 
+fn notes0() -> Vec[String] { return Vec(); }
+
+fn notes1(s: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  if s != "" { out.push(s); }
+  return out;
+}
+
+fn notes_cat(a0: Vec[String], b: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = a0;
+  let mut i: i32 = 0;
+  while i < b.len() {
+    out.push(b.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
 fn round_ok(w: tc.World, changed: bool) -> ExpandRoundResult {
-  return ExpandRoundResult { ok: true, err: tc.TcError.None, changed: changed, world: w };
+  return ExpandRoundResult { ok: true, err: tc.TcError.None, changed: changed, world: w, notes: notes0() };
+}
+
+fn round_ok_with_notes(w: tc.World, changed: bool, notes: Vec[String]) -> ExpandRoundResult {
+  return ExpandRoundResult { ok: true, err: tc.TcError.None, changed: changed, world: w, notes: notes };
 }
 
 fn round_err(w: tc.World, e: tc.TcError) -> ExpandRoundResult {
-  return ExpandRoundResult { ok: false, err: e, changed: false, world: w };
+  return ExpandRoundResult { ok: false, err: e, changed: false, world: w, notes: notes0() };
 }
 
 fn round_replace_expr(w: tc.World, site: MacroSite, n: ast.ExprNode) -> ExpandRoundResult {
@@ -387,7 +411,11 @@ fn expand_user_macro_call_as_fn_call(w: tc.World, site: MacroSite) -> ExpandRoun
   let inl: ExpandRoundResult = try_expand_local_user_macro_inline(w, site);
   if !inl.ok { return inl; }
   if inl.changed { return inl; }
-  return round_replace_expr(w, site, ast.ExprNode.Call(site.callee, site.targs, site.args));
+  let rr: ExpandRoundResult = round_replace_expr(w, site, ast.ExprNode.Call(site.callee, site.targs, site.args));
+  if !rr.ok { return rr; }
+  let mut ns: Vec[String] = inl.notes;
+  ns = notes_cat(ns, notes1("macro ".concat(site.name).concat("!: lowered to call sugar")));
+  return round_ok_with_notes(rr.world, rr.changed, ns);
 }
 
 fn expand_world_round(w: tc.World) -> ExpandRoundResult {
@@ -432,14 +460,16 @@ pub fn expand_world(w: tc.World, cfg0: ExpandConfig) -> ExpandResult {
 
   let mut cur: tc.World = w;
   let mut round: i32 = 0;
+  let mut notes: Vec[String] = Vec();
   while round < cfg.max_rounds {
     let rr: ExpandRoundResult = expand_world_round(cur);
+    notes = notes_cat(notes, rr.notes);
     if !rr.ok {
-      return ExpandResult { ok: false, err: rr.err, world: rr.world, rounds: round };
+      return ExpandResult { ok: false, err: rr.err, world: rr.world, rounds: round, notes: notes };
     }
     cur = rr.world;
     if !rr.changed {
-      return ExpandResult { ok: true, err: tc.TcError.None, world: cur, rounds: round };
+      return ExpandResult { ok: true, err: tc.TcError.None, world: cur, rounds: round, notes: notes };
     }
     round = round + 1;
   }
@@ -450,5 +480,6 @@ pub fn expand_world(w: tc.World, cfg0: ExpandConfig) -> ExpandResult {
       "macro expansion exceeded max rounds: ".concat(cfg.max_rounds.to_string())),
     world: cur,
     rounds: cfg.max_rounds,
+    notes: notes,
   };
 }
