@@ -59,6 +59,7 @@ let v = compile!(ast);
 - `name!(...)` 语法在 stage2 进入 AST（独立于普通函数调用）。
 - `name[T]!(...)` 也支持（与普通泛型调用语法保持一致）。
 - 编译流水线已接入 `macroexpand` 阶段（`parse/load -> macroexpand -> typecheck`），展开按轮次执行直到固定点或到达轮次上限。
+- `macroexpand` 默认轮次上限为 `512`（`ExpandConfig.max_rounds`），避免“宏数量较多但可收敛”场景被过早截断；仍可通过配置收紧。
 - 当前内置最小规则集：
   - `compile!(expr)`：仅 1 个值参数、无 type args，直接把 `expr` 插回当前位置（支持链式场景，如 `compile!(compile!(...))`）。
   - `panic!(msg)`：仅 1 个值参数，重写为 `panic(msg)`。
