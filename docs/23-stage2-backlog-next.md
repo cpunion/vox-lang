@@ -8,7 +8,7 @@ Rule: complete one item end-to-end (code + tests + docs + commit), then move to 
 2. [x] Generic type-param pack declaration usable end-to-end (remove skeleton rejections; define current semantics explicitly).
 3. [x] Generic pack expansion design landing (call-site/type-site behavior and diagnostics consistency).
 4. [x] Macro system strengthening: quote/unquote coverage parity for expression shapes and clearer unsupported diagnostics.
-5. [ ] Macro execution safety rails: deterministic expansion ordering and bounded recursion diagnostics hardening.
+5. [x] Macro execution safety rails: deterministic expansion ordering and bounded recursion diagnostics hardening.
 6. [ ] Comptime evaluator parity pass: close remaining unsupported constant-expression gaps in the documented subset.
 7. [ ] IR semantic consistency pass: cast/compare edge behavior and verifier diagnostics alignment.
 8. [ ] Diagnostics layering pass: tighter primary span coverage for typecheck/irgen/macro errors.

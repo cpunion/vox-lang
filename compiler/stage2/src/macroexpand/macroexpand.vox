@@ -235,15 +235,40 @@ fn find_first_macro_site_in_prog(prog: ast.Program, mod_idx: i32) -> MacroSite {
   return no_site();
 }
 
+fn site_mod_path(w: tc.World, s: MacroSite) -> String {
+  if !s.found { return ""; }
+  if s.mod_idx < 0 || s.mod_idx >= w.mods.len() { return ""; }
+  return w.mods.get(s.mod_idx).path;
+}
+
+fn site_before(w: tc.World, a: MacroSite, b: MacroSite) -> bool {
+  if !a.found { return false; }
+  if !b.found { return true; }
+  let am: String = site_mod_path(w, a);
+  let bm: String = site_mod_path(w, b);
+  if am < bm { return true; }
+  if am > bm { return false; }
+  if a.sp.file < b.sp.file { return true; }
+  if a.sp.file > b.sp.file { return false; }
+  if a.sp.line < b.sp.line { return true; }
+  if a.sp.line > b.sp.line { return false; }
+  if a.sp.col < b.sp.col { return true; }
+  if a.sp.col > b.sp.col { return false; }
+  if a.expr_id < b.expr_id { return true; }
+  if a.expr_id > b.expr_id { return false; }
+  return a.name < b.name;
+}
+
 fn find_first_macro_site_in_world(w: tc.World) -> MacroSite {
+  let mut best: MacroSite = no_site();
   let mut i: i32 = 0;
   while i < w.mods.len() {
     let m: tc.WorldModule = w.mods.get(i);
     let s: MacroSite = find_first_macro_site_in_prog(m.prog, i);
-    if s.found { return s; }
+    if site_before(w, s, best) { best = s; }
     i = i + 1;
   }
-  return no_site();
+  return best;
 }
 
 fn expr_pool_replace(exprs: ast.ExprPool, id: i32, n: ast.ExprNode, sp: ast.Span) -> ast.ExprPool {
@@ -518,10 +543,40 @@ fn expand_world_round(w: tc.World) -> ExpandRoundResult {
 
 pub fn default_config() -> ExpandConfig { return ExpandConfig { max_rounds: 512 }; }
 
+fn macro_call_count_in_pool(exprs: ast.ExprPool) -> i32 {
+  let mut n: i32 = 0;
+  let mut i: i32 = 0;
+  while i < exprs.nodes.len() {
+    let en: ast.ExprNode = ast.expr_pool_get(exprs, i);
+    if match en { ast.ExprNode.MacroCall(_callee, _ta, _args) => true, _ => false } {
+      n = n + 1;
+    }
+    i = i + 1;
+  }
+  return n;
+}
+
+fn world_macro_call_count(w: tc.World) -> i32 {
+  let mut out: i32 = 0;
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    out = out + macro_call_count_in_pool(w.mods.get(i).prog.exprs);
+    i = i + 1;
+  }
+  return out;
+}
+
 fn max_rounds_error(w: tc.World, cfg: ExpandConfig) -> tc.TcError {
-  let msg: String = "macro expansion exceeded max rounds: ".concat(cfg.max_rounds.to_string());
+  let pending: i32 = world_macro_call_count(w);
+  let mut msg: String = "macro expansion exceeded max rounds: ".concat(cfg.max_rounds.to_string());
+  msg = msg.concat(" (pending macro calls: ").concat(pending.to_string()).concat(")");
   let site: MacroSite = find_first_macro_site_in_world(w);
   if site.found {
+    let mut mod_path: String = "";
+    if site.mod_idx >= 0 && site.mod_idx < w.mods.len() { mod_path = w.mods.get(site.mod_idx).path; }
+    if mod_path != "" && site.name != "" {
+      msg = msg.concat(" (next: ").concat(mod_path).concat("::").concat(site.name).concat("!)");
+    }
     return tc.tc_type_error_at(site.sp, msg);
   }
   return tc.tc_type_error("", msg);

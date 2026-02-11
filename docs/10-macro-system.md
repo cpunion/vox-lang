@@ -65,6 +65,7 @@ let v = compile!(ast);
 - `name[T]!(...)` 也支持（与普通泛型调用语法保持一致）。
 - 编译流水线已接入 `macroexpand` 阶段（`parse/load -> macroexpand -> typecheck`），展开按轮次执行直到固定点或到达轮次上限。
 - `macroexpand` 默认轮次上限为 `512`（`ExpandConfig.max_rounds`），避免“宏数量较多但可收敛”场景被过早截断；仍可通过配置收紧。
+  - 达到上限时的诊断会包含 `pending macro calls` 与 `next: <module>::<macro>!` 摘要，便于定位未收敛点。
 - 当前内置最小规则集：
   - `compile!(expr)`：仅 1 个值参数、无 type args，直接把 `expr` 插回当前位置（支持链式场景，如 `compile!(compile!(...))`）。
 - `quote!(expr)`：仅 1 个值参数、无 type args，表达式级 quote MVP（当前直接产出内联表达式节点）。
