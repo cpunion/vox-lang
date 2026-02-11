@@ -62,7 +62,7 @@ fn find_named_type_import(named: Vec[tc.NamedTypeImport], local: String) -> tc.N
 }
 
 fn is_vec_builtin_method(name: String) -> bool {
-  return name == "push" || name == "clear" || name == "extend" || name == "pop" || name == "len" || name == "is_empty" || name == "get" || name == "join";
+  return name == "push" || name == "clear" || name == "extend" || name == "pop" || name == "remove" || name == "len" || name == "is_empty" || name == "get" || name == "join";
 }
 
 fn is_string_builtin_method(name: String) -> bool {
@@ -588,6 +588,128 @@ fn gen_vec_pop_member_place(g0: Gen, recv_id: i32, elem: i32, out_ty: i32) -> Ge
   }
 
   return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(pop_tid), ty: out_ty };
+}
+
+fn gen_vec_remove_member_place(g0: Gen, recv_id: i32, elem: i32, idx: ir.Value, out_ty: i32) -> GenExprResult {
+  let mc: MemberChainResult = member_chain(g0.exprs, recv_id);
+  if !mc.ok { return GenExprResult { ok: false, err: "Vec.remove recv must be place", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+  if mc.fields.len() == 0 { return GenExprResult { ok: false, err: "Vec.remove recv must be place", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+
+  let br: LookupSlotResult = slots_lookup(g0.slots, mc.base);
+  if !br.found { return GenExprResult { ok: false, err: "unknown base var", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+  if !br.mutable { return GenExprResult { ok: false, err: "Vec.remove recv is immutable", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+
+  let mut g: Gen = g0;
+  let mut cur_slot: i32 = br.slot;
+  let mut cur_ty: i32 = br.ty;
+  let mut parents: Vec[VecPushParentSlot] = Vec();
+
+  let mut fi: i32 = 0;
+  while fi < mc.fields.len() - 1 {
+    let rt: ir.Ty = ir.ty_pool_get(g.ctx.pool, cur_ty);
+    if rt.kind != ir.TyKind.Struct { return GenExprResult { ok: false, err: "Vec.remove recv must be struct", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    let fs: tc.FindStructResult = tc.find_struct(g.ctx, rt.mod_path, rt.name);
+    if !fs.found { return GenExprResult { ok: false, err: "unknown struct type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    if !tc.vis_allows(fs.sig.vis, fs.sig.mod_path, g.mod_path) {
+      return GenExprResult { ok: false, err: "type is private", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+
+    let fname: String = mc.fields.get(fi);
+    let mut found: bool = false;
+    let mut next_ty: i32 = g.ctx.ty_bad;
+    let mut fvis: i32 = ast.vis_private();
+    let mut si: i32 = 0;
+    while si < fs.sig.fields.len() {
+      let sf: tc.StructFieldSig = fs.sig.fields.get(si);
+      if sf.name == fname {
+        found = true;
+        next_ty = sf.ty;
+        fvis = sf.vis;
+        break;
+      }
+      si = si + 1;
+    }
+    if !found { return GenExprResult { ok: false, err: "unknown field", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    if !tc.vis_allows(fvis, fs.sig.mod_path, g.mod_path) {
+      return GenExprResult { ok: false, err: "field is private", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+
+    let nt: GenNewIdResult = gen_new_temp(g);
+    g = nt.g;
+    let tid: i32 = nt.id;
+    g = gen_emit(g, ir.Instr.FieldGet(tid, cur_ty, ir.v_slot(cur_slot), fname));
+    let ns: GenNewIdResult = gen_new_slot(g);
+    g = ns.g;
+    let sid: i32 = ns.id;
+    g = gen_emit(g, ir.Instr.SlotDecl(sid, next_ty));
+    g = gen_emit(g, ir.Instr.Store(sid, ir.v_temp(tid)));
+    parents.push(VecPushParentSlot { parent_slot: cur_slot, field: fname, child_slot: sid, child_ty: next_ty });
+    cur_slot = sid;
+    cur_ty = next_ty;
+    fi = fi + 1;
+  }
+
+  let rt_last: ir.Ty = ir.ty_pool_get(g.ctx.pool, cur_ty);
+  if rt_last.kind != ir.TyKind.Struct { return GenExprResult { ok: false, err: "Vec.remove recv must be struct", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  let fs_last: tc.FindStructResult = tc.find_struct(g.ctx, rt_last.mod_path, rt_last.name);
+  if !fs_last.found { return GenExprResult { ok: false, err: "unknown struct type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  if !tc.vis_allows(fs_last.sig.vis, fs_last.sig.mod_path, g.mod_path) {
+    return GenExprResult { ok: false, err: "type is private", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+  }
+
+  let leaf: String = mc.fields.get(mc.fields.len() - 1);
+  let mut leaf_ok: bool = false;
+  let mut leaf_ty: i32 = g.ctx.ty_bad;
+  let mut leaf_vis: i32 = ast.vis_private();
+  let mut li: i32 = 0;
+  while li < fs_last.sig.fields.len() {
+    let lf: tc.StructFieldSig = fs_last.sig.fields.get(li);
+    if lf.name == leaf {
+      leaf_ok = true;
+      leaf_ty = lf.ty;
+      leaf_vis = lf.vis;
+      break;
+    }
+    li = li + 1;
+  }
+  if !leaf_ok { return GenExprResult { ok: false, err: "unknown field", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  if !tc.vis_allows(leaf_vis, fs_last.sig.mod_path, g.mod_path) {
+    return GenExprResult { ok: false, err: "field is private", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+  }
+
+  let t_vec: GenNewIdResult = gen_new_temp(g);
+  g = t_vec.g;
+  let tid_v: i32 = t_vec.id;
+  g = gen_emit(g, ir.Instr.FieldGet(tid_v, leaf_ty, ir.v_slot(cur_slot), leaf));
+  let sl: GenNewIdResult = gen_new_slot(g);
+  g = sl.g;
+  let vec_slot: i32 = sl.id;
+  g = gen_emit(g, ir.Instr.SlotDecl(vec_slot, leaf_ty));
+  g = gen_emit(g, ir.Instr.Store(vec_slot, ir.v_temp(tid_v)));
+
+  let ntp: GenNewIdResult = gen_new_temp(g);
+  g = ntp.g;
+  let remove_tid: i32 = ntp.id;
+  g = gen_emit(g, ir.Instr.VecRemove(remove_tid, elem, vec_slot, idx));
+
+  let t_vec2: GenNewIdResult = gen_new_temp(g);
+  g = t_vec2.g;
+  let tid_v2: i32 = t_vec2.id;
+  g = gen_emit(g, ir.Instr.Load(tid_v2, leaf_ty, vec_slot));
+  g = gen_emit(g, ir.Instr.StoreField(cur_slot, leaf, ir.v_temp(tid_v2)));
+
+  let mut ri: i32 = parents.len() - 1;
+  while ri >= 0 {
+    let ps: VecPushParentSlot = parents.get(ri);
+    let nt2: GenNewIdResult = gen_new_temp(g);
+    g = nt2.g;
+    let tid2: i32 = nt2.id;
+    g = gen_emit(g, ir.Instr.Load(tid2, ps.child_ty, ps.child_slot));
+    g = gen_emit(g, ir.Instr.StoreField(ps.parent_slot, ps.field, ir.v_temp(tid2)));
+    ri = ri - 1;
+  }
+
+  return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(remove_tid), ty: out_ty };
 }
 
 fn gen_call_reflect_intrinsic(g0: Gen, name: String, type_args: Vec[ast.TypeName], args: Vec[i32], out_ty: i32) -> GenExprResult {
@@ -1428,6 +1550,30 @@ fn gen_call_vec_method(g0: Gen, recv_id: i32, recv_ty: i32, mname: String, args:
       return gen_vec_pop_member_place(g, recv_id, elem, out_ty);
     }
     return GenExprResult { ok: false, err: "Vec.pop recv must be place", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+  }
+
+  if mname == "remove" {
+    if args.len() != 1 { return GenExprResult { ok: false, err: "Vec.remove arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+    let mut g: Gen = g0;
+    let idxr: GenExprResult = gen_expr(g, args.get(0), g.ctx.ty_i32);
+    if !idxr.ok { return idxr; }
+    g = idxr.g;
+    let rn: ast.ExprNode = ast.expr_pool_get(g.exprs, recv_id);
+    if match rn { ast.ExprNode.Ident(_x) => true, _ => false } {
+      let nm: String = match rn { ast.ExprNode.Ident(s) => s, _ => "" };
+      let sr: LookupSlotResult = slots_lookup(g.slots, nm);
+      if !sr.found { return GenExprResult { ok: false, err: "unknown vec var", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+      if !sr.mutable { return GenExprResult { ok: false, err: "Vec.remove recv is immutable", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+      let nt: GenNewIdResult = gen_new_temp(g);
+      g = nt.g;
+      let tid: i32 = nt.id;
+      g = gen_emit(g, ir.Instr.VecRemove(tid, elem, sr.slot, idxr.val));
+      return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
+    }
+    if match rn { ast.ExprNode.Member(_r, _n) => true, _ => false } {
+      return gen_vec_remove_member_place(g, recv_id, elem, idxr.val, out_ty);
+    }
+    return GenExprResult { ok: false, err: "Vec.remove recv must be place", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
   }
 
   if mname == "len" {

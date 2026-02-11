@@ -483,6 +483,7 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
   - `v.clear() -> ()`（可变）
   - `v.extend(other: Vec[T]) -> ()`（可变）
   - `v.pop() -> T`（可变；空向量运行时 panic）
+  - `v.remove(i: i32) -> T`（可变；索引越界运行时 panic）
   - `v.len() -> i32`
   - `v.is_empty() -> bool`
   - `v.get(i: i32) -> T`
@@ -505,10 +506,10 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 对 receiver 的约束（Stage0）：
 
 - 非变更方法（如 `len/is_empty/get/byte_at/slice/starts_with/ends_with/contains/index_of/last_index_of`）：receiver 可以是任意表达式（例如 `ctx.items.len()`）。
-- 变更方法（`Vec.push`/`Vec.clear`/`Vec.extend`/`Vec.pop`）：receiver 必须是 **place**（可写位置）。
-  - `Vec.push`/`Vec.clear`/`Vec.extend`/`Vec.pop` 要求 receiver 的根绑定是 `let mut`（不可变绑定会报错）。
-  - Stage0/Stage1：支持局部变量（如 `v.push(x)`、`v.clear()`、`v.extend(w)`、`v.pop()`），以及可变局部 struct 的直接字段（如 `s.items.push(x)`、`s.items.clear()`、`s.items.extend(w)`、`s.items.pop()`）。
-  - Stage2：额外支持可变局部 struct 的多级字段（如 `o.inner.items.push(x)`、`o.inner.items.clear()`、`o.inner.items.extend(w)`、`o.inner.items.pop()`）。
+- 变更方法（`Vec.push`/`Vec.clear`/`Vec.extend`/`Vec.pop`/`Vec.remove`）：receiver 必须是 **place**（可写位置）。
+  - `Vec.push`/`Vec.clear`/`Vec.extend`/`Vec.pop`/`Vec.remove` 要求 receiver 的根绑定是 `let mut`（不可变绑定会报错）。
+  - Stage0/Stage1：支持局部变量（如 `v.push(x)`、`v.clear()`、`v.extend(w)`、`v.pop()`、`v.remove(i)`），以及可变局部 struct 的直接字段（如 `s.items.push(x)`、`s.items.clear()`、`s.items.extend(w)`、`s.items.pop()`、`s.items.remove(i)`）。
+  - Stage2：额外支持可变局部 struct 的多级字段（如 `o.inner.items.push(x)`、`o.inner.items.clear()`、`o.inner.items.extend(w)`、`o.inner.items.pop()`、`o.inner.items.remove(i)`）。
 
 ### 保留的 `__*` 低层 intrinsic（Stage0/Stage1 自举期）
 
