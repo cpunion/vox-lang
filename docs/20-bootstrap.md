@@ -69,7 +69,7 @@ Stage0 下一步（仍属“可包含”范围，优先级高）：
 
 - 编译期计算：`comptime`（包括相关内建与执行器）
 - 宏：`name!(...)`、`quote`/AST 类型
-- trait/impl（可后续再加）
+- trait/impl 的高级特性（如完整 specialization 偏序比较、更强关联类型约束）
 - async/await
 - effect/资源系统
 

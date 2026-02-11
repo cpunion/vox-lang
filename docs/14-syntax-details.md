@@ -43,8 +43,9 @@
   - 泛型调用（通常可省略类型实参，由实参/返回期望推导）：`id(1)`
   - 函数 const 泛型：`fn addn[const N: i32](x: i32) -> i32 { return x + N; }`
   - const 泛型调用（显式 const 实参）：`addn[3](4)`
-  - pack/variadic 语法（Stage2 skeleton）：`fn zip[T...](xs: T...) -> i32 { ... }`
-    - 当前仅 parser + typecheck 占位诊断；尚未进入 IR/codegen。
+  - pack/variadic 语法（Stage2 当前实现）：`fn zip[T...](xs: T...) -> i32 { ... }`
+    - `xs: T...` 会在类型检查阶段降级为 `Vec[T]`，并可进入 IR/codegen。
+    - `T...`（type param pack 声明）当前只保留声明语义（最多 1 个且必须在末尾），未做真正 pack 展开。
 - 其它（Stage0 暂不实现）：`impl[T] ...` 等。
 
 ## Trait 语法（Stage1 v0）
