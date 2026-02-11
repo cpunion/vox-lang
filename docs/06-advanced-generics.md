@@ -54,6 +54,7 @@ where
   - 已声明的 `const` 泛型参数（`comptime N < M`）
   - 已声明的类型参数布局反射（`comptime @size_of(T) <= 64`、`comptime @align_of(T) <= 8`）
   - 已声明的类型参数字段/variant 数反射（`comptime @field_count(T) <= 8`）
+  - 已声明的类型参数 `TypeId` 反射（`comptime @type(T) > 0`）
 - 右值：十进制整数字面量（支持负号）或 `const` 参数（如 `comptime N < M`、`comptime @size_of(T) <= LIM`）
 - 运算符：`== != < <= > >=`
 - 校验时机：
