@@ -481,10 +481,12 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 - `Vec[T]`：
   - `v.push(x) -> ()`（可变）
   - `v.len() -> i32`
+  - `v.is_empty() -> bool`
   - `v.get(i: i32) -> T`
   - `v.join(sep: String) -> String`（仅当 `T == String`；用于拼接字符串片段）
 - `String`：
   - `s.len() -> i32`
+  - `s.is_empty() -> bool`
   - `s.byte_at(i: i32) -> i32`
   - `s.slice(start: i32, end: i32) -> String`
   - `s.concat(other: String) -> String`（返回新字符串；用于代码生成等场景）
@@ -499,7 +501,7 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 
 对 receiver 的约束（Stage0）：
 
-- 非变更方法（如 `len/get/byte_at/slice/starts_with/ends_with/contains/index_of/last_index_of`）：receiver 可以是任意表达式（例如 `ctx.items.len()`）。
+- 非变更方法（如 `len/is_empty/get/byte_at/slice/starts_with/ends_with/contains/index_of/last_index_of`）：receiver 可以是任意表达式（例如 `ctx.items.len()`）。
 - 变更方法（`Vec.push`）：receiver 必须是 **place**（可写位置）。
   - `Vec.push` 要求 receiver 的根绑定是 `let mut`（不可变绑定会报错）。
   - Stage0/Stage1：支持局部变量 `v.push(x)`，以及可变局部 struct 的直接字段 `s.items.push(x)`。
