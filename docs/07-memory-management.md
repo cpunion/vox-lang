@@ -1,6 +1,6 @@
 # 内存管理（Vox：无用户生命周期标注）
 
-> 说明：本章的“借用不可逃逸”是目标语义。Stage2 当前是过渡实现，`&T` / `&'static T` 在类型检查阶段先擦除为 `T`，因此尚未强制这些借用位置约束。
+> 说明：本章的“借用不可逃逸”是目标语义。Stage2 当前是过渡实现，`&T` / `&mut T` / `&'static T` / `&'static mut T` 在类型检查阶段先擦除为 `T`，因此尚未强制这些借用位置约束。
 
 ## 核心原则
 
@@ -99,7 +99,7 @@ impl StrView {
 
 - 标准库 `std/string` 已落地 `StrView`，当前字段模型为 `owner: String + lo/hi`（拥有型视图）。
 - 标准库 `std/collections` 已落地 `Slice[T]`，当前字段模型为 `owner: Vec[T] + lo/hi`（拥有型视图）。
-- 语法级 `&T` / `&'static T` 已在 stage2 接入（当前过渡语义等价 `T`）；`Arc[str]` 仍是后续演进方向。长期保存子串仍建议使用 `StrView`。
+- 语法级 `&T` / `&mut T` / `&'static T` / `&'static mut T` 已在 stage2 接入（当前过渡语义等价 `T`）；`Arc[str]` 仍是后续演进方向。长期保存子串仍建议使用 `StrView`。
 
 ## Unsafe
 
