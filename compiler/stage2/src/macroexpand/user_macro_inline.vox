@@ -52,6 +52,52 @@ fn template_expr_list_supported(pool: ast.ExprPool, ids: Vec[i32]) -> bool {
   return true;
 }
 
+fn template_stmt_supported(pool: ast.ExprPool, st: ast.Stmt) -> bool {
+  return
+    match st {
+      ast.Stmt.Let(_sp, _mut, _name, _has_ann, _ann, init) =>
+        template_expr_supported(pool, init),
+      ast.Stmt.Assign(_sp, _name, ex) =>
+        template_expr_supported(pool, ex),
+      ast.Stmt.AssignField(_sp, _recv, _field, ex) =>
+        template_expr_supported(pool, ex),
+      ast.Stmt.ExprStmt(_sp, ex) =>
+        template_expr_supported(pool, ex),
+      ast.Stmt.IfStmt(_sp, cond, then_b, has_else, else_b) =>
+        template_expr_supported(pool, cond) &&
+        template_block_supported(pool, then_b) &&
+        (!has_else || template_block_supported(pool, else_b)),
+      ast.Stmt.WhileStmt(_sp, cond, body) =>
+        template_expr_supported(pool, cond) &&
+        template_block_supported(pool, body),
+      ast.Stmt.Break(_sp) => true,
+      ast.Stmt.Continue(_sp) => true,
+      ast.Stmt.ReturnStmt(_sp, has_ex, ex) =>
+        !has_ex || template_expr_supported(pool, ex),
+    };
+}
+
+fn template_block_supported(pool: ast.ExprPool, b: ast.Block) -> bool {
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    if !template_stmt_supported(pool, b.stmts.get(i)) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn template_expr_block_supported(pool: ast.ExprPool, b: ast.ExprBlock) -> bool {
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    if !template_stmt_supported(pool, b.stmts.get(i)) { return false; }
+    i = i + 1;
+  }
+  if b.has_tail {
+    return template_expr_supported(pool, b.tail);
+  }
+  return true;
+}
+
 fn template_struct_fields_supported(pool: ast.ExprPool, fields: Vec[ast.StructLitField]) -> bool {
   let mut i: i32 = 0;
   while i < fields.len() {
@@ -79,8 +125,8 @@ fn template_expr_supported(pool: ast.ExprPool, id: i32) -> bool {
     ast.ExprNode.MacroCall(callee, _ta, args) => template_expr_supported(pool, callee) && template_expr_list_supported(pool, args),
     ast.ExprNode.Try(a) => template_expr_supported(pool, a),
     ast.ExprNode.StructLit(tyex, fields) => template_expr_supported(pool, tyex) && template_struct_fields_supported(pool, fields),
-    // Keep v1 hygienic/simple: no local-binding forms in inline template.
-    ast.ExprNode.Block(_b) => false,
+    ast.ExprNode.Block(b) => template_expr_block_supported(pool, b),
+    // Keep v1 hygienic/simple for now: no try/match template inline.
     ast.ExprNode.TryBlock(_b) => false,
     ast.ExprNode.Match(_scrut, _arms) => false,
   };
@@ -249,6 +295,195 @@ struct CloneExprListResult {
   ids: Vec[i32],
 }
 
+fn clone_stmt_list_with_args(
+  src: ast.ExprPool,
+  dst0: ast.ExprPool,
+  sts: Vec[ast.Stmt],
+  params: Vec[ast.Param],
+  args: Vec[i32],
+  ty_subs: Vec[TypeArgSub],
+  const_subs: Vec[ConstArgSub]
+) -> CloneStmtListResult {
+  let mut dst: ast.ExprPool = dst0;
+  let mut out: Vec[ast.Stmt] = Vec();
+  let mut i: i32 = 0;
+  while i < sts.len() {
+    let cr: CloneStmtResult = clone_stmt_with_args(
+      src,
+      dst,
+      sts.get(i),
+      params,
+      args,
+      ty_subs,
+      const_subs);
+    if !cr.ok { return CloneStmtListResult { ok: false, pool: dst, sts: Vec() }; }
+    dst = cr.pool;
+    out.push(cr.st);
+    i = i + 1;
+  }
+  return CloneStmtListResult { ok: true, pool: dst, sts: out };
+}
+
+struct CloneStmtResult {
+  ok: bool,
+  pool: ast.ExprPool,
+  st: ast.Stmt,
+}
+
+struct CloneStmtListResult {
+  ok: bool,
+  pool: ast.ExprPool,
+  sts: Vec[ast.Stmt],
+}
+
+fn clone_block_with_args(
+  src: ast.ExprPool,
+  dst0: ast.ExprPool,
+  b: ast.Block,
+  params: Vec[ast.Param],
+  args: Vec[i32],
+  ty_subs: Vec[TypeArgSub],
+  const_subs: Vec[ConstArgSub]
+) -> CloneBlockResult {
+  let cs: CloneStmtListResult = clone_stmt_list_with_args(src, dst0, b.stmts, params, args, ty_subs, const_subs);
+  if !cs.ok { return CloneBlockResult { ok: false, pool: cs.pool, b: ast.Block { stmts: Vec() } }; }
+  return CloneBlockResult { ok: true, pool: cs.pool, b: ast.Block { stmts: cs.sts } };
+}
+
+struct CloneBlockResult {
+  ok: bool,
+  pool: ast.ExprPool,
+  b: ast.Block,
+}
+
+fn clone_expr_block_with_args(
+  src: ast.ExprPool,
+  dst0: ast.ExprPool,
+  b: ast.ExprBlock,
+  params: Vec[ast.Param],
+  args: Vec[i32],
+  ty_subs: Vec[TypeArgSub],
+  const_subs: Vec[ConstArgSub]
+) -> CloneExprBlockResult {
+  let cs: CloneStmtListResult = clone_stmt_list_with_args(src, dst0, b.stmts, params, args, ty_subs, const_subs);
+  if !cs.ok {
+    return CloneExprBlockResult {
+      ok: false,
+      pool: cs.pool,
+      b: ast.ExprBlock { stmts: Vec(), has_tail: false, tail: -1 },
+    };
+  }
+  let mut dst: ast.ExprPool = cs.pool;
+  let mut tail: i32 = -1;
+  if b.has_tail {
+    let ct: CloneExprResult = clone_expr_with_args(src, dst, b.tail, params, args, ty_subs, const_subs);
+    if !ct.ok {
+      return CloneExprBlockResult {
+        ok: false,
+        pool: ct.pool,
+        b: ast.ExprBlock { stmts: Vec(), has_tail: false, tail: -1 },
+      };
+    }
+    dst = ct.pool;
+    tail = ct.id;
+  }
+  return CloneExprBlockResult {
+    ok: true,
+    pool: dst,
+    b: ast.ExprBlock { stmts: cs.sts, has_tail: b.has_tail, tail: tail },
+  };
+}
+
+struct CloneExprBlockResult {
+  ok: bool,
+  pool: ast.ExprPool,
+  b: ast.ExprBlock,
+}
+
+fn clone_stmt_with_args(
+  src: ast.ExprPool,
+  dst0: ast.ExprPool,
+  st: ast.Stmt,
+  params: Vec[ast.Param],
+  args: Vec[i32],
+  ty_subs: Vec[TypeArgSub],
+  const_subs: Vec[ConstArgSub]
+) -> CloneStmtResult {
+  return
+    match st {
+      ast.Stmt.Let(sp, mut0, name, has_ann, ann, init) => {
+        let cr: CloneExprResult = clone_expr_with_args(src, dst0, init, params, args, ty_subs, const_subs);
+        if !cr.ok { CloneStmtResult { ok: false, pool: cr.pool, st: ast.Stmt.Break(sp) } } else {
+          CloneStmtResult {
+            ok: true,
+            pool: cr.pool,
+            st: ast.Stmt.Let(sp, mut0, name, has_ann, substitute_type_name(ann, ty_subs, const_subs), cr.id),
+          }
+        }
+      },
+      ast.Stmt.Assign(sp, name, ex) => {
+        let cr: CloneExprResult = clone_expr_with_args(src, dst0, ex, params, args, ty_subs, const_subs);
+        if !cr.ok { CloneStmtResult { ok: false, pool: cr.pool, st: ast.Stmt.Break(sp) } } else {
+          CloneStmtResult { ok: true, pool: cr.pool, st: ast.Stmt.Assign(sp, name, cr.id) }
+        }
+      },
+      ast.Stmt.AssignField(sp, recv, field, ex) => {
+        let cr: CloneExprResult = clone_expr_with_args(src, dst0, ex, params, args, ty_subs, const_subs);
+        if !cr.ok { CloneStmtResult { ok: false, pool: cr.pool, st: ast.Stmt.Break(sp) } } else {
+          CloneStmtResult { ok: true, pool: cr.pool, st: ast.Stmt.AssignField(sp, recv, field, cr.id) }
+        }
+      },
+      ast.Stmt.ExprStmt(sp, ex) => {
+        let cr: CloneExprResult = clone_expr_with_args(src, dst0, ex, params, args, ty_subs, const_subs);
+        if !cr.ok { CloneStmtResult { ok: false, pool: cr.pool, st: ast.Stmt.Break(sp) } } else {
+          CloneStmtResult { ok: true, pool: cr.pool, st: ast.Stmt.ExprStmt(sp, cr.id) }
+        }
+      },
+      ast.Stmt.IfStmt(sp, cond, then_b, has_else, else_b) => {
+        let cc: CloneExprResult = clone_expr_with_args(src, dst0, cond, params, args, ty_subs, const_subs);
+        if !cc.ok { CloneStmtResult { ok: false, pool: cc.pool, st: ast.Stmt.Break(sp) } } else {
+          let cthen: CloneBlockResult = clone_block_with_args(src, cc.pool, then_b, params, args, ty_subs, const_subs);
+          if !cthen.ok { CloneStmtResult { ok: false, pool: cthen.pool, st: ast.Stmt.Break(sp) } } else {
+            let mut pool2: ast.ExprPool = cthen.pool;
+            let mut else2: ast.Block = ast.Block { stmts: Vec() };
+            if has_else {
+              let celse: CloneBlockResult = clone_block_with_args(src, pool2, else_b, params, args, ty_subs, const_subs);
+              if !celse.ok { return CloneStmtResult { ok: false, pool: celse.pool, st: ast.Stmt.Break(sp) }; }
+              pool2 = celse.pool;
+              else2 = celse.b;
+            }
+            CloneStmtResult {
+              ok: true,
+              pool: pool2,
+              st: ast.Stmt.IfStmt(sp, cc.id, cthen.b, has_else, else2),
+            }
+          }
+        }
+      },
+      ast.Stmt.WhileStmt(sp, cond, body) => {
+        let cc: CloneExprResult = clone_expr_with_args(src, dst0, cond, params, args, ty_subs, const_subs);
+        if !cc.ok { CloneStmtResult { ok: false, pool: cc.pool, st: ast.Stmt.Break(sp) } } else {
+          let cb: CloneBlockResult = clone_block_with_args(src, cc.pool, body, params, args, ty_subs, const_subs);
+          if !cb.ok { CloneStmtResult { ok: false, pool: cb.pool, st: ast.Stmt.Break(sp) } } else {
+            CloneStmtResult { ok: true, pool: cb.pool, st: ast.Stmt.WhileStmt(sp, cc.id, cb.b) }
+          }
+        }
+      },
+      ast.Stmt.Break(sp) => CloneStmtResult { ok: true, pool: dst0, st: ast.Stmt.Break(sp) },
+      ast.Stmt.Continue(sp) => CloneStmtResult { ok: true, pool: dst0, st: ast.Stmt.Continue(sp) },
+      ast.Stmt.ReturnStmt(sp, has_ex, ex) => {
+        if !has_ex {
+          CloneStmtResult { ok: true, pool: dst0, st: ast.Stmt.ReturnStmt(sp, false, ex) }
+        } else {
+          let cr: CloneExprResult = clone_expr_with_args(src, dst0, ex, params, args, ty_subs, const_subs);
+          if !cr.ok { CloneStmtResult { ok: false, pool: cr.pool, st: ast.Stmt.Break(sp) } } else {
+            CloneStmtResult { ok: true, pool: cr.pool, st: ast.Stmt.ReturnStmt(sp, true, cr.id) }
+          }
+        }
+      },
+    };
+}
+
 struct CloneStructFieldsResult {
   ok: bool,
   pool: ast.ExprPool,
@@ -404,6 +639,13 @@ fn clone_expr_with_args(
     let cf: CloneStructFieldsResult = clone_struct_fields_with_args(src, ct.pool, fs0, params, args, ty_subs, const_subs);
     if !cf.ok { return clone_expr_err(cf.pool); }
     let ar: ast.AddExprResult = ast.expr_pool_add(cf.pool, ast.ExprNode.StructLit(ct.id, cf.fields), sp);
+    return clone_expr_ok(ar.pool, ar.id);
+  }
+  if match n { ast.ExprNode.Block(_b) => true, _ => false } {
+    let b0: ast.ExprBlock = match n { ast.ExprNode.Block(b) => b, _ => ast.ExprBlock { stmts: Vec(), has_tail: false, tail: -1 } };
+    let cb: CloneExprBlockResult = clone_expr_block_with_args(src, dst0, b0, params, args, ty_subs, const_subs);
+    if !cb.ok { return clone_expr_err(cb.pool); }
+    let ar: ast.AddExprResult = ast.expr_pool_add(cb.pool, ast.ExprNode.Block(cb.b), sp);
     return clone_expr_ok(ar.pool, ar.id);
   }
 
