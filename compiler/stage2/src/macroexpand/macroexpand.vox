@@ -87,25 +87,79 @@ fn find_macro_site_in_block(exprs: ast.ExprPool, mod_idx: i32, b: ast.Block) -> 
   return no_site();
 }
 
+fn find_macro_site_in_if_stmt(exprs: ast.ExprPool, mod_idx: i32, cond: i32, then_b: ast.Block, has_else: bool, else_b: ast.Block) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, cond);
+  if s0.found { return s0; }
+  let s1: MacroSite = find_macro_site_in_block(exprs, mod_idx, then_b);
+  if s1.found { return s1; }
+  if has_else { return find_macro_site_in_block(exprs, mod_idx, else_b); }
+  return no_site();
+}
+
+fn find_macro_site_in_while_stmt(exprs: ast.ExprPool, mod_idx: i32, cond: i32, body: ast.Block) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, cond);
+  if s0.found { return s0; }
+  return find_macro_site_in_block(exprs, mod_idx, body);
+}
+
+fn find_macro_site_in_if_expr(exprs: ast.ExprPool, mod_idx: i32, c0: i32, t0: i32, e0: i32) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, c0);
+  if s0.found { return s0; }
+  let s1: MacroSite = find_macro_site_in_expr(exprs, mod_idx, t0);
+  if s1.found { return s1; }
+  return find_macro_site_in_expr(exprs, mod_idx, e0);
+}
+
+fn find_macro_site_in_binary_expr(exprs: ast.ExprPool, mod_idx: i32, l: i32, r: i32) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, l);
+  if s0.found { return s0; }
+  return find_macro_site_in_expr(exprs, mod_idx, r);
+}
+
+fn find_macro_site_in_call_expr(exprs: ast.ExprPool, mod_idx: i32, callee: i32, args: Vec[i32]) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, callee);
+  if s0.found { return s0; }
+  let mut i: i32 = 0;
+  while i < args.len() {
+    let si: MacroSite = find_macro_site_in_expr(exprs, mod_idx, args.get(i));
+    if si.found { return si; }
+    i = i + 1;
+  }
+  return no_site();
+}
+
+fn find_macro_site_in_struct_lit_expr(exprs: ast.ExprPool, mod_idx: i32, tyex: i32, fields: Vec[ast.StructLitField]) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, tyex);
+  if s0.found { return s0; }
+  let mut i: i32 = 0;
+  while i < fields.len() {
+    let si: MacroSite = find_macro_site_in_expr(exprs, mod_idx, fields.get(i).expr);
+    if si.found { return si; }
+    i = i + 1;
+  }
+  return no_site();
+}
+
+fn find_macro_site_in_match_expr(exprs: ast.ExprPool, mod_idx: i32, scrut: i32, arms: Vec[ast.MatchArm]) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, scrut);
+  if s0.found { return s0; }
+  let mut i: i32 = 0;
+  while i < arms.len() {
+    let si: MacroSite = find_macro_site_in_expr(exprs, mod_idx, arms.get(i).expr);
+    if si.found { return si; }
+    i = i + 1;
+  }
+  return no_site();
+}
+
 fn find_macro_site_in_stmt(exprs: ast.ExprPool, mod_idx: i32, st: ast.Stmt) -> MacroSite {
   return match st {
     ast.Stmt.Let(_sp, _mut, _name, _has_ann, _ann, init) => find_macro_site_in_expr(exprs, mod_idx, init),
     ast.Stmt.Assign(_sp, _name, ex) => find_macro_site_in_expr(exprs, mod_idx, ex),
     ast.Stmt.AssignField(_sp, _recv, _field, ex) => find_macro_site_in_expr(exprs, mod_idx, ex),
     ast.Stmt.ExprStmt(_sp, ex) => find_macro_site_in_expr(exprs, mod_idx, ex),
-    ast.Stmt.IfStmt(_sp, cond, then_b, has_else, else_b) => {
-      let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, cond);
-      if s0.found { return s0; }
-      let s1: MacroSite = find_macro_site_in_block(exprs, mod_idx, then_b);
-      if s1.found { return s1; }
-      if has_else { return find_macro_site_in_block(exprs, mod_idx, else_b); }
-      return no_site();
-    },
-    ast.Stmt.WhileStmt(_sp, cond, body) => {
-      let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, cond);
-      if s0.found { return s0; }
-      return find_macro_site_in_block(exprs, mod_idx, body);
-    },
+    ast.Stmt.IfStmt(_sp, cond, then_b, has_else, else_b) => find_macro_site_in_if_stmt(exprs, mod_idx, cond, then_b, has_else, else_b),
+    ast.Stmt.WhileStmt(_sp, cond, body) => find_macro_site_in_while_stmt(exprs, mod_idx, cond, body),
     ast.Stmt.Break(_sp) => no_site(),
     ast.Stmt.Continue(_sp) => no_site(),
     ast.Stmt.ReturnStmt(_sp, has_ex, ex) => if has_ex { find_macro_site_in_expr(exprs, mod_idx, ex) } else { no_site() },
@@ -122,57 +176,17 @@ fn find_macro_site_in_expr(exprs: ast.ExprPool, mod_idx: i32, id: i32) -> MacroS
     ast.ExprNode.Str(_s) => no_site(),
     ast.ExprNode.DotIdent(_s) => no_site(),
     ast.ExprNode.Block(b) => find_macro_site_in_expr_block(exprs, mod_idx, b),
-    ast.ExprNode.If(c0, t0, e0) => {
-      let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, c0);
-      if s0.found { return s0; }
-      let s1: MacroSite = find_macro_site_in_expr(exprs, mod_idx, t0);
-      if s1.found { return s1; }
-      return find_macro_site_in_expr(exprs, mod_idx, e0);
-    },
+    ast.ExprNode.If(c0, t0, e0) => find_macro_site_in_if_expr(exprs, mod_idx, c0, t0, e0),
     ast.ExprNode.Unary(_op, a) => find_macro_site_in_expr(exprs, mod_idx, a),
     ast.ExprNode.As(a, _tn) => find_macro_site_in_expr(exprs, mod_idx, a),
-    ast.ExprNode.Binary(_op, l, r) => {
-      let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, l);
-      if s0.found { return s0; }
-      return find_macro_site_in_expr(exprs, mod_idx, r);
-    },
+    ast.ExprNode.Binary(_op, l, r) => find_macro_site_in_binary_expr(exprs, mod_idx, l, r),
     ast.ExprNode.Member(recv, _name) => find_macro_site_in_expr(exprs, mod_idx, recv),
-    ast.ExprNode.Call(callee, _targs, args) => {
-      let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, callee);
-      if s0.found { return s0; }
-      let mut i: i32 = 0;
-      while i < args.len() {
-        let si: MacroSite = find_macro_site_in_expr(exprs, mod_idx, args.get(i));
-        if si.found { return si; }
-        i = i + 1;
-      }
-      return no_site();
-    },
+    ast.ExprNode.Call(callee, _targs, args) => find_macro_site_in_call_expr(exprs, mod_idx, callee, args),
     ast.ExprNode.MacroCall(callee, targs, args) => site_from_macro_call(exprs, mod_idx, id, callee, targs, args),
     ast.ExprNode.TryBlock(bid) => find_macro_site_in_expr(exprs, mod_idx, bid),
     ast.ExprNode.Try(a) => find_macro_site_in_expr(exprs, mod_idx, a),
-    ast.ExprNode.StructLit(tyex, fields) => {
-      let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, tyex);
-      if s0.found { return s0; }
-      let mut i: i32 = 0;
-      while i < fields.len() {
-        let si: MacroSite = find_macro_site_in_expr(exprs, mod_idx, fields.get(i).expr);
-        if si.found { return si; }
-        i = i + 1;
-      }
-      return no_site();
-    },
-    ast.ExprNode.Match(scrut, arms) => {
-      let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, scrut);
-      if s0.found { return s0; }
-      let mut i: i32 = 0;
-      while i < arms.len() {
-        let si: MacroSite = find_macro_site_in_expr(exprs, mod_idx, arms.get(i).expr);
-        if si.found { return si; }
-        i = i + 1;
-      }
-      return no_site();
-    },
+    ast.ExprNode.StructLit(tyex, fields) => find_macro_site_in_struct_lit_expr(exprs, mod_idx, tyex, fields),
+    ast.ExprNode.Match(scrut, arms) => find_macro_site_in_match_expr(exprs, mod_idx, scrut, arms),
   };
 }
 
@@ -350,6 +364,22 @@ fn expand_assert_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
   return round_err(w, tc.tc_type_error_at(site.sp, "assert! expects one or two value args"));
 }
 
+fn is_binary_assert_macro_name(name: String) -> bool {
+  return name == "assert_eq" ||
+    name == "assert_ne" ||
+    name == "assert_lt" ||
+    name == "assert_le" ||
+    name == "assert_gt" ||
+    name == "assert_ge";
+}
+
+fn expand_binary_assert_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+  if site.targs.len() != 0 || site.args.len() != 2 {
+    return round_err(w, tc.tc_type_error_at(site.sp, site.name.concat("! expects exactly two value args and no type args")));
+  }
+  return round_replace_expr(w, site, ast.ExprNode.Call(site.callee, Vec(), site.args));
+}
+
 fn expand_world_round(w: tc.World) -> ExpandRoundResult {
   let site: MacroSite = find_first_macro_site_in_world(w);
   if !site.found { return round_ok(w, false); }
@@ -366,6 +396,9 @@ fn expand_world_round(w: tc.World) -> ExpandRoundResult {
   if site.name == "assert" {
     return expand_assert_bang(w, site);
   }
+  if is_binary_assert_macro_name(site.name) {
+    return expand_binary_assert_bang(w, site);
+  }
 
   let msg: String = "macro expansion is not supported in stage2 yet: ".concat(site.name).concat("!");
   return round_err(w, tc.tc_type_error_at(site.sp, msg));
@@ -377,7 +410,8 @@ pub fn expand_world(w: tc.World, cfg0: ExpandConfig) -> ExpandResult {
   // Stage2 skeleton:
   // - reserves a dedicated expansion phase between parse/load and typecheck
   // - iterates in rounds until fixed-point / limit
-  // - currently supports a minimal built-in macro set (`compile!`, `panic!`, `compile_error!`, `assert!`)
+  // - currently supports a minimal built-in macro set
+  //   (`compile!`, `panic!`, `compile_error!`, `assert!`, `assert_eq!/assert_ne!/assert_lt!/assert_le!/assert_gt!/assert_ge!`)
   // - other macro calls still report unimplemented
   let cfg: ExpandConfig =
     if cfg0.max_rounds <= 0 {

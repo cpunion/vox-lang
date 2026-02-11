@@ -64,5 +64,12 @@ let v = compile!(ast);
   - `panic!(msg)`：仅 1 个值参数，重写为 `panic(msg)`。
   - `compile_error!(msg)`：仅 1 个值参数，重写为 `@compile_error(msg)`。
   - `assert!(cond)` / `assert!(cond, msg)`：重写为 `assert(cond)` / `assert_with(cond, msg)`。
+  - 比较断言宏（均要求 2 个值参数、无 type args）：
+    - `assert_eq!(a, b)` -> `assert_eq(a, b)`
+    - `assert_ne!(a, b)` -> `assert_ne(a, b)`
+    - `assert_lt!(a, b)` -> `assert_lt(a, b)`
+    - `assert_le!(a, b)` -> `assert_le(a, b)`
+    - `assert_gt!(a, b)` -> `assert_gt(a, b)`
+    - `assert_ge!(a, b)` -> `assert_ge(a, b)`
 - 除上述内置规则外，其他宏调用仍会在 `macroexpand` 阶段报错：`macro expansion is not supported in stage2 yet`。
 - 这样做的目标是先稳定语法和流水线边界，再逐步接入真正的“宏作为编译期函数”执行器。
