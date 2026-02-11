@@ -9,7 +9,8 @@ Rule: complete one item end-to-end (code + tests + commit), then move to the nex
 2. [x] Macroexpand diagnostics: surface inline-fallback reason (why template inline was rejected).
 3. [x] Macro execution v1: support function-like macro bodies returning expandable AST values (without `macro` keyword).
 4. [x] `quote` / unquote MVP: expression-level quote with `$x` interpolation.
-5. [ ] Comptime execution expansion: broaden compile-time evaluable function shapes (pure subset).
+5. [x] Comptime execution expansion: broaden compile-time evaluable function shapes (pure subset).  
+   Done scope: const/comptime evaluator now executes pure member-call subset (`String.len/byte_at/slice/concat/escape_c/to_string`, primitive `to_string`) inside const fn paths.
 6. [ ] Generic specialization diagnostics: deterministic conflict/ambiguity reports and ranking traces.
 7. [ ] Generic packs/variadics design MVP (parser + typecheck skeleton, no codegen specialization yet).
 8. [ ] Diagnostics upgrade: rune-aware column mapping and tighter span for type/const/macro errors.

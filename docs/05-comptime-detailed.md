@@ -111,6 +111,28 @@ fn crc_table() -> [u32; 256] { ... }
 - 调用点直接触发编译错误，错误文本为 `compile_error: <msg>`。
 - 该语义同样适用于 `const` 初始化中的调用。
 
+## const 上下文的方法调用子集（Stage2 已实现）
+
+为保持“普通函数在编译期可执行”的体验，Stage2 的 const/comptime 执行器支持一组纯方法调用：
+
+- `String`：
+  - `len() -> i32`
+  - `byte_at(i32) -> i32`
+  - `slice(i32, i32) -> String`
+  - `concat(String) -> String`
+  - `escape_c() -> String`
+  - `to_string() -> String`
+- 基础类型：
+  - `bool.to_string() -> String`
+  - `int.to_string() -> String`
+  - `float.to_string() -> String`（当前为稳定文本表示，后续可继续向运行时格式收敛）
+
+边界说明：
+
+- 当前只开放“确定性、无副作用”的方法。
+- 越界类错误（如 `byte_at/slice`）会在编译期直接报错。
+- 其他方法调用（尤其依赖运行时资源或未进入纯子集的方法）仍会在编译期被拒绝。
+
 ## 资源限制
 
 编译器可对 comptime 执行施加上限（步数/时间/内存），超限时报错并提示可能的无限递归/爆炸展开。
