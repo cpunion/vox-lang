@@ -23,6 +23,7 @@
 - `std::collections` 还提供最小泛型 `Map[K,V]`（线性实现）：
   - `map[K,V]()`、`map_len`、`map_is_empty`
   - `map_index_of_key`、`map_contains_key`、`map_get`
+  - `map_get_or`（缺失键时返回调用方提供的 fallback）
   - `map_set`（存在则覆盖，不存在则插入）、`map_remove`
   - 其中键比较相关 API 需要 `K: Eq`。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取）。
