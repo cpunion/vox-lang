@@ -42,8 +42,11 @@ fn mk_stmt(x: AstExpr) -> AstStmt {
 
 Stage2 MVP（当前已实现）：
 
-- 使用 `quote!(expr)` / `unquote!(expr)` 的函数式形式，先覆盖表达式位点。
-- `quote expr { ... }` 与 `$x` 语法仍保留为后续目标。
+- 使用 `quote!(expr)` / `unquote!(expr)` 的函数式形式，覆盖表达式位点。
+- 已支持表面语法糖：
+  - `quote expr { ... }` -> `quote!(...)`
+  - `$x` -> `unquote!(x)`
+  - 因此 `quote expr { $x + 1 }` 可直接工作，并与函数式形式等价。
 
 ## 调用与插入（草案）
 

@@ -287,6 +287,21 @@ fn peek4_kind(p: Parser) -> lex.TokenKind {
   return lex.TokenKind.Eof;
 }
 
+fn peek_ident_is(p: Parser, want: String) -> bool {
+  let t: lex.Token = peek(p);
+  if !kind_is(t.kind, lex.TokenKind.Ident) { return false; }
+  return lexeme(p, t) == want;
+}
+
+fn peek2_ident_is(p: Parser, want: String) -> bool {
+  let toks: Vec[lex.Token] = p.toks;
+  let i: i32 = p.pos + 1;
+  if i >= toks.len() { return false; }
+  let t: lex.Token = toks.get(i);
+  if !kind_is(t.kind, lex.TokenKind.Ident) { return false; }
+  return lexeme(p, t) == want;
+}
+
 fn kind_is(k: lex.TokenKind, want: lex.TokenKind) -> bool {
   return lex.token_kind_eq(k, want);
 }
@@ -973,6 +988,22 @@ fn parse_reflect_intrinsic_primary(p: Parser) -> ParseExprResult {
   return add_expr(idr.p, sp0, ast.ExprNode.Call(idr.id, targs, Vec()));
 }
 
+fn parse_quote_expr_primary(p: Parser) -> ParseExprResult {
+  // `quote expr { ... }` is surface sugar lowered to `quote!(...)`.
+  let ar0: AdvanceResult = expect(p, lex.TokenKind.Ident); // quote
+  let sp0: ast.Span = span_tok(p, ar0.tok);
+  let ar1: AdvanceResult = expect(ar0.p, lex.TokenKind.Ident); // expr
+  let ar2: AdvanceResult = expect(ar1.p, lex.TokenKind.LBrace);
+  let er: ParseExprResult = parse_expr(ar2.p, 0);
+  if er.p.has_err { return er; }
+  let ar3: AdvanceResult = expect(er.p, lex.TokenKind.RBrace);
+  let idq: ParseExprResult = add_expr(ar3.p, sp0, ast.ExprNode.Ident("quote"));
+  if idq.p.has_err { return idq; }
+  let mut args: Vec[i32] = Vec();
+  args.push(er.id);
+  return add_expr(idq.p, sp0, ast.ExprNode.MacroCall(idq.id, Vec(), args));
+}
+
 fn parse_primary(p: Parser) -> ParseExprResult {
   if p.has_err {
     return ParseExprResult { p: p, id: -1 };
@@ -998,6 +1029,15 @@ fn parse_primary(p: Parser) -> ParseExprResult {
   if kind_is(k, lex.TokenKind.KwFalse) {
     let ar: AdvanceResult = advance(p);
     return add_expr(ar.p, span_tok(p, ar.tok), ast.ExprNode.Bool(false));
+  }
+
+  // Surface quote syntax:
+  //   quote expr { ... }
+  if kind_is(k, lex.TokenKind.Ident) &&
+    peek_ident_is(p, "quote") &&
+    peek2_ident_is(p, "expr") &&
+    kind_is(peek3_kind(p), lex.TokenKind.LBrace) {
+    return parse_quote_expr_primary(p);
   }
 
   if kind_is(k, lex.TokenKind.Ident) {
@@ -1436,6 +1476,18 @@ fn parse_pat(p: Parser) -> ParsePatResult {
 
 fn parse_prefix(p: Parser) -> ParseExprResult {
   let k: lex.TokenKind = peek_kind(p);
+  if kind_is(k, lex.TokenKind.Dollar) {
+    // `$x` is surface sugar lowered to `unquote!(x)`.
+    let ar0: AdvanceResult = advance(p);
+    let sp0: ast.Span = span_tok(p, ar0.tok);
+    let er: ParseExprResult = parse_expr(ar0.p, 11);
+    if er.p.has_err { return er; }
+    let idu: ParseExprResult = add_expr(er.p, sp0, ast.ExprNode.Ident("unquote"));
+    if idu.p.has_err { return idu; }
+    let mut args: Vec[i32] = Vec();
+    args.push(er.id);
+    return add_expr(idu.p, sp0, ast.ExprNode.MacroCall(idu.id, Vec(), args));
+  }
   if kind_is(k, lex.TokenKind.Plus) {
     let ar: AdvanceResult = advance(p);
     let r: ParseExprResult = parse_expr(ar.p, 11);
