@@ -268,6 +268,37 @@ fn enum_variant_type_text(ctx: Ctx, v: EnumVariantSig) -> String {
   return out.concat(")");
 }
 
+fn type_id_hash_step(h: i64, b: i32) -> i64 {
+  // Keep hashing math inside i64-safe bounds to avoid checked-overflow traps.
+  let modn: i64 = 2147483647 as i64;
+  return ((h * (131 as i64)) + (b as i64) + (17 as i64)) % modn;
+}
+
+fn synthetic_type_id_from_text(text: String) -> i64 {
+  // Reserve a high range for synthetic ids used by reflection-only compound types
+  // that don't have a first-class surface syntax (e.g. enum payload tuples).
+  let base: i64 = 1100000000 as i64;
+  let mut h: i64 = 216613 as i64;
+  let mut i: i32 = 0;
+  while i < text.len() {
+    h = type_id_hash_step(h, text.byte_at(i));
+    i = i + 1;
+  }
+  return base + h;
+}
+
+fn enum_variant_tuple_type_id(ctx: Ctx, v: EnumVariantSig) -> i64 {
+  let mut sig: String = "tuple(";
+  let mut i: i32 = 0;
+  while i < v.fields.len() {
+    if i > 0 { sig = sig.concat(","); }
+    sig = sig.concat(ty_inst_str(ctx, v.fields.get(i)));
+    i = i + 1;
+  }
+  sig = sig.concat(")");
+  return synthetic_type_id_from_text(sig);
+}
+
 pub fn intrinsic_field_type_of(ctx: Ctx, ty: i32, idx: i64) -> ReflectTextResult {
   if idx < 0 { return ReflectTextResult { ok: false, err: "field_type index out of range", text: "" }; }
   let i: i32 = idx as i32;
@@ -324,7 +355,7 @@ pub fn intrinsic_field_type_id_of(ctx: Ctx, ty: i32, idx: i64) -> ReflectIntResu
     if v.fields.len() == 1 {
       return intrinsic_type_id_of(ctx, v.fields.get(0));
     }
-    return ReflectIntResult { ok: false, err: "field_type_id for multi-field enum variant not supported", iv: 0 };
+    return ReflectIntResult { ok: true, err: "", iv: enum_variant_tuple_type_id(ctx, v) };
   }
   return ReflectIntResult { ok: false, err: "field_type_id expects struct or enum", iv: 0 };
 }
