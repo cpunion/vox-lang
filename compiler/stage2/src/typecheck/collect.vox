@@ -44,6 +44,34 @@ fn has_variadic_param_decl(ps: Vec[ast.Param]) -> bool {
   return false;
 }
 
+struct NormalizeParamTypeResult {
+  ok: bool,
+  err: TcError,
+  ty: ast.TypeName,
+}
+
+fn vec_type_name(elem: ast.TypeName) -> ast.TypeName {
+  let mut parts: Vec[String] = Vec();
+  parts.push("Vec");
+  let mut args: Vec[ast.TypeName] = Vec();
+  args.push(elem);
+  return ast.TypeName { parts: parts, args: args };
+}
+
+fn normalize_param_type(sp: ast.Span, ps: Vec[ast.Param], idx: i32, ty: ast.TypeName) -> NormalizeParamTypeResult {
+  if !is_pack_type_name(ty) {
+    return NormalizeParamTypeResult { ok: true, err: TcError.None, ty: ty };
+  }
+  if idx != ps.len() - 1 {
+    return NormalizeParamTypeResult { ok: false, err: type_error_at(sp, "variadic parameter must be the last parameter"), ty: ty };
+  }
+  let elem: ast.TypeName = ty.args.get(0);
+  if is_pack_type_name(elem) {
+    return NormalizeParamTypeResult { ok: false, err: type_error_at(sp, "nested variadic parameter is not allowed"), ty: ty };
+  }
+  return NormalizeParamTypeResult { ok: true, err: TcError.None, ty: vec_type_name(elem) };
+}
+
 fn contains_i32(vs: Vec[i32], x: i32) -> bool {
   let mut i: i32 = 0;
   while i < vs.len() {
@@ -1022,20 +1050,6 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
     let mut fi: i32 = 0;
     while fi < m.prog.funcs.len() {
       let fd: ast.FuncDecl = m.prog.funcs.get(fi);
-      if has_type_param_pack_decl(fd.type_param_packs) {
-        return TcCtxResult {
-          ok: false,
-          err: type_error_at(fd.sp, "generic type parameter packs are parsed but not typechecked yet"),
-          ctx: c,
-        };
-      }
-      if has_variadic_param_decl(fd.params) {
-        return TcCtxResult {
-          ok: false,
-          err: type_error_at(fd.sp, "variadic value parameters are parsed but not typechecked yet"),
-          ctx: c,
-        };
-      }
       if is_reserved_intrinsic_name(fd.name) {
         return TcCtxResult { ok: false, err: type_error_at(fd.sp, "reserved name: ".concat(fd.name)), ctx: c };
       }
@@ -1089,7 +1103,9 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       let mut pi: i32 = 0;
       while pi < fd.params.len() {
         let pr: ast.Param = fd.params.get(pi);
-        let tr: ResolveTyResult = resolve_type(c, w, m.path, imps, fd.type_params, pr.ty);
+        let nr: NormalizeParamTypeResult = normalize_param_type(fd.sp, fd.params, pi, pr.ty);
+        if !nr.ok { return TcCtxResult { ok: false, err: nr.err, ctx: c }; }
+        let tr: ResolveTyResult = resolve_type(c, w, m.path, imps, fd.type_params, nr.ty);
         c = tr.ctx;
         if !tr.ok {
           return TcCtxResult { ok: false, err: type_error_at(fd.sp, "type resolve failed in fn param"), ctx: c };
@@ -1134,7 +1150,9 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       let mut pj: i32 = 0;
       while pj < fd.params.len() {
         let pr0: ast.Param = fd.params.get(pj);
-        let perr0: String = projection_bound_issue(c, fd.type_params, tbs, pr0.ty);
+        let nr0: NormalizeParamTypeResult = normalize_param_type(fd.sp, fd.params, pj, pr0.ty);
+        if !nr0.ok { return TcCtxResult { ok: false, err: nr0.err, ctx: c }; }
+        let perr0: String = projection_bound_issue(c, fd.type_params, tbs, nr0.ty);
         if perr0 != "" { return TcCtxResult { ok: false, err: type_error_at(fd.sp, perr0), ctx: c }; }
         pj = pj + 1;
       }

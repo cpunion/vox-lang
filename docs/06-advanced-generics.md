@@ -85,14 +85,15 @@ where
 - 偏序不比较方法体语义；`where` 的完整逻辑强弱比较仍未纳入（当前比较的是 impl 头部 `for` + 头部 type bounds）。
 - 仅在当前 `unify_ty` 支持的类型构造上参与判定（如 `Vec[T]` 场景）。
 
-## 4. 可变参数泛型（Stage2 parser/typecheck skeleton）
+## 4. 可变参数泛型（Stage2 最小可用）
 
-当前 Stage2 已进入“语法与诊断骨架”：
+当前 Stage2 行为：
 
 - parser 接受类型参数 pack 语法：`fn zip[T...](...) -> ...`
-- parser 接受值参数 variadic 语法：`fn zip[T](xs: T...) -> ...`
-- typecheck 会给出明确占位错误（尚未进入 IR/codegen）：
-  - `generic type parameter packs are parsed but not typechecked yet`
-  - `variadic value parameters are parsed but not typechecked yet`
+- parser/typecheck 接受值参数 variadic 语法：`fn zip[T](xs: T...) -> ...`
+- 语义（当前实现）：
+  - `T...`（type param pack 声明）当前仅作为“声明层语法”保留，暂不做真正 pack 展开；
+  - `xs: T...` 在 typecheck 收集阶段降级为 `xs: Vec[T]`；
+  - 限制：variadic 参数必须是最后一个参数，否则报错 `variadic parameter must be the last parameter`。
 
-说明：该阶段目标是先固定语法与错误模型；真正的 pack 展开、特化与代码生成将在后续条目实现。
+说明：真正的 pack 展开、基于 arity 的特化与更强代码生成策略，仍在后续条目推进。
