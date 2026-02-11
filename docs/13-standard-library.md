@@ -28,6 +28,7 @@
   - `map_keys`、`map_values`（按当前存储顺序返回拷贝）
   - `map_set`（存在则覆盖，不存在则插入）、`map_remove`
   - 其中键比较相关 API 需要 `K: Eq`。
+  - 同时提供 `MapOps` trait（`impl[K: Eq, V] MapOps for Map[K,V]`），可用方法风格调用：`m.remove(k)`、`m.contains_key(k)`、`m.len()`、`m.clear()`（插入/读取值当前使用 `map_set/map_get/map_get_or`）。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`，以及 `File`/`file_read_all`/`file_write_all`/`file_exists`/`mkdir_p`。网络部分提供 `NetAddr` + `NetConn` 与最小 TCP API：`net_connect` / `net_send` / `net_recv` / `net_close`（解释器与 C 后端一致可用；失败时统一 panic）。
