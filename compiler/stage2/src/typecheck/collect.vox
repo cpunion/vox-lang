@@ -712,6 +712,51 @@ fn const_where_op_supported(op: ast.BinaryOp) -> bool {
     };
 }
 
+struct CollectRhsReflectDecode {
+  ok: bool,
+  kind: i32,
+  name: String,
+}
+
+fn collect_rhs_reflect_decode(s: String) -> CollectRhsReflectDecode {
+  let pfx: String = "__cwref__:";
+  if s.len() <= pfx.len() || s.slice(0, pfx.len()) != pfx {
+    return CollectRhsReflectDecode { ok: false, kind: ast.comptime_where_lhs_const_param(), name: "" };
+  }
+  let rest: String = s.slice(pfx.len(), s.len());
+  let mut cut: i32 = -1;
+  let mut i: i32 = 0;
+  while i < rest.len() {
+    if rest.byte_at(i) == 58 {
+      cut = i;
+      i = rest.len();
+    } else {
+      i = i + 1;
+    }
+  }
+  if cut <= 0 || cut + 1 >= rest.len() {
+    return CollectRhsReflectDecode { ok: false, kind: ast.comptime_where_lhs_const_param(), name: "" };
+  }
+  let tag: String = rest.slice(0, cut);
+  let name: String = rest.slice(cut + 1, rest.len());
+  let kind: i32 =
+    if tag == "size_of" {
+      ast.comptime_where_lhs_size_of()
+    } else if tag == "align_of" {
+      ast.comptime_where_lhs_align_of()
+    } else if tag == "field_count" {
+      ast.comptime_where_lhs_field_count()
+    } else if tag == "type" {
+      ast.comptime_where_lhs_type()
+    } else {
+      ast.comptime_where_lhs_const_param()
+    };
+  if kind == ast.comptime_where_lhs_const_param() {
+    return CollectRhsReflectDecode { ok: false, kind: kind, name: "" };
+  }
+  return CollectRhsReflectDecode { ok: true, kind: kind, name: name };
+}
+
 fn has_const_where_sig(bs: Vec[ConstWhereBoundSig], lhs_kind: i32, name: String, op: ast.BinaryOp, rhs_is_param: bool, rhs_param: String, rhs_iv: i64) -> bool {
   let mut i: i32 = 0;
   while i < bs.len() {
@@ -750,7 +795,12 @@ fn collect_const_where_bounds(sp: ast.Span, tps: Vec[String], cps: Vec[ConstPara
         return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown const param in comptime where: ".concat(d.name)), bounds: out };
       }
       if d.rhs_is_param {
-        if find_const_param_sig(cps, d.rhs_param) == -1 {
+        let rr: CollectRhsReflectDecode = collect_rhs_reflect_decode(d.rhs_param);
+        if rr.ok {
+          if find_type_param_name(tps, rr.name) == -1 {
+            return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown type param in comptime where rhs: ".concat(rr.name)), bounds: out };
+          }
+        } else if find_const_param_sig(cps, d.rhs_param) == -1 {
           return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown const param in comptime where rhs: ".concat(d.rhs_param)), bounds: out };
         }
         out.push(ConstWhereBoundSig {
@@ -787,7 +837,12 @@ fn collect_const_where_bounds(sp: ast.Span, tps: Vec[String], cps: Vec[ConstPara
         return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown type param in comptime where: ".concat(d.name)), bounds: out };
       }
       if d.rhs_is_param {
-        if find_const_param_sig(cps, d.rhs_param) == -1 {
+        let rr2: CollectRhsReflectDecode = collect_rhs_reflect_decode(d.rhs_param);
+        if rr2.ok {
+          if find_type_param_name(tps, rr2.name) == -1 {
+            return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown type param in comptime where rhs: ".concat(rr2.name)), bounds: out };
+          }
+        } else if find_const_param_sig(cps, d.rhs_param) == -1 {
           return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown const param in comptime where rhs: ".concat(d.rhs_param)), bounds: out };
         }
         out.push(ConstWhereBoundSig {

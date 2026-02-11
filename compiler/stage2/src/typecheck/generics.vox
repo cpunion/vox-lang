@@ -568,6 +568,51 @@ fn const_where_eval_i64(op: ast.BinaryOp, a: i64, b: i64) -> bool {
   return false;
 }
 
+struct GenericsRhsReflectDecode {
+  ok: bool,
+  kind: i32,
+  name: String,
+}
+
+fn generics_rhs_reflect_decode(s: String) -> GenericsRhsReflectDecode {
+  let pfx: String = "__cwref__:";
+  if s.len() <= pfx.len() || s.slice(0, pfx.len()) != pfx {
+    return GenericsRhsReflectDecode { ok: false, kind: ast.comptime_where_lhs_const_param(), name: "" };
+  }
+  let rest: String = s.slice(pfx.len(), s.len());
+  let mut cut: i32 = -1;
+  let mut i: i32 = 0;
+  while i < rest.len() {
+    if rest.byte_at(i) == 58 {
+      cut = i;
+      i = rest.len();
+    } else {
+      i = i + 1;
+    }
+  }
+  if cut <= 0 || cut + 1 >= rest.len() {
+    return GenericsRhsReflectDecode { ok: false, kind: ast.comptime_where_lhs_const_param(), name: "" };
+  }
+  let tag: String = rest.slice(0, cut);
+  let name: String = rest.slice(cut + 1, rest.len());
+  let kind: i32 =
+    if tag == "size_of" {
+      ast.comptime_where_lhs_size_of()
+    } else if tag == "align_of" {
+      ast.comptime_where_lhs_align_of()
+    } else if tag == "field_count" {
+      ast.comptime_where_lhs_field_count()
+    } else if tag == "type" {
+      ast.comptime_where_lhs_type()
+    } else {
+      ast.comptime_where_lhs_const_param()
+    };
+  if kind == ast.comptime_where_lhs_const_param() {
+    return GenericsRhsReflectDecode { ok: false, kind: kind, name: "" };
+  }
+  return GenericsRhsReflectDecode { ok: true, kind: kind, name: name };
+}
+
 fn const_where_lhs_text(b: ConstWhereBoundSig) -> String {
   if b.lhs_kind == ast.comptime_where_lhs_const_param() { return b.name; }
   if b.lhs_kind == ast.comptime_where_lhs_size_of() { return "@size_of(".concat(b.name).concat(")"); }
@@ -575,6 +620,41 @@ fn const_where_lhs_text(b: ConstWhereBoundSig) -> String {
   if b.lhs_kind == ast.comptime_where_lhs_field_count() { return "@field_count(".concat(b.name).concat(")"); }
   if b.lhs_kind == ast.comptime_where_lhs_type() { return "@type(".concat(b.name).concat(")"); }
   return b.name;
+}
+
+struct ConstWhereReflectEvalResult {
+  ok: bool,
+  err: String,
+  iv: i64,
+}
+
+fn const_where_eval_reflect_i64(ctx: Ctx, kind: i32, name: String, subs: Vec[TySub]) -> ConstWhereReflectEvalResult {
+  let ty0: i32 = const_where_ty_lookup(subs, name);
+  if ty0 == -1 {
+    return ConstWhereReflectEvalResult { ok: false, err: "missing type generic arg for constraint: ".concat(name), iv: 0 };
+  }
+  let ty: i32 = strip_range(ctx, ty0);
+  if kind == ast.comptime_where_lhs_size_of() {
+    let sr: ReflectIntResult = intrinsic_size_of(ctx, ty);
+    if !sr.ok { return ConstWhereReflectEvalResult { ok: false, err: "comptime where size_of failed: ".concat(sr.err), iv: 0 }; }
+    return ConstWhereReflectEvalResult { ok: true, err: "", iv: sr.iv };
+  }
+  if kind == ast.comptime_where_lhs_align_of() {
+    let ar: ReflectIntResult = intrinsic_align_of(ctx, ty);
+    if !ar.ok { return ConstWhereReflectEvalResult { ok: false, err: "comptime where align_of failed: ".concat(ar.err), iv: 0 }; }
+    return ConstWhereReflectEvalResult { ok: true, err: "", iv: ar.iv };
+  }
+  if kind == ast.comptime_where_lhs_field_count() {
+    let fr: ReflectIntResult = intrinsic_field_count_of(ctx, ty);
+    if !fr.ok { return ConstWhereReflectEvalResult { ok: false, err: "comptime where field_count failed: ".concat(fr.err), iv: 0 }; }
+    return ConstWhereReflectEvalResult { ok: true, err: "", iv: fr.iv };
+  }
+  if kind == ast.comptime_where_lhs_type() {
+    let tr: ReflectIntResult = intrinsic_type_id_of(ctx, ty);
+    if !tr.ok { return ConstWhereReflectEvalResult { ok: false, err: "comptime where type failed: ".concat(tr.err), iv: 0 }; }
+    return ConstWhereReflectEvalResult { ok: true, err: "", iv: tr.iv };
+  }
+  return ConstWhereReflectEvalResult { ok: false, err: "unsupported comptime where lhs", iv: 0 };
 }
 
 pub fn check_const_where_bounds(ctx: Ctx, bounds: Vec[ConstWhereBoundSig], subs: Vec[TySub], csubs: Vec[ConstSub]) -> ConstWhereCheckResult {
@@ -596,38 +676,26 @@ pub fn check_const_where_bounds(ctx: Ctx, bounds: Vec[ConstWhereBoundSig], subs:
       b.lhs_kind == ast.comptime_where_lhs_field_count() ||
       b.lhs_kind == ast.comptime_where_lhs_type()
     {
-      let lhs_ty0: i32 = const_where_ty_lookup(subs, b.name);
-      if lhs_ty0 == -1 {
-        return ConstWhereCheckResult { ok: false, err: "missing type generic arg for constraint: ".concat(b.name) };
-      }
-      let lhs_ty: i32 = strip_range(ctx, lhs_ty0);
-      if b.lhs_kind == ast.comptime_where_lhs_size_of() {
-        let sr: ReflectIntResult = intrinsic_size_of(ctx, lhs_ty);
-        if !sr.ok { return ConstWhereCheckResult { ok: false, err: "comptime where size_of failed: ".concat(sr.err) }; }
-        lhs_iv = sr.iv;
-      } else if b.lhs_kind == ast.comptime_where_lhs_align_of() {
-        let ar: ReflectIntResult = intrinsic_align_of(ctx, lhs_ty);
-        if !ar.ok { return ConstWhereCheckResult { ok: false, err: "comptime where align_of failed: ".concat(ar.err) }; }
-        lhs_iv = ar.iv;
-      } else if b.lhs_kind == ast.comptime_where_lhs_type() {
-        let tr: ReflectIntResult = intrinsic_type_id_of(ctx, lhs_ty);
-        if !tr.ok { return ConstWhereCheckResult { ok: false, err: "comptime where type failed: ".concat(tr.err) }; }
-        lhs_iv = tr.iv;
-      } else {
-        let fr: ReflectIntResult = intrinsic_field_count_of(ctx, lhs_ty);
-        if !fr.ok { return ConstWhereCheckResult { ok: false, err: "comptime where field_count failed: ".concat(fr.err) }; }
-        lhs_iv = fr.iv;
-      }
+      let lv: ConstWhereReflectEvalResult = const_where_eval_reflect_i64(ctx, b.lhs_kind, b.name, subs);
+      if !lv.ok { return ConstWhereCheckResult { ok: false, err: lv.err }; }
+      lhs_iv = lv.iv;
     } else {
       return ConstWhereCheckResult { ok: false, err: "unsupported comptime where lhs" };
     }
     let mut rhs_iv: i64 = b.rhs_iv;
     if b.rhs_is_param {
       let rhs_cs: ConstSub = const_sub_lookup(csubs, b.rhs_param);
-      if rhs_cs.name == "" {
-        return ConstWhereCheckResult { ok: false, err: "missing const generic arg for constraint rhs: ".concat(b.rhs_param) };
+      if rhs_cs.name != "" {
+        rhs_iv = rhs_cs.iv;
+      } else {
+        let rr: GenericsRhsReflectDecode = generics_rhs_reflect_decode(b.rhs_param);
+        if !rr.ok {
+          return ConstWhereCheckResult { ok: false, err: "missing const generic arg for constraint rhs: ".concat(b.rhs_param) };
+        }
+        let rv: ConstWhereReflectEvalResult = const_where_eval_reflect_i64(ctx, rr.kind, rr.name, subs);
+        if !rv.ok { return ConstWhereCheckResult { ok: false, err: rv.err }; }
+        rhs_iv = rv.iv;
       }
-      rhs_iv = rhs_cs.iv;
     }
     if !const_where_eval_i64(b.op, lhs_iv, rhs_iv) {
       let msg: String =

@@ -1981,6 +1981,21 @@ fn parse_type_params(p: Parser) -> ParseTypeParamsResult {
   return ParseTypeParamsResult { p: ar5.p, tps: tps, tpbs: tpbs };
 }
 
+fn cw_reflect_tag(kind: i32) -> String {
+  if kind == ast.comptime_where_lhs_size_of() { return "size_of"; }
+  if kind == ast.comptime_where_lhs_align_of() { return "align_of"; }
+  if kind == ast.comptime_where_lhs_field_count() { return "field_count"; }
+  return "type";
+}
+
+fn cw_reflect_text(kind: i32, name: String) -> String {
+  return "@".concat(cw_reflect_tag(kind)).concat("(").concat(name).concat(")");
+}
+
+fn cw_rhs_reflect_encode(kind: i32, name: String) -> String {
+  return "__cwref__:".concat(cw_reflect_tag(kind)).concat(":").concat(name);
+}
+
 fn parse_where_bounds(p: Parser) -> ParseWhereBoundsResult {
   let ar1: AdvanceResult = expect(p, lex.TokenKind.KwWhere);
   let mut q: Parser = ar1.p;
@@ -2056,7 +2071,49 @@ fn parse_where_bounds(p: Parser) -> ParseWhereBoundsResult {
         if kind_is(opk, lex.TokenKind.Gt) { ast.BinaryOp.Gt } else { ast.BinaryOp.Ge };
       let ar2: AdvanceResult = advance(qlhs);
       let mut qrhs: Parser = ar2.p;
-      if kind_is(peek_kind(qrhs), lex.TokenKind.Ident) {
+      if kind_is(peek_kind(qrhs), lex.TokenKind.At) {
+        let ar_rhs_at: AdvanceResult = advance(qrhs);
+        let mut qrhs0: Parser = ar_rhs_at.p;
+        let mut rhs_kind: i32 = ast.comptime_where_lhs_const_param();
+        if kind_is(peek_kind(qrhs0), lex.TokenKind.Ident) {
+          let rname: ParseIdentResult = parse_ident(qrhs0);
+          qrhs0 = rname.p;
+          if rname.name == "size_of" {
+            rhs_kind = ast.comptime_where_lhs_size_of();
+          } else if rname.name == "align_of" {
+            rhs_kind = ast.comptime_where_lhs_align_of();
+          } else if rname.name == "field_count" {
+            rhs_kind = ast.comptime_where_lhs_field_count();
+          } else {
+            let mut qerr_name: Parser = qrhs0;
+            qerr_name.has_err = true;
+            qerr_name.err = ParseError.UnexpectedToken(lex.TokenKind.Ident, peek_kind(qrhs0), peek(qrhs0).start);
+            return ParseWhereBoundsResult { p: qerr_name, tpbs: out, cwbs: cwbs };
+          }
+        } else if kind_is(peek_kind(qrhs0), lex.TokenKind.KwType) {
+          let ar_kw: AdvanceResult = advance(qrhs0);
+          qrhs0 = ar_kw.p;
+          rhs_kind = ast.comptime_where_lhs_type();
+        } else {
+          let mut qerr_name0: Parser = qrhs0;
+          qerr_name0.has_err = true;
+          qerr_name0.err = ParseError.UnexpectedToken(lex.TokenKind.Ident, peek_kind(qrhs0), peek(qrhs0).start);
+          return ParseWhereBoundsResult { p: qerr_name0, tpbs: out, cwbs: cwbs };
+        }
+        let ar_rhs_l: AdvanceResult = expect(qrhs0, lex.TokenKind.LParen);
+        let rr_tp: ParseIdentResult = parse_ident(ar_rhs_l.p);
+        let ar_rhs_r: AdvanceResult = expect(rr_tp.p, lex.TokenKind.RParen);
+        qrhs = ar_rhs_r.p;
+        let rhs_text: String = cw_reflect_text(rhs_kind, rr_tp.name);
+        cwbs.push(ast.ConstWhereDecl {
+          lhs_kind: lhs_kind,
+          name: lhs_name,
+          op: op,
+          rhs_is_param: true,
+          rhs_param: cw_rhs_reflect_encode(rhs_kind, rr_tp.name),
+          rhs_text: rhs_text,
+        });
+      } else if kind_is(peek_kind(qrhs), lex.TokenKind.Ident) {
         let rr: ParseIdentResult = parse_ident(qrhs);
         qrhs = rr.p;
         cwbs.push(ast.ConstWhereDecl {

@@ -36,6 +36,7 @@
   - `where` 约束：`fn eq[T](x: T) -> bool where T: Eq + Show { ... }`
   - `where comptime` 约束（Stage1 已实现子集）：`fn addn[const N: i32](x: i32) -> i32 where comptime N > 0, comptime N <= 8 { ... }`
   - `where comptime` 右值可为常量参数：`fn f[const N: i32, const M: i32](x: i32) -> i32 where comptime N < M { ... }`
+  - `where comptime` 右值可为反射项：`fn f[T, U](x: T, y: U) -> i32 where comptime @size_of(T) <= @align_of(U) { ... }`
   - `where comptime` 支持类型布局反射约束：`fn fit[T](x: T) -> i32 where comptime @size_of(T) <= 64, comptime @align_of(T) <= 8 { ... }`
   - `where comptime` 支持字段/variant 数反射约束：`fn fit[T](x: T) -> i32 where comptime @field_count(T) <= 8 { ... }`
   - `where comptime` 支持类型 ID 反射约束：`fn fit[T](x: T) -> i32 where comptime @type(T) > 0 { ... }`
