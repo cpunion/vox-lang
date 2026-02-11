@@ -1050,10 +1050,12 @@ fn try_expand_local_user_macro_inline(w: tc.World, site: MacroSite) -> ExpandRou
 
   let tyc: i32 = fd.type_params.len();
   let cc: i32 = fd.const_params.len();
-  let expect_targs: i32 = tyc + cc;
-  if site.targs.len() != expect_targs {
+  // Inline template expansion can fill trailing const generic args from defaults,
+  // but it cannot infer missing type generic args at macroexpand time.
+  if site.targs.len() < tyc || site.targs.len() > (tyc + cc) {
     return inline_skip(w, site, "generic arg count mismatch for inline template");
   }
+  let explicit_const_n: i32 = site.targs.len() - tyc;
 
   let mut ty_subs: Vec[TypeArgSub] = Vec();
   let mut i: i32 = 0;
@@ -1067,9 +1069,18 @@ fn try_expand_local_user_macro_inline(w: tc.World, site: MacroSite) -> ExpandRou
   let mut const_subs: Vec[ConstArgSub] = Vec();
   let mut j: i32 = 0;
   while j < cc {
-    let ta: ast.TypeName = site.targs.get(tyc + j);
-    let text: String = const_arg_text(ta);
-    if text == "" { return inline_skip(w, site, "const arg position received non-const type arg"); }
+    let mut text: String = "";
+    if j < explicit_const_n {
+      let ta: ast.TypeName = site.targs.get(tyc + j);
+      text = const_arg_text(ta);
+      if text == "" { return inline_skip(w, site, "const arg position received non-const type arg"); }
+    } else {
+      let cp: ast.ConstParamDecl = fd.const_params.get(j);
+      if !cp.has_default {
+        return inline_skip(w, site, "missing const generic arg without default for inline template");
+      }
+      text = cp.default_text;
+    }
     const_subs.push(ConstArgSub { name: fd.const_params.get(j).name, text: text });
     j = j + 1;
   }
