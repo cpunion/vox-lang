@@ -21,9 +21,10 @@
   - 另外，语言层当前支持 `str` 作为 `String` 的同义类型（类型别名语义），并支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法（当前过渡语义映射到 `T`）。
 - `std::collections` 已提供 `Slice[T]`（拥有型 `Vec[T]` 视图）及最小 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`get`、`to_vec`、`contains`、`index_of`、`last_index_of`，以及子切片匹配 API：`starts_with`、`ends_with`、`contains_slice`、`index_of_slice`、`last_index_of_slice`（均要求 `T: Eq`）。
 - `std::collections` 还提供最小泛型 `Map[K,V]`（线性实现）：
-  - `map[K,V]()`、`map_len`、`map_is_empty`
+  - `map[K,V]()`、`map_len`、`map_is_empty`、`map_clear`
   - `map_index_of_key`、`map_contains_key`、`map_get`
   - `map_get_or`（缺失键时返回调用方提供的 fallback）
+  - `map_keys`、`map_values`（按当前存储顺序返回拷贝）
   - `map_set`（存在则覆盖，不存在则插入）、`map_remove`
   - 其中键比较相关 API 需要 `K: Eq`。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取）。
