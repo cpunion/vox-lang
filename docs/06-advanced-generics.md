@@ -94,6 +94,10 @@ where
 - 语义（当前实现）：
   - `T...`（type param pack 声明）当前仅作为“声明层语法”保留，暂不做真正 pack 展开；
   - `xs: T...` 在 typecheck 收集阶段降级为 `xs: Vec[T]`；
+  - 规则：当前只允许一个 type param pack，且必须位于类型参数列表末尾；
   - 限制：variadic 参数必须是最后一个参数，否则报错 `variadic parameter must be the last parameter`。
+- 调用点约束：
+  - 若对包含 `T...` 的函数提供超过声明上限的显式类型实参，会报
+    `type parameter pack expansion is not implemented yet: expected at most N type args, got M`。
 
 说明：真正的 pack 展开、基于 arity 的特化与更强代码生成策略，仍在后续条目推进。

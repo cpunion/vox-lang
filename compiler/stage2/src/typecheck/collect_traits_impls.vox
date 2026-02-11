@@ -124,6 +124,35 @@ fn cti_has_variadic_param_decl(ps: Vec[ast.Param]) -> bool {
   return false;
 }
 
+struct CtiValidateTypeParamPacksResult {
+  ok: bool,
+  err: TcError,
+}
+
+fn cti_type_param_pos(tps: Vec[String], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < tps.len() {
+    if tps.get(i) == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn cti_validate_type_param_packs(sp: ast.Span, tps: Vec[String], tp_packs: Vec[String]) -> CtiValidateTypeParamPacksResult {
+  if tp_packs.len() == 0 { return CtiValidateTypeParamPacksResult { ok: true, err: TcError.None }; }
+  if tp_packs.len() > 1 {
+    return CtiValidateTypeParamPacksResult { ok: false, err: type_error_at(sp, "only one type parameter pack is currently supported") };
+  }
+  let p: String = tp_packs.get(0);
+  if cti_type_param_pos(tps, p) == -1 {
+    return CtiValidateTypeParamPacksResult { ok: false, err: type_error_at(sp, "unknown type parameter pack: ".concat(p)) };
+  }
+  if cti_type_param_pos(tps, p) != tps.len() - 1 {
+    return CtiValidateTypeParamPacksResult { ok: false, err: type_error_at(sp, "type parameter pack must be the last type parameter") };
+  }
+  return CtiValidateTypeParamPacksResult { ok: true, err: TcError.None };
+}
+
 struct CtiNormalizeParamTypeResult {
   ok: bool,
   err: TcError,
@@ -250,6 +279,7 @@ fn trait_method_sig_for(ctx: Ctx, ms: TraitMethodSig, for_ty: i32, assocs: Vec[I
     vis: ast.vis_private(),
     is_pub: false,
     type_params: ms.sig.type_params,
+    type_param_packs: ms.sig.type_param_packs,
     const_params: ms.sig.const_params,
     type_param_bounds: ms.sig.type_param_bounds,
     const_where_bounds: ms.sig.const_where_bounds,
@@ -287,6 +317,7 @@ fn impl_method_emit_sig(head_tps: Vec[String], head_tpbs: Vec[TypeParamBoundSig]
     vis: ast.vis_private(),
     is_pub: false,
     type_params: concat_strs(head_tps, want.type_params),
+    type_param_packs: want.type_param_packs,
     const_params: want.const_params,
     type_param_bounds: concat_bounds(head_tpbs, want.type_param_bounds),
     const_where_bounds: want.const_where_bounds,
@@ -567,6 +598,8 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
       let mut fi: i32 = 0;
       while fi < td.methods.len() {
         let md: ast.TraitMethodDecl = td.methods.get(fi);
+        let pv: CtiValidateTypeParamPacksResult = cti_validate_type_param_packs(md.sp, md.type_params, md.type_param_packs);
+        if !pv.ok { return TcCtxResult { ok: false, err: pv.err, ctx: c }; }
         if trait_method_exists(ms, md.name) {
           return TcCtxResult { ok: false, err: type_error_at(md.sp, "duplicate trait method: ".concat(md.name)), ctx: c };
         }
@@ -693,7 +726,17 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         }
         ms.push(TraitMethodSig {
           name: md.name,
-          sig: FuncSig { params: ps, ret: rr.idx, vis: ast.vis_pub(), is_pub: true, type_params: md.type_params, const_params: cps, type_param_bounds: tbs, const_where_bounds: cwr.bounds },
+          sig: FuncSig {
+            params: ps,
+            ret: rr.idx,
+            vis: ast.vis_pub(),
+            is_pub: true,
+            type_params: md.type_params,
+            type_param_packs: md.type_param_packs,
+            const_params: cps,
+            type_param_bounds: tbs,
+            const_where_bounds: cwr.bounds,
+          },
           has_default: md.has_body,
           default_mod_path: m.path,
           default_file: td.file,
@@ -861,6 +904,8 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         }
 
         let md: ast.FuncDecl = id.methods.get(mdi);
+        let pv0: CtiValidateTypeParamPacksResult = cti_validate_type_param_packs(md.sp, md.type_params, md.type_param_packs);
+        if !pv0.ok { return TcCtxResult { ok: false, err: pv0.err, ctx: c }; }
         let want: FuncSig = trait_method_sig_for(c, tms, for_ty, impl_assocs);
         if md.const_params.len() != want.const_params.len() {
           return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param count mismatch"), ctx: c };
@@ -936,6 +981,16 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         }
         if md.type_params.len() != want.type_params.len() {
           return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method type param count mismatch"), ctx: c };
+        }
+        if md.type_param_packs.len() != want.type_param_packs.len() {
+          return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method type parameter pack count mismatch"), ctx: c };
+        }
+        if md.type_param_packs.len() == 1 {
+          let got_pack_pos: i32 = cti_type_param_pos(md.type_params, md.type_param_packs.get(0));
+          let want_pack_pos: i32 = cti_type_param_pos(want.type_params, want.type_param_packs.get(0));
+          if got_pack_pos != want_pack_pos {
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method type parameter pack position mismatch"), ctx: c };
+          }
         }
 
         // Impl method generic param names may differ from trait method names;

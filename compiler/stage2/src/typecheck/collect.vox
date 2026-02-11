@@ -44,6 +44,35 @@ fn has_variadic_param_decl(ps: Vec[ast.Param]) -> bool {
   return false;
 }
 
+struct ValidateTypeParamPacksResult {
+  ok: bool,
+  err: TcError,
+}
+
+fn type_param_pos_local(tps: Vec[String], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < tps.len() {
+    if tps.get(i) == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn validate_type_param_packs(sp: ast.Span, tps: Vec[String], tp_packs: Vec[String]) -> ValidateTypeParamPacksResult {
+  if tp_packs.len() == 0 { return ValidateTypeParamPacksResult { ok: true, err: TcError.None }; }
+  if tp_packs.len() > 1 {
+    return ValidateTypeParamPacksResult { ok: false, err: type_error_at(sp, "only one type parameter pack is currently supported"), };
+  }
+  let p: String = tp_packs.get(0);
+  if type_param_pos_local(tps, p) == -1 {
+    return ValidateTypeParamPacksResult { ok: false, err: type_error_at(sp, "unknown type parameter pack: ".concat(p)), };
+  }
+  if type_param_pos_local(tps, p) != tps.len() - 1 {
+    return ValidateTypeParamPacksResult { ok: false, err: type_error_at(sp, "type parameter pack must be the last type parameter"), };
+  }
+  return ValidateTypeParamPacksResult { ok: true, err: TcError.None };
+}
+
 struct NormalizeParamTypeResult {
   ok: bool,
   err: TcError,
@@ -888,6 +917,7 @@ fn builtin_func_sym(
       vis: ast.vis_pub(),
       is_pub: true,
       type_params: type_params,
+      type_param_packs: Vec(),
       const_params: const_params,
       type_param_bounds: Vec(),
       const_where_bounds: Vec(),
@@ -1050,6 +1080,8 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
     let mut fi: i32 = 0;
     while fi < m.prog.funcs.len() {
       let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+      let vpr: ValidateTypeParamPacksResult = validate_type_param_packs(fd.sp, fd.type_params, fd.type_param_packs);
+      if !vpr.ok { return TcCtxResult { ok: false, err: vpr.err, ctx: c }; }
       if is_reserved_intrinsic_name(fd.name) {
         return TcCtxResult { ok: false, err: type_error_at(fd.sp, "reserved name: ".concat(fd.name)), ctx: c };
       }
@@ -1162,7 +1194,17 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       let cwr: CollectConstWhereResult = collect_const_where_bounds(fd.sp, fd.type_params, cps, fd.const_where_bounds);
       if !cwr.ok { return TcCtxResult { ok: false, err: cwr.err, ctx: c }; }
 
-      let sig: FuncSig = FuncSig { params: ps, ret: rr.idx, vis: fd.vis, is_pub: fd.is_pub, type_params: fd.type_params, const_params: cps, type_param_bounds: tbs, const_where_bounds: cwr.bounds };
+      let sig: FuncSig = FuncSig {
+        params: ps,
+        ret: rr.idx,
+        vis: fd.vis,
+        is_pub: fd.is_pub,
+        type_params: fd.type_params,
+        type_param_packs: fd.type_param_packs,
+        const_params: cps,
+        type_param_bounds: tbs,
+        const_where_bounds: cwr.bounds,
+      };
       c.funcs.push(FuncSym { mod_path: m.path, name: fd.name, sig: sig });
       fi = fi + 1;
     }
