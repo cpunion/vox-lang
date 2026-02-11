@@ -75,6 +75,19 @@ fn me_func_count(w: tc.World, mod_path: String) -> i32 {
   return -1;
 }
 
+fn me_is_int_lit(w: tc.World, mod_path: String, id: i32, text: String) -> bool {
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let wm: tc.WorldModule = w.mods.get(mi);
+    if wm.path == mod_path {
+      let n: ast.ExprNode = ast.expr_pool_get(wm.prog.exprs, id);
+      return match n { ast.ExprNode.Int(v) => v == text, _ => false };
+    }
+    mi = mi + 1;
+  }
+  return false;
+}
+
 fn me_deep_macro_expr(depth: i32) -> String {
   let mut out: String = "1";
   let mut i: i32 = 0;
@@ -348,6 +361,24 @@ fn test_macroexpand_user_macro_inline_const_generic_args_smoke() -> () {
   t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
 }
 
+fn test_macroexpand_user_macro_inline_const_generic_value_substitution_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn addn[const N: i32](x: i32) -> i32 { return x + N; }\n"
+      .concat("fn main() -> i32 { return addn[3]!(40); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "3"),
+      _ => false,
+    },
+    "expected const-generic param N to be substituted as integer literal");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
 fn test_macroexpand_user_macro_inline_member_generic_type_args_smoke() -> () {
   let mut w: tc.World = tc.world();
   w = me_world_add(w, "dep", "pub fn id[T](x: T) -> T { return x; }");
@@ -412,6 +443,24 @@ fn test_macroexpand_compile_bang_executes_ast_expr_fn_call_smoke() -> () {
   t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
 }
 
+fn test_macroexpand_user_macro_inline_named_import_const_generic_value_substitution_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn addn[const N: i32](x: i32) -> i32 { return x + N; }");
+  w = me_world_add(w, "main", "import { addn as inc } from \"dep\"\nfn main() -> i32 { return inc[3]!(40); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "3"),
+      _ => false,
+    },
+    "expected named-import const generic N substitution in macro template");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
 fn test_macroexpand_compile_bang_executes_cross_module_ast_expr_fn_call_smoke() -> () {
   let mut w: tc.World = tc.world();
   w = me_world_add(w, "dep", "pub fn add1(x: AstExpr) -> AstExpr { return x + 1; }");
@@ -432,6 +481,24 @@ fn test_macroexpand_compile_bang_executes_named_import_ast_expr_fn_call_smoke() 
   t.assert_with(er.ok, tc.tc_error_to_string(er.err));
   let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
   t.assert_with(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false }, "expected compile!(named-import(...)) to execute macro fn call");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_executes_named_import_const_generic_ast_expr_fn_call_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn addn[const N: i32](x: AstExpr) -> AstExpr { return x + N; }");
+  w = me_world_add(w, "main", "import { addn as inc } from \"dep\"\nfn main() -> i32 { return compile!(inc[3](40)); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "3"),
+      _ => false,
+    },
+    "expected compile!(named-import const-generic ast fn call) to substitute N");
   let tr: tc.TcResult = tc.typecheck_world(er.world);
   t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
 }

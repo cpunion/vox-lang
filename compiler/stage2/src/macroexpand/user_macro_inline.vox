@@ -240,12 +240,17 @@ fn scope_with_name(scope0: Vec[String], name: String) -> Vec[String] {
   return scope;
 }
 
-fn scope_from_params(params: Vec[ast.Param]) -> Vec[String] {
+fn scope_from_params_and_const_params(params: Vec[ast.Param], const_params: Vec[ast.ConstParamDecl]) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   let mut i: i32 = 0;
   while i < params.len() {
     out = scope_with_name(out, params.get(i).name);
     i = i + 1;
+  }
+  let mut j: i32 = 0;
+  while j < const_params.len() {
+    out = scope_with_name(out, const_params.get(j).name);
+    j = j + 1;
   }
   return out;
 }
@@ -455,8 +460,8 @@ fn cross_mod_expr_safe_with_scope(pool: ast.ExprPool, id: i32, scope: Vec[String
   };
 }
 
-fn cross_mod_expr_safe(pool: ast.ExprPool, id: i32, params: Vec[ast.Param]) -> bool {
-  return cross_mod_expr_safe_with_scope(pool, id, scope_from_params(params));
+fn cross_mod_expr_safe(pool: ast.ExprPool, id: i32, params: Vec[ast.Param], const_params: Vec[ast.ConstParamDecl]) -> bool {
+  return cross_mod_expr_safe_with_scope(pool, id, scope_from_params_and_const_params(params, const_params));
 }
 
 fn find_param_arg_idx(params: Vec[ast.Param], name: String) -> i32 {
@@ -852,6 +857,14 @@ fn clone_expr_with_args(
     if pi >= 0 && pi < args.len() {
       return clone_expr_ok(dst0, args.get(pi));
     }
+    // Substitute const-generic params in expression position as integer literals.
+    // This keeps inline templates like `x + N` usable for `fn f[const N: i32](...)`.
+    let ci: i32 = find_const_sub_idx(const_subs, name);
+    if ci >= 0 {
+      let text: String = const_subs.get(ci).text;
+      let ar_lit: ast.AddExprResult = ast.expr_pool_add(dst0, ast.ExprNode.Int(text), sp);
+      return clone_expr_ok(ar_lit.pool, ar_lit.id);
+    }
     let ar: ast.AddExprResult = ast.expr_pool_add(dst0, n, sp);
     return clone_expr_ok(ar.pool, ar.id);
   }
@@ -1069,7 +1082,7 @@ fn try_expand_local_user_macro_inline(w: tc.World, site: MacroSite) -> ExpandRou
   if !template_expr_supported(template_pool, template_id) {
     return inline_skip(w, site, "template contains unsupported expression forms (root: ".concat(root_kind).concat(")"));
   }
-  if callee_mod_idx != site.mod_idx && !cross_mod_expr_safe(template_pool, template_id, fd.params) {
+  if callee_mod_idx != site.mod_idx && !cross_mod_expr_safe(template_pool, template_id, fd.params, fd.const_params) {
     return inline_skip(w, site, "cross-module template is not scope-safe (root: ".concat(root_kind).concat(")"));
   }
 
