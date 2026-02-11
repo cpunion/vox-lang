@@ -413,7 +413,7 @@ pub const NAME: String = "vox";
   - `const P0: P = P { x: 1, y: 2 }`
   - `const Q0: Pair[i32] = Pair[i32] { a: 1, b: 2 }`
   - `const X: i32 = P0.x`
-- 支持在 const block 中对 `let mut` 的 struct 局部执行字段赋值（`p.x = ...`）。
+- 支持在 const block 中对 `let mut` 的 struct 局部执行字段赋值（含多级路径与复合赋值，如 `p.x = ...`、`o.i.x = ...`、`o.i.x += 2`）。
 - 支持 enum 变体构造（含 payload），例如 `const X: E = .A(1)`。
   - 也支持限定路径写法：`const X: E = E.A(1)`、`const X: dep.E = dep.E.A(1)`。
   - 也支持 typed-path 写法：`const X: Option[i32] = Option[i32].Some(1)`、`const Y: Option[i32] = Option[i32].None`。

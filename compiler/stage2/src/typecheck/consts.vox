@@ -714,6 +714,174 @@ fn const_exec_stmt_assign(
   return const_exec_ok(rr.sigs, rr.states, const_set_local_at(locals0, li, const_local_with_value(target, rr)));
 }
 
+fn const_split_field_path(path: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut start: i32 = 0;
+  let mut i: i32 = 0;
+  while i < path.len() {
+    if path.byte_at(i) == 46 {
+      out.push(path.slice(start, i));
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  out.push(path.slice(start, path.len()));
+  return out;
+}
+
+struct ConstFieldPathTyResult {
+  ok: bool,
+  err: TcError,
+  ty: i32,
+}
+
+fn const_field_path_ty_ok(ty: i32) -> ConstFieldPathTyResult {
+  return ConstFieldPathTyResult { ok: true, err: TcError.None, ty: ty };
+}
+
+fn const_field_path_ty_err(err: TcError) -> ConstFieldPathTyResult {
+  return ConstFieldPathTyResult { ok: false, err: err, ty: -1 };
+}
+
+fn const_resolve_field_path_ty(
+  ctx: Ctx, cur_mod: String, sp: ast.Span,
+  base_ty: i32, parts: Vec[String]
+) -> ConstFieldPathTyResult {
+  if parts.len() == 0 {
+    return const_field_path_ty_err(type_error_at(sp, "unknown field"));
+  }
+  let mut cur_ty: i32 = base_ty;
+  let mut pi: i32 = 0;
+  while pi < parts.len() {
+    let rt: ir.Ty = ir.ty_pool_get(ctx.pool, cur_ty);
+    if rt.kind != ir.TyKind.Struct {
+      return const_field_path_ty_err(type_error_at(sp, "const field assign recv must be struct"));
+    }
+    let fs: FindStructResult = find_struct(ctx, rt.mod_path, rt.name);
+    if !fs.found {
+      return const_field_path_ty_err(type_error_at(sp, "unknown struct type"));
+    }
+    if !vis_allows(fs.sig.vis, fs.sig.mod_path, cur_mod) {
+      return const_field_path_ty_err(type_error_at(sp, "type is private"));
+    }
+
+    let mut found: bool = false;
+    let mut next_ty: i32 = ctx.ty_bad;
+    let mut fvis: i32 = ast.vis_private();
+    let mut fi: i32 = 0;
+    while fi < fs.sig.fields.len() {
+      let sf: StructFieldSig = fs.sig.fields.get(fi);
+      if sf.name == parts.get(pi) {
+        found = true;
+        next_ty = sf.ty;
+        fvis = sf.vis;
+        fi = fs.sig.fields.len();
+      } else {
+        fi = fi + 1;
+      }
+    }
+    if !found {
+      return const_field_path_ty_err(type_error_at(sp, "unknown field"));
+    }
+    if !vis_allows(fvis, fs.sig.mod_path, cur_mod) {
+      return const_field_path_ty_err(type_error_at(sp, "field is private"));
+    }
+    cur_ty = next_ty;
+    pi = pi + 1;
+  }
+  return const_field_path_ty_ok(cur_ty);
+}
+
+struct ConstStructFieldUpdateResult {
+  ok: bool,
+  err: TcError,
+  sv: String,
+}
+
+fn const_struct_field_update_ok(sv: String) -> ConstStructFieldUpdateResult {
+  return ConstStructFieldUpdateResult { ok: true, err: TcError.None, sv: sv };
+}
+
+fn const_struct_field_update_err(err: TcError) -> ConstStructFieldUpdateResult {
+  return ConstStructFieldUpdateResult { ok: false, err: err, sv: "" };
+}
+
+fn const_apply_struct_field_update(
+  ctx: Ctx, cur_mod: String, sp: ast.Span,
+  struct_ty: i32, struct_sv: String,
+  parts: Vec[String], part_i: i32,
+  val: ConstEnumPayloadField
+) -> ConstStructFieldUpdateResult {
+  if part_i < 0 || part_i >= parts.len() {
+    return const_struct_field_update_err(type_error_at(sp, "unknown field"));
+  }
+
+  let tsty: ir.Ty = ir.ty_pool_get(ctx.pool, struct_ty);
+  if tsty.kind != ir.TyKind.Struct {
+    return const_struct_field_update_err(type_error_at(sp, "const field assign recv must be struct"));
+  }
+  let fs: FindStructResult = find_struct(ctx, ty_mod(tsty), ty_name(tsty));
+  if !fs.found {
+    return const_struct_field_update_err(type_error_at(sp, "unknown struct type"));
+  }
+  if !vis_allows(fs.sig.vis, fs.sig.mod_path, cur_mod) {
+    return const_struct_field_update_err(type_error_at(sp, "type is private"));
+  }
+  let dec: ConstStructDecode = const_struct_unpack(struct_sv);
+  if !dec.ok {
+    return const_struct_field_update_err(type_error_at(sp, "bad const struct encoding"));
+  }
+  if dec.fields.len() != fs.sig.fields.len() {
+    return const_struct_field_update_err(type_error_at(sp, "bad const struct encoding"));
+  }
+
+  let mut found: bool = false;
+  let mut fidx: i32 = -1;
+  let mut fty: i32 = ctx.ty_bad;
+  let mut fi: i32 = 0;
+  while fi < fs.sig.fields.len() {
+    let sf: StructFieldSig = fs.sig.fields.get(fi);
+    if sf.name == parts.get(part_i) {
+      found = true;
+      fidx = fi;
+      fty = sf.ty;
+      if !vis_allows(sf.vis, fs.sig.mod_path, cur_mod) {
+        return const_struct_field_update_err(type_error_at(sp, "field is private"));
+      }
+      fi = fs.sig.fields.len();
+    } else {
+      fi = fi + 1;
+    }
+  }
+  if !found {
+    return const_struct_field_update_err(type_error_at(sp, "unknown field"));
+  }
+
+  if part_i + 1 == parts.len() {
+    let packed: String = const_struct_pack(const_set_payload_field_at(dec.fields, fidx, val));
+    return const_struct_field_update_ok(packed);
+  }
+
+  if !is_struct_ty(ctx, fty) {
+    return const_struct_field_update_err(type_error_at(sp, "const field assign recv must be struct"));
+  }
+  let curf: ConstEnumPayloadField = dec.fields.get(fidx);
+  if curf.kind != const_kind_struct() {
+    return const_struct_field_update_err(type_error_at(sp, "bad const struct encoding"));
+  }
+  let ur: ConstStructFieldUpdateResult = const_apply_struct_field_update(ctx, cur_mod, sp, fty, curf.sv, parts, part_i + 1, val);
+  if !ur.ok { return ur; }
+  let nextf: ConstEnumPayloadField = ConstEnumPayloadField {
+    kind: const_kind_struct(),
+    ty: fty,
+    iv: 0,
+    bv: false,
+    sv: ur.sv,
+  };
+  let packed2: String = const_struct_pack(const_set_payload_field_at(dec.fields, fidx, nextf));
+  return const_struct_field_update_ok(packed2);
+}
+
 fn const_exec_stmt_assign_field(
   ctx: Ctx, w: World, items: Vec[ConstItem],
   sigs0: Vec[ConstSig], states0: Vec[i32],
@@ -731,51 +899,25 @@ fn const_exec_stmt_assign_field(
   if target.kind != const_kind_struct() || !is_struct_ty(ctx, target.ty) {
     return const_exec_err(type_error_at(sp, "const field assign recv must be struct"), sigs0, states0, locals0);
   }
-  let tsty: ir.Ty = ir.ty_pool_get(ctx.pool, target.ty);
-  let fs: FindStructResult = find_struct(ctx, ty_mod(tsty), ty_name(tsty));
-  if !fs.found {
-    return const_exec_err(type_error_at(sp, "unknown struct type"), sigs0, states0, locals0);
-  }
-  if !vis_allows(fs.sig.vis, fs.sig.mod_path, cur_mod) {
-    return const_exec_err(type_error_at(sp, "type is private"), sigs0, states0, locals0);
-  }
-  let dec: ConstStructDecode = const_struct_unpack(target.sv);
-  if !dec.ok || dec.fields.len() != fs.sig.fields.len() {
-    return const_exec_err(type_error_at(sp, "bad const struct encoding"), sigs0, states0, locals0);
+  let parts: Vec[String] = const_split_field_path(field);
+  let frt: ConstFieldPathTyResult = const_resolve_field_path_ty(ctx, cur_mod, sp, target.ty, parts);
+  if !frt.ok {
+    return const_exec_err(frt.err, sigs0, states0, locals0);
   }
 
-  let mut found: bool = false;
-  let mut fidx: i32 = -1;
-  let mut fty: i32 = ctx.ty_bad;
-  let mut fi: i32 = 0;
-  while fi < fs.sig.fields.len() {
-    let sf: StructFieldSig = fs.sig.fields.get(fi);
-    if sf.name == field {
-      found = true;
-      fidx = fi;
-      fty = sf.ty;
-      if !vis_allows(sf.vis, fs.sig.mod_path, cur_mod) {
-        return const_exec_err(type_error_at(sp, "field is private"), sigs0, states0, locals0);
-      }
-      fi = fs.sig.fields.len();
-    } else {
-      fi = fi + 1;
-    }
-  }
-  if !found {
-    return const_exec_err(type_error_at(sp, "unknown field"), sigs0, states0, locals0);
-  }
-
-  let rr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, rhs, fty, locals0);
+  let rr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, rhs, frt.ty, locals0);
   if !rr.ok { return const_exec_err(rr.err, rr.sigs, rr.states, locals0); }
-  if !assignable_to(ctx, fty, rr.ty) {
+  if !assignable_to(ctx, frt.ty, rr.ty) {
     return const_exec_err(type_error_at(sp, "const assign type mismatch"), rr.sigs, rr.states, locals0);
   }
   let fr: ConstToPayloadFieldResult = const_payload_field_from_eval(rr);
   if !fr.ok {
     return const_exec_err(type_error_at(sp, fr.err), rr.sigs, rr.states, locals0);
   }
-  let packed: String = const_struct_pack(const_set_payload_field_at(dec.fields, fidx, fr.f));
+  let ur: ConstStructFieldUpdateResult = const_apply_struct_field_update(ctx, cur_mod, sp, target.ty, target.sv, parts, 0, fr.f);
+  if !ur.ok {
+    return const_exec_err(ur.err, rr.sigs, rr.states, locals0);
+  }
   let updated: ConstLocal = ConstLocal {
     name: target.name,
     mutable: target.mutable,
@@ -783,7 +925,7 @@ fn const_exec_stmt_assign_field(
     ty: target.ty,
     iv: 0,
     bv: false,
-    sv: packed,
+    sv: ur.sv,
   };
   return const_exec_ok(rr.sigs, rr.states, const_set_local_at(locals0, li, updated));
 }
