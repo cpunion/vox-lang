@@ -98,6 +98,15 @@ fn template_expr_block_supported(pool: ast.ExprPool, b: ast.ExprBlock) -> bool {
   return true;
 }
 
+fn template_match_arms_supported(pool: ast.ExprPool, arms: Vec[ast.MatchArm]) -> bool {
+  let mut i: i32 = 0;
+  while i < arms.len() {
+    if !template_expr_supported(pool, arms.get(i).expr) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
 fn template_struct_fields_supported(pool: ast.ExprPool, fields: Vec[ast.StructLitField]) -> bool {
   let mut i: i32 = 0;
   while i < fields.len() {
@@ -126,9 +135,10 @@ fn template_expr_supported(pool: ast.ExprPool, id: i32) -> bool {
     ast.ExprNode.Try(a) => template_expr_supported(pool, a),
     ast.ExprNode.StructLit(tyex, fields) => template_expr_supported(pool, tyex) && template_struct_fields_supported(pool, fields),
     ast.ExprNode.Block(b) => template_expr_block_supported(pool, b),
-    // Keep v1 hygienic/simple for now: no try/match template inline.
-    ast.ExprNode.TryBlock(_b) => false,
-    ast.ExprNode.Match(_scrut, _arms) => false,
+    ast.ExprNode.TryBlock(b) => template_expr_supported(pool, b),
+    ast.ExprNode.Match(scrut, arms) =>
+      template_expr_supported(pool, scrut) &&
+      template_match_arms_supported(pool, arms),
   };
 }
 
@@ -293,6 +303,35 @@ struct CloneExprListResult {
   ok: bool,
   pool: ast.ExprPool,
   ids: Vec[i32],
+}
+
+struct CloneMatchArmsResult {
+  ok: bool,
+  pool: ast.ExprPool,
+  arms: Vec[ast.MatchArm],
+}
+
+fn clone_match_arms_with_args(
+  src: ast.ExprPool,
+  dst0: ast.ExprPool,
+  arms0: Vec[ast.MatchArm],
+  params: Vec[ast.Param],
+  args: Vec[i32],
+  ty_subs: Vec[TypeArgSub],
+  const_subs: Vec[ConstArgSub]
+) -> CloneMatchArmsResult {
+  let mut dst: ast.ExprPool = dst0;
+  let mut out: Vec[ast.MatchArm] = Vec();
+  let mut i: i32 = 0;
+  while i < arms0.len() {
+    let a: ast.MatchArm = arms0.get(i);
+    let cr: CloneExprResult = clone_expr_with_args(src, dst, a.expr, params, args, ty_subs, const_subs);
+    if !cr.ok { return CloneMatchArmsResult { ok: false, pool: cr.pool, arms: Vec() }; }
+    dst = cr.pool;
+    out.push(ast.MatchArm { pat: a.pat, expr: cr.id });
+    i = i + 1;
+  }
+  return CloneMatchArmsResult { ok: true, pool: dst, arms: out };
 }
 
 fn clone_stmt_list_with_args(
@@ -639,6 +678,23 @@ fn clone_expr_with_args(
     let cf: CloneStructFieldsResult = clone_struct_fields_with_args(src, ct.pool, fs0, params, args, ty_subs, const_subs);
     if !cf.ok { return clone_expr_err(cf.pool); }
     let ar: ast.AddExprResult = ast.expr_pool_add(cf.pool, ast.ExprNode.StructLit(ct.id, cf.fields), sp);
+    return clone_expr_ok(ar.pool, ar.id);
+  }
+  if match n { ast.ExprNode.TryBlock(_b) => true, _ => false } {
+    let b0: i32 = match n { ast.ExprNode.TryBlock(b) => b, _ => -1 };
+    let cb: CloneExprResult = clone_expr_with_args(src, dst0, b0, params, args, ty_subs, const_subs);
+    if !cb.ok { return clone_expr_err(cb.pool); }
+    let ar: ast.AddExprResult = ast.expr_pool_add(cb.pool, ast.ExprNode.TryBlock(cb.id), sp);
+    return clone_expr_ok(ar.pool, ar.id);
+  }
+  if match n { ast.ExprNode.Match(_scrut, _arms) => true, _ => false } {
+    let scrut0: i32 = match n { ast.ExprNode.Match(scrut, _arms) => scrut, _ => -1 };
+    let arms0: Vec[ast.MatchArm] = match n { ast.ExprNode.Match(_scrut, arms) => arms, _ => Vec() };
+    let cs: CloneExprResult = clone_expr_with_args(src, dst0, scrut0, params, args, ty_subs, const_subs);
+    if !cs.ok { return clone_expr_err(cs.pool); }
+    let ca: CloneMatchArmsResult = clone_match_arms_with_args(src, cs.pool, arms0, params, args, ty_subs, const_subs);
+    if !ca.ok { return clone_expr_err(ca.pool); }
+    let ar: ast.AddExprResult = ast.expr_pool_add(ca.pool, ast.ExprNode.Match(cs.id, ca.arms), sp);
     return clone_expr_ok(ar.pool, ar.id);
   }
   if match n { ast.ExprNode.Block(_b) => true, _ => false } {
