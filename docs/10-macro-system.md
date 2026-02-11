@@ -53,3 +53,9 @@ fn mk_stmt(x: AstExpr) -> AstStmt {
 let ast = some_macro_like_fn();
 let v = compile!(ast);
 ```
+
+## Stage2 现状（2026-02）
+
+- `name!(...)` 语法在 stage2 进入 AST（独立于普通函数调用）。
+- stage2 目前不执行宏展开；类型检查会给出明确报错：`macro expansion is not supported in stage2 yet`。
+- 这样做的目标是先稳定语法和错误模型，不把 `name!(...)` 偷偷降级成普通函数调用，后续再接入真正的宏展开执行器。
