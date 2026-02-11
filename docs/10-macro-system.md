@@ -72,6 +72,7 @@ fn main() -> i32 { return compile!(make_add1(41)); }
 - 当前内置最小规则集：
   - `compile!(expr)`：仅 1 个值参数、无 type args，直接把 `expr` 插回当前位置（支持链式场景，如 `compile!(compile!(...))`）。
     - 当 `expr` 是普通调用（`f(...)` / `pkg.f(...)`）且 `f` 返回 `Ast*` 时，会先转为宏调用再展开，支持 `compile!(make_ast(...))` 形态。
+    - 支持“宏调用宏”级联展开：`compile!(m2(...))` 若 `m2` 模板中继续产生 `m1!(...)`，会在后续轮次继续展开直到收敛。
 - `quote!(expr)`：仅 1 个值参数、无 type args，表达式级 quote MVP（当前直接产出内联表达式节点）。
 - `unquote!(expr)`：仅 1 个值参数、无 type args，表达式级 unquote MVP（当前直接产出内联表达式节点）。
   - 覆盖形态已验证包含普通二元表达式、`if` 表达式与 `match` 表达式组合场景。
