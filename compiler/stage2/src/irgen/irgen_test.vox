@@ -2140,6 +2140,78 @@ fn test_irgen_trait_const_generic_method_monomorphizes_impl_symbol() -> () {
   t.assert(contains(s, "$gN_3d3_3ai32"));
 }
 
+fn test_irgen_trait_const_generic_method_comptime_where_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    trait AddN { fn addn[const N: i32](x: Self, v: i32) -> i32 where comptime N > 0; }
+    struct I { v: i32 }
+    impl AddN for I { fn addn[const N: i32](x: I, v: i32) -> i32 where comptime N > 0 { return v + N; } }
+    fn main() -> i32 {
+      let x: I = I { v: 1 };
+      return AddN.addn[3](x, 4);
+    }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "impl$main$AddN$addn$"));
+  t.assert(contains(s, "$gN_3d3_3ai32"));
+}
+
+fn test_irgen_trait_const_generic_method_comptime_where_impl_mismatch_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    trait AddN { fn addn[const N: i32](x: Self, v: i32) -> i32 where comptime N > 0; }
+    struct I { v: i32 }
+    impl AddN for I { fn addn[const N: i32](x: I, v: i32) -> i32 where comptime N >= 0 { return v + N; } }
+    fn main() -> i32 { return 0; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "comptime where"));
+}
+
+fn test_irgen_trait_const_generic_method_comptime_where_rhs_reflect_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    trait FitRU {
+      fn fit[T, U](x: Self, a: T, b: U) -> i32 where comptime @size_of(T) <= @align_of(U);
+    }
+    struct I { v: i32 }
+    impl FitRU for I {
+      fn fit[T, U](x: I, a: T, b: U) -> i32 where comptime @size_of(T) <= @align_of(U) { return 1; }
+    }
+    fn main() -> i32 {
+      let x: I = I { v: 1 };
+      let y: i64 = 0;
+      return FitRU.fit(x, 3, y);
+    }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "impl$main$FitRU$fit$"));
+}
+
+fn test_irgen_trait_const_generic_method_comptime_where_rhs_reflect_impl_mismatch_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    trait FitRU {
+      fn fit[T, U](x: Self, a: T, b: U) -> i32 where comptime @size_of(T) <= @align_of(U);
+    }
+    struct I { v: i32 }
+    impl FitRU for I {
+      fn fit[T, U](x: I, a: T, b: U) -> i32 where comptime @size_of(T) < @align_of(U) { return 1; }
+    }
+    fn main() -> i32 { return 0; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "comptime where"));
+}
+
 fn test_irgen_trait_generic_default_method_monomorphizes_impl_symbol() -> () {
   let mut w: tc.World = tc.world();
   w = add_mod(w, "std/prelude", """
