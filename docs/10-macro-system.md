@@ -62,6 +62,7 @@ let v = compile!(ast);
 - 当前内置最小规则集：
   - `compile!(expr)`：仅 1 个值参数、无 type args，直接把 `expr` 插回当前位置（支持链式场景，如 `compile!(compile!(...))`）。
   - `panic!(msg)`：仅 1 个值参数，重写为 `panic(msg)`。
+  - `compile_error!(msg)`：仅 1 个值参数，重写为 `@compile_error(msg)`。
   - `assert!(cond)` / `assert!(cond, msg)`：重写为 `assert(cond)` / `assert_with(cond, msg)`。
 - 除上述内置规则外，其他宏调用仍会在 `macroexpand` 阶段报错：`macro expansion is not supported in stage2 yet`。
 - 这样做的目标是先稳定语法和流水线边界，再逐步接入真正的“宏作为编译期函数”执行器。
