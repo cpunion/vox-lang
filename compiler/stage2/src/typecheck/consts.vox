@@ -440,6 +440,43 @@ fn const_find_local(locals: Vec[ConstLocal], name: String) -> i32 {
   return -1;
 }
 
+fn is_const_generic_arg_tn_or_const_local(tn: ast.TypeName, locals: Vec[ConstLocal]) -> bool {
+  if is_const_generic_arg_tn(tn) { return true; }
+  if tn.parts.len() != 1 || tn.args.len() != 0 { return false; }
+  return const_find_local(locals, tn.parts.get(0)) != -1;
+}
+
+fn parse_const_generic_arg_in_const_locals(
+  ctx: Ctx,
+  tn: ast.TypeName,
+  want_ty: i32,
+  locals: Vec[ConstLocal]
+) -> ParseConstGenericArgResult {
+  let pr: ParseConstGenericArgResult = parse_const_generic_arg(ctx, tn, want_ty);
+  if pr.ok { return pr; }
+
+  if tn.parts.len() != 1 || tn.args.len() != 0 {
+    return ParseConstGenericArgResult { ok: false, iv: 0, text: "" };
+  }
+  let name: String = tn.parts.get(0);
+  let li: i32 = const_find_local(locals, name);
+  if li == -1 {
+    return ParseConstGenericArgResult { ok: false, iv: 0, text: name };
+  }
+  let lv: ConstLocal = locals.get(li);
+  if lv.kind != const_kind_int() {
+    return ParseConstGenericArgResult { ok: false, iv: 0, text: name };
+  }
+  let bty: i32 = strip_range(ctx, want_ty);
+  if !is_int_like_ty(ctx, bty) {
+    return ParseConstGenericArgResult { ok: false, iv: 0, text: name };
+  }
+  if !assignable_to(ctx, want_ty, lv.ty) {
+    return ParseConstGenericArgResult { ok: false, iv: 0, text: name };
+  }
+  return ParseConstGenericArgResult { ok: true, iv: lv.iv, text: lv.iv.to_string() };
+}
+
 fn const_local_from_value(name: String, mutable: bool, v: EvalConstExprResult) -> ConstLocal {
   return ConstLocal { name: name, mutable: mutable, kind: v.kind, ty: v.ty, iv: v.iv, bv: v.bv, sv: v.sv };
 }
@@ -1854,7 +1891,7 @@ fn eval_const_expr_in_mod_locals(
         let mut first_const: i32 = -1;
         let mut xi: i32 = 0;
         while xi < type_args.len() {
-          if is_const_generic_arg_tn(type_args.get(xi)) {
+          if is_const_generic_arg_tn_or_const_local(type_args.get(xi), locals) {
             first_const = xi;
             xi = type_args.len();
           } else {
@@ -1865,7 +1902,7 @@ fn eval_const_expr_in_mod_locals(
           explicit_targ_n = first_const;
           let mut xj: i32 = first_const;
           while xj < type_args.len() {
-            if !is_const_generic_arg_tn(type_args.get(xj)) {
+            if !is_const_generic_arg_tn_or_const_local(type_args.get(xj), locals) {
               return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call generic args mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
             }
             xj = xj + 1;
@@ -1883,7 +1920,7 @@ fn eval_const_expr_in_mod_locals(
         let mut ci0: i32 = 0;
         while ci0 < explicit_targ_n {
           let ta0: ast.TypeName = type_args.get(ci0);
-          if is_const_generic_arg_tn(ta0) {
+          if is_const_generic_arg_tn_or_const_local(ta0, locals) {
             return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call generic args mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
           }
           explicit_targs.push(ta0);
@@ -1895,7 +1932,7 @@ fn eval_const_expr_in_mod_locals(
           let cp: ConstParamSig = fr_call.sig.const_params.get(cidx);
           if cidx < explicit_const_n {
             let ctn: ast.TypeName = type_args.get(explicit_targ_n + cidx);
-            let pr: ParseConstGenericArgResult = parse_const_generic_arg(ctx, ctn, cp.ty);
+            let pr: ParseConstGenericArgResult = parse_const_generic_arg_in_const_locals(ctx, ctn, cp.ty, locals);
             if !pr.ok {
               return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call const generic arg out of range"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
             }

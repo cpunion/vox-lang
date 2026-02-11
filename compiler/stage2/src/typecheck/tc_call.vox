@@ -676,7 +676,7 @@ fn tc_call_func_sig(
   let mut first_const: i32 = -1;
   let mut xi: i32 = 0;
   while xi < type_args.len() {
-    if is_const_generic_arg_tn(type_args.get(xi)) {
+    if is_const_generic_arg_tn_or_local(l0, type_args.get(xi)) {
       first_const = xi;
       xi = type_args.len();
     } else {
@@ -687,7 +687,7 @@ fn tc_call_func_sig(
     explicit_targ_n = first_const;
     let mut xj: i32 = first_const;
     while xj < type_args.len() {
-      if !is_const_generic_arg_tn(type_args.get(xj)) {
+      if !is_const_generic_arg_tn_or_local(l0, type_args.get(xj)) {
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
       }
       xj = xj + 1;
@@ -705,19 +705,21 @@ fn tc_call_func_sig(
   let mut ci0: i32 = 0;
   while ci0 < explicit_targ_n {
     let ta0: ast.TypeName = type_args.get(ci0);
-    if is_const_generic_arg_tn(ta0) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if is_const_generic_arg_tn_or_local(l0, ta0) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     explicit_targs.push(ta0);
     ci0 = ci0 + 1;
   }
 
   let mut cidx: i32 = 0;
   let mut csubs: Vec[ConstSub] = Vec();
+  let mut has_unresolved_const_arg: bool = false;
   while cidx < sig.const_params.len() {
     let cp: ConstParamSig = sig.const_params.get(cidx);
     if cidx < explicit_const_n {
       let ctn: ast.TypeName = type_args.get(explicit_targ_n + cidx);
-      let pr: ParseConstGenericArgResult = parse_const_generic_arg(ctx, ctn, cp.ty);
+      let pr: ParseConstGenericArgWithLocalsResult = parse_const_generic_arg_with_locals(ctx, l0, ctn, cp.ty);
       if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      if pr.unresolved { has_unresolved_const_arg = true; }
       csubs.push(ConstSub { name: cp.name, ty: cp.ty, iv: pr.iv, text: pr.text });
     } else {
       if !cp.has_default { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
@@ -767,8 +769,10 @@ fn tc_call_func_sig(
     j = j + 1;
   }
 
-  let cwr: ConstWhereCheckResult = check_const_where_bounds(ctx, sig.const_where_bounds, subs, csubs);
-  if !cwr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, cwr.err) }; }
+  if !has_unresolved_const_arg {
+    let cwr: ConstWhereCheckResult = check_const_where_bounds(ctx, sig.const_where_bounds, subs, csubs);
+    if !cwr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, cwr.err) }; }
+  }
 
   // Check trait bounds for inferred/explicit type args.
   let mut bi: i32 = 0;
