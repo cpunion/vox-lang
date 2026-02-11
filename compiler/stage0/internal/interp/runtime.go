@@ -51,6 +51,35 @@ const (
 	callKindEnumCtor
 )
 
+// TestResult describes one interpreted test execution.
+type TestResult struct {
+	Dur time.Duration
+	Err error
+}
+
+// ModuleSummary aggregates pass/fail and duration for one test module.
+type ModuleSummary struct {
+	Module string
+	Passed int
+	Failed int
+	Dur    time.Duration
+}
+
+// NamedDuration is used for the slowest-tests report.
+type NamedDuration struct {
+	Name string
+	Dur  time.Duration
+}
+
+// TestRunReport contains detailed interpreter test results for CLI reporting.
+type TestRunReport struct {
+	Log             string
+	Results         map[string]TestResult
+	FailedNames     []string
+	ModuleSummaries []ModuleSummary
+	Slowest         []NamedDuration
+}
+
 func RunMain(p *typecheck.CheckedProgram) (string, error) {
 	return RunMainWithArgs(p, nil)
 }
@@ -143,8 +172,19 @@ func RunTestsNamed(p *typecheck.CheckedProgram, testNames []string) (string, []s
 }
 
 func RunTestsNamedWithJobs(p *typecheck.CheckedProgram, testNames []string, jobs int) (string, []string, error) {
+	rep, err := RunTestsNamedDetailedWithJobs(p, testNames, jobs)
+	return rep.Log, rep.FailedNames, err
+}
+
+func RunTestsNamedDetailedWithJobs(p *typecheck.CheckedProgram, testNames []string, jobs int) (TestRunReport, error) {
 	if len(testNames) == 0 {
-		return "[test] no tests found\n", nil, nil
+		return TestRunReport{
+			Log:             "[test] no tests found\n",
+			Results:         map[string]TestResult{},
+			FailedNames:     nil,
+			ModuleSummaries: nil,
+			Slowest:         nil,
+		}, nil
 	}
 
 	results := runInterpTestsByModule(p, names.GroupQualifiedTestsByModule(testNames), jobs)
@@ -175,10 +215,17 @@ func RunTestsNamedWithJobs(p *typecheck.CheckedProgram, testNames []string, jobs
 		fmt.Fprintf(&log, "[slowest] %s (%s)\n", s.name, formatTestDuration(s.dur))
 	}
 	fmt.Fprintf(&log, "[test] %d passed, %d failed\n", len(testNames)-failed, failed)
-	if failed != 0 {
-		return log.String(), failedNames, fmt.Errorf("%d test(s) failed", failed)
+	rep := TestRunReport{
+		Log:             log.String(),
+		Results:         exportInterpResults(results),
+		FailedNames:     failedNames,
+		ModuleSummaries: exportInterpModuleSummaries(moduleSummaries),
+		Slowest:         exportInterpSlowest(slowest),
 	}
-	return log.String(), nil, nil
+	if failed != 0 {
+		return rep, fmt.Errorf("%d test(s) failed", failed)
+	}
+	return rep, nil
 }
 
 type interpTestResult struct {
@@ -242,6 +289,35 @@ func summarizeInterpTestResults(testNames []string, results map[string]interpTes
 		slowest = slowest[:5]
 	}
 	return mods, slowest
+}
+
+func exportInterpResults(results map[string]interpTestResult) map[string]TestResult {
+	out := make(map[string]TestResult, len(results))
+	for name, r := range results {
+		out[name] = TestResult{Dur: r.dur, Err: r.err}
+	}
+	return out
+}
+
+func exportInterpModuleSummaries(summaries []interpModuleSummary) []ModuleSummary {
+	out := make([]ModuleSummary, 0, len(summaries))
+	for _, s := range summaries {
+		out = append(out, ModuleSummary{
+			Module: s.module,
+			Passed: s.passed,
+			Failed: s.failed,
+			Dur:    s.dur,
+		})
+	}
+	return out
+}
+
+func exportInterpSlowest(slowest []namedInterpDuration) []NamedDuration {
+	out := make([]NamedDuration, 0, len(slowest))
+	for _, s := range slowest {
+		out = append(out, NamedDuration{Name: s.name, Dur: s.dur})
+	}
+	return out
 }
 
 func runtimeForTests(p *typecheck.CheckedProgram) *Runtime {

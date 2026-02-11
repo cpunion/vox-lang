@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"voxlang/internal/ast"
+	"voxlang/internal/interp"
 	"voxlang/internal/source"
 )
 
@@ -565,5 +566,57 @@ func TestBuildJSONTestReport_ListOnlyIncludesModuleDetails(t *testing.T) {
 	}
 	if len(rep.FailedTests) != 0 {
 		t.Fatalf("failed_tests len = %d, want 0", len(rep.FailedTests))
+	}
+}
+
+func TestInterpJSONConversionHelpers_PreserveDurationsAndErrors(t *testing.T) {
+	testNames := []string{"mod.a::test_ok", "mod.a::test_fail"}
+	interpResults := map[string]interp.TestResult{
+		"mod.a::test_ok":   {Dur: 2 * time.Millisecond, Err: nil},
+		"mod.a::test_fail": {Dur: 3 * time.Millisecond, Err: os.ErrInvalid},
+	}
+	results := interpResultsToExecResults(interpResults)
+	modules := interpModuleSummariesToTestSummaries([]interp.ModuleSummary{
+		{Module: "mod.a", Passed: 1, Failed: 1, Dur: 5 * time.Millisecond},
+	})
+	slowest := interpSlowestToNamedDurations([]interp.NamedDuration{
+		{Name: "mod.a::test_fail", Dur: 3 * time.Millisecond},
+		{Name: "mod.a::test_ok", Dur: 2 * time.Millisecond},
+	})
+
+	rep := buildJSONTestReport(
+		testOptions{eng: engineInterp, dir: "."},
+		"/tmp/p",
+		2,
+		2,
+		0,
+		testNames,
+		results,
+		modules,
+		"",
+		"",
+	)
+	rep.Slowest = jsonSlowestFromNamed(slowest)
+
+	if rep.Passed != 1 || rep.Failed != 1 {
+		t.Fatalf("unexpected pass/fail: %+v", rep)
+	}
+	if len(rep.Results) != 2 {
+		t.Fatalf("results len = %d, want 2", len(rep.Results))
+	}
+	if rep.Results[0].Name != "mod.a::test_ok" || rep.Results[0].DurationMicros <= 0 || rep.Results[0].Status != "pass" {
+		t.Fatalf("unexpected ok result: %+v", rep.Results[0])
+	}
+	if rep.Results[1].Name != "mod.a::test_fail" || rep.Results[1].DurationMicros <= 0 || rep.Results[1].Status != "fail" {
+		t.Fatalf("unexpected fail result: %+v", rep.Results[1])
+	}
+	if !strings.Contains(rep.Results[1].Error, "invalid argument") {
+		t.Fatalf("unexpected fail error text: %q", rep.Results[1].Error)
+	}
+	if len(rep.Modules) != 1 || rep.Modules[0].DurationMicros <= 0 {
+		t.Fatalf("unexpected modules summary: %+v", rep.Modules)
+	}
+	if len(rep.Slowest) != 2 || rep.Slowest[0].DurationMicros <= 0 {
+		t.Fatalf("unexpected slowest: %+v", rep.Slowest)
 	}
 }

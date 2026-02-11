@@ -40,6 +40,7 @@ Stage0 行为：
 - `vox test --json`：输出机器可读 JSON 报告（包含 selection/results/modules/module_details/failed_tests/slowest/summary）
  - 调度策略：模块间并行、模块内串行（稳定日志顺序与共享状态可控）
  - 输出包含每个测试耗时（如 `([OK] mod::test_x (0.42ms))`）
+ - `--engine=c` 与 `--engine=interp` 的 JSON 字段语义保持一致：`results.duration_us/error`、`modules.duration_us`、`slowest.duration_us` 都输出真实执行数据
  - 输出包含模块级汇总（`[module] <mod>: <passed> passed, <failed> failed (<dur>)`）
 - 输出包含最慢测试 TopN（当前 N=5，`[slowest] <test> (<dur>)`）
 - 输出包含选择摘要（`[select] discovered: N, selected: M`，并在使用 `--run/--filter/--rerun-failed` 时打印过滤来源）

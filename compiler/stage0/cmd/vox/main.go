@@ -561,30 +561,31 @@ func testWithOptions(opts testOptions) error {
 	}
 
 	if opts.eng == engineInterp {
-		log, failedNames, err := interp.RunTestsNamedWithJobs(res.Program, testNames, opts.jobs)
+		repI, err := interp.RunTestsNamedDetailedWithJobs(res.Program, testNames, opts.jobs)
 		if !opts.jsonOutput {
-			if log != "" {
-				fmt.Fprint(os.Stdout, log)
+			if repI.Log != "" {
+				fmt.Fprint(os.Stdout, repI.Log)
 			}
 			fmt.Fprintf(os.Stdout, "[time] total: %s\n", formatTestDuration(time.Since(runStart)))
 		}
-		if werr := writeFailedTests(abs, failedNames); werr != nil {
+		if werr := writeFailedTests(abs, repI.FailedNames); werr != nil {
 			return werr
 		}
 		hint := ""
-		if len(failedNames) != 0 {
+		if len(repI.FailedNames) != 0 {
 			hint = testRerunCommand(opts.eng, abs)
 		}
 		if opts.jsonOutput {
-			results := interpResultsFromFailed(testNames, failedNames)
-			moduleSummaries, slowest := summarizeTestResults(testNames, results)
+			results := interpResultsToExecResults(repI.Results)
+			moduleSummaries := interpModuleSummariesToTestSummaries(repI.ModuleSummaries)
+			slowest := interpSlowestToNamedDurations(repI.Slowest)
 			rep := buildJSONTestReport(opts, abs, discoveredTests, len(testNames), prevFailedCount, testNames, results, moduleSummaries, hint, "")
 			rep.Slowest = jsonSlowestFromNamed(slowest)
 			rep.TotalDurationMicros = time.Since(runStart).Microseconds()
 			if err := emitJSONReport(os.Stdout, rep); err != nil {
 				return err
 			}
-		} else if len(failedNames) != 0 {
+		} else if len(repI.FailedNames) != 0 {
 			fmt.Fprintf(os.Stdout, "[hint] rerun failed: %s\n", testRerunCommand(opts.eng, abs))
 		}
 		return err
@@ -775,18 +776,31 @@ func emitJSONReport(out io.Writer, rep jsonTestReport) error {
 	return enc.Encode(rep)
 }
 
-func interpResultsFromFailed(testNames []string, failedNames []string) map[string]testExecResult {
-	failed := make(map[string]struct{}, len(failedNames))
-	for _, n := range failedNames {
-		failed[n] = struct{}{}
+func interpResultsToExecResults(results map[string]interp.TestResult) map[string]testExecResult {
+	out := make(map[string]testExecResult, len(results))
+	for name, r := range results {
+		out[name] = testExecResult{dur: r.Dur, err: r.Err}
 	}
-	out := make(map[string]testExecResult, len(testNames))
-	for _, n := range testNames {
-		if _, ok := failed[n]; ok {
-			out[n] = testExecResult{dur: 0, err: fmt.Errorf("failed")}
-		} else {
-			out[n] = testExecResult{dur: 0, err: nil}
-		}
+	return out
+}
+
+func interpModuleSummariesToTestSummaries(summaries []interp.ModuleSummary) []moduleTestSummary {
+	out := make([]moduleTestSummary, 0, len(summaries))
+	for _, s := range summaries {
+		out = append(out, moduleTestSummary{
+			module: s.Module,
+			passed: s.Passed,
+			failed: s.Failed,
+			dur:    s.Dur,
+		})
+	}
+	return out
+}
+
+func interpSlowestToNamedDurations(slowest []interp.NamedDuration) []namedTestDuration {
+	out := make([]namedTestDuration, 0, len(slowest))
+	for _, s := range slowest {
+		out = append(out, namedTestDuration{name: s.Name, dur: s.Dur})
 	}
 	return out
 }
