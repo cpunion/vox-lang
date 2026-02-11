@@ -1385,7 +1385,11 @@ func compileWithDriver(dir string, driver codegen.DriverMainKind) (string, error
 	if err != nil {
 		return "", fmt.Errorf("cc not found in PATH")
 	}
-	cmd := exec.Command(cc, "-std=c11", "-O0", "-g", cPath, "-o", binPath)
+	ccArgs := []string{"-std=c11", "-O0", "-g", cPath, "-o", binPath}
+	if runtime.GOOS == "windows" {
+		ccArgs = append(ccArgs, "-lws2_32")
+	}
+	cmd := exec.Command(cc, ccArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -1573,7 +1577,11 @@ func compileTests(dir string, res *loader.BuildResult, testNames []string) (stri
 	if err != nil {
 		return "", fmt.Errorf("cc not found in PATH")
 	}
-	cmd := exec.Command(cc, "-std=c11", "-O0", "-g", cPath, "-o", binPath)
+	ccArgs := []string{"-std=c11", "-O0", "-g", cPath, "-o", binPath}
+	if runtime.GOOS == "windows" {
+		ccArgs = append(ccArgs, "-lws2_32")
+	}
+	cmd := exec.Command(cc, ccArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
