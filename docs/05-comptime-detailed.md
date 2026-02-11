@@ -79,7 +79,7 @@ fn crc_table() -> [u32; 256] { ... }
 - `@field_count` 当前支持 `struct/enum`（分别返回字段数/variant 数）。
 - `@field_name` 当前支持 `struct/enum`（分别返回字段名/variant 名），`I` 为 `usize` const 实参。
 - `@field_type` 当前支持 `struct/enum`（返回字段/variant payload 类型文本），`I` 为 `usize` const 实参。
-- `@field_type_id` 当前支持 `struct` 字段与 `enum` 的 0/1 payload variant（多 payload variant 暂不支持）。
+- `@field_type_id` 当前支持 `struct` 字段与 `enum` variant（含多 payload variant）。对多 payload variant，返回稳定的合成 `TypeId`（用于编译期比较与缓存键）。
 - `@assignable_to(Src, Dst)` 复用当前类型系统赋值规则（如 `@range` 到 base 的 widening）。
 - `@castable_to(Src, Dst)` 复用当前 `as` 显式转换规则（int/float/range 相关）。
 - `@eq_comparable_with(A, B)` 与 `==/!=` 二元规则对齐。

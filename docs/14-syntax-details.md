@@ -518,7 +518,7 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 - `@field_count(Type) -> usize`（当前支持 `struct/enum`）
 - `@field_name(Type, I) -> String`（当前支持 `struct/enum`，`I` 为 const 索引）
 - `@field_type(Type, I) -> String`（当前支持 `struct/enum`，`I` 为 const 索引）
-- `@field_type_id(Type, I) -> TypeId`（当前支持 `struct` 字段与 `enum` 的 0/1 payload variant）
+- `@field_type_id(Type, I) -> TypeId`（当前支持 `struct` 字段与 `enum` variant；多 payload variant 返回稳定合成 `TypeId`）
 - `@same_type(A, B) -> bool`
 - `@assignable_to(Src, Dst) -> bool`
 - `@castable_to(Src, Dst) -> bool`
