@@ -155,6 +155,105 @@ fn verify_id_nonneg(id: i32, what: String) -> VerifyResult {
   return verify_ok();
 }
 
+fn binop_kind_text(op: BinOpKind) -> String {
+  return
+    match op {
+      BinOpKind.Add => "add",
+      BinOpKind.Sub => "sub",
+      BinOpKind.Mul => "mul",
+      BinOpKind.Div => "div",
+      BinOpKind.Mod => "mod",
+      BinOpKind.BitAnd => "bitand",
+      BinOpKind.BitOr => "bitor",
+      BinOpKind.BitXor => "bitxor",
+      BinOpKind.Shl => "shl",
+      BinOpKind.Shr => "shr",
+    };
+}
+
+fn cmp_kind_text(op: CmpKind) -> String {
+  return
+    match op {
+      CmpKind.Lt => "cmp_lt",
+      CmpKind.Le => "cmp_le",
+      CmpKind.Gt => "cmp_gt",
+      CmpKind.Ge => "cmp_ge",
+      CmpKind.Eq => "cmp_eq",
+      CmpKind.Ne => "cmp_ne",
+    };
+}
+
+struct VerifyOpKindResult {
+  ok: bool,
+  err: VerifyResult,
+  kind: TyKind,
+}
+
+fn verify_op_kind(pool: TyPool, ty: i32, ctx: String) -> VerifyOpKindResult {
+  let vt: VerifyResult = verify_ty_idx(pool, ty, ctx.concat(" ty"));
+  if !vt.ok {
+    return VerifyOpKindResult { ok: false, err: vt, kind: TyKind.Bad };
+  }
+  let t: Ty = ty_pool_get(pool, ty);
+  if t.kind != TyKind.Range {
+    return VerifyOpKindResult { ok: true, err: verify_ok(), kind: t.kind };
+  }
+  let ve: VerifyResult = verify_ty_idx(pool, t.elem, ctx.concat(" range base"));
+  if !ve.ok {
+    return VerifyOpKindResult { ok: false, err: ve, kind: TyKind.Bad };
+  }
+  return VerifyOpKindResult { ok: true, err: verify_ok(), kind: ty_pool_get(pool, t.elem).kind };
+}
+
+fn verify_binop_ty(pool: TyPool, op: BinOpKind, ty: i32, ctx: String) -> VerifyResult {
+  let kr: VerifyOpKindResult = verify_op_kind(pool, ty, ctx);
+  if !kr.ok { return kr.err; }
+  let k: TyKind = kr.kind;
+  let is_int: bool = ty_is_int_kind(k);
+  let is_float: bool = ty_is_float_kind(k);
+
+  let is_arith: bool =
+    match op {
+      BinOpKind.Add => true,
+      BinOpKind.Sub => true,
+      BinOpKind.Mul => true,
+      BinOpKind.Div => true,
+      BinOpKind.Mod => true,
+      _ => false,
+    };
+  if is_arith {
+    if is_int || is_float { return verify_ok(); }
+    return verify_err(binop_kind_text(op).concat(" in ").concat(ctx).concat(": expects int/float, got ").concat(ty_kind_text(k)));
+  }
+
+  if is_int { return verify_ok(); }
+  return verify_err(binop_kind_text(op).concat(" in ").concat(ctx).concat(": expects int, got ").concat(ty_kind_text(k)));
+}
+
+fn verify_cmp_ty(pool: TyPool, op: CmpKind, ty: i32, ctx: String) -> VerifyResult {
+  let kr: VerifyOpKindResult = verify_op_kind(pool, ty, ctx);
+  if !kr.ok { return kr.err; }
+  let k: TyKind = kr.kind;
+  let is_int: bool = ty_is_int_kind(k);
+  let is_float: bool = ty_is_float_kind(k);
+  let is_ordered: bool = is_int || is_float || k == TyKind.String;
+
+  let is_eq: bool = match op { CmpKind.Eq => true, CmpKind.Ne => true, _ => false };
+  if is_eq {
+    let eq_ok: bool =
+      k == TyKind.Unit ||
+      k == TyKind.Bool ||
+      is_ordered ||
+      k == TyKind.Struct ||
+      k == TyKind.Enum;
+    if eq_ok { return verify_ok(); }
+    return verify_err(cmp_kind_text(op).concat(" in ").concat(ctx).concat(": expects eq-comparable type, got ").concat(ty_kind_text(k)));
+  }
+
+  if is_ordered { return verify_ok(); }
+  return verify_err(cmp_kind_text(op).concat(" in ").concat(ctx).concat(": expects ordered type, got ").concat(ty_kind_text(k)));
+}
+
 fn verify_cast_int(pool: TyPool, dst_ty: i32, src_ty: i32, checked: bool, ctx: String) -> VerifyResult {
   let vdst: VerifyResult = verify_ty_idx(pool, dst_ty, ctx.concat(" dst_ty"));
   if !vdst.ok { return vdst; }
@@ -203,13 +302,19 @@ fn verify_instr(p: Program, f: Func, b: Block, inst: Instr) -> VerifyResult {
         if !vd.ok { vd } else { verify_ty_idx(pool, ty, "const ty") }
       },
 
-      Instr.BinOp(dst, _op, ty, _a, _c) => {
+      Instr.BinOp(dst, op, ty, _a, _c) => {
         let vd: VerifyResult = verify_id_nonneg(dst, "binop dst");
-        if !vd.ok { vd } else { verify_ty_idx(pool, ty, "binop ty") }
+        if !vd.ok { return vd; }
+        let vt: VerifyResult = verify_ty_idx(pool, ty, "binop ty");
+        if !vt.ok { return vt; }
+        verify_binop_ty(pool, op, ty, f.name.concat("::").concat(b.name))
       },
-      Instr.Cmp(dst, _op, ty, _a, _c) => {
+      Instr.Cmp(dst, op, ty, _a, _c) => {
         let vd: VerifyResult = verify_id_nonneg(dst, "cmp dst");
-        if !vd.ok { vd } else { verify_ty_idx(pool, ty, "cmp operand ty") }
+        if !vd.ok { return vd; }
+        let vt: VerifyResult = verify_ty_idx(pool, ty, "cmp operand ty");
+        if !vt.ok { return vt; }
+        verify_cmp_ty(pool, op, ty, f.name.concat("::").concat(b.name))
       },
       Instr.And(dst, _a, _c) => verify_id_nonneg(dst, "and dst"),
       Instr.Or(dst, _a, _c) => verify_id_nonneg(dst, "or dst"),

@@ -173,6 +173,7 @@ range_check i64 0 3 %t0
 
 - 类型索引必须有效（函数参数/返回、结构体字段、枚举 payload、相关指令）
 - cast 指令必须满足本节定义的类型组合约束
+- `binop`/`cmp` 必须满足操作符与操作数类型组合约束（如有序比较仅允许 `int/float/string`，位运算仅允许整数）
 - `range_check` 必须作用于整数类型且区间合法（`lo <= hi`）
 - `struct_init` 的类型必须是 `struct`，且初始化字段名必须存在于对应声明中
 - `enum_init` 的类型必须是 `enum`，variant 必须存在且 payload 个数必须与声明一致
