@@ -221,7 +221,12 @@ fn resolve_alias(ctx0: Ctx, w: World, items: Vec[AliasItem], states0: Vec[i32], 
   let tr: ResolveTyResult = resolve_type(c, w, it.mod_path, imps, Vec(), it.decl.ty);
   c = tr.ctx;
   if !tr.ok {
-    return ResolveAliasResult { ok: false, err: type_error_at(it.decl.sp, "type resolve failed in type alias"), ctx: c, states: states };
+    return ResolveAliasResult {
+      ok: false,
+      err: type_error_at(it.decl.sp, resolve_fail_msg(it.decl.ty, "type resolve failed in type alias")),
+      ctx: c,
+      states: states,
+    };
   }
 
   // Cache the resolved alias for later use sites.
@@ -301,11 +306,11 @@ fn collect_structs(ctx: Ctx, w: World) -> TcCtxResult {
       let mut fi: i32 = 0;
       while fi < sd.fields.len() {
         let fd: ast.FieldDecl = sd.fields.get(fi);
-        let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), fd.ty);
-        c = rr.ctx;
-        if !rr.ok {
-          return TcCtxResult { ok: false, err: type_error_at(sd.sp, "type resolve failed in struct field"), ctx: c };
-        }
+          let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), fd.ty);
+          c = rr.ctx;
+          if !rr.ok {
+          return TcCtxResult { ok: false, err: type_error_at(sd.sp, resolve_fail_msg(fd.ty, "type resolve failed in struct field")), ctx: c };
+          }
         fields.push(StructFieldSig { name: fd.name, ty: rr.idx, vis: fd.vis, is_pub: fd.is_pub });
         fi = fi + 1;
       }
@@ -318,7 +323,7 @@ fn collect_structs(ctx: Ctx, w: World) -> TcCtxResult {
       let self_r: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), self_ty);
       c = self_r.ctx;
       if !self_r.ok {
-        return TcCtxResult { ok: false, err: type_error_at(sd.sp, "type resolve failed for struct self type"), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(sd.sp, resolve_fail_msg(self_ty, "type resolve failed for struct self type")), ctx: c };
       }
       si = si + 1;
     }
@@ -358,7 +363,7 @@ fn collect_enums(ctx: Ctx, w: World) -> TcCtxResult {
           let tr: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), vd.fields.get(fi));
           c = tr.ctx;
           if !tr.ok {
-            return TcCtxResult { ok: false, err: type_error_at(ed.sp, "type resolve failed in enum variant"), ctx: c };
+            return TcCtxResult { ok: false, err: type_error_at(ed.sp, resolve_fail_msg(vd.fields.get(fi), "type resolve failed in enum variant")), ctx: c };
           }
           ftys.push(tr.idx);
           fi = fi + 1;
@@ -375,7 +380,7 @@ fn collect_enums(ctx: Ctx, w: World) -> TcCtxResult {
       let self_r: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), self_ty);
       c = self_r.ctx;
       if !self_r.ok {
-        return TcCtxResult { ok: false, err: type_error_at(ed.sp, "type resolve failed for enum self type"), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(ed.sp, resolve_fail_msg(self_ty, "type resolve failed for enum self type")), ctx: c };
       }
       ei = ei + 1;
     }
@@ -410,6 +415,12 @@ fn type_name_text(tn: ast.TypeName) -> String {
     i = i + 1;
   }
   return out.concat("]");
+}
+
+fn resolve_fail_msg(tn: ast.TypeName, fallback: String) -> String {
+  let msg: String = named_lifetime_type_error(tn);
+  if msg != "" { return msg; }
+  return fallback;
 }
 
 // Typed-path marker pre-resolution:
@@ -450,7 +461,9 @@ fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, typ
     let tn: ast.TypeName = match n { ast.ExprNode.As(_a, t) => t, _ => ast.TypeName { parts: Vec(), args: Vec() } };
     let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, tn);
     c = tr.ctx;
-    if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in expression type annotation: ".concat(type_name_text(tn)))); }
+    if !tr.ok {
+      return type_walk_err(c, type_error(owner_file, resolve_fail_msg(tn, "type resolve failed in expression type annotation: ".concat(type_name_text(tn)))));
+    }
   }
   if match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } {
     let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, ts, _a) => ts, _ => Vec() };
@@ -460,7 +473,9 @@ fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, typ
       if !is_const_generic_arg_tn(ta) {
         let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, ta);
         c = tr.ctx;
-        if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in call type arg: ".concat(type_name_text(ta)))); }
+        if !tr.ok {
+          return type_walk_err(c, type_error(owner_file, resolve_fail_msg(ta, "type resolve failed in call type arg: ".concat(type_name_text(ta)))));
+        }
       }
       ti = ti + 1;
     }
@@ -473,7 +488,9 @@ fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, typ
       if !is_const_generic_arg_tn(ta) {
         let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, ta);
         c = tr.ctx;
-        if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in macro call type arg: ".concat(type_name_text(ta)))); }
+        if !tr.ok {
+          return type_walk_err(c, type_error(owner_file, resolve_fail_msg(ta, "type resolve failed in macro call type arg: ".concat(type_name_text(ta)))));
+        }
       }
       ti = ti + 1;
     }
@@ -574,7 +591,9 @@ fn walk_stmt_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, typ
       if has_ann {
         let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, ann);
         c = tr.ctx;
-        if !tr.ok { return type_walk_err(c, type_error(owner_file, "type resolve failed in let annotation: ".concat(type_name_text(ann)))); }
+        if !tr.ok {
+          return type_walk_err(c, type_error(owner_file, resolve_fail_msg(ann, "type resolve failed in let annotation: ".concat(type_name_text(ann)))));
+        }
       }
       walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, init, owner_file)
     },
@@ -1167,7 +1186,7 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
         let cpr: ResolveTyResult = resolve_type(c, w, m.path, imps, fd.type_params, cp.ty);
         c = cpr.ctx;
         if !cpr.ok {
-          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "type resolve failed in const param"), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(fd.sp, resolve_fail_msg(cp.ty, "type resolve failed in const param")), ctx: c };
         }
         if !is_int_like_ty(c, cpr.idx) {
           return TcCtxResult { ok: false, err: type_error_at(fd.sp, "const param type must be integer"), ctx: c };
@@ -1200,7 +1219,7 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
         let tr: ResolveTyResult = resolve_type(c, w, m.path, imps, fd.type_params, nr.ty);
         c = tr.ctx;
         if !tr.ok {
-          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "type resolve failed in fn param"), ctx: c };
+          return TcCtxResult { ok: false, err: type_error_at(fd.sp, resolve_fail_msg(nr.ty, "type resolve failed in fn param")), ctx: c };
         }
         ps.push(tr.idx);
         pi = pi + 1;
@@ -1208,7 +1227,7 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, fd.type_params, fd.ret);
       c = rr.ctx;
       if !rr.ok {
-        return TcCtxResult { ok: false, err: type_error_at(fd.sp, "type resolve failed in fn ret"), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(fd.sp, resolve_fail_msg(fd.ret, "type resolve failed in fn ret")), ctx: c };
       }
 
       let mut tbs: Vec[TypeParamBoundSig] = Vec();
