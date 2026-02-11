@@ -15,7 +15,8 @@ Rule: complete one item end-to-end (code + tests + commit), then move to the nex
    Done scope: impl candidate text now stable-sorted; ambiguity diagnostics include `rank_trace` with pairwise specificity relation.
 7. [x] Generic packs/variadics design MVP (parser + typecheck skeleton, no codegen specialization yet).  
    Done scope: parser now accepts `T...` type-parameter packs and `arg: T...` variadic params; typecheck emits explicit skeleton diagnostics (no IR/codegen yet).
-8. [ ] Diagnostics upgrade: rune-aware column mapping and tighter span for type/const/macro errors.
+8. [x] Diagnostics upgrade: rune-aware column mapping and tighter span for type/const/macro errors.  
+   Done scope: const block stmt executor now reports stmt-anchored spans (`let/assign/assign field/if/while/break/continue`), and macroexpand max-round overflow now reports first macro callsite span instead of fallback `1:1`.
 9. [ ] Testing framework upgrade: richer `--json` payload and stable rerun metadata pipeline.
 10. [ ] Stdlib `std/sync`: generic `Mutex[T]` / `Atomic[T]` runtime-backed semantics on stage2.
 11. [ ] Stdlib `std/io`: file + network minimal abstractions aligned with current runtime APIs.

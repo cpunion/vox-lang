@@ -63,6 +63,8 @@ Stage1 v0 的 typecheck/irgen 错误以字符串为主，**但当 AST 节点拥�
 - supertrait cycle 报错已定位到 trait 声明位置（不再回退 `file:1:1`）。
 - trait 方法声明已携带 `Span`，其方法级 `where/comptime where` 错误定位到方法行而非 trait 头。
 - trait/impl 的 associated type 声明已携带 `Span`，重复/非法绑定错误定位到具体 `type` 条目。
+- const block 语句执行错误（`let/assign/assign field/if/while/break/continue`）优先使用语句 `Span`，不再回退 `file:1:1`。
+- macroexpand 轮次上限错误（`max rounds exceeded`）优先定位到首个宏调用点 `Span`，便于直接跳转问题源。
 - typecheck/import/irgen 错误已附带稳定错误码后缀，当前包含：
   - `E_PARSE_0001`
   - `E_LEX_0001`

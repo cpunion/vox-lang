@@ -578,13 +578,13 @@ fn const_exec_stmt_if(
   ctx: Ctx, w: World, items: Vec[ConstItem],
   sigs0: Vec[ConstSig], states0: Vec[i32],
   cur_mod: String, imps: Imports, exprs: ast.ExprPool,
-  file: String, cnd: i32, thn: ast.Block, has_else: bool, els: ast.Block,
+  file: String, sp: ast.Span, cnd: i32, thn: ast.Block, has_else: bool, els: ast.Block,
   locals0: Vec[ConstLocal], loop_depth: i32
 ) -> ConstExecStmtsResult {
   let cr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, cnd, ctx.ty_bool, locals0);
   if !cr.ok { return const_exec_err(cr.err, cr.sigs, cr.states, locals0); }
   if cr.kind != const_kind_bool() {
-    return const_exec_err(type_error(file, "const if cond must be bool"), cr.sigs, cr.states, locals0);
+    return const_exec_err(type_error_at(sp, "const if cond must be bool"), cr.sigs, cr.states, locals0);
   }
 
   let mut sigs1: Vec[ConstSig] = cr.sigs;
@@ -618,7 +618,7 @@ fn const_exec_stmt_while(
   ctx: Ctx, w: World, items: Vec[ConstItem],
   sigs0: Vec[ConstSig], states0: Vec[i32],
   cur_mod: String, imps: Imports, exprs: ast.ExprPool,
-  file: String, cnd: i32, body: ast.Block,
+  file: String, sp: ast.Span, cnd: i32, body: ast.Block,
   locals0: Vec[ConstLocal], loop_depth: i32
 ) -> ConstExecStmtsResult {
   let mut sigs1: Vec[ConstSig] = sigs0;
@@ -627,12 +627,12 @@ fn const_exec_stmt_while(
   let mut iter: i32 = 0;
   while true {
     if iter > 100000 {
-      return const_exec_err(type_error(file, "const while exceeded iteration limit"), sigs1, states1, locals1);
+      return const_exec_err(type_error_at(sp, "const while exceeded iteration limit"), sigs1, states1, locals1);
     }
     let crw: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs1, states1, cur_mod, imps, exprs, file, cnd, ctx.ty_bool, locals1);
     if !crw.ok { return const_exec_err(crw.err, crw.sigs, crw.states, locals1); }
     if crw.kind != const_kind_bool() {
-      return const_exec_err(type_error(file, "const while cond must be bool"), crw.sigs, crw.states, locals1);
+      return const_exec_err(type_error_at(sp, "const while cond must be bool"), crw.sigs, crw.states, locals1);
     }
     sigs1 = crw.sigs;
     states1 = crw.states;
@@ -671,21 +671,21 @@ fn const_exec_stmt_let(
   ctx: Ctx, w: World, items: Vec[ConstItem],
   sigs0: Vec[ConstSig], states0: Vec[i32],
   cur_mod: String, imps: Imports, exprs: ast.ExprPool,
-  file: String, is_mut: bool, name: String, has_ann: bool, ann: ast.TypeName, init: i32,
+  file: String, sp: ast.Span, is_mut: bool, name: String, has_ann: bool, ann: ast.TypeName, init: i32,
   locals0: Vec[ConstLocal]
 ) -> ConstExecStmtsResult {
   let mut want: i32 = -1;
   if has_ann {
     let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), ann);
     if !tr.ok {
-      return const_exec_err(type_error(file, "const let type annotation resolve failed"), sigs0, states0, locals0);
+      return const_exec_err(type_error_at(sp, "const let type annotation resolve failed"), sigs0, states0, locals0);
     }
     want = tr.idx;
   }
   let vr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, init, want, locals0);
   if !vr.ok { return const_exec_err(vr.err, vr.sigs, vr.states, locals0); }
   if has_ann && !assignable_to(ctx, want, vr.ty) {
-    return const_exec_err(type_error(file, "const let type mismatch"), vr.sigs, vr.states, locals0);
+    return const_exec_err(type_error_at(sp, "const let type mismatch"), vr.sigs, vr.states, locals0);
   }
   let mut locals1: Vec[ConstLocal] = locals0;
   locals1.push(const_local_from_value(name, is_mut, vr));
@@ -696,20 +696,20 @@ fn const_exec_stmt_assign(
   ctx: Ctx, w: World, items: Vec[ConstItem],
   sigs0: Vec[ConstSig], states0: Vec[i32],
   cur_mod: String, imps: Imports, exprs: ast.ExprPool,
-  file: String, name: String, rhs: i32, locals0: Vec[ConstLocal]
+  file: String, sp: ast.Span, name: String, rhs: i32, locals0: Vec[ConstLocal]
 ) -> ConstExecStmtsResult {
   let li: i32 = const_find_local(locals0, name);
   if li == -1 {
-    return const_exec_err(type_error(file, "const assign unknown local"), sigs0, states0, locals0);
+    return const_exec_err(type_error_at(sp, "const assign unknown local"), sigs0, states0, locals0);
   }
   let target: ConstLocal = locals0.get(li);
   if !target.mutable {
-    return const_exec_err(type_error(file, "const assign target is immutable"), sigs0, states0, locals0);
+    return const_exec_err(type_error_at(sp, "const assign target is immutable"), sigs0, states0, locals0);
   }
   let rr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, rhs, target.ty, locals0);
   if !rr.ok { return const_exec_err(rr.err, rr.sigs, rr.states, locals0); }
   if !assignable_to(ctx, target.ty, rr.ty) {
-    return const_exec_err(type_error(file, "const assign type mismatch"), rr.sigs, rr.states, locals0);
+    return const_exec_err(type_error_at(sp, "const assign type mismatch"), rr.sigs, rr.states, locals0);
   }
   return const_exec_ok(rr.sigs, rr.states, const_set_local_at(locals0, li, const_local_with_value(target, rr)));
 }
@@ -718,30 +718,30 @@ fn const_exec_stmt_assign_field(
   ctx: Ctx, w: World, items: Vec[ConstItem],
   sigs0: Vec[ConstSig], states0: Vec[i32],
   cur_mod: String, imps: Imports, exprs: ast.ExprPool,
-  file: String, recv: String, field: String, rhs: i32, locals0: Vec[ConstLocal]
+  file: String, sp: ast.Span, recv: String, field: String, rhs: i32, locals0: Vec[ConstLocal]
 ) -> ConstExecStmtsResult {
   let li: i32 = const_find_local(locals0, recv);
   if li == -1 {
-    return const_exec_err(type_error(file, "const assign unknown local"), sigs0, states0, locals0);
+    return const_exec_err(type_error_at(sp, "const assign unknown local"), sigs0, states0, locals0);
   }
   let target: ConstLocal = locals0.get(li);
   if !target.mutable {
-    return const_exec_err(type_error(file, "const assign target is immutable"), sigs0, states0, locals0);
+    return const_exec_err(type_error_at(sp, "const assign target is immutable"), sigs0, states0, locals0);
   }
   if target.kind != const_kind_struct() || !is_struct_ty(ctx, target.ty) {
-    return const_exec_err(type_error(file, "const field assign recv must be struct"), sigs0, states0, locals0);
+    return const_exec_err(type_error_at(sp, "const field assign recv must be struct"), sigs0, states0, locals0);
   }
   let tsty: ir.Ty = ir.ty_pool_get(ctx.pool, target.ty);
   let fs: FindStructResult = find_struct(ctx, ty_mod(tsty), ty_name(tsty));
   if !fs.found {
-    return const_exec_err(type_error(file, "unknown struct type"), sigs0, states0, locals0);
+    return const_exec_err(type_error_at(sp, "unknown struct type"), sigs0, states0, locals0);
   }
   if !vis_allows(fs.sig.vis, fs.sig.mod_path, cur_mod) {
-    return const_exec_err(type_error(file, "type is private"), sigs0, states0, locals0);
+    return const_exec_err(type_error_at(sp, "type is private"), sigs0, states0, locals0);
   }
   let dec: ConstStructDecode = const_struct_unpack(target.sv);
   if !dec.ok || dec.fields.len() != fs.sig.fields.len() {
-    return const_exec_err(type_error(file, "bad const struct encoding"), sigs0, states0, locals0);
+    return const_exec_err(type_error_at(sp, "bad const struct encoding"), sigs0, states0, locals0);
   }
 
   let mut found: bool = false;
@@ -755,7 +755,7 @@ fn const_exec_stmt_assign_field(
       fidx = fi;
       fty = sf.ty;
       if !vis_allows(sf.vis, fs.sig.mod_path, cur_mod) {
-        return const_exec_err(type_error(file, "field is private"), sigs0, states0, locals0);
+        return const_exec_err(type_error_at(sp, "field is private"), sigs0, states0, locals0);
       }
       fi = fs.sig.fields.len();
     } else {
@@ -763,17 +763,17 @@ fn const_exec_stmt_assign_field(
     }
   }
   if !found {
-    return const_exec_err(type_error(file, "unknown field"), sigs0, states0, locals0);
+    return const_exec_err(type_error_at(sp, "unknown field"), sigs0, states0, locals0);
   }
 
   let rr: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, rhs, fty, locals0);
   if !rr.ok { return const_exec_err(rr.err, rr.sigs, rr.states, locals0); }
   if !assignable_to(ctx, fty, rr.ty) {
-    return const_exec_err(type_error(file, "const assign type mismatch"), rr.sigs, rr.states, locals0);
+    return const_exec_err(type_error_at(sp, "const assign type mismatch"), rr.sigs, rr.states, locals0);
   }
   let fr: ConstToPayloadFieldResult = const_payload_field_from_eval(rr);
   if !fr.ok {
-    return const_exec_err(type_error(file, fr.err), rr.sigs, rr.states, locals0);
+    return const_exec_err(type_error_at(sp, fr.err), rr.sigs, rr.states, locals0);
   }
   let packed: String = const_struct_pack(const_set_payload_field_at(dec.fields, fidx, fr.f));
   let updated: ConstLocal = ConstLocal {
@@ -795,25 +795,25 @@ fn const_exec_stmt(
   file: String, st: ast.Stmt, locals0: Vec[ConstLocal], loop_depth: i32
 ) -> ConstExecStmtsResult {
   return match st {
-    ast.Stmt.Let(_sp, is_mut, name, has_ann, ann, init) =>
-      const_exec_stmt_let(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, is_mut, name, has_ann, ann, init, locals0),
-    ast.Stmt.Assign(_sp, name, rhs) =>
-      const_exec_stmt_assign(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, name, rhs, locals0),
-    ast.Stmt.AssignField(_sp, recv, field, rhs) =>
-      const_exec_stmt_assign_field(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, recv, field, rhs, locals0),
+    ast.Stmt.Let(sp, is_mut, name, has_ann, ann, init) =>
+      const_exec_stmt_let(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, sp, is_mut, name, has_ann, ann, init, locals0),
+    ast.Stmt.Assign(sp, name, rhs) =>
+      const_exec_stmt_assign(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, sp, name, rhs, locals0),
+    ast.Stmt.AssignField(sp, recv, field, rhs) =>
+      const_exec_stmt_assign_field(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, sp, recv, field, rhs, locals0),
     ast.Stmt.ExprStmt(_sp, exid) =>
       const_exec_stmt_expr(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, exid, locals0),
-    ast.Stmt.IfStmt(_sp, cnd, thn, has_else, els) =>
-      const_exec_stmt_if(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, cnd, thn, has_else, els, locals0, loop_depth),
-    ast.Stmt.WhileStmt(_sp, cnd, body) =>
-      const_exec_stmt_while(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, cnd, body, locals0, loop_depth),
-    ast.Stmt.Break(_sp) => if loop_depth <= 0 {
-      const_exec_err(type_error(file, "const break outside while"), sigs0, states0, locals0)
+    ast.Stmt.IfStmt(sp, cnd, thn, has_else, els) =>
+      const_exec_stmt_if(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, sp, cnd, thn, has_else, els, locals0, loop_depth),
+    ast.Stmt.WhileStmt(sp, cnd, body) =>
+      const_exec_stmt_while(ctx, w, items, sigs0, states0, cur_mod, imps, exprs, file, sp, cnd, body, locals0, loop_depth),
+    ast.Stmt.Break(sp) => if loop_depth <= 0 {
+      const_exec_err(type_error_at(sp, "const break outside while"), sigs0, states0, locals0)
     } else {
       const_exec_ctrl(sigs0, states0, locals0, const_flow_break(), 0, -1, 0, false, "")
     },
-    ast.Stmt.Continue(_sp) => if loop_depth <= 0 {
-      const_exec_err(type_error(file, "const continue outside while"), sigs0, states0, locals0)
+    ast.Stmt.Continue(sp) => if loop_depth <= 0 {
+      const_exec_err(type_error_at(sp, "const continue outside while"), sigs0, states0, locals0)
     } else {
       const_exec_ctrl(sigs0, states0, locals0, const_flow_continue(), 0, -1, 0, false, "")
     },
