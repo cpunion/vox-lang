@@ -91,6 +91,7 @@ Stage1 `typecheck` 对外保留文本渲染，同时在内部错误对象中附�
 
 - `parse/lex` 失败：来自 `parse` 元信息
 - `type/import` 失败：来自 `typecheck` 元信息
+- `macroexpand` 失败：使用 compile 层独立分类（`kind = macroexpand`、`code = E_MACROEXPAND_0001`）
 - `irgen`/`ir verify` 失败：使用 compile 层稳定 kind/code，并保留原始渲染文本
 - `loader` 在文件聚合阶段也会保留并传递 `parse/lex` 的 `kind/code/message/rendered`
 
