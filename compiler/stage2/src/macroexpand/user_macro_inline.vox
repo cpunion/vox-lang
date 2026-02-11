@@ -24,6 +24,15 @@ fn find_local_func_idx(prog: ast.Program, name: String) -> i32 {
   return -1;
 }
 
+fn find_world_mod_idx(w: tc.World, path: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    if w.mods.get(i).path == path { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 fn macro_template_return_expr_id(fd: ast.FuncDecl) -> i32 {
   if fd.body.stmts.len() != 1 { return -1; }
   let st: ast.Stmt = fd.body.stmts.get(0);
@@ -71,6 +80,61 @@ fn template_expr_supported(pool: ast.ExprPool, id: i32) -> bool {
     ast.ExprNode.Try(a) => template_expr_supported(pool, a),
     ast.ExprNode.StructLit(tyex, fields) => template_expr_supported(pool, tyex) && template_struct_fields_supported(pool, fields),
     // Keep v1 hygienic/simple: no local-binding forms in inline template.
+    ast.ExprNode.Block(_b) => false,
+    ast.ExprNode.TryBlock(_b) => false,
+    ast.ExprNode.Match(_scrut, _arms) => false,
+  };
+}
+
+fn param_exists(params: Vec[ast.Param], name: String) -> bool {
+  return find_param_arg_idx(params, name) >= 0;
+}
+
+fn cross_mod_expr_list_safe(pool: ast.ExprPool, ids: Vec[i32], params: Vec[ast.Param]) -> bool {
+  let mut i: i32 = 0;
+  while i < ids.len() {
+    if !cross_mod_expr_safe(pool, ids.get(i), params) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn cross_mod_struct_fields_safe(pool: ast.ExprPool, fields: Vec[ast.StructLitField], params: Vec[ast.Param]) -> bool {
+  let mut i: i32 = 0;
+  while i < fields.len() {
+    if !cross_mod_expr_safe(pool, fields.get(i).expr, params) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn cross_mod_expr_safe(pool: ast.ExprPool, id: i32, params: Vec[ast.Param]) -> bool {
+  let n: ast.ExprNode = ast.expr_pool_get(pool, id);
+  return match n {
+    ast.ExprNode.Int(_v) => true,
+    ast.ExprNode.Float(_v) => true,
+    ast.ExprNode.Bool(_v) => true,
+    ast.ExprNode.Str(_s) => true,
+    ast.ExprNode.Ident(s) => param_exists(params, s),
+    ast.ExprNode.DotIdent(_s) => false,
+    ast.ExprNode.If(c0, t0, e0) =>
+      cross_mod_expr_safe(pool, c0, params) &&
+      cross_mod_expr_safe(pool, t0, params) &&
+      cross_mod_expr_safe(pool, e0, params),
+    ast.ExprNode.Unary(_op, a) => cross_mod_expr_safe(pool, a, params),
+    ast.ExprNode.As(_a, _tn) => false,
+    ast.ExprNode.Binary(_op, l, r) => cross_mod_expr_safe(pool, l, params) && cross_mod_expr_safe(pool, r, params),
+    ast.ExprNode.Member(recv, _name) => cross_mod_expr_safe(pool, recv, params),
+    ast.ExprNode.Call(callee, _ta, args) =>
+      cross_mod_expr_safe(pool, callee, params) &&
+      cross_mod_expr_list_safe(pool, args, params),
+    ast.ExprNode.MacroCall(callee, _ta, args) =>
+      cross_mod_expr_safe(pool, callee, params) &&
+      cross_mod_expr_list_safe(pool, args, params),
+    ast.ExprNode.Try(a) => cross_mod_expr_safe(pool, a, params),
+    ast.ExprNode.StructLit(tyex, fields) =>
+      cross_mod_expr_safe(pool, tyex, params) &&
+      cross_mod_struct_fields_safe(pool, fields, params),
     ast.ExprNode.Block(_b) => false,
     ast.ExprNode.TryBlock(_b) => false,
     ast.ExprNode.Match(_scrut, _arms) => false,
@@ -254,31 +318,57 @@ fn clone_expr_with_args(src: ast.ExprPool, dst0: ast.ExprPool, id: i32, params: 
 fn try_expand_local_user_macro_inline(w: tc.World, site: MacroSite) -> ExpandRoundResult {
   if site.targs.len() != 0 { return round_ok(w, false); }
 
-  let m: tc.WorldModule = w.mods.get(site.mod_idx);
-  let callee_node: ast.ExprNode = ast.expr_pool_get(m.prog.exprs, site.callee);
-  let callee_name: String =
-    match callee_node {
-      ast.ExprNode.Ident(s) => s,
-      _ => "",
-    };
+  let call_mod: tc.WorldModule = w.mods.get(site.mod_idx);
+  let callee_node: ast.ExprNode = ast.expr_pool_get(call_mod.prog.exprs, site.callee);
+
+  let mut callee_mod_idx: i32 = site.mod_idx;
+  let mut callee_name: String = "";
+
+  if match callee_node { ast.ExprNode.Ident(_s) => true, _ => false } {
+    callee_name = match callee_node { ast.ExprNode.Ident(s) => s, _ => "" };
+  } else if match callee_node { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+    let recv_id: i32 = match callee_node { ast.ExprNode.Member(recv, _name) => recv, _ => -1 };
+    let name1: String = match callee_node { ast.ExprNode.Member(_recv, name) => name, _ => "" };
+    let recv_node: ast.ExprNode = ast.expr_pool_get(call_mod.prog.exprs, recv_id);
+    if !match recv_node { ast.ExprNode.Ident(_a) => true, _ => false } {
+      return round_ok(w, false);
+    }
+    let alias: String = match recv_node { ast.ExprNode.Ident(a) => a, _ => "" };
+    let ar: tc.ImportAliasesResult = tc.build_import_aliases(w, call_mod.prog.imports, site.sp.file);
+    if !ar.ok { return round_err(w, ar.err); }
+    let target_path: String = tc.find_alias(ar.aliases, alias);
+    if target_path == "" { return round_ok(w, false); }
+    let mi: i32 = find_world_mod_idx(w, target_path);
+    if mi < 0 { return round_ok(w, false); }
+    callee_mod_idx = mi;
+    callee_name = name1;
+  } else {
+    return round_ok(w, false);
+  }
+
   if callee_name == "" { return round_ok(w, false); }
 
-  let fi: i32 = find_local_func_idx(m.prog, callee_name);
+  let callee_mod: tc.WorldModule = w.mods.get(callee_mod_idx);
+  let fi: i32 = find_local_func_idx(callee_mod.prog, callee_name);
   if fi < 0 { return round_ok(w, false); }
-  let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+  let fd: ast.FuncDecl = callee_mod.prog.funcs.get(fi);
+  if callee_mod_idx != site.mod_idx && !fd.is_pub { return round_ok(w, false); }
   if fd.type_params.len() != 0 || fd.const_params.len() != 0 { return round_ok(w, false); }
   if fd.params.len() != site.args.len() { return round_ok(w, false); }
 
   let template_id: i32 = macro_template_return_expr_id(fd);
   if template_id < 0 { return round_ok(w, false); }
-  if !template_expr_supported(m.prog.exprs, template_id) { return round_ok(w, false); }
+  if !template_expr_supported(callee_mod.prog.exprs, template_id) { return round_ok(w, false); }
+  if callee_mod_idx != site.mod_idx && !cross_mod_expr_safe(callee_mod.prog.exprs, template_id, fd.params) {
+    return round_ok(w, false);
+  }
 
-  let cr: CloneExprResult = clone_expr_with_args(m.prog.exprs, m.prog.exprs, template_id, fd.params, site.args);
+  let cr: CloneExprResult = clone_expr_with_args(callee_mod.prog.exprs, call_mod.prog.exprs, template_id, fd.params, site.args);
   if !cr.ok { return round_ok(w, false); }
 
   let repl: ast.ExprNode = ast.expr_pool_get(cr.pool, cr.id);
   let exprs2: ast.ExprPool = expr_pool_replace(cr.pool, site.expr_id, repl, site.sp);
-  let prog2: ast.Program = program_with_exprs(m.prog, exprs2);
+  let prog2: ast.Program = program_with_exprs(call_mod.prog, exprs2);
   let w2: tc.World = world_replace_mod_prog(w, site.mod_idx, prog2);
   return round_ok(w2, true);
 }
