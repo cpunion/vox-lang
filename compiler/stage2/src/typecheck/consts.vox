@@ -1247,6 +1247,8 @@ fn eval_const_reflect_intrinsic(
   w: World,
   cur_mod: String,
   imps: Imports,
+  exprs: ast.ExprPool,
+  call_id: i32,
   file: String,
   name: String,
   type_args: Vec[ast.TypeName],
@@ -1256,27 +1258,27 @@ fn eval_const_reflect_intrinsic(
   states0: Vec[i32]
 ) -> EvalConstExprResult {
   if args.len() != 0 {
-    return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic call arity mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic call arity mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@field_name" || name == "@field_type" || name == "@field_type_id" {
     if type_args.len() != 2 {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic requires type and const index"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic requires type and const index"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     let tr0: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), type_args.get(0));
     if !tr0.ok {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type arg resolve failed"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type arg resolve failed"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     let pr: ParseConstGenericArgResult = parse_const_generic_arg(tr0.ctx, type_args.get(1), tr0.ctx.ty_usize);
     if !pr.ok {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic index out of range"), kind: 0, ty: tr0.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic index out of range"), kind: 0, ty: tr0.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     if name == "@field_type_id" {
       let trt: ReflectIntResult = intrinsic_field_type_id_of(tr0.ctx, tr0.idx, pr.iv);
       if !trt.ok {
-        return EvalConstExprResult { ok: false, err: type_error(file, trt.err), kind: 0, ty: tr0.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+        return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, trt.err), kind: 0, ty: tr0.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
       }
       if expected != -1 && !assignable_to(tr0.ctx, expected, tr0.ctx.ty_usize) {
-        return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr0.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+        return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr0.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
       }
       return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: tr0.ctx.ty_usize, iv: trt.iv, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
@@ -1288,10 +1290,10 @@ fn eval_const_reflect_intrinsic(
         intrinsic_field_type_of(tr0.ctx, tr0.idx, pr.iv)
       };
     if !nr0.ok {
-      return EvalConstExprResult { ok: false, err: type_error(file, nr0.err), kind: 0, ty: tr0.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, nr0.err), kind: 0, ty: tr0.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     if expected != -1 && !assignable_to(tr0.ctx, expected, tr0.ctx.ty_string) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr0.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr0.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_str(), ty: tr0.ctx.ty_string, iv: 0, bv: false, sv: nr0.text, sigs: sigs0, states: states0 };
   }
@@ -1784,7 +1786,7 @@ fn eval_const_expr_in_mod_locals(
         return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "compile_error: ".concat(mar.sv)), kind: 0, ty: mar.ty, iv: 0, bv: false, sv: "", sigs: mar.sigs, states: mar.states };
       }
       if is_reflect_intrinsic_name(fname) {
-        return eval_const_reflect_intrinsic(ctx, w, cur_mod, imps, file, fname, type_args, args, expected, sigs0, states0);
+        return eval_const_reflect_intrinsic(ctx, w, cur_mod, imps, exprs, id, file, fname, type_args, args, expected, sigs0, states0);
       }
       let nf: NamedFuncImport = find_named_func(imps.named_funcs, fname);
       if nf.local != "" {
