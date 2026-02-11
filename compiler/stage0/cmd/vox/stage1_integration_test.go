@@ -1564,6 +1564,9 @@ fn test_b_should_skip() -> () { t.assert(true); }
 	if !strings.Contains(string(bff), "\"skipped\":1") {
 		t.Fatalf("expected skipped count in summary for fail-fast run, got:\n%s", string(bff))
 	}
+	if !strings.Contains(string(bff), "\"hint\":") || !strings.Contains(string(bff), "--fail-fast") {
+		t.Fatalf("expected fail-fast rerun hint to preserve --fail-fast, got:\n%s", string(bff))
+	}
 	if strings.Contains(string(bff), "\"name\":\"tests::test_b_should_skip\"") {
 		t.Fatalf("expected fail-fast to skip second test execution, got:\n%s", string(bff))
 	}
