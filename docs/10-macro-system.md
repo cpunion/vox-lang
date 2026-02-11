@@ -72,5 +72,7 @@ let v = compile!(ast);
     - `assert_le!(a, b)` -> `assert_le(a, b)`
     - `assert_gt!(a, b)` -> `assert_gt(a, b)`
     - `assert_ge!(a, b)` -> `assert_ge(a, b)`
-- 非内置宏调用采用过渡语义：按“调用糖”处理，`name!(...)` / `name[T]!(...)` 会降级为 `name(...)` / `name[T](...)`，再进入常规 typecheck。
+- 非内置宏调用采用“内联优先 + 调用糖回退”的过渡语义：
+  - 先尝试本模块内联：当 `name!(...)` 对应到本模块函数 `fn name(...)`，且函数体是单条 `return <expr>;`（当前不含 block/match/try block 等局部绑定模板）时，宏展开阶段会把 `<expr>` 克隆到调用点并按形参名替换实参。
+  - 其余情况回退为调用糖：`name!(...)` / `name[T]!(...)` -> `name(...)` / `name[T](...)`，再进入常规 typecheck。
 - 这样做的目标是先稳定语法和流水线边界，并让“宏即函数”的调用形态可直接使用；后续再把返回 AST 的真正宏执行器接入同一阶段。

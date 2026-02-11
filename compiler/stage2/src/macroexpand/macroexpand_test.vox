@@ -2,6 +2,7 @@ import "std/testing" as t
 import "parse" as p
 import "typecheck" as tc
 import "macroexpand" as mx
+import "ast" as ast
 
 fn me_contains(hay: String, needle: String) -> bool {
   if needle.len() == 0 { return true; }
@@ -26,6 +27,33 @@ fn me_world_add(w: tc.World, path: String, src: String) -> tc.World {
   let r: p.ParseResult = p.parse_text_with_path("src/main.vox", src);
   t.assert(r.err == p.ParseError.None);
   return tc.world_add(w, path, r.prog);
+}
+
+fn me_main_return_expr_node(w: tc.World, mod_path: String) -> ast.ExprNode {
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let wm: tc.WorldModule = w.mods.get(mi);
+    if wm.path == mod_path {
+      let mut fi: i32 = 0;
+      while fi < wm.prog.funcs.len() {
+        let fd: ast.FuncDecl = wm.prog.funcs.get(fi);
+        if fd.name == "main" {
+          let mut si: i32 = 0;
+          while si < fd.body.stmts.len() {
+            let st: ast.Stmt = fd.body.stmts.get(si);
+            if match st { ast.Stmt.ReturnStmt(_sp, has_ex, _ex) => has_ex, _ => false } {
+              let ex: i32 = match st { ast.Stmt.ReturnStmt(_sp, _has_ex, id) => id, _ => -1 };
+              return ast.expr_pool_get(wm.prog.exprs, ex);
+            }
+            si = si + 1;
+          }
+        }
+        fi = fi + 1;
+      }
+    }
+    mi = mi + 1;
+  }
+  return ast.ExprNode.Int("0");
 }
 
 fn me_deep_macro_expr(depth: i32) -> String {
@@ -93,6 +121,30 @@ fn test_macroexpand_user_macro_sugar_and_builtin_macro_compose_smoke() -> () {
       .concat("fn main() -> i32 { return add1!(41); }"));
   let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
   t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_local_template_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: i32) -> i32 { return x + 1; }\n"
+      .concat("fn main() -> i32 { return add1!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_fallback_for_block_template_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: i32) -> i32 { return { let y: i32 = x + 1; y }; }\n"
+      .concat("fn main() -> i32 { return add1!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Call(_c, _ta, _args) => true, _ => false });
   let tr: tc.TcResult = tc.typecheck_world(er.world);
   t.assert(tr.ok);
 }
