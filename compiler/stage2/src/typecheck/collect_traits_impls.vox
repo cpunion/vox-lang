@@ -217,6 +217,36 @@ fn trait_method_param_names(ps: Vec[ast.Param]) -> Vec[String] {
   return out;
 }
 
+fn cti_const_where_op_text(op: ast.BinaryOp) -> String {
+  if match op { ast.BinaryOp.Eq => true, _ => false } { return "=="; }
+  if match op { ast.BinaryOp.Ne => true, _ => false } { return "!="; }
+  if match op { ast.BinaryOp.Lt => true, _ => false } { return "<"; }
+  if match op { ast.BinaryOp.Le => true, _ => false } { return "<="; }
+  if match op { ast.BinaryOp.Gt => true, _ => false } { return ">"; }
+  if match op { ast.BinaryOp.Ge => true, _ => false } { return ">="; }
+  return "?";
+}
+
+fn cti_const_where_lhs_text(kind: i32, name: String) -> String {
+  if kind == ast.comptime_where_lhs_const_param() { return name; }
+  if kind == ast.comptime_where_lhs_size_of() { return "@size_of(".concat(name).concat(")"); }
+  if kind == ast.comptime_where_lhs_align_of() { return "@align_of(".concat(name).concat(")"); }
+  if kind == ast.comptime_where_lhs_field_count() { return "@field_count(".concat(name).concat(")"); }
+  if kind == ast.comptime_where_lhs_type() { return "@type(".concat(name).concat(")"); }
+  return name;
+}
+
+fn cti_const_where_bound_text(b: ConstWhereBoundSig) -> String {
+  let lhs: String = cti_const_where_lhs_text(b.lhs_kind, b.name);
+  let rhs: String =
+    if b.rhs_is_param {
+      if b.rhs_text != "" { b.rhs_text } else { b.rhs_param }
+    } else {
+      b.rhs_text
+    };
+  return lhs.concat(" ").concat(cti_const_where_op_text(b.op)).concat(" ").concat(rhs);
+}
+
 fn impl_method_decl_idx(ds: Vec[ast.FuncDecl], name: String) -> i32 {
   let mut i: i32 = 0;
   while i < ds.len() {
@@ -952,13 +982,18 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let got_cwr: CollectConstWhereResult = collect_const_where_bounds(md.sp, md.type_params, want.const_params, md.const_where_bounds);
         if !got_cwr.ok { return TcCtxResult { ok: false, err: got_cwr.err, ctx: c }; }
         if got_cwr.bounds.len() != want.const_where_bounds.len() {
-          return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method comptime where bound count mismatch"), ctx: c };
+          let msgc: String =
+            "impl method comptime where bound count mismatch: expected "
+              .concat(want.const_where_bounds.len().to_string())
+              .concat(", got ")
+              .concat(got_cwr.bounds.len().to_string());
+          return TcCtxResult { ok: false, err: type_error_at(md.sp, msgc), ctx: c };
         }
         let mut cbi0: i32 = 0;
         while cbi0 < want.const_where_bounds.len() {
           let wb: ConstWhereBoundSig = want.const_where_bounds.get(cbi0);
           if !has_const_where_sig(got_cwr.bounds, wb.lhs_kind, wb.name, wb.op, wb.rhs_is_param, wb.rhs_param, wb.rhs_iv) {
-            let msgw: String = "impl method missing comptime where bound: ".concat(wb.name);
+            let msgw: String = "impl method missing comptime where bound: ".concat(cti_const_where_bound_text(wb));
             return TcCtxResult { ok: false, err: type_error_at(md.sp, msgw), ctx: c };
           }
           cbi0 = cbi0 + 1;
@@ -967,7 +1002,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         while cbi0 < got_cwr.bounds.len() {
           let gb: ConstWhereBoundSig = got_cwr.bounds.get(cbi0);
           if !has_const_where_sig(want.const_where_bounds, gb.lhs_kind, gb.name, gb.op, gb.rhs_is_param, gb.rhs_param, gb.rhs_iv) {
-            let msgw2: String = "impl method has extra comptime where bound: ".concat(gb.name);
+            let msgw2: String = "impl method has extra comptime where bound: ".concat(cti_const_where_bound_text(gb));
             return TcCtxResult { ok: false, err: type_error_at(md.sp, msgw2), ctx: c };
           }
           cbi0 = cbi0 + 1;
