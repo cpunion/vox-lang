@@ -94,11 +94,20 @@ fn crc_table() -> [u32; 256] { ... }
 - `@is_numeric` 判断是否为数值类型（`int` 或 `float`，含 range）。
 - `@is_zero_sized` 判断当前布局下 size 是否为 0（如 `()`）。
 
-暂未实现（保留方向）：
+类型位置反射（Stage2 已实现）：
 
 ```vox
-@field_type(T, index: usize) -> type
+type F0 = @field_type(S, 0)
 ```
+
+当前规则：
+
+- 仅允许在**类型位置**使用 `@field_type(T, I)`，返回字段/variant 对应的类型。
+- `T` 必须是 concrete nominal（`struct` 或 `enum`，可含已实例化泛型实参）。
+- `I` 必须是非负整数字面量（支持尾逗号：`@field_type(S, 1,)`）。
+- `struct`：`I` 对应字段索引。
+- `enum`：`I` 对应 variant 索引；unit variant 返回 `()`；单 payload variant 返回该 payload 类型。
+- 多 payload enum variant 在当前阶段会被拒绝（尚无 tuple 类型语法承载该结果）。
 
 ## comptime 报错（Stage1 已实现）
 

@@ -559,6 +559,79 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
     return ResolveTyResult { ctx: c, ok: true, idx: ir0.idx };
   }
 
+  // @field_type(T, I)
+  // Type-position reflection over nominal layouts.
+  if tn.parts.len() == 2 && tn.parts.get(0) == "@field_type" && tn.args.len() == 1 {
+    let pr_i: ParseI64DecResult = parse_i64_dec(tn.parts.get(1));
+    if !pr_i.ok || pr_i.val < 0 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let i: i32 = pr_i.val as i32;
+
+    let br: ResolveTyResult = resolve_type_bound(c, w, cur_mod, imps, type_params, binds, tn.args.get(0));
+    c = br.ctx;
+    if !br.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+
+    let bt_idx: i32 = strip_range(c, br.idx);
+    let bt: ir.Ty = ir.ty_pool_get(c.pool, bt_idx);
+    if bt.kind == ir.TyKind.Param {
+      return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
+    }
+
+    if bt.kind == ir.TyKind.Struct {
+      let fs: FindStructResult = find_struct(c, bt.mod_path, bt.name);
+      if fs.found {
+        if i < 0 || i >= fs.sig.fields.len() { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+        return ResolveTyResult { ctx: c, ok: true, idx: fs.sig.fields.get(i).ty };
+      }
+
+      // Non-generic nominal types may be referenced before collect_structs
+      // has materialized signature fields. Fall back to source decl on demand.
+      let fm2: FindModResult = find_mod(w, bt.mod_path);
+      if !fm2.found { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      let m2: WorldModule = w.mods.get(fm2.idx);
+      let fsd2: FindStructDeclResult = find_struct_decl_in_mod(m2, bt.name);
+      if !fsd2.found { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      if i < 0 || i >= fsd2.d.fields.len() { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      let ir2: ImportsResult = build_imports(w, bt.mod_path, m2.prog.imports, fsd2.d.file);
+      if !ir2.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      let fr2: ResolveTyResult = resolve_type_bound(c, w, bt.mod_path, ir2.imps, Vec(), Vec(), fsd2.d.fields.get(i).ty);
+      c = fr2.ctx;
+      if !fr2.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      return ResolveTyResult { ctx: c, ok: true, idx: fr2.idx };
+    }
+
+    if bt.kind == ir.TyKind.Enum {
+      let fe: FindEnumResult = find_enum(c, bt.mod_path, bt.name);
+      if fe.found {
+        if i < 0 || i >= fe.sig.vars.len() { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+        let v: EnumVariantSig = fe.sig.vars.get(i);
+        if v.fields.len() == 0 { return ResolveTyResult { ctx: c, ok: true, idx: c.ty_unit }; }
+        if v.fields.len() == 1 { return ResolveTyResult { ctx: c, ok: true, idx: v.fields.get(0) }; }
+        // No tuple surface type in stage2; multi-payload variant type projection
+        // is intentionally rejected for now.
+        return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
+      }
+
+      // Same fallback strategy as struct branch above.
+      let fm3: FindModResult = find_mod(w, bt.mod_path);
+      if !fm3.found { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      let m3: WorldModule = w.mods.get(fm3.idx);
+      let fed3: FindEnumDeclResult = find_enum_decl_in_mod(m3, bt.name);
+      if !fed3.found { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      if i < 0 || i >= fed3.d.variants.len() { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      let vd3: ast.EnumVariantDecl = fed3.d.variants.get(i);
+      if vd3.fields.len() == 0 { return ResolveTyResult { ctx: c, ok: true, idx: c.ty_unit }; }
+      if vd3.fields.len() != 1 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      let ir3: ImportsResult = build_imports(w, bt.mod_path, m3.prog.imports, fed3.d.file);
+      if !ir3.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      let vr3: ResolveTyResult = resolve_type_bound(c, w, bt.mod_path, ir3.imps, Vec(), Vec(), vd3.fields.get(0));
+      c = vr3.ctx;
+      if !vr3.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      return ResolveTyResult { ctx: c, ok: true, idx: vr3.idx };
+    }
+
+    return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
+  }
+
   // Vec[T]
   if tn.parts.len() == 1 && tn.parts.get(0) == "Vec" && tn.args.len() == 1 {
     let r0: ResolveTyResult = resolve_type_bound(c, w, cur_mod, imps, type_params, binds, tn.args.get(0));
