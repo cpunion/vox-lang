@@ -7,12 +7,26 @@ struct CloneExprResult {
   id: i32,
 }
 
+struct MacroTemplateExprResult {
+  ok: bool,
+  pool: ast.ExprPool,
+  id: i32,
+}
+
 fn clone_expr_ok(pool: ast.ExprPool, id: i32) -> CloneExprResult {
   return CloneExprResult { ok: true, pool: pool, id: id };
 }
 
 fn clone_expr_err(pool: ast.ExprPool) -> CloneExprResult {
   return CloneExprResult { ok: false, pool: pool, id: -1 };
+}
+
+fn macro_template_expr_ok(pool: ast.ExprPool, id: i32) -> MacroTemplateExprResult {
+  return MacroTemplateExprResult { ok: true, pool: pool, id: id };
+}
+
+fn macro_template_expr_err(pool: ast.ExprPool) -> MacroTemplateExprResult {
+  return MacroTemplateExprResult { ok: false, pool: pool, id: -1 };
 }
 
 fn find_local_func_idx(prog: ast.Program, name: String) -> i32 {
@@ -33,14 +47,51 @@ fn find_world_mod_idx(w: tc.World, path: String) -> i32 {
   return -1;
 }
 
-fn macro_template_return_expr_id(fd: ast.FuncDecl) -> i32 {
-  if fd.body.stmts.len() != 1 { return -1; }
-  let st: ast.Stmt = fd.body.stmts.get(0);
+fn block_contains_return(b: ast.Block) -> bool {
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    if stmt_contains_return(b.stmts.get(i)) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn stmt_contains_return(st: ast.Stmt) -> bool {
   return
     match st {
-      ast.Stmt.ReturnStmt(_sp, has_ex, ex) => if has_ex { ex } else { -1 },
-      _ => -1,
+      ast.Stmt.IfStmt(_sp, _cond, then_b, has_else, else_b) =>
+        block_contains_return(then_b) || (has_else && block_contains_return(else_b)),
+      ast.Stmt.WhileStmt(_sp, _cond, body) =>
+        block_contains_return(body),
+      ast.Stmt.ReturnStmt(_sp, _has_ex, _ex) => true,
+      _ => false,
     };
+}
+
+fn macro_template_expr(pool0: ast.ExprPool, fd: ast.FuncDecl) -> MacroTemplateExprResult {
+  if fd.body.stmts.len() == 0 { return macro_template_expr_err(pool0); }
+  let last_idx: i32 = fd.body.stmts.len() - 1;
+  let last_st: ast.Stmt = fd.body.stmts.get(last_idx);
+  let has_tail: bool = match last_st { ast.Stmt.ReturnStmt(_sp, has_ex, _ex) => has_ex, _ => false };
+  if !has_tail { return macro_template_expr_err(pool0); }
+  let tail: i32 = match last_st { ast.Stmt.ReturnStmt(_sp, _has_ex, ex) => ex, _ => -1 };
+  if last_idx == 0 { return macro_template_expr_ok(pool0, tail); }
+
+  let mut prefix: Vec[ast.Stmt] = Vec();
+  let mut i: i32 = 0;
+  while i < last_idx {
+    let st: ast.Stmt = fd.body.stmts.get(i);
+    if stmt_contains_return(st) { return macro_template_expr_err(pool0); }
+    prefix.push(st);
+    i = i + 1;
+  }
+
+  let sp: ast.Span = match last_st { ast.Stmt.ReturnStmt(s, _has_ex, _ex) => s, _ => fd.sp };
+  let ar: ast.AddExprResult = ast.expr_pool_add(
+    pool0,
+    ast.ExprNode.Block(ast.ExprBlock { stmts: prefix, has_tail: true, tail: tail }),
+    sp);
+  return macro_template_expr_ok(ar.pool, ar.id);
 }
 
 fn template_expr_list_supported(pool: ast.ExprPool, ids: Vec[i32]) -> bool {
@@ -956,15 +1007,17 @@ fn try_expand_local_user_macro_inline(w: tc.World, site: MacroSite) -> ExpandRou
     j = j + 1;
   }
 
-  let template_id: i32 = macro_template_return_expr_id(fd);
-  if template_id < 0 { return round_ok(w, false); }
-  if !template_expr_supported(callee_mod.prog.exprs, template_id) { return round_ok(w, false); }
-  if callee_mod_idx != site.mod_idx && !cross_mod_expr_safe(callee_mod.prog.exprs, template_id, fd.params) {
+  let mt: MacroTemplateExprResult = macro_template_expr(callee_mod.prog.exprs, fd);
+  if !mt.ok { return round_ok(w, false); }
+  let template_pool: ast.ExprPool = mt.pool;
+  let template_id: i32 = mt.id;
+  if !template_expr_supported(template_pool, template_id) { return round_ok(w, false); }
+  if callee_mod_idx != site.mod_idx && !cross_mod_expr_safe(template_pool, template_id, fd.params) {
     return round_ok(w, false);
   }
 
   let cr: CloneExprResult = clone_expr_with_args(
-    callee_mod.prog.exprs,
+    template_pool,
     call_mod.prog.exprs,
     template_id,
     fd.params,
