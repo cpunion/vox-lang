@@ -128,3 +128,6 @@ vox_stage2 test-pkg  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=
 - lock mismatch 采用字段级诊断（如 `dependency mismatch: dep field digest expected=... actual=...`）。
 - `build-pkg` 与 `test-pkg` 在 lock 校验失败时输出一致 remediation hint：
   - `hint: refresh lockfile after dependency changes: remove vox.lock then rerun build-pkg/test-pkg.`
+- `test-pkg` 的筛选参数支持放在 `<out.bin>` 前后（等价）：
+  - `vox_stage2 test-pkg --run='*typecheck*' --list target/debug/vox_stage2.test`
+  - `vox_stage2 test-pkg target/debug/vox_stage2.test --run='*typecheck*' --list`

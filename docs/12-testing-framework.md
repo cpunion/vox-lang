@@ -53,6 +53,7 @@ Stage2 `test-pkg` 对齐增强（2026-02）：
 - `results` 在失败项上包含 `error` 与 `log_file` 字段，便于外部系统直接抓取失败上下文
 - `--rerun-failed` 缓存采用版本化 JSON（含 `version`、`updated_unix_us`、`tests`，同时保留 `failed_tests` 兼容键）
 - 读取 `--rerun-failed` 缓存时会做规范化（排序、去重、去空），并兼容旧版纯文本/旧 JSON 格式
+- `test-pkg` 筛选参数（`--module/--run/--filter/--jobs/--fail-fast/--list/--rerun-failed/--json`）可放在 `<out.bin>` 前后
 
 `--json` 的关键字段：
 

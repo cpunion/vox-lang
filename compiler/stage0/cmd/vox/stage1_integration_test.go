@@ -1447,6 +1447,27 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(bfilterSplit), "[test] test_std_sync_runtime_generic_api_smoke") {
 		t.Fatalf("expected split filter to select target test, got:\n%s", string(bfilterSplit))
 	}
+	cmdFilterPostOut := exec.Command(stage2BinB, "test-pkg", outRel, "--filter=std_sync_runtime_generic_api_smoke", "--list")
+	cmdFilterPostOut.Dir = stage2DirAbs
+	bfilterPostOut, err := cmdFilterPostOut.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg <out> --filter --list failed: %v\n%s", err, string(bfilterPostOut))
+	}
+	if !strings.Contains(string(bfilterPostOut), "[test] test_std_sync_runtime_generic_api_smoke") {
+		t.Fatalf("expected post-out filter to select target test, got:\n%s", string(bfilterPostOut))
+	}
+	cmdModulePostOut := exec.Command(stage2BinB, "test-pkg", outRel, "--module=typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list")
+	cmdModulePostOut.Dir = stage2DirAbs
+	bmodPostOut, err := cmdModulePostOut.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg <out> --module --run --list failed: %v\n%s", err, string(bmodPostOut))
+	}
+	if !strings.Contains(string(bmodPostOut), "[select] --module: \"typecheck\"") {
+		t.Fatalf("expected post-out module filter in selection output, got:\n%s", string(bmodPostOut))
+	}
+	if !strings.Contains(string(bmodPostOut), "[test] typecheck::test_typecheck_allows_generic_fn_sig") {
+		t.Fatalf("expected post-out module+run filters to select target test, got:\n%s", string(bmodPostOut))
+	}
 
 	cmdJobs := exec.Command(stage2BinB, "test-pkg", "--jobs=2", "--run=*std_sync_runtime_generic_api_smoke", "--list", outRel)
 	cmdJobs.Dir = stage2DirAbs
@@ -1465,6 +1486,15 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	}
 	if !strings.Contains(string(bjobsShort), "[select] --jobs: 2") {
 		t.Fatalf("expected short -j selection in text output, got:\n%s", string(bjobsShort))
+	}
+	cmdJobsPostOut := exec.Command(stage2BinB, "test-pkg", outRel, "--jobs=2", "--run=*std_sync_runtime_generic_api_smoke", "--list")
+	cmdJobsPostOut.Dir = stage2DirAbs
+	bjobsPostOut, err := cmdJobsPostOut.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage2 test-pkg <out> --jobs --run --list failed: %v\n%s", err, string(bjobsPostOut))
+	}
+	if !strings.Contains(string(bjobsPostOut), "[select] --jobs: 2") {
+		t.Fatalf("expected post-out jobs selection in text output, got:\n%s", string(bjobsPostOut))
 	}
 	cmdJobsBad := exec.Command(stage2BinB, "test-pkg", "--jobs=0", "--list", outRel)
 	cmdJobsBad.Dir = stage2DirAbs
