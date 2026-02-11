@@ -110,3 +110,21 @@ vox_stage1 test-pkg  <out.bin>   # 从 ./src 与 ./tests 发现并运行 test_*
 - `build-pkg/test-pkg` 会读取当前目录的 `vox.toml`，加载其中声明的 path 依赖（包含传递依赖；依赖只加载其 `src/**`，不加载 tests）。
   - `vox.toml` 无效或出现重复依赖名时，命令会失败并返回非 0。
 - Stage1 会按可执行文件路径推导 Stage1 根目录，并从其 `src/std/**` 注入标准库源码（用于自举期最小 std）。
+
+## Stage2 CLI（当前主迭代线）
+
+Stage2 由 Stage1 构建并运行（见 `compiler/stage2/src/main.vox`），命令面与 Stage1 基本一致：
+
+```text
+vox_stage2 emit-c    [--driver=user|tool] <out.c>   <src...>
+vox_stage2 build     [--driver=user|tool] <out.bin> <src...>
+vox_stage2 build-pkg [--driver=user|tool] <out.bin>
+vox_stage2 test-pkg  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] <out.bin>
+```
+
+当前行为（与实现一致）：
+
+- `build-pkg` / `test-pkg` 在存在 `vox.lock` 时会先做锁文件一致性校验。
+- lock mismatch 采用字段级诊断（如 `dependency mismatch: dep field digest expected=... actual=...`）。
+- `build-pkg` 与 `test-pkg` 在 lock 校验失败时输出一致 remediation hint：
+  - `hint: refresh lockfile after dependency changes: remove vox.lock then rerun build-pkg/test-pkg.`

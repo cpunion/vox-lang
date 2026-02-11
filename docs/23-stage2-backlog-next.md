@@ -14,5 +14,5 @@ Rule: complete one item end-to-end (code + tests + docs + commit), then move to 
 8. [x] Diagnostics layering pass: tighter primary span coverage for typecheck/irgen/macro errors.
 9. [x] Testing framework UX pass: filtering/rerun/report fields consistency across engines.
 10. [x] Stdlib generic cleanup: remove repetitive non-generic wrappers where generic APIs already exist.
-11. [ ] Package/dependency UX pass: lock mismatch diagnostics and remediation hints consistency.
-12. [ ] Stage2 documentation convergence: update language/spec/tooling docs to match implemented behavior exactly.
+11. [x] Package/dependency UX pass: lock mismatch diagnostics and remediation hints consistency.
+12. [x] Stage2 documentation convergence: update language/spec/tooling docs to match implemented behavior exactly.

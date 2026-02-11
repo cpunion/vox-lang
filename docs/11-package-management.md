@@ -56,5 +56,11 @@ Stage1 在 `build-pkg` / `test-pkg` 成功解析依赖后会写出 `vox.lock`，
 完整性规则（stage1 当前实现）：
 
 - 若存在 `vox.lock`，构建前会校验每个依赖条目的 `source/path/git/rev/registry/version/digest` 与当前解析结果一致。
-- 不一致会直接失败（提示 lockfile mismatch），要求先刷新依赖并重建锁文件。
+- 不一致会直接失败，并给出字段级诊断，例如：
+  - `dependency mismatch: dep field digest expected="..." actual="..."`
+  - `missing dependency in vox.lock: dep`
+  - `unexpected dependency in vox.lock: dep`
+  - `dependency count mismatch: lock=1 resolved=2`
+- `build-pkg` 与 `test-pkg` 会输出一致 remediation hint：
+  - `hint: refresh lockfile after dependency changes: remove vox.lock then rerun build-pkg/test-pkg.`
 - 这样可以防止“依赖内容悄悄变化但版本号不变”的非可复现构建。

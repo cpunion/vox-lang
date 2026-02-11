@@ -15,6 +15,7 @@ struct LockDep {
 
 struct ParseLockResult { ok: bool, err: String, deps: Vec[LockDep] }
 struct LockVerifyResult { ok: bool, err: String }
+struct LockFindDepResult { found: bool, dep: LockDep }
 
 fn lock_ok() -> LockVerifyResult { return LockVerifyResult { ok: true, err: "" }; }
 fn lock_err(msg: String) -> LockVerifyResult { return LockVerifyResult { ok: false, err: msg }; }
@@ -210,16 +211,57 @@ fn lock_dep_of(d: mf.Dependency) -> LockDep {
   };
 }
 
-fn lock_dep_eq(a: LockDep, b: LockDep) -> bool {
-  return a.name == b.name &&
-    a.source == b.source &&
-    a.path == b.path &&
-    a.resolved_path == b.resolved_path &&
-    a.git == b.git &&
-    a.rev == b.rev &&
-    a.registry == b.registry &&
-    a.version == b.version &&
-    a.digest == b.digest;
+fn lock_find_dep_by_name(deps: Vec[LockDep], name: String) -> LockFindDepResult {
+  let mut i: i32 = 0;
+  while i < deps.len() {
+    let d: LockDep = deps.get(i);
+    if d.name == name {
+      return LockFindDepResult { found: true, dep: d };
+    }
+    i = i + 1;
+  }
+  return LockFindDepResult { found: false, dep: empty_lock_dep() };
+}
+
+fn lock_quote_value(v: String) -> String {
+  if v == "" { return "<empty>"; }
+  return "\"".concat(v).concat("\"");
+}
+
+fn lock_field_mismatch(dep_name: String, field: String, expected: String, actual: String) -> String {
+  let mut msg: String = "dependency mismatch: ".concat(dep_name);
+  msg = msg.concat(" field ").concat(field);
+  msg = msg.concat(" expected=").concat(lock_quote_value(expected));
+  msg = msg.concat(" actual=").concat(lock_quote_value(actual));
+  return msg;
+}
+
+fn lock_dep_mismatch_detail(expected: LockDep, actual: LockDep) -> String {
+  if expected.source != actual.source {
+    return lock_field_mismatch(expected.name, "source", expected.source, actual.source);
+  }
+  if expected.path != actual.path {
+    return lock_field_mismatch(expected.name, "path", expected.path, actual.path);
+  }
+  if expected.resolved_path != actual.resolved_path {
+    return lock_field_mismatch(expected.name, "resolved_path", expected.resolved_path, actual.resolved_path);
+  }
+  if expected.git != actual.git {
+    return lock_field_mismatch(expected.name, "git", expected.git, actual.git);
+  }
+  if expected.rev != actual.rev {
+    return lock_field_mismatch(expected.name, "rev", expected.rev, actual.rev);
+  }
+  if expected.registry != actual.registry {
+    return lock_field_mismatch(expected.name, "registry", expected.registry, actual.registry);
+  }
+  if expected.version != actual.version {
+    return lock_field_mismatch(expected.name, "version", expected.version, actual.version);
+  }
+  if expected.digest != actual.digest {
+    return lock_field_mismatch(expected.name, "digest", expected.digest, actual.digest);
+  }
+  return "";
 }
 
 fn verify_lockfile_or_ok(deps: Vec[mf.Dependency]) -> LockVerifyResult {
@@ -240,25 +282,34 @@ fn verify_lockfile_or_ok(deps: Vec[mf.Dependency]) -> LockVerifyResult {
   }
 
   if pr.deps.len() != expected.len() {
-    return lock_err("dependency count mismatch");
+    return lock_err(
+      "dependency count mismatch: lock=".concat(pr.deps.len().to_string()).concat(
+        " resolved=").concat(expected.len().to_string())
+    );
   }
 
   let mut ei: i32 = 0;
   while ei < expected.len() {
     let e: LockDep = expected.get(ei);
-    let mut found: bool = false;
-    let mut ai: i32 = 0;
-    while ai < pr.deps.len() {
-      let a: LockDep = pr.deps.get(ai);
-      if lock_dep_eq(e, a) {
-        found = true;
-      }
-      ai = ai + 1;
+    let fr: LockFindDepResult = lock_find_dep_by_name(pr.deps, e.name);
+    if !fr.found {
+      return lock_err("missing dependency in vox.lock: ".concat(e.name));
     }
-    if !found {
-      return lock_err("dependency mismatch: ".concat(e.name));
+    let mismatch: String = lock_dep_mismatch_detail(e, fr.dep);
+    if mismatch != "" {
+      return lock_err(mismatch);
     }
     ei = ei + 1;
+  }
+
+  let mut ai: i32 = 0;
+  while ai < pr.deps.len() {
+    let a: LockDep = pr.deps.get(ai);
+    let fr: LockFindDepResult = lock_find_dep_by_name(expected, a.name);
+    if !fr.found {
+      return lock_err("unexpected dependency in vox.lock: ".concat(a.name));
+    }
+    ai = ai + 1;
   }
   return lock_ok();
 }

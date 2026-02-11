@@ -82,6 +82,7 @@ Stage0/Stage1 v0 的 `Vec[T]` 在 C 后端中被表示为一个 by-value 的小�
 1. Const 泛型默认值：已支持函数/trait 方法声明默认 const 参数，并支持调用端省略/覆盖。
 2. 包管理：`vox.toml` 依赖项支持 `path` 与 `version` 字段解析；`build-pkg`/`test-pkg` 会生成 `vox.lock`。
    - 现补充：`vox.lock` 记录依赖 `digest`（`vox.toml` + `src/**/*.vox` 摘要），后续构建会做一致性校验，不匹配直接失败，保证可复现。
+   - lock mismatch 诊断已细化到字段级（如 `dependency mismatch: dep field digest expected=... actual=...`），并在 `build-pkg`/`test-pkg` 路径输出一致修复提示。
 3. 类型反射 intrinsic：已支持 `@size_of/@align_of/@type/@type_name/@field_count/@field_name/@field_type/@field_type_id/@same_type/@assignable_to/@castable_to/@eq_comparable_with/@ordered_with/@same_layout/@bitcastable` 以及 `@is_integer/@is_signed_int/@is_unsigned_int/@is_float/@is_bool/@is_string/@is_struct/@is_enum/@is_vec/@is_range/@is_eq_comparable/@is_ordered/@is_unit/@is_numeric/@is_zero_sized`，并在 const 与 IR lowering 阶段常量折叠。
 4. stdlib 基座：`std/sync` 已统一为泛型句柄 API（`Mutex[T]/Atomic[T]`，当前由 `SyncScalar` 约束覆盖 `i32/i64`）；`std/io` 网络最小 TCP API（`net_connect/net_send/net_recv/net_close`）在解释器与 C 后端可用。
 5. 诊断定位：AST 顶层声明已携带 `Span`，typecheck/irgen 的声明级错误与 `missing return` 已优先输出真实 `file:line:col`。

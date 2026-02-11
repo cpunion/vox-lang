@@ -1252,6 +1252,95 @@ edition = "2026"
 	}
 }
 
+func TestStage1BuildsStage2LockMismatchDiagnosticsConsistentAcrossBuildAndTest(t *testing.T) {
+	requireSelfhostTests(t)
+
+	_, stage2BinB := stage2ToolBinBuiltByStage1(t)
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir root src: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "tests"), 0o755); err != nil {
+		t.Fatalf("mkdir root tests: %v", err)
+	}
+	depRoot := filepath.Join(root, "dep_pkg")
+	if err := os.MkdirAll(filepath.Join(depRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir dep src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "vox.toml"), []byte(`[package]
+name = "dep"
+version = "0.1.0"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write dep vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(depRoot, "src", "dep.vox"), []byte("pub fn two() -> i32 { return 2; }\n"), 0o644); err != nil {
+		t.Fatalf("write dep source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = { path = "dep_pkg", version = "0.1.0" }
+`), 0o644); err != nil {
+		t.Fatalf("write root vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("import \"dep\" as dep\nfn main() -> i32 { return dep.two(); }\n"), 0o644); err != nil {
+		t.Fatalf("write root source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tests", "lock_test.vox"), []byte("import \"std/testing\" as t\nfn test_lock_smoke() -> () { t.assert(true); }\n"), 0o644); err != nil {
+		t.Fatalf("write root test source: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	firstBuild := exec.Command(stage2BinB, "build-pkg", outBin)
+	firstBuild.Dir = root
+	if b, err := firstBuild.CombinedOutput(); err != nil {
+		t.Fatalf("stage2 build-pkg first run failed: %v\n%s", err, string(b))
+	}
+
+	if err := os.WriteFile(filepath.Join(depRoot, "src", "dep.vox"), []byte("pub fn two() -> i32 { return 3; }\n"), 0o644); err != nil {
+		t.Fatalf("rewrite dep source: %v", err)
+	}
+
+	buildCmd := exec.Command(stage2BinB, "build-pkg", outBin)
+	buildCmd.Dir = root
+	buildOutBytes, buildErr := buildCmd.CombinedOutput()
+	if buildErr == nil {
+		t.Fatalf("expected stage2 build-pkg lock mismatch failure")
+	}
+	buildOut := string(buildOutBytes)
+	if !strings.Contains(buildOut, "invalid vox.lock") {
+		t.Fatalf("expected invalid vox.lock error from stage2 build-pkg, got:\n%s", buildOut)
+	}
+	if !strings.Contains(buildOut, "dependency mismatch: dep field digest") {
+		t.Fatalf("expected field-level digest mismatch detail from stage2 build-pkg, got:\n%s", buildOut)
+	}
+	if !strings.Contains(buildOut, "hint: refresh lockfile after dependency changes") {
+		t.Fatalf("expected lock remediation hint from stage2 build-pkg, got:\n%s", buildOut)
+	}
+
+	testCmd := exec.Command(stage2BinB, "test-pkg", outBin)
+	testCmd.Dir = root
+	testOutBytes, testErr := testCmd.CombinedOutput()
+	if testErr == nil {
+		t.Fatalf("expected stage2 test-pkg lock mismatch failure")
+	}
+	testOut := string(testOutBytes)
+	if !strings.Contains(testOut, "invalid vox.lock") {
+		t.Fatalf("expected invalid vox.lock error from stage2 test-pkg, got:\n%s", testOut)
+	}
+	if !strings.Contains(testOut, "dependency mismatch: dep field digest") {
+		t.Fatalf("expected field-level digest mismatch detail from stage2 test-pkg, got:\n%s", testOut)
+	}
+	if !strings.Contains(testOut, "hint: refresh lockfile after dependency changes") {
+		t.Fatalf("expected lock remediation hint from stage2 test-pkg, got:\n%s", testOut)
+	}
+}
+
 func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	requireSelfhostTests(t)
 
