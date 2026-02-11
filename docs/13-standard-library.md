@@ -17,7 +17,7 @@
 
 - `std::prelude` 已提供默认 trait：`Eq`、`Ord`、`Show`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
 - 未显式 import 时，函数名会回退到 `std/prelude`；trait 静态调用与 `impl Trait for ...` 也支持回退到 `std/prelude` 的公开 trait。
-- `std::string` 已提供 `StrView`（拥有型字符串视图）及最小 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`byte_at`、`to_string`、`starts_with`、`ends_with`、`contains`、`index_of`、`last_index_of`，以及 `StrView` 对 `StrView` 的匹配 API：`starts_with_view`、`ends_with_view`、`contains_view`、`index_of_view`、`last_index_of_view`。
+- `std::string` 已提供 `StrView`（拥有型字符串视图）及最小 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`byte_at`、`to_string`、`starts_with`、`ends_with`、`contains`、`index_of`、`last_index_of`、`equals`、`compare`，以及 `StrView` 对 `StrView` 的匹配/比较 API：`starts_with_view`、`ends_with_view`、`contains_view`、`index_of_view`、`last_index_of_view`、`equals_view`、`compare_view`。
   - 另外，语言层当前支持 `str` 作为 `String` 的同义类型（类型别名语义），并支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法（当前过渡语义映射到 `T`）。
 - `std::collections` 已提供 `Slice[T]`（拥有型 `Vec[T]` 视图）及最小 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`get`、`to_vec`、`contains`、`index_of`、`last_index_of`，以及子切片匹配 API：`starts_with`、`ends_with`、`contains_slice`、`index_of_slice`、`last_index_of_slice`（均要求 `T: Eq`）。
 - `std::collections` 还提供最小泛型 `Map[K,V]`（线性实现）：
