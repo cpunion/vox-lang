@@ -147,24 +147,110 @@ pub struct FindImplForTyResult {
 }
 
 fn impl_match_candidates_text(ctx: Ctx, trait_mod: String, trait_name: String, recv_ty: i32) -> String {
-  let mut out: String = "";
-  let mut n: i32 = 0;
+  let mut rows: Vec[String] = Vec();
   let mut i: i32 = 0;
   while i < ctx.impls.len() {
     let isg: ImplSig = ctx.impls.get(i);
     if isg.trait_mod_path == trait_mod && isg.trait_name == trait_name {
       let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
       if ur.ok {
-        if n > 0 { out = out.concat(", "); }
-        out = out.concat(ty_inst_str(ctx, isg.for_ty));
-        n = n + 1;
-        if n >= 8 { return out.concat(", ..."); }
+        rows.push(impl_diag_text(ctx, isg));
       }
     }
     i = i + 1;
   }
-  if n == 0 { return "<none>"; }
+  rows = sym_lookup_sort_strings(rows);
+  return sym_lookup_join_first(rows, 8);
+}
+
+fn sym_lookup_insert_sorted(xs0: Vec[String], x: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut inserted: bool = false;
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    let cur: String = xs0.get(i);
+    if !inserted && x < cur {
+      out.push(x);
+      inserted = true;
+    }
+    out.push(cur);
+    i = i + 1;
+  }
+  if !inserted {
+    out.push(x);
+  }
   return out;
+}
+
+fn sym_lookup_sort_strings(xs0: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    out = sym_lookup_insert_sorted(out, xs0.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn sym_lookup_join_first(xs: Vec[String], nmax: i32) -> String {
+  if xs.len() == 0 { return "<none>"; }
+  let mut out: String = "";
+  let mut n: i32 = xs.len();
+  if n > nmax { n = nmax; }
+  let mut i: i32 = 0;
+  while i < n {
+    if i > 0 { out = out.concat(", "); }
+    out = out.concat(xs.get(i));
+    i = i + 1;
+  }
+  if xs.len() > nmax {
+    out = out.concat(", ...");
+  }
+  return out;
+}
+
+fn impl_head_bounds_text(isg: ImplSig) -> String {
+  if isg.head_type_param_bounds.len() == 0 { return "<none>"; }
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < isg.head_type_param_bounds.len() {
+    let b: TypeParamBoundSig = isg.head_type_param_bounds.get(i);
+    let mut tn: String = b.trait_name;
+    if b.trait_mod_path != "" {
+      tn = b.trait_mod_path.concat("::").concat(tn);
+    }
+    if i > 0 { out = out.concat(" + "); }
+    out = out.concat(b.type_param).concat(":").concat(tn);
+    i = i + 1;
+  }
+  return out;
+}
+
+fn impl_diag_text(ctx: Ctx, isg: ImplSig) -> String {
+  return ty_inst_str(ctx, isg.for_ty).concat(" {bounds: ").concat(impl_head_bounds_text(isg)).concat("}");
+}
+
+fn impl_rank_trace_text(ctx: Ctx, a0: ImplSig, b0: ImplSig) -> String {
+  let mut a: ImplSig = a0;
+  let mut b: ImplSig = b0;
+  let mut ad: String = impl_diag_text(ctx, a);
+  let mut bd: String = impl_diag_text(ctx, b);
+  if bd < ad {
+    let tmpi: ImplSig = a;
+    a = b;
+    b = tmpi;
+    let tmps: String = ad;
+    ad = bd;
+    bd = tmps;
+  }
+  let ab: bool = impl_sig_more_specific(ctx, a, b);
+  let ba: bool = impl_sig_more_specific(ctx, b, a);
+  let rel: String =
+    if ab && !ba { "left more specific" }
+    else if ba && !ab { "right more specific" }
+    else if ab && ba { "equivalent" }
+    else { "incomparable" };
+  return "rank_trace: [".concat(ad).concat("] vs [").concat(bd).concat("] => ").concat(rel);
 }
 
 fn ty_sub_lookup(subs: Vec[TySub], name: String) -> i32 {
@@ -256,7 +342,8 @@ fn find_impl_for_ty_with_stack(ctx: Ctx, trait_mod: String, trait_name: String, 
         }
         if !new_more && !old_more {
           let cands: String = impl_match_candidates_text(ctx, trait_mod, trait_name, recv_ty);
-          return FindImplForTyResult { found: false, ambiguous: true, candidates: cands, sig: out };
+          let trace: String = impl_rank_trace_text(ctx, out, isg);
+          return FindImplForTyResult { found: false, ambiguous: true, candidates: cands.concat(" | ").concat(trace), sig: out };
         }
       }
     }
@@ -393,7 +480,8 @@ pub fn find_trait_dispatch_method(ctx: Ctx, cur_mod: String, recv_ty: i32, name:
           isg.trait_name.concat(".").concat(name)
             .concat(" for ").concat(ty_inst_str(ctx, first_impl.for_ty))
             .concat(", ").concat(isg.trait_name).concat(".").concat(name)
-            .concat(" for ").concat(ty_inst_str(ctx, isg.for_ty));
+            .concat(" for ").concat(ty_inst_str(ctx, isg.for_ty))
+            .concat(" | ").concat(impl_rank_trace_text(ctx, first_impl, isg));
         return FindTraitDispatchMethodResult { found: false, ambiguous: true, candidates: cands_same, impl_mod_path: "", m: out_m };
       }
       let cands: String = first_trait.concat(".").concat(name).concat(", ").concat(isg.trait_name).concat(".").concat(name);

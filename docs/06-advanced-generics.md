@@ -76,6 +76,9 @@ where
 - 分派前会先检查 impl 头部 bounds 是否对当前接收者成立；不成立的候选不会参与竞争。
 - 若重叠但不存在严格偏序（不可比较或等价重叠），编译期报错：
   - `overlapping impl without strict specialization: ...`
+- 诊断增强（Stage2）：
+  - 候选 impl 列表按稳定顺序输出（避免受声明/加载顺序影响）。
+  - 歧义分派错误附带 `rank_trace`，展示候选头部比较结果（如 `incomparable` / `left more specific`）。
 
 当前限制（后续可扩展）：
 
