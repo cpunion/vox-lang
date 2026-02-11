@@ -984,14 +984,43 @@ fn test_compile_std_sync_smoke() -> () {
   fs.push(ld.SourceFile {
     path: "src/std/sync/sync.vox",
     text: """
-      pub struct MutexI32 { value: i32 }
-      pub fn mutex_i32(v: i32) -> MutexI32 { return MutexI32 { value: v }; }
-      pub fn mutex_i32_into_inner(m: MutexI32) -> i32 { return m.value; }
-      pub struct AtomicI32 { value: i32 }
-      pub fn atomic_i32(v: i32) -> AtomicI32 { return AtomicI32 { value: v }; }
-      pub fn atomic_i32_load(a: AtomicI32) -> i32 { return a.value; }
-      pub fn atomic_i32_store(a: AtomicI32, v: i32) -> AtomicI32 { let mut out: AtomicI32 = a; out.value = v; return out; }
-      pub fn atomic_i32_fetch_add(a: AtomicI32, delta: i32) -> AtomicI32 { let mut out: AtomicI32 = a; out.value = out.value + delta; return out; }
+      pub trait SyncScalar {
+        fn mutex_new(v: Self) -> i64;
+        fn mutex_load(sample: Self, handle: i64) -> Self;
+        fn mutex_store(v: Self, handle: i64) -> ();
+        fn atomic_new(v: Self) -> i64;
+        fn atomic_load(sample: Self, handle: i64) -> Self;
+        fn atomic_store(v: Self, handle: i64) -> ();
+        fn atomic_fetch_add(delta: Self, handle: i64) -> Self;
+      }
+      impl SyncScalar for i32 {
+        fn mutex_new(v: i32) -> i64 { return __mutex_i32_new(v); }
+        fn mutex_load(sample: i32, handle: i64) -> i32 { return __mutex_i32_load(handle); }
+        fn mutex_store(v: i32, handle: i64) -> () { __mutex_i32_store(handle, v); }
+        fn atomic_new(v: i32) -> i64 { return __atomic_i32_new(v); }
+        fn atomic_load(sample: i32, handle: i64) -> i32 { return __atomic_i32_load(handle); }
+        fn atomic_store(v: i32, handle: i64) -> () { __atomic_i32_store(handle, v); }
+        fn atomic_fetch_add(delta: i32, handle: i64) -> i32 { return __atomic_i32_fetch_add(handle, delta); }
+      }
+      pub struct Mutex[T: SyncScalar] { handle: i64, sample: T }
+      pub fn mutex[T: SyncScalar](v: T) -> Mutex[T] { return Mutex { handle: SyncScalar.mutex_new(v), sample: v }; }
+      pub fn mutex_load[T: SyncScalar](m: Mutex[T]) -> T { return SyncScalar.mutex_load(m.sample, m.handle); }
+      pub fn mutex_store[T: SyncScalar](m: Mutex[T], v: T) -> Mutex[T] {
+        SyncScalar.mutex_store(v, m.handle);
+        return Mutex { handle: m.handle, sample: v };
+      }
+      pub fn mutex_into_inner[T: SyncScalar](m: Mutex[T]) -> T { return SyncScalar.mutex_load(m.sample, m.handle); }
+      pub struct Atomic[T: SyncScalar] { handle: i64, sample: T }
+      pub fn atomic[T: SyncScalar](v: T) -> Atomic[T] { return Atomic { handle: SyncScalar.atomic_new(v), sample: v }; }
+      pub fn atomic_load[T: SyncScalar](a: Atomic[T]) -> T { return SyncScalar.atomic_load(a.sample, a.handle); }
+      pub fn atomic_store[T: SyncScalar](a: Atomic[T], v: T) -> Atomic[T] {
+        SyncScalar.atomic_store(v, a.handle);
+        return Atomic { handle: a.handle, sample: v };
+      }
+      pub fn atomic_fetch_add[T: SyncScalar](a: Atomic[T], delta: T) -> Atomic[T] {
+        let next: T = SyncScalar.atomic_fetch_add(delta, a.handle);
+        return Atomic { handle: a.handle, sample: next };
+      }
     """,
   });
   fs.push(ld.SourceFile {
@@ -999,12 +1028,12 @@ fn test_compile_std_sync_smoke() -> () {
     text: """
       import "std/sync" as s
       fn main() -> i32 {
-        let m: s.MutexI32 = s.mutex_i32(7);
-        let x: i32 = s.mutex_i32_into_inner(m);
-        let mut a: s.AtomicI32 = s.atomic_i32(1);
-        a = s.atomic_i32_fetch_add(a, 2);
-        a = s.atomic_i32_store(a, 4);
-        return x + s.atomic_i32_load(a);
+        let m: s.Mutex[i32] = s.mutex[i32](7);
+        let x: i32 = s.mutex_into_inner[i32](m);
+        let mut a: s.Atomic[i32] = s.atomic[i32](1);
+        a = s.atomic_fetch_add[i32](a, 2);
+        a = s.atomic_store[i32](a, 4);
+        return x + s.atomic_load[i32](a);
       }
     """,
   });
@@ -1018,14 +1047,36 @@ fn test_compile_std_sync_i64_smoke() -> () {
   fs.push(ld.SourceFile {
     path: "src/std/sync/sync.vox",
     text: """
-      pub struct MutexI64 { handle: i64 }
-      pub fn mutex_i64(v: i64) -> MutexI64 { return MutexI64 { handle: __mutex_i64_new(v) }; }
-      pub fn mutex_i64_load(m: MutexI64) -> i64 { return __mutex_i64_load(m.handle); }
-      pub fn mutex_i64_store(m: MutexI64, v: i64) -> MutexI64 { __mutex_i64_store(m.handle, v); return m; }
-      pub struct AtomicI64 { handle: i64 }
-      pub fn atomic_i64(v: i64) -> AtomicI64 { return AtomicI64 { handle: __atomic_i64_new(v) }; }
-      pub fn atomic_i64_load(a: AtomicI64) -> i64 { return __atomic_i64_load(a.handle); }
-      pub fn atomic_i64_fetch_add(a: AtomicI64, d: i64) -> AtomicI64 { __atomic_i64_fetch_add(a.handle, d); return a; }
+      pub trait SyncScalar {
+        fn mutex_new(v: Self) -> i64;
+        fn mutex_load(sample: Self, handle: i64) -> Self;
+        fn mutex_store(v: Self, handle: i64) -> ();
+        fn atomic_new(v: Self) -> i64;
+        fn atomic_load(sample: Self, handle: i64) -> Self;
+        fn atomic_fetch_add(delta: Self, handle: i64) -> Self;
+      }
+      impl SyncScalar for i64 {
+        fn mutex_new(v: i64) -> i64 { return __mutex_i64_new(v); }
+        fn mutex_load(sample: i64, handle: i64) -> i64 { return __mutex_i64_load(handle); }
+        fn mutex_store(v: i64, handle: i64) -> () { __mutex_i64_store(handle, v); }
+        fn atomic_new(v: i64) -> i64 { return __atomic_i64_new(v); }
+        fn atomic_load(sample: i64, handle: i64) -> i64 { return __atomic_i64_load(handle); }
+        fn atomic_fetch_add(delta: i64, handle: i64) -> i64 { return __atomic_i64_fetch_add(handle, delta); }
+      }
+      pub struct Mutex[T: SyncScalar] { handle: i64, sample: T }
+      pub fn mutex[T: SyncScalar](v: T) -> Mutex[T] { return Mutex { handle: SyncScalar.mutex_new(v), sample: v }; }
+      pub fn mutex_load[T: SyncScalar](m: Mutex[T]) -> T { return SyncScalar.mutex_load(m.sample, m.handle); }
+      pub fn mutex_store[T: SyncScalar](m: Mutex[T], v: T) -> Mutex[T] {
+        SyncScalar.mutex_store(v, m.handle);
+        return Mutex { handle: m.handle, sample: v };
+      }
+      pub struct Atomic[T: SyncScalar] { handle: i64, sample: T }
+      pub fn atomic[T: SyncScalar](v: T) -> Atomic[T] { return Atomic { handle: SyncScalar.atomic_new(v), sample: v }; }
+      pub fn atomic_load[T: SyncScalar](a: Atomic[T]) -> T { return SyncScalar.atomic_load(a.sample, a.handle); }
+      pub fn atomic_fetch_add[T: SyncScalar](a: Atomic[T], d: T) -> Atomic[T] {
+        let next: T = SyncScalar.atomic_fetch_add(d, a.handle);
+        return Atomic { handle: a.handle, sample: next };
+      }
     """,
   });
   fs.push(ld.SourceFile {
@@ -1033,12 +1084,12 @@ fn test_compile_std_sync_i64_smoke() -> () {
     text: """
       import "std/sync" as s
       fn main() -> i32 {
-        let mut m: s.MutexI64 = s.mutex_i64(7 as i64);
-        let m2: s.MutexI64 = m;
-        m = s.mutex_i64_store(m, 9 as i64);
-        let mut a: s.AtomicI64 = s.atomic_i64(3 as i64);
-        a = s.atomic_i64_fetch_add(a, 4 as i64);
-        return (s.mutex_i64_load(m2) + s.atomic_i64_load(a)) as i32;
+        let mut m: s.Mutex[i64] = s.mutex[i64](7 as i64);
+        let m2: s.Mutex[i64] = m;
+        m = s.mutex_store[i64](m, 9 as i64);
+        let mut a: s.Atomic[i64] = s.atomic[i64](3 as i64);
+        a = s.atomic_fetch_add[i64](a, 4 as i64);
+        return (s.mutex_load[i64](m2) + s.atomic_load[i64](a)) as i32;
       }
     """,
   });
