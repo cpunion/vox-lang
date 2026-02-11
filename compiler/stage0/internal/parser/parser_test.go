@@ -21,6 +21,54 @@ func TestParseMain(t *testing.T) {
 	}
 }
 
+func TestParseFuncParamsAllowTrailingComma(t *testing.T) {
+	f := source.NewFile("test.vox", `fn sum(a: i32, b: i32,) -> i32 { return a + b; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Funcs) != 1 {
+		t.Fatalf("expected 1 func, got %d", len(prog.Funcs))
+	}
+	if len(prog.Funcs[0].Params) != 2 {
+		t.Fatalf("expected 2 params, got %d", len(prog.Funcs[0].Params))
+	}
+}
+
+func TestParseTraitMethodParamsAllowTrailingComma(t *testing.T) {
+	f := source.NewFile("test.vox", `trait Add {
+  fn add(x: i32, y: i32,) -> i32;
+}
+fn main() -> i32 { return 0; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Traits) != 1 {
+		t.Fatalf("expected 1 trait, got %d", len(prog.Traits))
+	}
+	if len(prog.Traits[0].Methods) != 1 {
+		t.Fatalf("expected 1 trait method, got %d", len(prog.Traits[0].Methods))
+	}
+	if len(prog.Traits[0].Methods[0].Params) != 2 {
+		t.Fatalf("expected 2 params, got %d", len(prog.Traits[0].Methods[0].Params))
+	}
+}
+
+func TestParseFuncTypeParamsAllowTrailingComma(t *testing.T) {
+	f := source.NewFile("test.vox", `fn id[T,](x: T) -> T { return x; }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Funcs) != 1 {
+		t.Fatalf("expected 1 func, got %d", len(prog.Funcs))
+	}
+	if len(prog.Funcs[0].TypeParams) != 1 || prog.Funcs[0].TypeParams[0] != "T" {
+		t.Fatalf("unexpected type params: %#v", prog.Funcs[0].TypeParams)
+	}
+}
+
 func TestParsePathCall(t *testing.T) {
 	f := source.NewFile("test.vox", `import "dep"
 fn main() -> i32 { return dep.one(); }`)

@@ -497,6 +497,9 @@ func (p *Parser) parseTraitMethodSig() ast.TraitMethodSig {
 			ty := p.parseType()
 			params = append(params, ast.Param{Name: paramName.Lexeme, Type: ty, Span: joinSpan(paramName.Span, ty.Span())})
 			if p.match(lexer.TokenComma) {
+				if p.at(lexer.TokenRParen) {
+					break
+				}
 				continue
 			}
 			break
@@ -598,6 +601,9 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 					}
 				}
 				if p.match(lexer.TokenComma) {
+					if p.at(lexer.TokenRBracket) {
+						break
+					}
 					continue
 				}
 				break
@@ -614,6 +620,9 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 			ty := p.parseType()
 			params = append(params, ast.Param{Name: paramName.Lexeme, Type: ty, Span: joinSpan(paramName.Span, ty.Span())})
 			if p.match(lexer.TokenComma) {
+				if p.at(lexer.TokenRParen) {
+					break
+				}
 				continue
 			}
 			break
