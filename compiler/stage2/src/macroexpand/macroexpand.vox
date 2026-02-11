@@ -329,6 +329,109 @@ fn is_macro_exec_ret_type(tn: ast.TypeName) -> bool {
     type_name_is_simple(tn, "AstBlock");
 }
 
+struct MacroExecFnRef {
+  mod_path: String,
+  name: String,
+}
+
+fn macro_exec_fn_ref_exists(refs: Vec[MacroExecFnRef], mod_path: String, name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < refs.len() {
+    let r: MacroExecFnRef = refs.get(i);
+    if r.mod_path == mod_path && r.name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn collect_macro_exec_fn_refs(w: tc.World) -> Vec[MacroExecFnRef] {
+  let mut out: Vec[MacroExecFnRef] = Vec();
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(mi);
+    let mut fi: i32 = 0;
+    while fi < m.prog.funcs.len() {
+      let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+      if is_macro_exec_ret_type(fd.ret) {
+        out.push(MacroExecFnRef { mod_path: m.path, name: fd.name });
+      }
+      fi = fi + 1;
+    }
+    mi = mi + 1;
+  }
+  return out;
+}
+
+fn import_name_local(nm: ast.ImportName) -> String {
+  if nm.alias != "" { return nm.alias; }
+  return nm.name;
+}
+
+fn find_named_func_import(named_funcs: Vec[tc.NamedFuncImport], local: String) -> tc.NamedFuncImport {
+  let mut i: i32 = 0;
+  while i < named_funcs.len() {
+    let nf: tc.NamedFuncImport = named_funcs.get(i);
+    if nf.local == local { return nf; }
+    i = i + 1;
+  }
+  return tc.NamedFuncImport { local: "", mod_path: "", name: "" };
+}
+
+fn strip_macro_exec_named_imports_prog(w: tc.World, mod_path: String, prog: ast.Program, refs: Vec[MacroExecFnRef]) -> ast.Program {
+  let mut out_imps: Vec[ast.ImportDecl] = Vec();
+  let mut ii: i32 = 0;
+  while ii < prog.imports.len() {
+    let imp: ast.ImportDecl = prog.imports.get(ii);
+    if imp.names.len() == 0 {
+      out_imps.push(imp);
+      ii = ii + 1;
+      continue;
+    }
+
+    let ir: tc.ImportsResult = tc.build_imports(w, mod_path, prog.imports, imp.file);
+    if !ir.ok {
+      out_imps.push(imp);
+      ii = ii + 1;
+      continue;
+    }
+
+    let mut keep_names: Vec[ast.ImportName] = Vec();
+    let mut ni: i32 = 0;
+    while ni < imp.names.len() {
+      let nm: ast.ImportName = imp.names.get(ni);
+      let local: String = import_name_local(nm);
+      let nf: tc.NamedFuncImport = find_named_func_import(ir.imps.named_funcs, local);
+      if nf.local == "" || !macro_exec_fn_ref_exists(refs, nf.mod_path, nf.name) {
+        keep_names.push(nm);
+      }
+      ni = ni + 1;
+    }
+
+    if keep_names.len() != 0 {
+      out_imps.push(ast.ImportDecl {
+        file: imp.file,
+        sp: imp.sp,
+        path: imp.path,
+        alias: imp.alias,
+        names: keep_names,
+      });
+    }
+    ii = ii + 1;
+  }
+
+  return ast.Program {
+    imports: out_imps,
+    types: prog.types,
+    consts: prog.consts,
+    structs: prog.structs,
+    enums: prog.enums,
+    traits: prog.traits,
+    impls: prog.impls,
+    funcs: prog.funcs,
+    exprs: prog.exprs,
+  };
+}
+
 fn strip_macro_exec_funcs_prog(prog: ast.Program) -> ast.Program {
   let mut fs: Vec[ast.FuncDecl] = Vec();
   let mut i: i32 = 0;
@@ -353,13 +456,15 @@ fn strip_macro_exec_funcs_prog(prog: ast.Program) -> ast.Program {
 }
 
 fn strip_macro_exec_funcs_world(w: tc.World) -> tc.World {
+  let refs: Vec[MacroExecFnRef] = collect_macro_exec_fn_refs(w);
   let mut mods: Vec[tc.WorldModule] = Vec();
   let mut i: i32 = 0;
   while i < w.mods.len() {
     let m: tc.WorldModule = w.mods.get(i);
+    let prog1: ast.Program = strip_macro_exec_named_imports_prog(w, m.path, m.prog, refs);
     mods.push(tc.WorldModule {
       path: m.path,
-      prog: strip_macro_exec_funcs_prog(m.prog),
+      prog: strip_macro_exec_funcs_prog(prog1),
     });
     i = i + 1;
   }
@@ -434,8 +539,10 @@ fn compile_bang_try_lower_call_to_macro_call(w: tc.World, site: MacroSite, arg_n
 
   let mut callee_mod_idx: i32 = site.mod_idx;
   let mut callee_name: String = "";
+  let mut callee_is_ident: bool = false;
 
   if match callee_node { ast.ExprNode.Ident(_s) => true, _ => false } {
+    callee_is_ident = true;
     callee_name = match callee_node { ast.ExprNode.Ident(s) => s, _ => "" };
   } else if match callee_node { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
     let recv_id: i32 = match callee_node { ast.ExprNode.Member(recv, _name) => recv, _ => -1 };
@@ -459,9 +566,38 @@ fn compile_bang_try_lower_call_to_macro_call(w: tc.World, site: MacroSite, arg_n
 
   if callee_name == "" { return compile_bang_arg_ok(arg_node); }
 
-  let callee_mod: tc.WorldModule = w.mods.get(callee_mod_idx);
-  let fi: i32 = find_local_func_idx(callee_mod.prog, callee_name);
+  let mut fi: i32 = find_local_func_idx(w.mods.get(callee_mod_idx).prog, callee_name);
+  if fi < 0 && callee_is_ident {
+    let ir: tc.ImportsResult = tc.build_imports(w, call_mod.path, call_mod.prog.imports, site.sp.file);
+    if !ir.ok { return compile_bang_arg_err(ir.err); }
+    let mut ni: i32 = 0;
+    while ni < ir.imps.named_funcs.len() {
+      let nf: tc.NamedFuncImport = ir.imps.named_funcs.get(ni);
+      if nf.local == callee_name {
+        let mi: i32 = find_world_mod_idx(w, nf.mod_path);
+        if mi >= 0 {
+          callee_mod_idx = mi;
+          callee_name = nf.name;
+          fi = find_local_func_idx(w.mods.get(callee_mod_idx).prog, callee_name);
+        }
+        ni = ir.imps.named_funcs.len();
+      } else {
+        ni = ni + 1;
+      }
+    }
+  }
+  if fi < 0 && callee_is_ident {
+    let prelude_idx: i32 = find_world_mod_idx(w, "std/prelude");
+    if prelude_idx >= 0 {
+      let fip: i32 = find_local_func_idx(w.mods.get(prelude_idx).prog, callee_name);
+      if fip >= 0 {
+        callee_mod_idx = prelude_idx;
+        fi = fip;
+      }
+    }
+  }
   if fi < 0 { return compile_bang_arg_ok(arg_node); }
+  let callee_mod: tc.WorldModule = w.mods.get(callee_mod_idx);
   let fd: ast.FuncDecl = callee_mod.prog.funcs.get(fi);
   if !is_macro_exec_ret_type(fd.ret) { return compile_bang_arg_ok(arg_node); }
 

@@ -982,8 +982,10 @@ fn try_expand_local_user_macro_inline(w: tc.World, site: MacroSite) -> ExpandRou
 
   let mut callee_mod_idx: i32 = site.mod_idx;
   let mut callee_name: String = "";
+  let mut callee_is_ident: bool = false;
 
   if match callee_node { ast.ExprNode.Ident(_s) => true, _ => false } {
+    callee_is_ident = true;
     callee_name = match callee_node { ast.ExprNode.Ident(s) => s, _ => "" };
   } else if match callee_node { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
     let recv_id: i32 = match callee_node { ast.ExprNode.Member(recv, _name) => recv, _ => -1 };
@@ -1007,9 +1009,28 @@ fn try_expand_local_user_macro_inline(w: tc.World, site: MacroSite) -> ExpandRou
 
   if callee_name == "" { return inline_skip(w, site, "empty callee name"); }
 
-  let callee_mod: tc.WorldModule = w.mods.get(callee_mod_idx);
-  let fi: i32 = find_local_func_idx(callee_mod.prog, callee_name);
+  let mut fi: i32 = find_local_func_idx(w.mods.get(callee_mod_idx).prog, callee_name);
+  if fi < 0 && callee_is_ident {
+    let ir: tc.ImportsResult = tc.build_imports(w, call_mod.path, call_mod.prog.imports, site.sp.file);
+    if !ir.ok { return round_err(w, ir.err); }
+    let mut ni: i32 = 0;
+    while ni < ir.imps.named_funcs.len() {
+      let nf: tc.NamedFuncImport = ir.imps.named_funcs.get(ni);
+      if nf.local == callee_name {
+        let mi: i32 = find_world_mod_idx(w, nf.mod_path);
+        if mi >= 0 {
+          callee_mod_idx = mi;
+          callee_name = nf.name;
+          fi = find_local_func_idx(w.mods.get(callee_mod_idx).prog, callee_name);
+        }
+        ni = ir.imps.named_funcs.len();
+      } else {
+        ni = ni + 1;
+      }
+    }
+  }
   if fi < 0 { return inline_skip(w, site, "callee function not found in target module"); }
+  let callee_mod: tc.WorldModule = w.mods.get(callee_mod_idx);
   let fd: ast.FuncDecl = callee_mod.prog.funcs.get(fi);
   if callee_mod_idx != site.mod_idx && !fd.is_pub { return inline_skip(w, site, "callee function is not public across modules"); }
   if fd.params.len() != site.args.len() { return inline_skip(w, site, "arity mismatch between callee params and macro args"); }
