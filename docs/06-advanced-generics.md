@@ -98,6 +98,6 @@ where
   - 限制：variadic 参数必须是最后一个参数，否则报错 `variadic parameter must be the last parameter`。
 - 调用点约束：
   - 若对包含 `T...` 的函数提供超过声明上限的显式类型实参，会报
-    `type parameter pack expansion is not implemented yet: expected at most N type args, got M`。
+    `wrong number of type args: expected at most N, got M`。
 
 说明：真正的 pack 展开、基于 arity 的特化与更强代码生成策略，仍在后续条目推进。
