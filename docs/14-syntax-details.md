@@ -272,6 +272,7 @@ type Value = I32: i32 | Str: String;
 
 - 语言设计草案倾向将 `"..."` 视为 `&'static str`（可按 `&str` 使用）。
 - Stage0/Stage1/Stage2 当前实现中，字符串字面量仍视为 `String`（后端以 `const char*` 表示）。
+- Stage2 当前提供 `str` 作为 `String` 的同义类型（类型层别名语义，便于未来向 `&str` 方向迁移）。
 - 过渡到切片方向的当前落地是 `std/string` 的 `StrView { owner: String, lo, hi }`（拥有型视图），可在不引入语法级 `&str` 的情况下表达“长期保存的子串视图”。
 - 语法级 `&str` / `&'static str` 仍是后续演进项，不在当前 stage1/stage2 冻结线范围内。
 
