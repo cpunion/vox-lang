@@ -71,5 +71,5 @@ let v = compile!(ast);
     - `assert_le!(a, b)` -> `assert_le(a, b)`
     - `assert_gt!(a, b)` -> `assert_gt(a, b)`
     - `assert_ge!(a, b)` -> `assert_ge(a, b)`
-- 除上述内置规则外，其他宏调用仍会在 `macroexpand` 阶段报错：`macro expansion is not supported in stage2 yet`。
-- 这样做的目标是先稳定语法和流水线边界，再逐步接入真正的“宏作为编译期函数”执行器。
+- 非内置宏调用采用过渡语义：按“调用糖”处理，`name!(...)` / `name[T]!(...)` 会降级为 `name(...)` / `name[T](...)`，再进入常规 typecheck。
+- 这样做的目标是先稳定语法和流水线边界，并让“宏即函数”的调用形态可直接使用；后续再把返回 AST 的真正宏执行器接入同一阶段。
