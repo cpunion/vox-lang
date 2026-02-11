@@ -102,5 +102,6 @@ fn main() -> i32 { return compile!(make_add1(41)); }
 - 宏执行 v1（无 `macro` 关键字）：
   - 返回类型为 `AstExpr/AstStmt/AstItem/AstBlock` 的普通 `fn` 会被当作“宏执行函数”参与 `name!(...)` 展开流程。
   - 当前 `name!(...)` 调用位点是表达式位置，因此已稳定支持 `AstExpr` 形态的函数式宏模板执行。
+  - `name!(...)` 支持模块别名与命名导入两种跨模块调用方式（例如 `dep.add1!(...)` / `import { add1 as inc } ...; inc!(...)`）。
   - 展开收敛后，这类宏执行函数会从 world 中剔除，不进入后续运行时 typecheck/codegen（避免把 `Ast*` 当作运行时类型）。
 - 这样做的目标是先稳定语法和流水线边界，并让“宏即函数”的调用形态可直接使用；后续再把返回 AST 的真正宏执行器接入同一阶段。
