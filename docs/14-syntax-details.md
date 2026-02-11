@@ -457,11 +457,12 @@ match x {
 - 绑定模式等价于“带名字的 `_`”，所以也会让 `match` 变为穷尽。
 - Stage0/Stage1 v0 会对明显的 unreachable arm 报错（例如 `_`/绑定模式之后的 arm，或某个 enum variant 在 payload 空间已被覆盖之后的 arm）。
 
-## 禁止的引用语法位置
+## 禁止的引用语法位置（目标语义）
 
 为配合“临时借用”规则：
 
 - 非 `&'static` 的 `&T` / `&mut T` 不允许出现在 struct 字段与返回类型中（详见 `docs/07-memory-management.md`）
+- Stage2 当前为过渡实现，`&T` 在类型层先擦除为 `T`，所以暂未强制上述位置约束。
 
 ## 成员访问（`.`）
 
