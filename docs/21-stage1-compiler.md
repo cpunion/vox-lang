@@ -75,10 +75,15 @@ Stage1/Stage2 的 C runtime 已从“扩容链式泄漏”收敛到共享存储�
 - 扩容改为 `realloc(h->data, ...)`，不再在每次 grow 保留旧 buffer。
 - 由于浅拷贝仍可能出现，`h` 作为间接层可避免 grow 后旧副本悬垂指针（UAF）。
 
-当前边界（仍是 stage1 冻结线的折中语义）：
+当前边界（stage1 冻结线的折中语义）：
 
 - 仍未引入通用 drop/release；进程结束前活跃容器及其缓冲区保持有效（不做完整生命周期回收）。
 - 复制后的值共享同一 backing storage（`h`），但持有各自的 `len`；这是为自举稳定与实现复杂度做的折中，后续如引入严格所有权/移动语义可再收敛为更强一致模型。
+
+Stage2 补充（在不引入语言级 drop 的前提下）：
+
+- C runtime 增加了“运行时分配跟踪 + `atexit` 清理”机制：`vox_vec` backing storage、字符串运行时结果（`slice/concat/to_string` 等）和部分句柄分配会注册到跟踪表，并在进程退出时统一释放。
+- 该机制只解决“进程生命周期内累计泄漏”问题，不改变值语义；容器共享 backing storage、浅拷贝行为与当前 type system 约束保持不变。
 
 当前补充：
 

@@ -100,6 +100,7 @@ impl StrView {
 - 标准库 `std/string` 已落地 `StrView`，当前字段模型为 `owner: String + lo/hi`（拥有型视图）。
 - 标准库 `std/collections` 已落地 `Slice[T]`，当前字段模型为 `owner: Vec[T] + lo/hi`（拥有型视图）。
 - 语法级 `&T` / `&mut T` / `&'static T` / `&'static mut T` 已在 stage2 接入（当前过渡语义等价 `T`）；`Arc[str]` 仍是后续演进方向。长期保存子串仍建议使用 `StrView`。
+- Stage2 C 后端运行时已加入“分配跟踪 + 进程退出清理（`atexit`）”机制，用于回收运行期动态分配的字符串/容器 backing storage；这不是语言级 `drop`，也不改变现有所有权语义。
 
 ## Unsafe
 
