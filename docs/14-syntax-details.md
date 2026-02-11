@@ -551,6 +551,7 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
   - `@name(Type)`：`@size_of/@align_of/@type/@type_name/@field_count/@is_*`
   - `@name(Type, I)`：`@field_name/@field_type/@field_type_id`
   - `@name(A, B)`：`@same_type/@assignable_to/@castable_to/@eq_comparable_with/@ordered_with/@same_layout/@bitcastable`
+  - 三种形态都允许尾逗号：`@is_integer(i32,)`、`@same_type(i32, i64,)`、`@field_name(S, 1,)`
 - 这些 intrinsic 会在 IR 生成时折叠为常量；在 `const` 上下文同样可用。
 - `@size_of/@align_of` 采用 Stage1 当前 C 后端的目标布局模型。
 

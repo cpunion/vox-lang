@@ -72,6 +72,7 @@ fn crc_table() -> [u32; 256] { ... }
   - `@name(Type)`：如 `@size_of/@align_of/@type/@type_name/@field_count/@is_*`
   - `@name(Type, I)`：`@field_name/@field_type/@field_type_id`（`I` 为 `usize` const 实参）
   - `@name(A, B)`：`@same_type/@assignable_to/@castable_to/@eq_comparable_with/@ordered_with/@same_layout/@bitcastable`
+  - 以上三种形态均允许尾逗号（例如 `@is_integer(i32,)`、`@same_type(i32, i64,)`）。
 - 可用于普通表达式与 `const` 初始化（均会折叠为常量）。
 - `@size_of/@align_of` 当前按 Stage1 C 后端目标布局模型计算。
 - `@type` 返回编译期 `TypeId`（Stage1 当前表示为 `usize`）。
@@ -108,6 +109,7 @@ fn crc_table() -> [u32; 256] { ... }
 当前语义：
 
 - 参数必须是 1 个 `String` 表达式。
+- 允许尾逗号调用：`@compile_error("msg",)`。
 - 调用点直接触发编译错误，错误文本为 `compile_error: <msg>`。
 - 该语义同样适用于 `const` 初始化中的调用。
 
