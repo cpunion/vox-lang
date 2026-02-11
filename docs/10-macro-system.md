@@ -58,6 +58,7 @@ let v = compile!(ast);
 
 - `name!(...)` 语法在 stage2 进入 AST（独立于普通函数调用）。
 - `name[T]!(...)` 也支持（与普通泛型调用语法保持一致）。
-- 编译流水线已预留 `macroexpand` 阶段（`parse/load -> macroexpand -> typecheck`），当前会在该阶段定位并报告首个宏调用点。
-- stage2 目前不执行宏展开；类型检查会给出明确报错：`macro expansion is not supported in stage2 yet`。
-- 这样做的目标是先稳定语法和错误模型，不把 `name!(...)` 偷偷降级成普通函数调用，后续再接入真正的宏展开执行器。
+- 编译流水线已接入 `macroexpand` 阶段（`parse/load -> macroexpand -> typecheck`），展开按轮次执行直到固定点或到达轮次上限。
+- 当前仅内置一条最小展开规则：`compile!(expr)`（且仅 1 个值参数、无 type args）会直接把 `expr` 插回当前位置，支持链式场景（如 `compile!(compile!(...))`）。
+- 除 `compile!` 外，其他宏调用仍会在 `macroexpand` 阶段报错：`macro expansion is not supported in stage2 yet`。
+- 这样做的目标是先稳定语法和流水线边界，再逐步接入真正的“宏作为编译期函数”执行器。
