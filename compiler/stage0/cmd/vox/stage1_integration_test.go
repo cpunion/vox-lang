@@ -1402,6 +1402,9 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(bj), "\"jobs\":2") {
 		t.Fatalf("expected jobs in selection json output, got:\n%s", string(bj))
 	}
+	if !strings.Contains(string(bj), "\"module_details\"") || !strings.Contains(string(bj), "\"module\":\"(root)\"") {
+		t.Fatalf("expected list json module_details output, got:\n%s", string(bj))
+	}
 	cmdFailFastList := exec.Command(stage2BinB, "test-pkg", "--fail-fast", "--run=*std_sync_runtime_generic_api_smoke", "--list", outRel)
 	cmdFailFastList.Dir = stage2DirAbs
 	bffList, err := cmdFailFastList.CombinedOutput()
@@ -1431,6 +1434,9 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	}
 	if !strings.Contains(string(bjm), "\"selected_tests\":[\"typecheck::test_typecheck_allows_generic_fn_sig\"]") {
 		t.Fatalf("expected module-filtered selected test in json output, got:\n%s", string(bjm))
+	}
+	if !strings.Contains(string(bjm), "\"module_details\":[{\"module\":\"typecheck\"") {
+		t.Fatalf("expected module_details in module-filtered list json output, got:\n%s", string(bjm))
 	}
 
 	cmdJSONRun := exec.Command(stage2BinB, "test-pkg", "--run=*std_sync_runtime_generic_api_smoke", "--json", outRel)

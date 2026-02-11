@@ -118,5 +118,6 @@ make test
 - `test-pkg` 并行执行下，失败测试会回显其捕获的 stdout/stderr 片段，便于定位问题。
 - 失败重跑提示（`[hint] rerun failed: ...`）基于当前可执行名生成，并会保留当前测试调度参数（如 `--jobs`、`--fail-fast`）。
 - `--json` 当前输出 `selection/selected_tests/results/modules/module_details/slowest/failed_tests/summary`，并附带 `duration_us` 字段；`selection` 包含 `fail_fast`，`summary` 包含 `skipped`；失败时附带 `hint`。
+  - `--list --json` 下也会输出 `module_details`（按模块聚合当前选择集），便于脚本直接消费分组信息。
 - `--rerun-failed` 缓存文件位于 `target/debug/.vox_last_failed_tests`，当前使用 JSON 元数据（兼容旧文本行格式读取）。
 - 可通过 `make test-stage2-selfhost`（仅引导链路）与 `make test-stage2-tests`（stage2 测试套件）单独执行（依赖 `VOX_RUN_SELFHOST_TESTS=1`）。
