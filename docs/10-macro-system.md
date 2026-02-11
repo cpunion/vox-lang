@@ -40,6 +40,11 @@ fn mk_stmt(x: AstExpr) -> AstStmt {
 - `$(expr)` 插入任意表达式计算得到的 AST
 - 展开多轮迭代直到无宏调用或达到上限
 
+Stage2 MVP（当前已实现）：
+
+- 使用 `quote!(expr)` / `unquote!(expr)` 的函数式形式，先覆盖表达式位点。
+- `quote expr { ... }` 与 `$x` 语法仍保留为后续目标。
+
 ## 调用与插入（草案）
 
 宏调用提供两种形态：
@@ -62,6 +67,8 @@ let v = compile!(ast);
 - `macroexpand` 默认轮次上限为 `512`（`ExpandConfig.max_rounds`），避免“宏数量较多但可收敛”场景被过早截断；仍可通过配置收紧。
 - 当前内置最小规则集：
   - `compile!(expr)`：仅 1 个值参数、无 type args，直接把 `expr` 插回当前位置（支持链式场景，如 `compile!(compile!(...))`）。
+  - `quote!(expr)`：仅 1 个值参数、无 type args，表达式级 quote MVP（当前直接产出内联表达式节点）。
+  - `unquote!(expr)`：仅 1 个值参数、无 type args，表达式级 unquote MVP（当前直接产出内联表达式节点）。
   - `panic!(msg)`：仅 1 个值参数，重写为 `panic(msg)`。
   - `compile_error!(msg)`：仅 1 个值参数，重写为 `@compile_error(msg)`。
   - `assert!(cond)` / `assert!(cond, msg)`：重写为 `assert(cond)` / `assert_with(cond, msg)`。
