@@ -284,6 +284,14 @@ fn round_err(w: tc.World, e: tc.TcError) -> ExpandRoundResult {
   return ExpandRoundResult { ok: false, err: e, changed: false, world: w };
 }
 
+fn round_replace_expr(w: tc.World, site: MacroSite, n: ast.ExprNode) -> ExpandRoundResult {
+  let m: tc.WorldModule = w.mods.get(site.mod_idx);
+  let exprs2: ast.ExprPool = expr_pool_replace(m.prog.exprs, site.expr_id, n, site.sp);
+  let prog2: ast.Program = program_with_exprs(m.prog, exprs2);
+  let w2: tc.World = world_replace_mod_prog(w, site.mod_idx, prog2);
+  return round_ok(w2, true);
+}
+
 fn expand_compile_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
   if site.targs.len() != 0 || site.args.len() != 1 {
     return round_err(w, tc.tc_type_error_at(site.sp, "compile! expects exactly one value arg and no type args"));
@@ -291,10 +299,42 @@ fn expand_compile_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
   let m: tc.WorldModule = w.mods.get(site.mod_idx);
   let arg_id: i32 = site.args.get(0);
   let arg_node: ast.ExprNode = ast.expr_pool_get(m.prog.exprs, arg_id);
-  let exprs2: ast.ExprPool = expr_pool_replace(m.prog.exprs, site.expr_id, arg_node, site.sp);
-  let prog2: ast.Program = program_with_exprs(m.prog, exprs2);
-  let w2: tc.World = world_replace_mod_prog(w, site.mod_idx, prog2);
-  return round_ok(w2, true);
+  return round_replace_expr(w, site, arg_node);
+}
+
+fn expand_panic_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+  if site.targs.len() != 0 || site.args.len() != 1 {
+    return round_err(w, tc.tc_type_error_at(site.sp, "panic! expects exactly one value arg and no type args"));
+  }
+  return round_replace_expr(w, site, ast.ExprNode.Call(site.callee, Vec(), site.args));
+}
+
+fn assert_with_callee_node(exprs: ast.ExprPool, callee: i32) -> ast.ExprNode {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+  return match n {
+    ast.ExprNode.Ident(_s) => ast.ExprNode.Ident("assert_with"),
+    ast.ExprNode.Member(recv, _name) => ast.ExprNode.Member(recv, "assert_with"),
+    _ => ast.ExprNode.Ident("assert_with"),
+  };
+}
+
+fn expand_assert_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+  if site.targs.len() != 0 {
+    return round_err(w, tc.tc_type_error_at(site.sp, "assert! expects no type args"));
+  }
+  if site.args.len() == 1 {
+    return round_replace_expr(w, site, ast.ExprNode.Call(site.callee, Vec(), site.args));
+  }
+  if site.args.len() == 2 {
+    let m: tc.WorldModule = w.mods.get(site.mod_idx);
+    let ar: ast.AddExprResult = ast.expr_pool_add(m.prog.exprs, assert_with_callee_node(m.prog.exprs, site.callee), site.sp);
+    let call: ast.ExprNode = ast.ExprNode.Call(ar.id, Vec(), site.args);
+    let exprs2: ast.ExprPool = expr_pool_replace(ar.pool, site.expr_id, call, site.sp);
+    let prog2: ast.Program = program_with_exprs(m.prog, exprs2);
+    let w2: tc.World = world_replace_mod_prog(w, site.mod_idx, prog2);
+    return round_ok(w2, true);
+  }
+  return round_err(w, tc.tc_type_error_at(site.sp, "assert! expects one or two value args"));
 }
 
 fn expand_world_round(w: tc.World) -> ExpandRoundResult {
@@ -303,6 +343,12 @@ fn expand_world_round(w: tc.World) -> ExpandRoundResult {
 
   if site.name == "compile" {
     return expand_compile_bang(w, site);
+  }
+  if site.name == "panic" {
+    return expand_panic_bang(w, site);
+  }
+  if site.name == "assert" {
+    return expand_assert_bang(w, site);
   }
 
   let msg: String = "macro expansion is not supported in stage2 yet: ".concat(site.name).concat("!");
@@ -315,7 +361,7 @@ pub fn expand_world(w: tc.World, cfg0: ExpandConfig) -> ExpandResult {
   // Stage2 skeleton:
   // - reserves a dedicated expansion phase between parse/load and typecheck
   // - iterates in rounds until fixed-point / limit
-  // - currently supports `compile!(expr)` by direct AST splice
+  // - currently supports a minimal built-in macro set (`compile!`, `panic!`, `assert!`)
   // - other macro calls still report unimplemented
   let cfg: ExpandConfig =
     if cfg0.max_rounds <= 0 {
