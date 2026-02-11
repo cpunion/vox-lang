@@ -1396,6 +1396,9 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(bj), "\"list_only\":true") {
 		t.Fatalf("expected json list report, got:\n%s", string(bj))
 	}
+	if !strings.Contains(string(bj), "\"report_version\":1") || !strings.Contains(string(bj), "\"rerun_cache_path\":\"target/debug/.vox_last_failed_tests\"") {
+		t.Fatalf("expected json report/cache metadata in list output, got:\n%s", string(bj))
+	}
 	if !strings.Contains(string(bj), "\"selected_tests\":[\"test_std_sync_runtime_generic_api_smoke\"]") {
 		t.Fatalf("expected selected test in json output, got:\n%s", string(bj))
 	}
@@ -1448,6 +1451,9 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(bjr), "\"results\"") || !strings.Contains(string(bjr), "\"module_details\"") || !strings.Contains(string(bjr), "\"summary\"") {
 		t.Fatalf("expected json run report fields, got:\n%s", string(bjr))
 	}
+	if !strings.Contains(string(bjr), "\"report_version\":1") || !strings.Contains(string(bjr), "\"rerun_cache_version\":1") {
+		t.Fatalf("expected json report/cache metadata in run output, got:\n%s", string(bjr))
+	}
 	if !strings.Contains(string(bjr), "\"slowest\"") || !strings.Contains(string(bjr), "\"duration_us\"") {
 		t.Fatalf("expected json timing fields, got:\n%s", string(bjr))
 	}
@@ -1474,6 +1480,9 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	}
 	if !strings.Contains(string(cache), "\"failed_tests\":") {
 		t.Fatalf("expected json failed-tests cache, got:\n%s", string(cache))
+	}
+	if !strings.Contains(string(cache), "\"version\":1") || !strings.Contains(string(cache), "\"updated_unix_us\":") || !strings.Contains(string(cache), "\"tests\":") {
+		t.Fatalf("expected failed-tests cache metadata, got:\n%s", string(cache))
 	}
 
 	cmdRerun := exec.Command(stage2BinB, "test-pkg", "--rerun-failed", outRel)
@@ -1566,6 +1575,9 @@ fn test_b_should_skip() -> () { t.assert(true); }
 	}
 	if !strings.Contains(string(bff), "\"fail_fast\":true") {
 		t.Fatalf("expected fail_fast selection metadata, got:\n%s", string(bff))
+	}
+	if !strings.Contains(string(bff), "\"error\":\"test failed\"") || !strings.Contains(string(bff), "\"log_file\":\"") {
+		t.Fatalf("expected failed test error/log metadata in json output, got:\n%s", string(bff))
 	}
 	if !strings.Contains(string(bff), "\"skipped\":1") {
 		t.Fatalf("expected skipped count in summary for fail-fast run, got:\n%s", string(bff))

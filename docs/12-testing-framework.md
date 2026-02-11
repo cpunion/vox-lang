@@ -46,6 +46,13 @@ Stage0 行为：
 - 测试失败后输出重跑提示（`[hint] rerun failed: vox test --engine=... --rerun-failed <dir>`）
 - `target/debug/.vox_failed_tests` 当前采用 JSON 元数据格式（包含失败测试列表与更新时间）；读取端兼容旧版纯文本行列表
 
+Stage2 `test-pkg` 对齐增强（2026-02）：
+
+- JSON 报告新增稳定元信息：`report_version`、`rerun_cache_path`、`rerun_cache_version`
+- `results` 在失败项上包含 `error` 与 `log_file` 字段，便于外部系统直接抓取失败上下文
+- `--rerun-failed` 缓存采用版本化 JSON（含 `version`、`updated_unix_us`、`tests`，同时保留 `failed_tests` 兼容键）
+- 读取 `--rerun-failed` 缓存时会做规范化（排序、去重、去空），并兼容旧版纯文本/旧 JSON 格式
+
 `--json` 的关键字段：
 
 - `selection`：发现数、筛选后数量、`--run/--filter/--jobs/--rerun-failed` 元信息

@@ -17,7 +17,8 @@ Rule: complete one item end-to-end (code + tests + commit), then move to the nex
    Done scope: parser now accepts `T...` type-parameter packs and `arg: T...` variadic params; typecheck emits explicit skeleton diagnostics (no IR/codegen yet).
 8. [x] Diagnostics upgrade: rune-aware column mapping and tighter span for type/const/macro errors.  
    Done scope: const block stmt executor now reports stmt-anchored spans (`let/assign/assign field/if/while/break/continue`), and macroexpand max-round overflow now reports first macro callsite span instead of fallback `1:1`.
-9. [ ] Testing framework upgrade: richer `--json` payload and stable rerun metadata pipeline.
+9. [x] Testing framework upgrade: richer `--json` payload and stable rerun metadata pipeline.  
+   Done scope: `test-pkg --json` now emits `report_version` + rerun-cache metadata fields, failed result entries include `error/log_file`, and rerun cache is versioned JSON (`version/updated_unix_us/tests`) with backward-compatible read + normalized load.
 10. [ ] Stdlib `std/sync`: generic `Mutex[T]` / `Atomic[T]` runtime-backed semantics on stage2.
 11. [ ] Stdlib `std/io`: file + network minimal abstractions aligned with current runtime APIs.
 12. [ ] Package management hardening: registry/git lock verification and clearer mismatch diagnostics.

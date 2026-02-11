@@ -432,6 +432,8 @@ struct TestRunResult {
   module: String,
   ok: bool,
   dur_ns: i64,
+  err: String,
+  log_file: String,
 }
 
 struct NamedDuration {
@@ -904,8 +906,14 @@ fn json_of_results(rs: Vec[TestRunResult]) -> String {
       .concat("{\"name\":").concat(json_quote(r.name))
       .concat(",\"module\":").concat(json_quote(r.module))
       .concat(",\"status\":").concat(json_quote(if r.ok { "ok" } else { "fail" }))
-      .concat(",\"duration_us\":").concat(duration_us(r.dur_ns).to_string())
-      .concat("}");
+      .concat(",\"duration_us\":").concat(duration_us(r.dur_ns).to_string());
+    if r.err != "" {
+      out = out.concat(",\"error\":").concat(json_quote(r.err));
+    }
+    if r.log_file != "" {
+      out = out.concat(",\"log_file\":").concat(json_quote(r.log_file));
+    }
+    out = out.concat("}");
     i = i + 1;
   }
   return out.concat("]");
@@ -981,6 +989,7 @@ fn print_json_report(
   slowest: Vec[NamedDuration],
   failed_tests: Vec[String],
   hint: String,
+  message: String,
   passed: i32,
   failed: i32,
   skipped: i32,
@@ -988,22 +997,33 @@ fn print_json_report(
 ) -> () {
   let list_module_details: Vec[ModuleDetail] = if list_only { module_details_from_tests(selected_tests) } else { module_details };
   let mut out: String = "{";
-  out = out.concat("\"selection\":{");
+  out = out.concat("\"report_version\":1");
+  out = out.concat(",\"rerun_cache_path\":").concat(json_quote(failed_tests_path()));
+  out = out.concat(",\"rerun_cache_version\":1");
+  out = out.concat(",\"selection\":{");
   out = out.concat("\"discovered\":").concat(discovered.to_string());
   out = out.concat(",\"selected\":").concat(selected.to_string());
   if jobs > 0 { out = out.concat(",\"jobs\":").concat(jobs.to_string()); }
   if fail_fast { out = out.concat(",\"fail_fast\":").concat(json_bool(true)); }
-  if module_pat != "" { out = out.concat(",\"module\":").concat(json_quote(module_pat)); }
-  if run_pat != "" { out = out.concat(",\"run\":").concat(json_quote(run_pat)); }
+  if module_pat != "" {
+    out = out.concat(",\"module\":").concat(json_quote(module_pat));
+    out = out.concat(",\"module_pattern\":").concat(json_quote(module_pat));
+  }
+  if run_pat != "" {
+    out = out.concat(",\"run\":").concat(json_quote(run_pat));
+    out = out.concat(",\"run_pattern\":").concat(json_quote(run_pat));
+  }
   if filter != "" { out = out.concat(",\"filter\":").concat(json_quote(filter)); }
   if rerun_failed {
     out = out.concat(",\"rerun_failed\":").concat(json_bool(true));
     out = out.concat(",\"prev_failed_count\":").concat(rerun_failed_count.to_string());
+    out = out.concat(",\"rerun_cache_path\":").concat(json_quote(failed_tests_path()));
   }
   out = out.concat("}");
   out = out.concat(",\"list_only\":").concat(json_bool(list_only));
   out = out.concat(",\"selected_tests\":").concat(json_of_tests(selected_tests));
   out = out.concat(",\"module_details\":").concat(json_of_module_details(list_module_details));
+  if message != "" { out = out.concat(",\"message\":").concat(json_quote(message)); }
   if !list_only {
     out = out.concat(",\"results\":").concat(json_of_results(results));
     out = out.concat(",\"modules\":").concat(json_of_modules(modules));
@@ -1023,6 +1043,22 @@ fn print_json_report(
 
 fn failed_tests_path() -> String {
   return "target/debug/.vox_last_failed_tests";
+}
+
+fn normalize_failed_tests(names: Vec[String]) -> Vec[String] {
+  let sorted: Vec[String] = sort_strings(names);
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < sorted.len() {
+    let name: String = trim_space(sorted.get(i));
+    if name != "" {
+      if out.len() == 0 || out.get(out.len() - 1) != name {
+        out.push(name);
+      }
+    }
+    i = i + 1;
+  }
+  return out;
 }
 
 fn split_lines(s: String) -> Vec[String] {
@@ -1072,9 +1108,9 @@ fn index_of_from(s: String, needle: String, start: i32) -> i32 {
   return -1;
 }
 
-fn parse_failed_tests_json(txt: String) -> Vec[String] {
+fn parse_json_string_array_field(txt: String, key: String) -> Vec[String] {
   let mut out: Vec[String] = Vec();
-  let k: i32 = index_of_from(txt, "\"failed_tests\"", 0);
+  let k: i32 = index_of_from(txt, "\"".concat(key).concat("\""), 0);
   if k < 0 { return out; }
   let lb: i32 = index_of_from(txt, "[", k);
   if lb < 0 { return out; }
@@ -1093,27 +1129,33 @@ fn parse_failed_tests_json(txt: String) -> Vec[String] {
   return out;
 }
 
+fn parse_failed_tests_json(txt: String) -> Vec[String] {
+  let t0: Vec[String] = parse_json_string_array_field(txt, "tests");
+  if t0.len() > 0 { return t0; }
+  return parse_json_string_array_field(txt, "failed_tests");
+}
+
 fn read_failed_tests() -> Vec[String] {
   let p: String = failed_tests_path();
   if !fs.exists(p) { return Vec(); }
   let txt: String = fs.read_to_string(p);
   let t: String = trim_space(txt);
   if t.len() > 0 && t.byte_at(0) == 123 { // '{'
-    return parse_failed_tests_json(t);
+    return normalize_failed_tests(parse_failed_tests_json(t));
   }
-  return split_lines(txt);
+  return normalize_failed_tests(split_lines(txt));
 }
 
 fn write_failed_tests(names: Vec[String]) -> () {
   fs.mkdir_p("target/debug");
-  let mut out: String = "{\"failed_tests\":[";
-  let mut i: i32 = 0;
-  while i < names.len() {
-    if i > 0 { out = out.concat(","); }
-    out = out.concat(json_quote(names.get(i)));
-    i = i + 1;
-  }
-  out = out.concat("]}\n");
+  let canon: Vec[String] = normalize_failed_tests(names);
+  let updated_us: i64 = tm.now_ns() / 1000;
+  let mut out: String = "{";
+  out = out.concat("\"version\":1");
+  out = out.concat(",\"updated_unix_us\":").concat(updated_us.to_string());
+  out = out.concat(",\"tests\":").concat(json_of_tests(canon));
+  out = out.concat(",\"failed_tests\":").concat(json_of_tests(canon));
+  out = out.concat("}\n");
   fs.write_string(failed_tests_path(), out);
 }
 
@@ -1748,7 +1790,7 @@ fn main() -> i32 {
     let prev_failed: Vec[String] = if test_rerun_failed { read_failed_tests() } else { Vec() };
     if test_rerun_failed && prev_failed.len() == 0 {
       if test_json {
-        print_json_report(discovered.len(), 0, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, true, 0, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", 0, 0, 0, 0);
+        print_json_report(discovered.len(), 0, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, true, 0, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", "no previous failed tests", 0, 0, 0, 0);
       } else {
         print("[test] no previous failed tests\n");
       }
@@ -1763,7 +1805,7 @@ fn main() -> i32 {
     }
     if test_list_only {
       if test_json {
-        print_json_report(discovered.len(), tests.len(), test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, true, tests, Vec(), Vec(), Vec(), Vec(), Vec(), "", 0, 0, 0, 0);
+        print_json_report(discovered.len(), tests.len(), test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, true, tests, Vec(), Vec(), Vec(), Vec(), Vec(), "", "", 0, 0, 0, 0);
       } else {
         print_test_list(tests);
       }
@@ -1771,7 +1813,7 @@ fn main() -> i32 {
     }
     if tests.len() == 0 {
       if test_json {
-        print_json_report(discovered.len(), 0, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", 0, 0, 0, 0);
+        print_json_report(discovered.len(), 0, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", "no tests found", 0, 0, 0, 0);
       } else {
         print("[test] no tests found\n");
       }
@@ -1867,7 +1909,7 @@ fn main() -> i32 {
             }
             module_summaries = update_module_summary(module_summaries, job.name, false, dur_ns);
             module_details = update_module_detail(module_details, job.name, false, dur_ns);
-            results.push(TestRunResult { name: job.name, module: test_module_name(job.name), ok: false, dur_ns: dur_ns });
+            results.push(TestRunResult { name: job.name, module: test_module_name(job.name), ok: false, dur_ns: dur_ns, err: "test failed", log_file: job.log_file });
             if !test_json {
               print("[FAIL] ".concat(job.name).concat(" (").concat(format_duration_ns(dur_ns)).concat(")\n"));
               print_failed_test_log(job.name, job.log_file);
@@ -1880,7 +1922,7 @@ fn main() -> i32 {
             passed = passed + 1;
             module_summaries = update_module_summary(module_summaries, job.name, true, dur_ns);
             module_details = update_module_detail(module_details, job.name, true, dur_ns);
-            results.push(TestRunResult { name: job.name, module: test_module_name(job.name), ok: true, dur_ns: dur_ns });
+            results.push(TestRunResult { name: job.name, module: test_module_name(job.name), ok: true, dur_ns: dur_ns, err: "", log_file: "" });
             if !test_json { print("[OK] ".concat(job.name).concat(" (").concat(format_duration_ns(dur_ns)).concat(")\n")); }
           }
         } else {
@@ -1908,7 +1950,7 @@ fn main() -> i32 {
     write_failed_tests(failed_names_sorted);
     let hint: String = if failed != 0 { build_rerun_hint(out, test_jobs, test_fail_fast) } else { "" };
     if test_json {
-      print_json_report(discovered.len(), tests.len(), test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, tests, results_sorted, module_summaries_sorted, module_details_sorted, slowest, failed_names_sorted, hint, passed, failed, skipped, total_ns);
+      print_json_report(discovered.len(), tests.len(), test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, tests, results_sorted, module_summaries_sorted, module_details_sorted, slowest, failed_names_sorted, hint, "", passed, failed, skipped, total_ns);
     } else {
       print_module_summaries(module_summaries_sorted);
       print_slowest(slowest);
