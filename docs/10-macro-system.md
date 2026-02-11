@@ -83,4 +83,8 @@ let v = compile!(ast);
     - 跨模块（`pkg.name!(...)`）：仅在模板对跨模块内联安全时启用（当前要求模板表达式只能依赖形参与其派生表达式），否则回退。
   - 其余情况回退为调用糖：`name!(...)` / `name[T]!(...)` -> `name(...)` / `name[T](...)`，再进入常规 typecheck。
   - 当发生“内联跳过并回退”时，编译失败场景会在错误文本追加 `[macroexpand] ...` 注记，包含具体跳过原因（如“callee function not found”、“generic arg count mismatch”）。
+- 宏执行 v1（无 `macro` 关键字）：
+  - 返回类型为 `AstExpr/AstStmt/AstItem/AstBlock` 的普通 `fn` 会被当作“宏执行函数”参与 `name!(...)` 展开流程。
+  - 当前 `name!(...)` 调用位点是表达式位置，因此已稳定支持 `AstExpr` 形态的函数式宏模板执行。
+  - 展开收敛后，这类宏执行函数会从 world 中剔除，不进入后续运行时 typecheck/codegen（避免把 `Ast*` 当作运行时类型）。
 - 这样做的目标是先稳定语法和流水线边界，并让“宏即函数”的调用形态可直接使用；后续再把返回 AST 的真正宏执行器接入同一阶段。
