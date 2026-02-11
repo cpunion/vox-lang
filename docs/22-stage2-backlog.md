@@ -13,7 +13,8 @@ Rule: complete one item end-to-end (code + tests + commit), then move to the nex
    Done scope: const/comptime evaluator now executes pure member-call subset (`String.len/byte_at/slice/concat/escape_c/to_string`, primitive `to_string`) inside const fn paths.
 6. [x] Generic specialization diagnostics: deterministic conflict/ambiguity reports and ranking traces.  
    Done scope: impl candidate text now stable-sorted; ambiguity diagnostics include `rank_trace` with pairwise specificity relation.
-7. [ ] Generic packs/variadics design MVP (parser + typecheck skeleton, no codegen specialization yet).
+7. [x] Generic packs/variadics design MVP (parser + typecheck skeleton, no codegen specialization yet).  
+   Done scope: parser now accepts `T...` type-parameter packs and `arg: T...` variadic params; typecheck emits explicit skeleton diagnostics (no IR/codegen yet).
 8. [ ] Diagnostics upgrade: rune-aware column mapping and tighter span for type/const/macro errors.
 9. [ ] Testing framework upgrade: richer `--json` payload and stable rerun metadata pipeline.
 10. [ ] Stdlib `std/sync`: generic `Mutex[T]` / `Atomic[T]` runtime-backed semantics on stage2.

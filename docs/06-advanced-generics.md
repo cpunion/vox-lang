@@ -85,6 +85,14 @@ where
 - 偏序不比较方法体语义；`where` 的完整逻辑强弱比较仍未纳入（当前比较的是 impl 头部 `for` + 头部 type bounds）。
 - 仅在当前 `unify_ty` 支持的类型构造上参与判定（如 `Vec[T]` 场景）。
 
-## 4. 可变参数泛型（deferred）
+## 4. 可变参数泛型（Stage2 parser/typecheck skeleton）
 
-保留方向：tuple/parameter pack 支持，优先级低于 const 泛型与 comptime 约束。
+当前 Stage2 已进入“语法与诊断骨架”：
+
+- parser 接受类型参数 pack 语法：`fn zip[T...](...) -> ...`
+- parser 接受值参数 variadic 语法：`fn zip[T](xs: T...) -> ...`
+- typecheck 会给出明确占位错误（尚未进入 IR/codegen）：
+  - `generic type parameter packs are parsed but not typechecked yet`
+  - `variadic value parameters are parsed but not typechecked yet`
+
+说明：该阶段目标是先固定语法与错误模型；真正的 pack 展开、特化与代码生成将在后续条目实现。
