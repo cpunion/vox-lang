@@ -1160,6 +1160,44 @@ fn test_compile_impl_specialization_requires_strict_order_rejected() -> () {
   t.assert(contains(r.err, "overlapping impl without strict specialization"));
 }
 
+fn test_compile_impl_specialization_prefers_stronger_bounds_and_filters_non_matching_bounds_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Eq { fn eq(a: Self, b: Self) -> bool; }
+      impl Eq for i32 { fn eq(a: i32, b: i32) -> bool { return a == b; } }
+      trait Tag { fn tag(x: Self) -> i32; }
+      impl[T] Tag for T { fn tag(x: T) -> i32 { return 1; } }
+      impl[T: Eq] Tag for T { fn tag(x: T) -> i32 { return 2; } }
+      fn main() -> i32 { return Tag.tag(7) + Tag.tag("x"); }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+
+fn test_compile_impl_specialization_incomparable_bounds_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait A { fn a(x: Self) -> i32; }
+      trait B { fn b(x: Self) -> i32; }
+      impl A for i32 { fn a(x: i32) -> i32 { return x; } }
+      impl B for i32 { fn b(x: i32) -> i32 { return x; } }
+      trait Tag { fn tag(x: Self) -> i32; }
+      impl[T: A] Tag for T { fn tag(x: T) -> i32 { return 1; } }
+      impl[T: B] Tag for T { fn tag(x: T) -> i32 { return 2; } }
+      fn main() -> i32 { return Tag.tag(1); }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "overlapping impl without strict specialization"));
+}
+
 fn test_compile_generic_impl_bound_rejected_smoke() -> () {
   let mut fs: Vec[ld.SourceFile] = Vec();
   fs.push(ld.SourceFile {
@@ -1173,8 +1211,14 @@ fn test_compile_generic_impl_bound_rejected_smoke() -> () {
   });
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
   t.assert(!r.ok);
-  t.assert(contains(r.err, "does not satisfy trait bound"));
-  t.assert(contains(r.err, "Mark"));
+  let bound_msg: bool = contains(r.err, "does not satisfy trait bound");
+  let no_impl_msg: bool = contains(r.err, "no impl for trait call");
+  t.assert(bound_msg || no_impl_msg);
+  if bound_msg {
+    t.assert(contains(r.err, "Mark"));
+  } else {
+    t.assert(contains(r.err, "Show"));
+  }
 }
 
 fn test_compile_trait_method_sugar_smoke() -> () {

@@ -264,6 +264,96 @@ fn impl_for_ty_more_specific(ctx: Ctx, a: i32, b: i32) -> bool {
   return !a_to_b.ok;
 }
 
+fn trait_is_or_extends_impl(ctx: Ctx, mod_path: String, name: String, want_mod: String, want_name: String) -> bool {
+  if mod_path == want_mod && name == want_name { return true; }
+  let tf: FindTraitResult = find_trait(ctx, mod_path, name);
+  if !tf.found { return false; }
+  let mut i: i32 = 0;
+  while i < tf.sig.supers.len() {
+    let s: TraitSuperSig = tf.sig.supers.get(i);
+    if trait_is_or_extends_impl(ctx, s.mod_path, s.name, want_mod, want_name) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn impl_bound_on_pos_covers(
+  ctx: Ctx,
+  a_tps: Vec[String],
+  a_bounds: Vec[TypeParamBoundSig],
+  b_pos: i32,
+  b_trait_mod: String,
+  b_trait_name: String
+) -> bool {
+  let mut i: i32 = 0;
+  while i < a_bounds.len() {
+    let ab: TypeParamBoundSig = a_bounds.get(i);
+    let ap: i32 = type_param_pos(a_tps, ab.type_param);
+    if ap == b_pos {
+      if trait_is_or_extends_impl(ctx, ab.trait_mod_path, ab.trait_name, b_trait_mod, b_trait_name) {
+        return true;
+      }
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn impl_bounds_cover(
+  ctx: Ctx,
+  a_tps: Vec[String],
+  a_bounds: Vec[TypeParamBoundSig],
+  b_tps: Vec[String],
+  b_bounds: Vec[TypeParamBoundSig]
+) -> bool {
+  let mut i: i32 = 0;
+  while i < b_bounds.len() {
+    let bb: TypeParamBoundSig = b_bounds.get(i);
+    let bp: i32 = type_param_pos(b_tps, bb.type_param);
+    if bp < 0 { return false; }
+    if !impl_bound_on_pos_covers(ctx, a_tps, a_bounds, bp, bb.trait_mod_path, bb.trait_name) {
+      return false;
+    }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn impl_bounds_more_specific(
+  ctx: Ctx,
+  a_tps: Vec[String],
+  a_bounds: Vec[TypeParamBoundSig],
+  b_tps: Vec[String],
+  b_bounds: Vec[TypeParamBoundSig]
+) -> bool {
+  if !impl_bounds_cover(ctx, a_tps, a_bounds, b_tps, b_bounds) { return false; }
+  return !impl_bounds_cover(ctx, b_tps, b_bounds, a_tps, a_bounds);
+}
+
+fn impl_sig_more_specific_parts(
+  ctx: Ctx,
+  a_for_ty: i32,
+  a_tps: Vec[String],
+  a_bounds: Vec[TypeParamBoundSig],
+  b_for_ty: i32,
+  b_tps: Vec[String],
+  b_bounds: Vec[TypeParamBoundSig]
+) -> bool {
+  let a_head_more: bool = impl_for_ty_more_specific(ctx, a_for_ty, b_for_ty);
+  let b_head_more: bool = impl_for_ty_more_specific(ctx, b_for_ty, a_for_ty);
+  if a_head_more && !b_head_more { return true; }
+  if b_head_more && !a_head_more { return false; }
+  return impl_bounds_more_specific(ctx, a_tps, a_bounds, b_tps, b_bounds);
+}
+
+pub fn impl_sig_more_specific(ctx: Ctx, a: ImplSig, b: ImplSig) -> bool {
+  return impl_sig_more_specific_parts(
+    ctx,
+    a.for_ty, a.head_type_params, a.head_type_param_bounds,
+    b.for_ty, b.head_type_params, b.head_type_param_bounds
+  );
+}
+
 fn impl_decl_span(w: World, mod_path: String, decl_idx: i32) -> ast.Span {
   let fm: FindModResult = find_mod(w, mod_path);
   if !fm.found { return ast.span0(); }
@@ -650,8 +740,8 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let ds: ImplSig = c.impls.get(di);
         if ds.trait_mod_path == trr.mod_path && ds.trait_name == trr.name {
           if impl_for_ty_overlap(c, ds.for_ty, for_ty) {
-            let new_more: bool = impl_for_ty_more_specific(c, for_ty, ds.for_ty);
-            let old_more: bool = impl_for_ty_more_specific(c, ds.for_ty, for_ty);
+            let new_more: bool = impl_sig_more_specific_parts(c, for_ty, id.type_params, head_tpbs, ds.for_ty, ds.head_type_params, ds.head_type_param_bounds);
+            let old_more: bool = impl_sig_more_specific_parts(c, ds.for_ty, ds.head_type_params, ds.head_type_param_bounds, for_ty, id.type_params, head_tpbs);
             if !new_more && !old_more {
               let msg_ov: String = "overlapping impl without strict specialization: ".concat(ty_inst_str(c, for_ty)).concat(" vs ").concat(ty_inst_str(c, ds.for_ty));
               return TcCtxResult { ok: false, err: type_error_at(id.sp, msg_ov), ctx: c };
@@ -910,6 +1000,8 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         trait_mod_path: trr.mod_path,
         trait_name: trr.name,
         for_ty: for_ty,
+        head_type_params: id.type_params,
+        head_type_param_bounds: head_tpbs,
         assoc_types: impl_assocs,
         methods: ims,
       });
