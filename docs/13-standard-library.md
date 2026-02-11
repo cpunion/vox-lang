@@ -18,7 +18,7 @@
 - `std::prelude` 已提供默认 trait：`Eq`、`Ord`、`Show`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
 - 未显式 import 时，函数名会回退到 `std/prelude`；trait 静态调用与 `impl Trait for ...` 也支持回退到 `std/prelude` 的公开 trait。
 - `std::string` 已提供 `StrView`（拥有型字符串视图）及最小 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`byte_at`、`to_string`、`starts_with`、`ends_with`、`contains`、`index_of`、`last_index_of`。
-  - 另外，语言层当前支持 `str` 作为 `String` 的同义类型（类型别名语义）。
+  - 另外，语言层当前支持 `str` 作为 `String` 的同义类型（类型别名语义），并支持 `&str` / `&'static str` 语法（当前过渡语义同样映射到 `String`）。
 - `std::collections` 已提供 `Slice[T]`（拥有型 `Vec[T]` 视图）及最小 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`get`、`to_vec`、`contains`、`index_of`。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。

@@ -97,7 +97,7 @@ impl StrView {
 
 - 标准库 `std/string` 已落地 `StrView`，当前字段模型为 `owner: String + lo/hi`（拥有型视图）。
 - 标准库 `std/collections` 已落地 `Slice[T]`，当前字段模型为 `owner: Vec[T] + lo/hi`（拥有型视图）。
-- 语法级 `&str` / `Arc[str]` 仍是后续演进方向；在当前阶段通过 `StrView` 先覆盖“可长期保存子串”的工程需求。
+- 语法级 `&str` / `&'static str` 已在 stage2 接入（当前过渡语义等价 `String`）；`Arc[str]` 仍是后续演进方向。长期保存子串仍建议使用 `StrView`。
 
 ## Unsafe
 
