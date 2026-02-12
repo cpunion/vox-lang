@@ -1,16 +1,19 @@
-name: release
+name: ci-release
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     tags:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    name: build-${{ matrix.os }}
+    name: build-and-smoke-${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -25,6 +28,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: compiler/stage0/go.mod
+          cache: false
 
       - name: Install C compiler (Windows)
         if: runner.os == 'Windows'
@@ -33,7 +37,7 @@ jobs:
           choco install mingw -y --no-progress
           Add-Content -Path $env:GITHUB_PATH -Value 'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin'
 
-      - name: Compute platform key
+      - name: Compute build metadata
         shell: bash
         run: |
           set -euo pipefail
@@ -44,7 +48,13 @@ jobs:
             Windows) plat="windows-${arch}" ;;
             *) echo "unsupported RUNNER_OS=${RUNNER_OS}"; exit 1 ;;
           esac
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/* ]]; then
+            ver="${GITHUB_REF_NAME}"
+          else
+            ver="pr-${GITHUB_SHA::7}"
+          fi
           echo "PLATFORM=${plat}" >> "$GITHUB_ENV"
+          echo "BUILD_VERSION=${ver}" >> "$GITHUB_ENV"
 
       - name: Prepare rolling bootstrap stage2 (best effort)
         shell: bash
@@ -74,27 +84,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./scripts/release/build-release-bundle.sh "${GITHUB_REF_NAME}"
+          ./scripts/release/build-release-bundle.sh "${BUILD_VERSION}"
+
+      - name: Run smoke tests (stage0/stage1/stage2)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/release/smoke-toolchains.sh
 
       - name: Upload platform artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ env.PLATFORM }}
+          name: bundle-${{ env.PLATFORM }}
           path: |
-            dist/vox-lang-${{ github.ref_name }}-${{ env.PLATFORM }}.tar.gz
-            dist/vox-lang-${{ github.ref_name }}-${{ env.PLATFORM }}.tar.gz.sha256
+            dist/vox-lang-${{ env.BUILD_VERSION }}-${{ env.PLATFORM }}.tar.gz
+            dist/vox-lang-${{ env.BUILD_VERSION }}-${{ env.PLATFORM }}.tar.gz.sha256
 
   publish:
-    name: publish
+    name: publish-release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     needs: build
+    permissions:
+      contents: write
 
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: release-*
+          pattern: bundle-*
           merge-multiple: true
 
       - name: Aggregate checksums

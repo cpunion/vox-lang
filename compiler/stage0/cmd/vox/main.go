@@ -1385,7 +1385,11 @@ func compileWithDriver(dir string, driver codegen.DriverMainKind) (string, error
 	if err != nil {
 		return "", fmt.Errorf("cc not found in PATH")
 	}
-	ccArgs := []string{"-std=c11", "-O0", "-g", cPath, "-o", binPath}
+	ccArgs := []string{"-std=c11", "-O0", "-g"}
+	if runtime.GOOS != "windows" {
+		ccArgs = append(ccArgs, "-D_POSIX_C_SOURCE=200809L", "-D_DEFAULT_SOURCE")
+	}
+	ccArgs = append(ccArgs, cPath, "-o", binPath)
 	if runtime.GOOS == "windows" {
 		ccArgs = append(ccArgs, "-lws2_32")
 	}

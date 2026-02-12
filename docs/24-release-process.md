@@ -54,11 +54,12 @@
 
 ## 3. 触发规则
 
-- 采用 tag 触发发布：`vX.Y.Z`
+- CI 构建校验：`pull_request -> main`（三平台构建 + 烟测，不发布 release）
+- 版本发布：`push tag vX.Y.Z`（三平台构建 + 烟测 + GitHub Release）
 - 推荐流程：
-  1. 合并主干
+  1. PR 合并到 `main`（已完成三平台构建与烟测）
   2. 打 tag
-  3. GitHub Actions 产出三平台资产并创建 Release
+  3. GitHub Actions 上传 release 资产
 
 ## 4. 验收门禁
 
