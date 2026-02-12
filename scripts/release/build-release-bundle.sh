@@ -179,6 +179,12 @@ if [[ -z "$STAGE1_TOOL" ]]; then
   STAGE1_TOOL="$(resolve_bin "$ROOT/compiler/stage1/target/release/vox_stage1")"
 fi
 
+set +e
+"$STAGE1_TOOL" >/dev/null 2>&1
+stage1_tool_probe=$?
+set -e
+echo "[release] stage1 tool probe exit: $stage1_tool_probe"
+
 BOOTSTRAP_MODE="stage1-fallback"
 STAGE2_BOOTSTRAP=""
 if [[ -n "${VOX_BOOTSTRAP_STAGE2:-}" ]]; then
@@ -198,6 +204,16 @@ else
   STAGE2_BOOTSTRAP="$STAGE1_TOOL"
   echo "[release] build stage2 tool via stage1 fallback"
 fi
+
+echo "[release] stage2 bootstrap binary: $STAGE2_BOOTSTRAP"
+if [[ -f "$STAGE2_BOOTSTRAP" ]]; then
+  ls -l "$STAGE2_BOOTSTRAP"
+fi
+set +e
+"$STAGE2_BOOTSTRAP" >/dev/null 2>&1
+stage2_bootstrap_probe=$?
+set -e
+echo "[release] stage2 bootstrap probe exit: $stage2_bootstrap_probe"
 
 mkdir -p "$ROOT/compiler/stage2/target/release"
 STAGE2_TOOL_LOG="$ROOT/compiler/stage2/target/release/stage2-tool-build.log"
