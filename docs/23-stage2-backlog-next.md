@@ -1,6 +1,9 @@
 # Stage2 Backlog Next (P0/P1, no async/effect)
 
-Rule: complete one item end-to-end (code + tests + docs + commit), then move to next item without leaving unresolved leftovers in the same scope.
+Status: **archived (closed)**.
+Canonical closure + gate: `docs/25-stage2-p0p1-closure.md`, `make test-stage2-p0p1`.
+
+Rule (historical): complete one item end-to-end (code + tests + docs + commit), then move to next item without leaving unresolved leftovers in the same scope.
 
 ## Items
 
