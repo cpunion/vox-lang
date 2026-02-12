@@ -27,7 +27,10 @@ Governance from now on:
 ### P0
 
 - [ ] A01 Real generic pack expansion (type/value packs), not declaration-only.
-  - Current gap: `T...` still declaration-only.
+  - [x] A01-1 Trailing explicit type args can bind a single trailing type pack (homogeneous-only for now).
+    - Landed in `compiler/stage2/src/compiler/typecheck/tc_call.vox` and `compiler/stage2/src/compiler/irgen/gen_call_match.vox`, with tests in compile/typecheck suites.
+  - [ ] A01-2 Heterogeneous type pack binding + true per-position substitution model.
+  - [ ] A01-3 Value pack expansion and call-site lowering coherence.
   - Source: `docs/06-advanced-generics.md`.
 
 - [ ] A02 String/borrow model convergence from transitional `String/str` aliasing to true `&str`/slice semantics.

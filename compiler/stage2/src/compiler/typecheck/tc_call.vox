@@ -40,14 +40,33 @@ fn compile_error_arg_text(exprs: ast.ExprPool, id: i32) -> String {
 }
 
 fn pack_arity_error_msg(sig: FuncSig, got: i32) -> String {
-  let mut msg: String = "wrong number of type args: expected at most "
+  return "wrong number of type args: expected at most "
     .concat(sig.type_params.len().to_string())
     .concat(", got ")
     .concat(got.to_string());
-  if sig.type_param_packs.len() != 0 {
-    msg = msg.concat(" (type parameter pack is declaration-only in stage2)");
-  }
-  return msg;
+}
+
+fn has_type_param_pack(sig: FuncSig) -> bool {
+  return sig.type_param_packs.len() == 1;
+}
+
+fn type_param_fixed_prefix_len(sig: FuncSig) -> i32 {
+  if has_type_param_pack(sig) { return sig.type_params.len() - 1; }
+  return sig.type_params.len();
+}
+
+fn explicit_type_arg_arity_ok(sig: FuncSig, explicit_targ_n: i32) -> bool {
+  if !has_type_param_pack(sig) { return explicit_targ_n <= sig.type_params.len(); }
+  // With one trailing type-parameter pack, explicit type args can extend past
+  // the fixed prefix; extra args are absorbed by the pack binder.
+  return explicit_targ_n >= 0;
+}
+
+fn explicit_type_arg_bind_name(sig: FuncSig, idx: i32) -> String {
+  if !has_type_param_pack(sig) { return sig.type_params.get(idx); }
+  let fixed_n: i32 = type_param_fixed_prefix_len(sig);
+  if idx < fixed_n { return sig.type_params.get(idx); }
+  return sig.type_param_packs.get(0);
 }
 
 fn method_cand_key(mod_path: String, trait_name: String) -> String {
@@ -921,7 +940,7 @@ fn tc_call_func_sig(
       xj = xj + 1;
     }
   }
-  if explicit_targ_n > sig.type_params.len() {
+  if !explicit_type_arg_arity_ok(sig, explicit_targ_n) {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, pack_arity_error_msg(sig, explicit_targ_n)) };
   }
   let explicit_const_n: i32 = type_args.len() - explicit_targ_n;
@@ -973,14 +992,21 @@ fn tc_call_func_sig(
     subs = ur0.subs;
   }
 
-  // Explicit type args win (when provided).
+  // Explicit type args win (when provided). For a trailing type-parameter
+  // pack, extra explicit type args bind to the pack name.
   let mut ti: i32 = 0;
   while ti < explicit_targs.len() {
     let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, l0.type_params, explicit_targs.get(ti));
     if !tr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let tp: String = sig.type_params.get(ti);
+    let tp: String = explicit_type_arg_bind_name(sig, ti);
     let cur: i32 = subs_lookup(subs, tp);
-    if cur != -1 && cur != tr.idx { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if cur != -1 && cur != tr.idx {
+      return ExprTyResult {
+        ok: false,
+        ty: ctx.ty_bad,
+        err: type_error_at(call_sp, "heterogeneous explicit type arguments for type parameter pack are not supported yet"),
+      };
+    }
     if cur == -1 { subs.push(TySub { name: tp, ty: tr.idx }); }
     ti = ti + 1;
   }

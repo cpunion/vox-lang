@@ -1442,14 +1442,31 @@ fn pending_add(p0: Vec[PendingInst], pi: PendingInst) -> Vec[PendingInst] {
 }
 
 fn gen_pack_arity_error(sig: tc.FuncSig, got: i32) -> String {
-  let mut msg: String = "wrong number of type args: expected at most "
+  return "wrong number of type args: expected at most "
     .concat(sig.type_params.len().to_string())
     .concat(", got ")
     .concat(got.to_string());
-  if sig.type_param_packs.len() != 0 {
-    msg = msg.concat(" (type parameter pack is declaration-only in stage2)");
-  }
-  return msg;
+}
+
+fn gen_has_type_param_pack(sig: tc.FuncSig) -> bool {
+  return sig.type_param_packs.len() == 1;
+}
+
+fn gen_type_param_fixed_prefix_len(sig: tc.FuncSig) -> i32 {
+  if gen_has_type_param_pack(sig) { return sig.type_params.len() - 1; }
+  return sig.type_params.len();
+}
+
+fn gen_explicit_type_arg_arity_ok(sig: tc.FuncSig, explicit_targ_n: i32) -> bool {
+  if !gen_has_type_param_pack(sig) { return explicit_targ_n <= sig.type_params.len(); }
+  return explicit_targ_n >= 0;
+}
+
+fn gen_explicit_type_arg_bind_name(sig: tc.FuncSig, idx: i32) -> String {
+  if !gen_has_type_param_pack(sig) { return sig.type_params.get(idx); }
+  let fixed_n: i32 = gen_type_param_fixed_prefix_len(sig);
+  if idx < fixed_n { return sig.type_params.get(idx); }
+  return sig.type_param_packs.get(0);
 }
 
 struct GenVariadicPackResult { ok: bool, err: String, g: Gen, val: ir.Value }
@@ -1583,7 +1600,7 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
       xj = xj + 1;
     }
   }
-  if explicit_targ_n > sig.type_params.len() {
+  if !gen_explicit_type_arg_arity_ok(sig, explicit_targ_n) {
     return GenExprResult { ok: false, err: gen_pack_arity_error(sig, explicit_targ_n), g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
   }
   let explicit_const_n: i32 = type_args.len() - explicit_targ_n;
@@ -1634,15 +1651,18 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   if !ur0.ok { return GenExprResult { ok: false, err: "cannot infer generic return", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
   subs = ur0.subs;
 
-  // Explicit type args.
+  // Explicit type args. For a trailing type-parameter pack, extra explicit
+  // type args bind to the pack name.
   let mut ti: i32 = 0;
   while ti < explicit_targs.len() {
     let tr: tc.ResolveTyResult = tc.resolve_type(g.ctx, g.w, g.mod_path, g.imps, Vec(), explicit_targs.get(ti));
     g.ctx = tr.ctx;
     if !tr.ok { return GenExprResult { ok: false, err: "bad type arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-    let tp: String = sig.type_params.get(ti);
+    let tp: String = gen_explicit_type_arg_bind_name(sig, ti);
     let cur: i32 = subs_lookup(subs, tp);
-    if cur != -1 && cur != tr.idx { return GenExprResult { ok: false, err: "type arg conflict", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    if cur != -1 && cur != tr.idx {
+      return GenExprResult { ok: false, err: "heterogeneous explicit type arguments for type parameter pack are not supported yet", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
     if cur == -1 { subs.push(tc.TySub { name: tp, ty: tr.idx }); }
     ti = ti + 1;
   }

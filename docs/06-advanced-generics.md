@@ -118,11 +118,14 @@ where
 
 类型参数 pack 的当前语义：
 
-- `T...`（type param pack 声明）当前仍是“最小可用”语义：
-  - 不做真实 pack 展开，仅用于语法与 arity 校验；
-  - 若显式类型实参超过声明上限，会报
-    `wrong number of type args: expected at most N, got M`。
-  - 当声明包含 `T...` 时，诊断会追加说明：`type parameter pack is declaration-only in stage2`。
+- `T...`（type param pack 声明）当前是“受限可用”语义：
+  - 支持单个尾部 type parameter pack；
+  - 显式类型实参允许超过固定前缀，超出的 trailing 类型实参会绑定到 pack 名称；
+  - 当前 pack 绑定仅支持同构（homogeneous）类型实参：
+    - 例如 `f[i32, i32, 3](...)` 可通过；
+    - 若同一 pack 位置出现异构类型，会报
+      `heterogeneous explicit type arguments for type parameter pack are not supported yet`。
+  - 对无 pack 的普通泛型，仍保留 `expected at most N, got M` 的 arity 检查。
 
 后续（未做）：
 
