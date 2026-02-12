@@ -1,0 +1,307 @@
+import "compiler/ast" as ast
+import "compiler/ir" as ir
+
+fn find_param_ty_idx_fn_body(ctx: Ctx, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Param && t.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn remap_tp_name_for_body(old_tps: Vec[String], new_tps: Vec[String], name: String) -> String {
+  let mut i: i32 = 0;
+  while i < old_tps.len() {
+    if old_tps.get(i) == name { return new_tps.get(i); }
+    i = i + 1;
+  }
+  return name;
+}
+
+fn remap_sig_for_body(ctx: Ctx, sig: FuncSig, src_method_tps: Vec[String]) -> FuncSig {
+  if src_method_tps.len() == 0 || src_method_tps.len() > sig.type_params.len() { return sig; }
+  let start: i32 = sig.type_params.len() - src_method_tps.len();
+
+  let mut old_tail: Vec[String] = Vec();
+  let mut new_tail: Vec[String] = Vec();
+  let mut out_tps: Vec[String] = Vec();
+  let mut subs: Vec[TySub] = Vec();
+
+  let mut i: i32 = 0;
+  while i < sig.type_params.len() {
+    let old: String = sig.type_params.get(i);
+    let nm: String = if i >= start { src_method_tps.get(i - start) } else { old };
+    out_tps.push(nm);
+    if i >= start && old != nm {
+      old_tail.push(old);
+      new_tail.push(nm);
+      let nty: i32 = find_param_ty_idx_fn_body(ctx, nm);
+      if nty != -1 { subs.push(TySub { name: old, ty: nty }); }
+    }
+    i = i + 1;
+  }
+
+  let mut out_params: Vec[i32] = Vec();
+  i = 0;
+  while i < sig.params.len() {
+    out_params.push(subst_ty(ctx, sig.params.get(i), subs));
+    i = i + 1;
+  }
+  let out_ret: i32 = subst_ty(ctx, sig.ret, subs);
+
+  let mut out_bounds: Vec[TypeParamBoundSig] = Vec();
+  i = 0;
+  while i < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(i);
+    out_bounds.push(TypeParamBoundSig {
+      type_param: remap_tp_name_for_body(old_tail, new_tail, b.type_param),
+      trait_mod_path: b.trait_mod_path,
+      trait_name: b.trait_name,
+    });
+    i = i + 1;
+  }
+
+  let mut out_tpps: Vec[String] = Vec();
+  i = 0;
+  while i < sig.type_param_packs.len() {
+    out_tpps.push(remap_tp_name_for_body(old_tail, new_tail, sig.type_param_packs.get(i)));
+    i = i + 1;
+  }
+
+  return FuncSig {
+    params: out_params,
+    ret: out_ret,
+    vis: sig.vis,
+    is_pub: sig.is_pub,
+    type_params: out_tps,
+    type_param_packs: out_tpps,
+    const_params: sig.const_params,
+    type_param_bounds: out_bounds,
+    const_where_bounds: sig.const_where_bounds,
+  };
+}
+
+fn typecheck_fn_with_sig(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, fnc: ast.FuncDecl, sig: FuncSig) -> TcResult {
+  let use_sig: FuncSig = remap_sig_for_body(ctx, sig, fnc.type_params);
+  let mut l: Locals = locals_new();
+  l.type_params = use_sig.type_params;
+  l.type_param_bounds = use_sig.type_param_bounds;
+  l.fn_ret_ty = use_sig.ret;
+  // Function const params are compile-time values (possibly unknown at definition check time).
+  let mut ci: i32 = 0;
+  while ci < use_sig.const_params.len() {
+    let cp: ConstParamSig = use_sig.const_params.get(ci);
+    l = locals_decl_const(l, cp.name, cp.ty);
+    ci = ci + 1;
+  }
+  // params at depth 0
+  let mut pi: i32 = 0;
+  while pi < fnc.params.len() {
+    let p: ast.Param = fnc.params.get(pi);
+    l = locals_decl(l, p.name, use_sig.params.get(pi), false);
+    pi = pi + 1;
+  }
+
+  let r: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, l, use_sig.ret, fnc.body);
+  if !r.ok {
+    return TcResult { ok: false, err: r.err };
+  }
+  return TcResult { ok: true, err: TcError.None };
+}
+
+fn typecheck_fn(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, fnc: ast.FuncDecl) -> TcResult {
+  let fr: FindFuncResult = find_func(ctx, mod_path, fnc.name);
+  if !fr.found {
+    return TcResult { ok: false, err: type_error_at(fnc.sp, "missing fn sig") };
+  }
+  return typecheck_fn_with_sig(ctx, w, mod_path, imps, exprs, fnc, fr.sig);
+}
+
+struct TcStmtResult { ok: bool, err: TcError, ctx: Ctx, locals: Locals }
+
+fn split_field_path(path: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut start: i32 = 0;
+  let mut i: i32 = 0;
+  while i < path.len() {
+    if path.byte_at(i) == 46 {
+      out.push(path.slice(start, i));
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  out.push(path.slice(start, path.len()));
+  return out;
+}
+
+fn tc_block(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, b: ast.Block) -> TcStmtResult {
+  let mut c: Ctx = ctx;
+  let mut l: Locals = locals_enter(l0);
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    let r: TcStmtResult = tc_stmt(c, w, mod_path, imps, exprs, l, ret_ty, b.stmts.get(i));
+    if !r.ok { return r; }
+    c = r.ctx;
+    l = r.locals;
+    i = i + 1;
+  }
+  l = locals_exit(l);
+  return TcStmtResult { ok: true, err: TcError.None, ctx: c, locals: l0 };
+}
+
+fn tc_stmt(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, st: ast.Stmt) -> TcStmtResult {
+  let break_outside_err: String = "break outside loop";
+  let continue_outside_err: String = "continue outside loop";
+  return match st {
+    ast.Stmt.Let(sp, mutable, name, has_ann, ann, init) => tc_stmt_let(ctx, w, mod_path, imps, exprs, l0, sp, mutable, name, has_ann, ann, init),
+    ast.Stmt.Assign(sp, name, rhs) => tc_stmt_assign(ctx, w, mod_path, imps, exprs, l0, sp, name, rhs),
+    ast.Stmt.AssignField(sp, recv, field, rhs) => tc_stmt_assign_field(ctx, w, mod_path, imps, exprs, l0, sp, recv, field, rhs),
+    ast.Stmt.ExprStmt(sp, eid) => tc_stmt_expr(ctx, w, mod_path, imps, exprs, l0, sp, eid),
+    ast.Stmt.IfStmt(sp, cond, then_b, has_else, else_b) => tc_stmt_if(ctx, w, mod_path, imps, exprs, l0, ret_ty, sp, cond, then_b, has_else, else_b),
+    ast.Stmt.WhileStmt(sp, cond, body) => tc_stmt_while(ctx, w, mod_path, imps, exprs, l0, ret_ty, sp, cond, body),
+    ast.Stmt.Break(sp) =>
+      if l0.loop_depth > 0 {
+        TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 }
+      } else {
+        TcStmtResult {
+          ok: false,
+          err: type_error_at(sp, break_outside_err),
+          ctx: ctx,
+          locals: l0,
+        }
+      },
+    ast.Stmt.Continue(sp) =>
+      if l0.loop_depth > 0 {
+        TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 }
+      } else {
+        TcStmtResult {
+          ok: false,
+          err: type_error_at(sp, continue_outside_err),
+          ctx: ctx,
+          locals: l0,
+        }
+      },
+    ast.Stmt.ReturnStmt(sp, has, eid) => tc_stmt_return(ctx, w, mod_path, imps, exprs, l0, ret_ty, sp, has, eid),
+  };
+}
+
+fn tc_stmt_let(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, mutable: bool, name: String, has_ann: bool, ann: ast.TypeName, init: i32) -> TcStmtResult {
+  let mut c: Ctx = ctx;
+  let mut expected: i32 = -1;
+  if has_ann {
+    let rr: ResolveTyResult = resolve_type(c, w, mod_path, imps, l0.type_params, ann);
+    c = rr.ctx;
+    if !rr.ok {
+      let msg: String = named_lifetime_type_error(ann);
+      return TcStmtResult { ok: false, err: type_error_at(sp, if msg != "" { msg } else { "bad let annotation" }), ctx: c, locals: l0 };
+    }
+    expected = rr.idx;
+  }
+  let er: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l0, init, expected);
+  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: c, locals: l0 }; }
+  let mut final_ty: i32 = er.ty;
+  if has_ann {
+    final_ty = expected;
+    if !assignable_to(c, final_ty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, init), "let init type mismatch"), ctx: c, locals: l0 }; }
+  }
+  let l1: Locals = locals_decl(l0, name, final_ty, mutable);
+  return TcStmtResult { ok: true, err: TcError.None, ctx: c, locals: l1 };
+}
+
+fn tc_stmt_assign(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, name: String, rhs: i32) -> TcStmtResult {
+  let vr: LookupVarResult = locals_lookup(l0, name);
+  if !vr.found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown var"), ctx: ctx, locals: l0 }; }
+  if !vr.mutable { return TcStmtResult { ok: false, err: type_error_at(sp, "assign to immutable var"), ctx: ctx, locals: l0 }; }
+  let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, rhs, vr.ty);
+  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
+  if !assignable_to(ctx, vr.ty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "assign type mismatch"), ctx: ctx, locals: l0 }; }
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+}
+
+fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, recv: String, field: String, rhs: i32) -> TcStmtResult {
+  let vr: LookupVarResult = locals_lookup(l0, recv);
+  if !vr.found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown var"), ctx: ctx, locals: l0 }; }
+  if !vr.mutable { return TcStmtResult { ok: false, err: type_error_at(sp, "assign to immutable var"), ctx: ctx, locals: l0 }; }
+
+  let parts: Vec[String] = split_field_path(field);
+  let mut cur_ty: i32 = vr.ty;
+  let mut fty: i32 = ctx.ty_bad;
+  let mut pi: i32 = 0;
+  while pi < parts.len() {
+    let rt: ir.Ty = ir.ty_pool_get(ctx.pool, cur_ty);
+    if rt.kind != ir.TyKind.Struct { return TcStmtResult { ok: false, err: type_error_at(sp, "field assign recv must be struct"), ctx: ctx, locals: l0 }; }
+    let fs: FindStructResult = find_struct(ctx, rt.mod_path, rt.name);
+    if !fs.found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown struct type"), ctx: ctx, locals: l0 }; }
+    // Visibility: crossing modules requires both the type and the field to be visible.
+    if !vis_allows(fs.sig.vis, fs.sig.mod_path, mod_path) { return TcStmtResult { ok: false, err: type_error_at(sp, "type is private"), ctx: ctx, locals: l0 }; }
+
+    let mut found: bool = false;
+    let mut next_ty: i32 = ctx.ty_bad;
+    let mut fvis: i32 = ast.vis_private();
+    let mut i: i32 = 0;
+    while i < fs.sig.fields.len() {
+      let f: StructFieldSig = fs.sig.fields.get(i);
+      if f.name == parts.get(pi) {
+        found = true;
+        next_ty = f.ty;
+        fvis = f.vis;
+        break;
+      }
+      i = i + 1;
+    }
+    if !found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown field"), ctx: ctx, locals: l0 }; }
+    if !vis_allows(fvis, fs.sig.mod_path, mod_path) { return TcStmtResult { ok: false, err: type_error_at(sp, "field is private"), ctx: ctx, locals: l0 }; }
+    fty = next_ty;
+    cur_ty = next_ty;
+    pi = pi + 1;
+  }
+
+  let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, rhs, fty);
+  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
+  if !assignable_to(ctx, fty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "assign type mismatch"), ctx: ctx, locals: l0 }; }
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+}
+
+fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, _sp: ast.Span, eid: i32) -> TcStmtResult {
+  let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, eid, -1);
+  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+}
+
+fn tc_stmt_if(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, _sp: ast.Span, cond: i32, then_b: ast.Block, has_else: bool, else_b: ast.Block) -> TcStmtResult {
+  let cr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, cond, ctx.ty_bool);
+  if !cr.ok { return TcStmtResult { ok: false, err: cr.err, ctx: ctx, locals: l0 }; }
+  if cr.ty != ctx.ty_bool { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, cond), "if cond must be bool"), ctx: ctx, locals: l0 }; }
+
+  let r1: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, locals_enter(l0), ret_ty, then_b);
+  if !r1.ok { return r1; }
+  if has_else {
+    let r2: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, locals_enter(l0), ret_ty, else_b);
+    if !r2.ok { return r2; }
+  }
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+}
+
+fn tc_stmt_while(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, _sp: ast.Span, cond: i32, body: ast.Block) -> TcStmtResult {
+  let cr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, cond, ctx.ty_bool);
+  if !cr.ok { return TcStmtResult { ok: false, err: cr.err, ctx: ctx, locals: l0 }; }
+  if cr.ty != ctx.ty_bool { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, cond), "while cond must be bool"), ctx: ctx, locals: l0 }; }
+  let mut lb: Locals = locals_enter(l0);
+  lb.loop_depth = lb.loop_depth + 1;
+  let r1: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, lb, ret_ty, body);
+  if !r1.ok { return r1; }
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+}
+
+fn tc_stmt_return(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, sp: ast.Span, has: bool, eid: i32) -> TcStmtResult {
+  if !has {
+    if ret_ty != ctx.ty_unit { return TcStmtResult { ok: false, err: type_error_at(sp, "return type mismatch"), ctx: ctx, locals: l0 }; }
+    return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+  }
+  let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, eid, ret_ty);
+  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
+  if !assignable_to(ctx, ret_ty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, eid), "return type mismatch"), ctx: ctx, locals: l0 }; }
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+}

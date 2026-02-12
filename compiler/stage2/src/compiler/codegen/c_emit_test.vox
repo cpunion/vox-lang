@@ -1,0 +1,434 @@
+import "std/testing" as t
+import "compiler/parse" as p
+import "compiler/typecheck" as tc
+import "compiler/irgen" as irgen
+import "compiler/codegen" as cg
+
+fn contains(hay: String, needle: String) -> bool {
+  if needle.len() == 0 { return true; }
+  if hay.len() < needle.len() { return false; }
+  let mut i: i32 = 0;
+  while i <= hay.len() - needle.len() {
+    if hay.slice(i, i + needle.len()) == needle { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn compile_to_c(src: String) -> String {
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(r.err == p.ParseError.None);
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "main", r.prog);
+  let gr: irgen.GenResult = irgen.generate_world(w);
+  t.assert(gr.ok);
+  return cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+}
+
+fn test_codegen_smoke_main_i32() -> () {
+  let c: String = compile_to_c("fn main() -> i32 { return 0; }");
+  t.assert(contains(c, "int main(int argc, char** argv) {"));
+  t.assert(contains(c, "int32_t v = vox_fn_mmain();"));
+}
+
+fn test_codegen_smoke_main_i8() -> () {
+  let c: String = compile_to_c("fn main() -> i8 { return -5; }");
+  t.assert(contains(c, "int main(int argc, char** argv) {"));
+  t.assert(contains(c, "int8_t v = vox_fn_mmain();"));
+}
+
+fn test_codegen_smoke_main_u32() -> () {
+  let c: String = compile_to_c("fn main() -> u32 { return 5; }");
+  t.assert(contains(c, "int main(int argc, char** argv) {"));
+  t.assert(contains(c, "uint32_t v = vox_fn_mmain();"));
+  t.assert(contains(c, "PRIu32"));
+}
+
+fn test_codegen_smoke_main_u64() -> () {
+  let c: String = compile_to_c("fn main() -> u64 { return 5; }");
+  t.assert(contains(c, "int main(int argc, char** argv) {"));
+  t.assert(contains(c, "uint64_t v = vox_fn_mmain();"));
+  t.assert(contains(c, "PRIu64"));
+}
+
+fn test_codegen_smoke_main_f32() -> () {
+  let c: String = compile_to_c("fn main() -> f32 { return 1.5; }");
+  t.assert(contains(c, "int main(int argc, char** argv) {"));
+  t.assert(contains(c, "float v = vox_fn_mmain();"));
+  t.assert(contains(c, "printf(\"%.9g\\n\", (double)v);"));
+}
+
+fn test_codegen_smoke_main_f64() -> () {
+  let c: String = compile_to_c("fn main() -> f64 { return 1.5; }");
+  t.assert(contains(c, "int main(int argc, char** argv) {"));
+  t.assert(contains(c, "double v = vox_fn_mmain();"));
+  t.assert(contains(c, "printf(\"%.17g\\n\", v);"));
+}
+
+fn test_codegen_smoke_main_isize() -> () {
+  let c: String = compile_to_c("fn main() -> isize { return -5; }");
+  t.assert(contains(c, "int main(int argc, char** argv) {"));
+  // v0: isize is mapped to int64_t in the C backend.
+  t.assert(contains(c, "int64_t v = vox_fn_mmain();"));
+  t.assert(contains(c, "PRId64"));
+}
+
+fn test_codegen_smoke_main_usize() -> () {
+  let c: String = compile_to_c("fn main() -> usize { return 5; }");
+  t.assert(contains(c, "int main(int argc, char** argv) {"));
+  // v0: usize is mapped to uint64_t in the C backend.
+  t.assert(contains(c, "uint64_t v = vox_fn_mmain();"));
+  t.assert(contains(c, "PRIu64"));
+}
+
+fn test_codegen_builtin_print() -> () {
+  let c: String = compile_to_c("fn main() -> i32 { print(\"hi\"); return 0; }");
+  t.assert(contains(c, "vox_builtin_print("));
+  t.assert(contains(c, "hi"));
+}
+
+fn test_codegen_windows_tcp_runtime_has_real_impl() -> () {
+  let c: String = compile_to_c("fn main() -> i32 { return 0; }");
+  t.assert(contains(c, "#include <winsock2.h>"));
+  t.assert(contains(c, "#include <ws2tcpip.h>"));
+  t.assert(contains(c, "WSAStartup(MAKEWORD(2, 2), &wsa);"));
+  t.assert(contains(c, "closesocket(fd);"));
+  t.assert(!contains(c, "tcp is not supported on windows in stage1 yet"));
+}
+
+fn test_codegen_to_string_u64_uses_u64_runtime() -> () {
+  let src: String = "fn main() -> i32 { let x: u64 = 123; let s: String = x.to_string(); return s.len(); }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_u64_to_string("));
+}
+
+fn test_codegen_to_string_f64_uses_f64_runtime() -> () {
+  let src: String = "fn main() -> i32 { let x: f64 = 1.5; let s: String = x.to_string(); return s.len(); }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_f64_to_string("));
+}
+
+fn test_codegen_string_predicate_methods_use_runtime_helpers() -> () {
+  let src: String = """
+    fn main() -> i32 {
+      let s: String = "vox-lang";
+      if s.starts_with("vox") && s.ends_with("lang") && s.contains("-") { return 1; }
+      return 0;
+    }
+  """;
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_str_starts_with("));
+  t.assert(contains(c, "vox_str_ends_with("));
+  t.assert(contains(c, "vox_str_contains("));
+}
+
+fn test_codegen_string_index_methods_use_runtime_helpers() -> () {
+  let src: String = """
+    fn main() -> i32 {
+      let s: String = "vox-lang-vox";
+      let i0: i32 = s.index_of("vox");
+      let i1: i32 = s.last_index_of("vox");
+      return i0 + i1;
+    }
+  """;
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_str_index_of("));
+  t.assert(contains(c, "vox_str_last_index_of("));
+}
+
+fn test_codegen_string_is_empty_uses_runtime_len() -> () {
+  let src: String = """
+    fn main() -> i32 {
+      let s0: String = "";
+      let s1: String = "x";
+      return if s0.is_empty() && !s1.is_empty() { 1 } else { 0 };
+    }
+  """;
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_str_len("));
+}
+
+fn test_codegen_vec_is_empty_uses_runtime_len() -> () {
+  let src: String = """
+    fn main() -> i32 {
+      let mut v: Vec[i32] = Vec();
+      if v.is_empty() { v.push(1); }
+      return if !v.is_empty() && v.len() == 1 { 1 } else { 0 };
+    }
+  """;
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_vec_len("));
+}
+
+fn test_codegen_vec_clear_uses_runtime_helper() -> () {
+  let src: String = """
+    fn main() -> i32 {
+      let mut v: Vec[i32] = Vec();
+      v.push(1);
+      v.clear();
+      return v.len();
+    }
+  """;
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_vec_clear("));
+}
+
+fn test_codegen_vec_extend_uses_runtime_helper() -> () {
+  let src: String = """
+    fn main() -> i32 {
+      let mut a: Vec[i32] = Vec();
+      a.push(1);
+      let mut b: Vec[i32] = Vec();
+      b.push(2);
+      a.extend(b);
+      return a.len();
+    }
+  """;
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_vec_extend("));
+}
+
+fn test_codegen_vec_pop_uses_runtime_helper() -> () {
+  let src: String = """
+    fn main() -> i32 {
+      let mut v: Vec[i32] = Vec();
+      v.push(1);
+      let x: i32 = v.pop();
+      return x;
+    }
+  """;
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_vec_pop("));
+}
+
+fn test_codegen_vec_remove_uses_runtime_helper() -> () {
+  let src: String = """
+    fn main() -> i32 {
+      let mut v: Vec[i32] = Vec();
+      v.push(1);
+      v.push(2);
+      let x: i32 = v.remove(0);
+      return x + v.len();
+    }
+  """;
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_vec_remove("));
+}
+
+fn test_codegen_vec_insert_uses_runtime_helper() -> () {
+  let src: String = """
+    fn main() -> i32 {
+      let mut v: Vec[i32] = Vec();
+      v.push(1);
+      v.insert(0, 9);
+      return v.get(0);
+    }
+  """;
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_vec_insert("));
+}
+
+fn test_codegen_vec_set_uses_runtime_helper() -> () {
+  let src: String = """
+    fn main() -> i32 {
+      let mut v: Vec[i32] = Vec();
+      v.push(1);
+      v.set(0, 9);
+      return v.get(0);
+    }
+  """;
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_vec_set("));
+}
+
+fn test_codegen_vec_runtime_uses_shared_storage_realloc() -> () {
+  let c: String = compile_to_c("fn main() -> i32 { let mut v: Vec[i32] = Vec(); v.push(1); return v.len(); }");
+  t.assert(contains(c, "typedef struct { uint8_t* data; int32_t cap; int32_t elem_size; } vox_vec_data;"));
+  t.assert(contains(c, "typedef struct { vox_vec_data* h; int32_t len; } vox_vec;"));
+  t.assert(contains(c, "vox_rt_realloc(v->h->data"));
+}
+
+fn test_codegen_runtime_has_exit_cleanup_for_tracked_allocations() -> () {
+  let c: String = compile_to_c("fn main() -> i32 { let a: String = \"a\"; let b: String = a.concat(\"b\"); return b.len(); }");
+  t.assert(contains(c, "typedef struct vox_alloc_node { void* ptr; struct vox_alloc_node* next; } vox_alloc_node;"));
+  t.assert(contains(c, "static void vox_rt_cleanup(void) {"));
+  t.assert(contains(c, "atexit(vox_rt_cleanup)"));
+  t.assert(contains(c, "vox_rt_malloc("));
+}
+
+fn test_codegen_enum_payload_equality_uses_helper() -> () {
+  let src: String = "enum E { A(i32), B(String) }\nfn main() -> i32 { let a: E = E.B(\"x\"); let b: E = E.B(\"x\"); return if a == b { 1 } else { 0 }; }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_enum_eq_"));
+  t.assert(contains(c, "strcmp("));
+}
+
+fn test_codegen_struct_equality_uses_helper() -> () {
+  let src: String = "struct S { a: i32, b: String }\nfn main() -> i32 { let x: S = S { a: 1, b: \"x\" }; let y: S = S { a: 1, b: \"x\" }; return if x == y { 1 } else { 0 }; }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "vox_struct_eq_"));
+  t.assert(contains(c, "strcmp("));
+}
+
+fn test_codegen_tool_driver_main_i32_exits() -> () {
+  let pr: p.ParseResult = p.parse_text("fn main() -> i32 { return 7; }");
+  t.assert(pr.err == p.ParseError.None);
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "main", pr.prog);
+  let gr: irgen.GenResult = irgen.generate_world(w);
+  t.assert(gr.ok);
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec() });
+  t.assert(contains(c, "int32_t rc = vox_fn_mmain();"));
+  t.assert(contains(c, "return (int)rc;"));
+}
+
+fn test_codegen_tool_driver_main_u32_exits() -> () {
+  let pr: p.ParseResult = p.parse_text("fn main() -> u32 { return 7; }");
+  t.assert(pr.err == p.ParseError.None);
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "main", pr.prog);
+  let gr: irgen.GenResult = irgen.generate_world(w);
+  t.assert(gr.ok);
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec() });
+  t.assert(contains(c, "uint32_t rc = vox_fn_mmain();"));
+  t.assert(contains(c, "return (int)rc;"));
+}
+
+fn test_codegen_tool_driver_main_isize_exits() -> () {
+  let pr: p.ParseResult = p.parse_text("fn main() -> isize { return 7; }");
+  t.assert(pr.err == p.ParseError.None);
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "main", pr.prog);
+  let gr: irgen.GenResult = irgen.generate_world(w);
+  t.assert(gr.ok);
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec() });
+  t.assert(contains(c, "int64_t rc = vox_fn_mmain();"));
+  t.assert(contains(c, "return (int)rc;"));
+}
+
+fn test_codegen_tool_driver_main_f64_exits() -> () {
+  let pr: p.ParseResult = p.parse_text("fn main() -> f64 { return 7.0; }");
+  t.assert(pr.err == p.ParseError.None);
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "main", pr.prog);
+  let gr: irgen.GenResult = irgen.generate_world(w);
+  t.assert(gr.ok);
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec() });
+  t.assert(contains(c, "double rc = vox_fn_mmain();"));
+  t.assert(contains(c, "return (int)rc;"));
+}
+
+fn test_codegen_tool_driver_main_bool_exits() -> () {
+  let pr: p.ParseResult = p.parse_text("fn main() -> bool { return true; }");
+  t.assert(pr.err == p.ParseError.None);
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "main", pr.prog);
+  let gr: irgen.GenResult = irgen.generate_world(w);
+  t.assert(gr.ok);
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec() });
+  t.assert(contains(c, "bool rc = vox_fn_mmain();"));
+  t.assert(contains(c, "return rc ? 0 : 1;"));
+}
+
+fn test_codegen_tool_driver_main_string_exits() -> () {
+  let pr: p.ParseResult = p.parse_text("fn main() -> String { return \"ok\"; }");
+  t.assert(pr.err == p.ParseError.None);
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "main", pr.prog);
+  let gr: irgen.GenResult = irgen.generate_world(w);
+  t.assert(gr.ok);
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec() });
+  t.assert(contains(c, "const char* rc = vox_fn_mmain();"));
+  t.assert(contains(c, "printf(\"%s\\n\", rc ? rc : \"\");"));
+  t.assert(contains(c, "return 0;"));
+}
+
+fn test_codegen_i64_to_i32_checked_cast_emits_bounds_check() -> () {
+  let c: String = compile_to_c("fn main() -> i32 { let x: i64 = 1; return x as i32; }");
+  t.assert(contains(c, "INT32_MIN"));
+  t.assert(contains(c, "INT32_MAX"));
+  t.assert(contains(c, "i64 to i32 overflow"));
+}
+
+fn test_codegen_i32_to_i64_cast_skips_bounds_check() -> () {
+  let c: String = compile_to_c("fn main(x: i32) -> i64 { return x as i64; }");
+  t.assert(!contains(c, "i32 to i64 overflow"));
+}
+
+fn test_codegen_range_cast_emits_bounds_check() -> () {
+  let src: String = "type Tiny = @range(0..=3) i32\nfn main() -> i32 { let x: i32 = 1; let y: Tiny = x as Tiny; return y as i32; }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "range check failed"));
+  t.assert(contains(c, "(int32_t)0"));
+  t.assert(contains(c, "(int32_t)3"));
+}
+
+fn test_codegen_range_cast_emits_bounds_check_i8() -> () {
+  let src: String = "type Tiny = @range(0..=3) i8\nfn main() -> i8 { let x: i8 = 1; let y: Tiny = x as Tiny; return y as i8; }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "range check failed"));
+  t.assert(contains(c, "(int8_t)0"));
+  t.assert(contains(c, "(int8_t)3"));
+}
+
+fn test_codegen_range_cast_emits_bounds_check_u32() -> () {
+  let src: String = "type Tiny = @range(0..=3) u32\nfn main() -> u32 { let x: u32 = 1; let y: Tiny = x as Tiny; return y as u32; }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "range check failed"));
+  t.assert(contains(c, "(uint32_t)0"));
+  t.assert(contains(c, "(uint32_t)3"));
+}
+
+fn test_codegen_range_cast_emits_bounds_check_u8() -> () {
+  let src: String = "type Tiny = @range(0..=3) u8\nfn main() -> u8 { let x: u8 = 1; let y: Tiny = x as Tiny; return y as u8; }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "range check failed"));
+  t.assert(contains(c, "(uint8_t)0"));
+  t.assert(contains(c, "(uint8_t)3"));
+}
+
+fn test_codegen_range_cast_emits_bounds_check_u64() -> () {
+  let src: String = "type Tiny = @range(0..=3) u64\nfn main() -> u64 { let x: u64 = 1; let y: Tiny = x as Tiny; return y as u64; }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "range check failed"));
+  t.assert(contains(c, "(uint64_t)0"));
+  t.assert(contains(c, "(uint64_t)3"));
+}
+
+fn test_codegen_range_cast_emits_bounds_check_usize() -> () {
+  let src: String = "type Tiny = @range(0..=3) usize\nfn main() -> usize { let x: usize = 1; let y: Tiny = x as Tiny; return y as usize; }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "range check failed"));
+  // v0: usize is mapped to uint64_t in the C backend.
+  t.assert(contains(c, "(uint64_t)0"));
+  t.assert(contains(c, "(uint64_t)3"));
+}
+
+fn test_codegen_int_div_emits_div0_check() -> () {
+  let c: String = compile_to_c("fn main() -> i32 { let a: i32 = 1; let b: i32 = 0; return a / b; }");
+  t.assert(contains(c, "division by zero"));
+}
+
+fn test_codegen_int_mod_emits_div0_check_unsigned() -> () {
+  let src: String = "fn main() -> i32 { let a: u32 = 1; let b: u32 = 0; let c: u32 = a % b; return c as i32; }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "division by zero"));
+}
+
+fn test_codegen_int_add_avoids_signed_overflow_ub() -> () {
+  let c: String = compile_to_c("fn main() -> i32 { let a: i32 = 1; let b: i32 = 2; return a + b; }");
+  // Signed overflow is UB in C; backend must not rely on it.
+  t.assert(contains(c, "#include <string.h>"));
+  t.assert(contains(c, "memcpy(&"));
+}
+
+fn test_codegen_bit_ops_and_shift_checks() -> () {
+  let src: String = "fn main() -> i32 {\n  let a: i32 = 6 & 3;\n  let b: i32 = 1 << 4;\n  let c: i32 = b >> 2;\n  let _d: i32 = 1 << 32;\n  return (a | c) ^ 1;\n}";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, " & "));
+  t.assert(contains(c, " | "));
+  t.assert(contains(c, " ^ "));
+  t.assert(contains(c, "<<"));
+  t.assert(contains(c, ">>"));
+  t.assert(contains(c, "shift count out of range"));
+}

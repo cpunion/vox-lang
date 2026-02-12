@@ -17,11 +17,11 @@
 
 每个包包含：
 
-- `bin/vox-stage0[.exe]`
-- `bin/vox-stage1[.exe]`
+- `bootstrap/vox-stage0[.exe]`
+- `bootstrap/vox-stage1[.exe]`
 - `bin/vox-stage2[.exe]`
 - `VERSION`
-- `BOOTSTRAP_MODE`（`rolling-stage2` 或 `stage1-fallback`）
+- `BOOTSTRAP_MODE`（CI 要求为 `rolling-stage2`）
 
 并发布对应校验文件：
 
@@ -43,7 +43,7 @@
 
 `stage2(locked release) -> stage2(new)`
 
-回退链路（按锁文件策略）：
+本地应急链路（仅手工场景）：
 
 `stage1(tool) -> stage2(new)`
 
@@ -63,10 +63,10 @@ CI 步骤：
 - 成功则提取 `bin/vox-stage2[.exe]` 到 `compiler/stage2/target/bootstrap/vox_stage2_prev[.exe]`
 - 失败时按 `ALLOW_STAGE1_FALLBACK` 决定“回退继续”或“直接失败”
 
-策略建议：
+当前 CI 策略：
 
-1. 新机制试运行阶段：`ALLOW_STAGE1_FALLBACK=true`
-2. 机制稳定后：切换为 `ALLOW_STAGE1_FALLBACK=false`
+1. `ALLOW_STAGE1_FALLBACK=false`（锁定资产不可用即失败）
+2. `VOX_REQUIRE_ROLLING_BOOTSTRAP=1`（禁止在 CI 中回退到 stage1）
 
 ## 4. 触发规则
 
@@ -82,8 +82,9 @@ CI 步骤：
 发布 workflow 至少满足：
 
 1. 三个平台均成功产出 `stage0/stage1/stage2` 二进制。
-2. 每个平台产物均产出 `.sha256`。
-3. release 上传所有平台资产。
+2. 三个平台 `BOOTSTRAP_MODE` 均为 `rolling-stage2`。
+3. 每个平台产物均产出 `.sha256`。
+4. release 上传所有平台资产。
 
 ## 6. 锁版本维护流程
 

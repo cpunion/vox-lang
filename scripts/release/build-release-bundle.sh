@@ -246,6 +246,11 @@ else
   echo "[release] build stage2 tool via stage1 fallback"
 fi
 
+if [[ "${VOX_REQUIRE_ROLLING_BOOTSTRAP:-0}" == "1" && "$BOOTSTRAP_MODE" != "rolling-stage2" ]]; then
+  echo "[release] rolling bootstrap is required but not satisfied (mode=$BOOTSTRAP_MODE)" >&2
+  exit 1
+fi
+
 echo "[release] stage2 bootstrap binary: $STAGE2_BOOTSTRAP"
 if [[ -f "$STAGE2_BOOTSTRAP" ]]; then
   ls -l "$STAGE2_BOOTSTRAP"
@@ -308,8 +313,9 @@ CHECKSUM_PATH="${ARCHIVE_PATH}.sha256"
 
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/bin"
-cp "$STAGE0_OUT" "$BUNDLE_DIR/bin/vox-stage0${EXE_SUFFIX}"
-cp "$STAGE1_TOOL" "$BUNDLE_DIR/bin/vox-stage1${EXE_SUFFIX}"
+mkdir -p "$BUNDLE_DIR/bootstrap"
+cp "$STAGE0_OUT" "$BUNDLE_DIR/bootstrap/vox-stage0${EXE_SUFFIX}"
+cp "$STAGE1_TOOL" "$BUNDLE_DIR/bootstrap/vox-stage1${EXE_SUFFIX}"
 cp "$STAGE2_TOOL" "$BUNDLE_DIR/bin/vox-stage2${EXE_SUFFIX}"
 printf '%s\n' "$VERSION" > "$BUNDLE_DIR/VERSION"
 printf '%s\n' "$BOOTSTRAP_MODE" > "$BUNDLE_DIR/BOOTSTRAP_MODE"

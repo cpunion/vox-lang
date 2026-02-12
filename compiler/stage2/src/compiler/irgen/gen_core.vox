@@ -1,0 +1,253 @@
+import "compiler/ast" as ast
+import "compiler/ir" as ir
+import "compiler/typecheck" as tc
+
+struct SlotEntry { name: String, slot: i32, ty: i32, depth: i32, mutable: bool }
+struct Slots { es: Vec[SlotEntry], depth: i32 }
+struct LookupSlotResult { found: bool, slot: i32, ty: i32, mutable: bool }
+
+fn slots_new() -> Slots { return Slots { es: Vec(), depth: 0 }; }
+fn slots_enter(s: Slots) -> Slots { let mut q: Slots = s; q.depth = q.depth + 1; return q; }
+fn slots_exit(s: Slots) -> Slots { let mut q: Slots = s; q.depth = q.depth - 1; return q; }
+
+fn slots_decl(s: Slots, name: String, slot: i32, ty: i32, mutable: bool) -> Slots {
+  let mut q: Slots = s;
+  q.es.push(SlotEntry { name: name, slot: slot, ty: ty, depth: q.depth, mutable: mutable });
+  return q;
+}
+
+fn slots_lookup(s: Slots, name: String) -> LookupSlotResult {
+  let vs: Vec[SlotEntry] = s.es;
+  let mut i: i32 = vs.len() - 1;
+  while i >= 0 {
+    let e: SlotEntry = vs.get(i);
+    if e.depth <= s.depth && e.name == name {
+      return LookupSlotResult { found: true, slot: e.slot, ty: e.ty, mutable: e.mutable };
+    }
+    i = i - 1;
+  }
+  return LookupSlotResult { found: false, slot: -1, ty: -1, mutable: false };
+}
+
+struct LoopCtx { break_blk: String, cont_blk: String }
+struct TryCtx { ret_slot: i32, end_blk: String, ret_ty: i32 }
+
+struct PendingInst {
+  // Fully qualified IR name of the instantiated function.
+  qname: String,
+  // Module path containing the generic function definition.
+  mod_path: String,
+  // Base (generic) function name within mod_path.
+  base_name: String,
+  // Instantiated function name (unqualified, mangled suffix added).
+  inst_name: String,
+  // Concrete signature for the instantiation (type_params is empty).
+  sig: tc.FuncSig,
+  // Type parameter substitutions for resolving type names inside the generic body.
+  subs: Vec[tc.TySub],
+  // Const parameter substitutions available inside monomorphized generic bodies.
+  const_subs: Vec[tc.ConstSub],
+}
+
+struct Gen {
+  ctx: tc.Ctx,
+  w: tc.World,
+  mod_path: String,
+  imps: tc.Imports,
+  exprs: ast.ExprPool,
+
+  tmp_id: i32,
+  slot_id: i32,
+
+  blocks: Vec[ir.Block],
+  cur: i32, // block index
+
+  slots: Slots,
+  locals: tc.Locals, // type environment for tc.tc_expr (file-local imports are in `imps`)
+
+  loops: Vec[LoopCtx],
+  tries: Vec[TryCtx],
+  ret_ty: i32,
+
+  pending: Vec[PendingInst],
+
+  // Only set when lowering a monomorphized instance of a generic function.
+  type_subs: Vec[tc.TySub],
+  const_subs: Vec[tc.ConstSub],
+}
+
+struct GenFuncResult { ok: bool, err: String, ctx: tc.Ctx, f: ir.Func, pending: Vec[PendingInst] }
+
+struct GenNewIdResult { g: Gen, id: i32 }
+
+fn mk_empty_block(name: String) -> ir.Block {
+  // Term is a dummy; has_term gates it.
+  return ir.Block { name: name, instrs: Vec(), has_term: false, term: ir.Term.Br("") };
+}
+
+fn blocks_replace(bs: Vec[ir.Block], idx: i32, b: ir.Block) -> Vec[ir.Block] {
+  let mut out: Vec[ir.Block] = Vec();
+  let mut i: i32 = 0;
+  while i < bs.len() {
+    out.push(if i == idx { b } else { bs.get(i) });
+    i = i + 1;
+  }
+  return out;
+}
+
+fn gen_new_temp(g: Gen) -> GenNewIdResult {
+  let mut q: Gen = g;
+  let id: i32 = q.tmp_id;
+  q.tmp_id = q.tmp_id + 1;
+  return GenNewIdResult { g: q, id: id };
+}
+
+fn gen_new_slot(g: Gen) -> GenNewIdResult {
+  let mut q: Gen = g;
+  let id: i32 = q.slot_id;
+  q.slot_id = q.slot_id + 1;
+  return GenNewIdResult { g: q, id: id };
+}
+
+fn gen_new_block(g: Gen, name: String) -> GenNewIdResult {
+  let mut q: Gen = g;
+  q.blocks.push(mk_empty_block(name));
+  return GenNewIdResult { g: q, id: q.blocks.len() - 1 };
+}
+
+fn gen_set_block(g: Gen, idx: i32) -> Gen { let mut q: Gen = g; q.cur = idx; return q; }
+
+fn gen_emit(g: Gen, ins: ir.Instr) -> Gen {
+  let mut q: Gen = g;
+  let mut b: ir.Block = q.blocks.get(q.cur);
+  let mut is: Vec[ir.Instr] = b.instrs;
+  is.push(ins);
+  b.instrs = is;
+  q.blocks = blocks_replace(q.blocks, q.cur, b);
+  return q;
+}
+
+fn gen_term(g: Gen, t: ir.Term) -> Gen {
+  let mut q: Gen = g;
+  let mut b: ir.Block = q.blocks.get(q.cur);
+  b.has_term = true;
+  b.term = t;
+  q.blocks = blocks_replace(q.blocks, q.cur, b);
+  return q;
+}
+
+struct GenConstValueResult { ok: bool, err: String, g: Gen, val: ir.Value }
+struct GenInlineConstResult { ok: bool, err: String, g: Gen, val: ir.Value, ty: i32 }
+
+fn gen_inline_struct_const(g0: Gen, struct_ty: i32, packed: String) -> GenConstValueResult {
+  let dec: tc.ConstStructDecode = tc.const_struct_unpack(packed);
+  if !dec.ok {
+    return GenConstValueResult { ok: false, err: "bad const struct encoding", g: g0, val: ir.v_int(0) };
+  }
+
+  let st: ir.Ty = ir.ty_pool_get(g0.ctx.pool, struct_ty);
+  let fs: tc.FindStructResult = tc.find_struct(g0.ctx, tc.ty_mod(st), tc.ty_name(st));
+  if !fs.found {
+    return GenConstValueResult { ok: false, err: "unknown const struct type", g: g0, val: ir.v_int(0) };
+  }
+  if dec.fields.len() != fs.sig.fields.len() {
+    return GenConstValueResult { ok: false, err: "bad const struct field count", g: g0, val: ir.v_int(0) };
+  }
+
+  let mut g: Gen = g0;
+  let mut inits: Vec[ir.StructInitField] = Vec();
+  let mut i: i32 = 0;
+  while i < dec.fields.len() {
+    let fv: tc.ConstEnumPayloadField = dec.fields.get(i);
+    let vr: GenConstValueResult = gen_inline_const_payload_value(g, fv);
+    if !vr.ok { return vr; }
+    g = vr.g;
+    let sf: tc.StructFieldSig = fs.sig.fields.get(i);
+    inits.push(ir.StructInitField { name: sf.name, val: vr.val });
+    i = i + 1;
+  }
+
+  let rt: GenNewIdResult = gen_new_temp(g);
+  g = rt.g;
+  let tid: i32 = rt.id;
+  g = gen_emit(g, ir.Instr.StructInit(tid, struct_ty, inits));
+  return GenConstValueResult { ok: true, err: "", g: g, val: ir.v_temp(tid) };
+}
+
+fn gen_inline_enum_const(g0: Gen, enum_ty: i32, packed: String) -> GenConstValueResult {
+  let dec: tc.ConstEnumPayloadDecode = tc.const_enum_unpack(packed);
+  if !dec.ok {
+    return GenConstValueResult { ok: false, err: "bad const enum payload encoding", g: g0, val: ir.v_int(0) };
+  }
+
+  let mut g: Gen = g0;
+  let mut payload: Vec[ir.Value] = Vec();
+  let mut i: i32 = 0;
+  while i < dec.fields.len() {
+    let fv: tc.ConstEnumPayloadField = dec.fields.get(i);
+    let vr: GenConstValueResult = gen_inline_const_payload_value(g, fv);
+    if !vr.ok { return vr; }
+    g = vr.g;
+    payload.push(vr.val);
+    i = i + 1;
+  }
+
+  let rt: GenNewIdResult = gen_new_temp(g);
+  g = rt.g;
+  let tid: i32 = rt.id;
+  g = gen_emit(g, ir.Instr.EnumInit(tid, enum_ty, dec.variant, payload));
+  return GenConstValueResult { ok: true, err: "", g: g, val: ir.v_temp(tid) };
+}
+
+fn gen_inline_const_payload_value(g0: Gen, fv: tc.ConstEnumPayloadField) -> GenConstValueResult {
+  if fv.kind == tc.const_kind_int() {
+    return GenConstValueResult { ok: true, err: "", g: g0, val: ir.v_i64(fv.iv) };
+  }
+  if fv.kind == tc.const_kind_bool() {
+    return GenConstValueResult { ok: true, err: "", g: g0, val: ir.v_bool(fv.bv) };
+  }
+  if fv.kind == tc.const_kind_str() {
+    return GenConstValueResult { ok: true, err: "", g: g0, val: ir.v_str(fv.sv) };
+  }
+  if fv.kind == tc.const_kind_float() {
+    return GenConstValueResult { ok: true, err: "", g: g0, val: ir.v_float(fv.sv) };
+  }
+  if fv.kind == tc.const_kind_enum() {
+    return gen_inline_enum_const(g0, fv.ty, fv.sv);
+  }
+  if fv.kind == tc.const_kind_struct() {
+    return gen_inline_struct_const(g0, fv.ty, fv.sv);
+  }
+  return GenConstValueResult { ok: false, err: "unsupported const enum payload value", g: g0, val: ir.v_int(0) };
+}
+
+fn gen_inline_const_sig(g0: Gen, cs: tc.ConstSig) -> GenInlineConstResult {
+  let mut g: Gen = g0;
+  if cs.kind == tc.const_kind_enum() {
+    let evr: GenConstValueResult = gen_inline_enum_const(g, cs.ty, cs.sv);
+    if !evr.ok { return GenInlineConstResult { ok: false, err: evr.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    return GenInlineConstResult { ok: true, err: "", g: evr.g, val: evr.val, ty: cs.ty };
+  }
+  if cs.kind == tc.const_kind_struct() {
+    let svr: GenConstValueResult = gen_inline_struct_const(g, cs.ty, cs.sv);
+    if !svr.ok { return GenInlineConstResult { ok: false, err: svr.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    return GenInlineConstResult { ok: true, err: "", g: svr.g, val: svr.val, ty: cs.ty };
+  }
+
+  let v: ir.Value =
+    if cs.kind == tc.const_kind_int() {
+      ir.v_i64(cs.iv)
+    } else if cs.kind == tc.const_kind_bool() {
+      ir.v_bool(cs.bv)
+    } else if cs.kind == tc.const_kind_float() {
+      ir.v_float(cs.sv)
+    } else {
+      ir.v_str(cs.sv)
+    };
+
+  let rt: GenNewIdResult = gen_new_temp(g);
+  g = rt.g;
+  let tid: i32 = rt.id;
+  g = gen_emit(g, ir.Instr.Const(tid, cs.ty, v));
+  return GenInlineConstResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: cs.ty };
+}
