@@ -103,6 +103,10 @@ where
 
 调用点（已实现双模式）：
 
+- 泛型参数列表顺序规则：
+  - 调用写作 `f[TypeArgs..., ConstArgs...]`，类型实参必须在前，const 实参必须在后；
+  - 若顺序混用（例如 `f[3, i32]`），报错：`generic arg order error: type args must come before const args`。
+
 - 打包调用（pack-call）：
   - `sum(1, 2, 3)` 会在调用侧自动构造 `Vec[T]` 作为最后一个实参；
   - `sum()`（无 variadic 实参）也合法，会传入空 `Vec[T]`。
@@ -118,6 +122,7 @@ where
   - 不做真实 pack 展开，仅用于语法与 arity 校验；
   - 若显式类型实参超过声明上限，会报
     `wrong number of type args: expected at most N, got M`。
+  - 当声明包含 `T...` 时，诊断会追加说明：`type parameter pack is declaration-only in stage2`。
 
 后续（未做）：
 

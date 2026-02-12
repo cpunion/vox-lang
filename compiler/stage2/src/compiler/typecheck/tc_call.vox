@@ -40,16 +40,14 @@ fn compile_error_arg_text(exprs: ast.ExprPool, id: i32) -> String {
 }
 
 fn pack_arity_error_msg(sig: FuncSig, got: i32) -> String {
-  if sig.type_param_packs.len() != 0 {
-    return "wrong number of type args: expected at most "
-      .concat(sig.type_params.len().to_string())
-      .concat(", got ")
-      .concat(got.to_string());
-  }
-  return "wrong number of type args: expected at most "
+  let mut msg: String = "wrong number of type args: expected at most "
     .concat(sig.type_params.len().to_string())
     .concat(", got ")
     .concat(got.to_string());
+  if sig.type_param_packs.len() != 0 {
+    msg = msg.concat(" (type parameter pack is declaration-only in stage2)");
+  }
+  return msg;
 }
 
 fn method_cand_key(mod_path: String, trait_name: String) -> String {
@@ -438,7 +436,11 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
   // Typed path support:
   // - `Option[i32].Some(1)` => parts: ["Option","Some"], path_targs: [i32]
   let pr: ExprTypePathResult = expr_type_path(exprs, callee);
-  if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if !pr.ok {
+        let mut msgc: String = "invalid const generic arg for ".concat(cp.name);
+        if pr.text != "" { msgc = msgc.concat(": ").concat(pr.text); }
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgc) };
+      }
   let parts: Vec[String] = pr.parts;
   let path_targs: Vec[ast.TypeName] = pr.targs;
 
@@ -918,7 +920,7 @@ fn tc_call_func_sig(
     let mut xj: i32 = first_const;
     while xj < type_args.len() {
       if !is_const_generic_arg_tn_or_local(l0, type_args.get(xj)) {
-        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "generic arg order error: type args must come before const args") };
       }
       xj = xj + 1;
     }
@@ -939,7 +941,7 @@ fn tc_call_func_sig(
   let mut ci0: i32 = 0;
   while ci0 < explicit_targ_n {
     let ta0: ast.TypeName = type_args.get(ci0);
-    if is_const_generic_arg_tn_or_local(l0, ta0) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if is_const_generic_arg_tn_or_local(l0, ta0) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "generic arg order error: type args must come before const args") }; }
     explicit_targs.push(ta0);
     ci0 = ci0 + 1;
   }
@@ -952,11 +954,17 @@ fn tc_call_func_sig(
     if cidx < explicit_const_n {
       let ctn: ast.TypeName = type_args.get(explicit_targ_n + cidx);
       let pr: ParseConstGenericArgWithLocalsResult = parse_const_generic_arg_with_locals(ctx, l0, ctn, cp.ty);
-      if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      if !pr.ok {
+        let mut msgc: String = "invalid const generic arg for ".concat(cp.name);
+        if pr.text != "" { msgc = msgc.concat(": ").concat(pr.text); }
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgc) };
+      }
       if pr.unresolved { has_unresolved_const_arg = true; }
       csubs.push(ConstSub { name: cp.name, ty: cp.ty, iv: pr.iv, text: pr.text });
     } else {
-      if !cp.has_default { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      if !cp.has_default {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "missing const generic arg: ".concat(cp.name)) };
+      }
       csubs.push(ConstSub { name: cp.name, ty: cp.ty, iv: cp.default_iv, text: cp.default_text });
     }
     cidx = cidx + 1;
@@ -1026,7 +1034,7 @@ fn tc_call_func_sig(
   let mut j: i32 = 0;
   while j < sig.type_params.len() {
     let tp: String = sig.type_params.get(j);
-    if subs_lookup(subs, tp) == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if subs_lookup(subs, tp) == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "cannot infer type argument: ".concat(tp)) }; }
     j = j + 1;
   }
 

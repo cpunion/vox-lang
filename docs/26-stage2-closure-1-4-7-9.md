@@ -21,7 +21,7 @@ Canonical gate for each item:
    - Acceptance:
      - Add/adjust std tests showing view-first APIs.
      - Update docs (`07/13/14`) to exact behavior.
-3. [ ] Generic type-pack semantics closure: remove ambiguous skeleton behavior and lock deterministic semantics with tests.
+3. [x] Generic type-pack semantics closure: remove ambiguous skeleton behavior and lock deterministic semantics with tests.
    - Acceptance:
      - Add typecheck + compile tests that pin current supported behavior.
      - Eliminate contradictory diagnostics around pack arity/usage.
