@@ -1911,16 +1911,16 @@ fn main() -> i32 {
     let all: Vec[String] = fs.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_test_sources(all);
 
-    let discovered: Vec[String] = discover_tests(paths);
     let prev_failed: Vec[String] = if test_rerun_failed { read_failed_tests() } else { Vec() };
     if test_rerun_failed && prev_failed.len() == 0 {
       if test_json {
-        print_json_report(discovered.len(), 0, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, true, 0, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", "no previous failed tests", 0, 0, 0, 0);
+        print_json_report(0, 0, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, true, 0, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", "no previous failed tests", 0, 0, 0, 0);
       } else {
         print("[test] no previous failed tests\n");
       }
       return 0;
     }
+    let discovered: Vec[String] = if test_list_only { discover_tests_cached_fast(paths) } else { discover_tests_cached(paths) };
     let base: Vec[String] = if test_rerun_failed { intersect_tests(discovered, prev_failed) } else { discovered };
     let by_module: Vec[String] = filter_tests_module_pattern(base, test_module_pat);
     let by_run: Vec[String] = filter_tests_run_pattern(by_module, test_run_pat);
@@ -1964,21 +1964,25 @@ fn main() -> i32 {
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
 
-    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests });
-    if !r.ok {
-      print("compile failed: ".concat(r.err).concat("\n"));
-      return 1;
-    }
-
     let cpath: String = out.concat(".test.c");
     let bin: String = out.concat(".test");
-    fs.write_string(cpath, r.c);
-    let cmdline: String = cc_cmd().concat(" -std=c11 -O0 -g").concat(cc_common_flags()).concat(" ").concat(cpath).concat(" -o ").concat(bin).concat(cc_link_flags());
-    let code: i32 = proc.exec(cmdline);
-    if code != 0 {
-      print("cc failed: ".concat(cmdline).concat("\n"));
-      print("cc exit: ".concat(code.to_string()).concat("\n"));
-      return 1;
+    let build_key: String = test_build_cache_key(files, tests);
+    if !test_build_cache_hit(out, build_key, cpath, bin) {
+      let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests });
+      if !r.ok {
+        print("compile failed: ".concat(r.err).concat("\n"));
+        return 1;
+      }
+
+      fs.write_string(cpath, r.c);
+      let cmdline: String = cc_cmd().concat(" -std=c11 -O0 -g").concat(cc_common_flags()).concat(" ").concat(cpath).concat(" -o ").concat(bin).concat(cc_link_flags());
+      let code: i32 = proc.exec(cmdline);
+      if code != 0 {
+        print("cc failed: ".concat(cmdline).concat("\n"));
+        print("cc exit: ".concat(code.to_string()).concat("\n"));
+        return 1;
+      }
+      write_test_build_cache(out, build_key);
     }
 
     // Run tests by module-level parallel queues, keeping module-internal order.

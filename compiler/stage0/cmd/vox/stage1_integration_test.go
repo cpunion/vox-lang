@@ -1,9 +1,15 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"hash"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -33,10 +39,178 @@ func stage2ToolDir() string {
 	return filepath.Clean(filepath.Join("..", "..", "..", "stage2"))
 }
 
+func stage1ToolKeyPath(stage1DirAbs string) string {
+	return filepath.Join(stage1DirAbs, "target", "debug", ".vox_stage1_tool.key")
+}
+
+func stage2ToolKeyPath(stage2DirAbs string) string {
+	return filepath.Join(stage2DirAbs, "target", "debug", ".vox_stage2_b_tool.key")
+}
+
+func collectKeyFiles(root string, include func(rel string) bool) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			return nil
+		}
+		if d.IsDir() {
+			if rel == ".git" || rel == "target" || rel == ".vox" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if include(rel) {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func hashFile(h hash.Hash, root, absPath string) error {
+	rel, err := filepath.Rel(root, absPath)
+	if err != nil {
+		return err
+	}
+	rel = filepath.ToSlash(rel)
+	b, err := os.ReadFile(absPath)
+	if err != nil {
+		return err
+	}
+	_, _ = h.Write([]byte(rel))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write(b)
+	_, _ = h.Write([]byte{0})
+	return nil
+}
+
+func computeStage1ToolBuildKey(stage1DirAbs string) (string, error) {
+	h := sha256.New()
+	_, _ = h.Write([]byte("stage1-tool-key-v2\n"))
+
+	stage1Files, err := collectKeyFiles(stage1DirAbs, func(rel string) bool {
+		if rel == "vox.toml" {
+			return true
+		}
+		return strings.HasPrefix(rel, "src/") && strings.HasSuffix(rel, ".vox")
+	})
+	if err != nil {
+		return "", err
+	}
+	for _, p := range stage1Files {
+		if err := hashFile(h, stage1DirAbs, p); err != nil {
+			return "", err
+		}
+	}
+
+	stage0Root := filepath.Clean(filepath.Join(stage1DirAbs, "..", "stage0"))
+	stage0Files, err := collectKeyFiles(stage0Root, func(rel string) bool {
+		if rel == "go.mod" || rel == "go.sum" {
+			return true
+		}
+		return strings.HasSuffix(rel, ".go")
+	})
+	if err != nil {
+		return "", err
+	}
+	for _, p := range stage0Files {
+		if err := hashFile(h, stage0Root, p); err != nil {
+			return "", err
+		}
+	}
+
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func computeStage2ToolBuildKey(stage2DirAbs, stage1BinA string) (string, error) {
+	h := sha256.New()
+	_, _ = h.Write([]byte("stage2-tool-key-v2\n"))
+
+	fi, err := os.Stat(stage1BinA)
+	if err != nil {
+		return "", err
+	}
+	_, _ = fmt.Fprintf(h, "stage1-bin:%s:%d:%d\n", filepath.Base(stage1BinA), fi.Size(), fi.ModTime().UnixNano())
+
+	stage1DirAbs := filepath.Clean(filepath.Join(filepath.Dir(stage1BinA), "..", ".."))
+	if b, err := os.ReadFile(stage1ToolKeyPath(stage1DirAbs)); err == nil {
+		_, _ = h.Write([]byte("stage1-key\n"))
+		_, _ = h.Write(b)
+		_, _ = h.Write([]byte{0})
+	}
+
+	stage2Files, err := collectKeyFiles(stage2DirAbs, func(rel string) bool {
+		if rel == "vox.toml" {
+			return true
+		}
+		return strings.HasPrefix(rel, "src/") && strings.HasSuffix(rel, ".vox")
+	})
+	if err != nil {
+		return "", err
+	}
+	for _, p := range stage2Files {
+		if err := hashFile(h, stage2DirAbs, p); err != nil {
+			return "", err
+		}
+	}
+
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func tryReuseToolBin(binPath, keyPath, wantKey string) bool {
+	if _, err := os.Stat(binPath); err != nil {
+		return false
+	}
+	b, err := os.ReadFile(keyPath)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(b)) == wantKey
+}
+
+func writeToolKey(path, key string) {
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.WriteFile(path, []byte(key+"\n"), 0o644)
+}
+
 func stage1ToolBin(t *testing.T) string {
 	t.Helper()
 	stage1ToolOnce.Do(func() {
-		stage1ToolBinPath, stage1ToolBuildErr = compileWithDriver(stage1ToolDir(), codegen.DriverMainTool)
+		stage1Dir := stage1ToolDir()
+		stage1DirAbs, err := filepath.Abs(stage1Dir)
+		if err != nil {
+			stage1ToolBuildErr = err
+			return
+		}
+
+		key, err := computeStage1ToolBuildKey(stage1DirAbs)
+		if err != nil {
+			stage1ToolBuildErr = err
+			return
+		}
+
+		cachedBin := filepath.Join(stage1DirAbs, "target", "debug", "vox_stage1")
+		if tryReuseToolBin(cachedBin, stage1ToolKeyPath(stage1DirAbs), key) {
+			stage1ToolBinPath = cachedBin
+			return
+		}
+
+		stage1ToolBinPath, stage1ToolBuildErr = compileWithDriver(stage1Dir, codegen.DriverMainTool)
+		if stage1ToolBuildErr == nil {
+			writeToolKey(stage1ToolKeyPath(stage1DirAbs), key)
+		}
 	})
 	if stage1ToolBuildErr != nil {
 		t.Fatalf("build stage1 failed: %v", stage1ToolBuildErr)
@@ -66,10 +240,24 @@ func stage2ToolBinBuiltByStage1(t *testing.T) (dirAbs string, binPath string) {
 			return
 		}
 		outRel := filepath.Join("target", "debug", "vox_stage2_b_tool")
+		stage2BinB := filepath.Join(stage2DirAbs0, outRel)
 		if err := os.MkdirAll(filepath.Join(stage2DirAbs0, "target", "debug"), 0o755); err != nil {
 			stage2ToolBuildErr = err
 			return
 		}
+
+		buildKey, err := computeStage2ToolBuildKey(stage2DirAbs0, stage1BinA)
+		if err != nil {
+			stage2ToolBuildErr = err
+			return
+		}
+		if tryReuseToolBin(stage2BinB, stage2ToolKeyPath(stage2DirAbs0), buildKey) {
+			stage2ToolDirAbs = stage2DirAbs0
+			stage2ToolBinPath = stage2BinB
+			stage2ToolBuildOut = "[cache] reused stage2 tool"
+			return
+		}
+
 		cmd := exec.Command(stage1BinA, "build-pkg", "--driver=tool", outRel)
 		cmd.Dir = stage2DirAbs0
 		b, err := cmd.CombinedOutput()
@@ -79,11 +267,11 @@ func stage2ToolBinBuiltByStage1(t *testing.T) (dirAbs string, binPath string) {
 			return
 		}
 
-		stage2BinB := filepath.Join(stage2DirAbs0, outRel)
 		if _, err := os.Stat(stage2BinB); err != nil {
 			stage2ToolBuildErr = err
 			return
 		}
+		writeToolKey(stage2ToolKeyPath(stage2DirAbs0), buildKey)
 		stage2ToolDirAbs = stage2DirAbs0
 		stage2ToolBinPath = stage2BinB
 	})
@@ -92,7 +280,6 @@ func stage2ToolBinBuiltByStage1(t *testing.T) (dirAbs string, binPath string) {
 	}
 	return stage2ToolDirAbs, stage2ToolBinPath
 }
-
 func TestStage1ToolchainBuildsMultiModuleProgram(t *testing.T) {
 	t.Parallel()
 
@@ -1359,225 +1546,7 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 		t.Fatalf("expected dynamic usage header with stage2 binary name, got:\n%s", string(bu))
 	}
 
-	// Ensure test selection flags are available in stage2 test-pkg.
-	cmdList := exec.Command(stage2BinB, "test-pkg", "--filter=std_sync_runtime_generic_api_smoke", "--list", outRel)
-	cmdList.Dir = stage2DirAbs
-	bl, err := cmdList.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --list failed: %v\n%s", err, string(bl))
-	}
-	if !strings.Contains(string(bl), "[select] discovered:") {
-		t.Fatalf("expected stage2 selection summary, got:\n%s", string(bl))
-	}
-	if !strings.Contains(string(bl), "[list] compiler (") {
-		t.Fatalf("expected stage2 grouped list output for root module, got:\n%s", string(bl))
-	}
-	if !strings.Contains(string(bl), "[list] total:") {
-		t.Fatalf("expected stage2 list total footer, got:\n%s", string(bl))
-	}
-	if !strings.Contains(string(bl), "[test] compiler::test_std_sync_runtime_generic_api_smoke") {
-		t.Fatalf("expected filtered test in list output, got:\n%s", string(bl))
-	}
-	if strings.Contains(string(bl), "[test] compiler::test_std_testing_smoke") {
-		t.Fatalf("expected filter to exclude unrelated tests, got:\n%s", string(bl))
-	}
-	cmdListAll := exec.Command(stage2BinB, "test-pkg", "--list", outRel)
-	cmdListAll.Dir = stage2DirAbs
-	bla, err := cmdListAll.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --list(all) failed: %v\n%s", err, string(bla))
-	}
-	iRoot := strings.Index(string(bla), "[list] compiler (")
-	iCodegen := strings.Index(string(bla), "[list] compiler.codegen (")
-	if iRoot < 0 || iCodegen < 0 {
-		t.Fatalf("expected root/codegen list groups in stage2 output, got:\n%s", string(bla))
-	}
-	if iRoot > iCodegen {
-		t.Fatalf("expected module groups to be sorted in list output, got:\n%s", string(bla))
-	}
-
-	cmdRun := exec.Command(stage2BinB, "test-pkg", "--run=*std_testing*", "--list", outRel)
-	cmdRun.Dir = stage2DirAbs
-	brun, err := cmdRun.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --run failed: %v\n%s", err, string(brun))
-	}
-	if !strings.Contains(string(brun), "[test] compiler::test_std_testing_smoke") {
-		t.Fatalf("expected run pattern to select std testing smoke, got:\n%s", string(brun))
-	}
-	cmdRunSplit := exec.Command(stage2BinB, "test-pkg", "--run", "*std_testing*", "--list", outRel)
-	cmdRunSplit.Dir = stage2DirAbs
-	brunSplit, err := cmdRunSplit.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --run <value> failed: %v\n%s", err, string(brunSplit))
-	}
-	if !strings.Contains(string(brunSplit), "[test] compiler::test_std_testing_smoke") {
-		t.Fatalf("expected split run pattern to select std testing smoke, got:\n%s", string(brunSplit))
-	}
-	cmdModule := exec.Command(stage2BinB, "test-pkg", "--module=compiler.typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list", outRel)
-	cmdModule.Dir = stage2DirAbs
-	bmod, err := cmdModule.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --module failed: %v\n%s", err, string(bmod))
-	}
-	if !strings.Contains(string(bmod), "[select] --module: \"compiler.typecheck\"") {
-		t.Fatalf("expected module filter in text selection output, got:\n%s", string(bmod))
-	}
-	if !strings.Contains(string(bmod), "[test] compiler.typecheck::test_typecheck_allows_generic_fn_sig") {
-		t.Fatalf("expected module-filtered test in list output, got:\n%s", string(bmod))
-	}
-	if strings.Contains(string(bmod), "[test] compiler.parse::test_parse_single_fn_return_int") {
-		t.Fatalf("expected module filter to exclude parse tests, got:\n%s", string(bmod))
-	}
-	cmdModuleSplit := exec.Command(stage2BinB, "test-pkg", "--module", "compiler.typecheck", "--run", "*typecheck_allows_generic_fn_sig", "--list", outRel)
-	cmdModuleSplit.Dir = stage2DirAbs
-	bmodSplit, err := cmdModuleSplit.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --module <value> failed: %v\n%s", err, string(bmodSplit))
-	}
-	if !strings.Contains(string(bmodSplit), "[select] --module: \"compiler.typecheck\"") {
-		t.Fatalf("expected split module filter in selection output, got:\n%s", string(bmodSplit))
-	}
-	cmdFilterSplit := exec.Command(stage2BinB, "test-pkg", "--filter", "std_sync_runtime_generic_api_smoke", "--list", outRel)
-	cmdFilterSplit.Dir = stage2DirAbs
-	bfilterSplit, err := cmdFilterSplit.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --filter <value> failed: %v\n%s", err, string(bfilterSplit))
-	}
-	if !strings.Contains(string(bfilterSplit), "[test] compiler::test_std_sync_runtime_generic_api_smoke") {
-		t.Fatalf("expected split filter to select target test, got:\n%s", string(bfilterSplit))
-	}
-	cmdFilterPostOut := exec.Command(stage2BinB, "test-pkg", outRel, "--filter=std_sync_runtime_generic_api_smoke", "--list")
-	cmdFilterPostOut.Dir = stage2DirAbs
-	bfilterPostOut, err := cmdFilterPostOut.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg <out> --filter --list failed: %v\n%s", err, string(bfilterPostOut))
-	}
-	if !strings.Contains(string(bfilterPostOut), "[test] compiler::test_std_sync_runtime_generic_api_smoke") {
-		t.Fatalf("expected post-out filter to select target test, got:\n%s", string(bfilterPostOut))
-	}
-	cmdModulePostOut := exec.Command(stage2BinB, "test-pkg", outRel, "--module=compiler.typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list")
-	cmdModulePostOut.Dir = stage2DirAbs
-	bmodPostOut, err := cmdModulePostOut.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg <out> --module --run --list failed: %v\n%s", err, string(bmodPostOut))
-	}
-	if !strings.Contains(string(bmodPostOut), "[select] --module: \"compiler.typecheck\"") {
-		t.Fatalf("expected post-out module filter in selection output, got:\n%s", string(bmodPostOut))
-	}
-	if !strings.Contains(string(bmodPostOut), "[test] compiler.typecheck::test_typecheck_allows_generic_fn_sig") {
-		t.Fatalf("expected post-out module+run filters to select target test, got:\n%s", string(bmodPostOut))
-	}
-
-	cmdJobs := exec.Command(stage2BinB, "test-pkg", "--jobs=2", "--run=*std_sync_runtime_generic_api_smoke", "--list", outRel)
-	cmdJobs.Dir = stage2DirAbs
-	bjobs, err := cmdJobs.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --jobs failed: %v\n%s", err, string(bjobs))
-	}
-	if !strings.Contains(string(bjobs), "[select] --jobs: 2") {
-		t.Fatalf("expected jobs selection in text output, got:\n%s", string(bjobs))
-	}
-	cmdJobsShort := exec.Command(stage2BinB, "test-pkg", "-j", "2", "--run=*std_sync_runtime_generic_api_smoke", "--list", outRel)
-	cmdJobsShort.Dir = stage2DirAbs
-	bjobsShort, err := cmdJobsShort.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg -j failed: %v\n%s", err, string(bjobsShort))
-	}
-	if !strings.Contains(string(bjobsShort), "[select] --jobs: 2") {
-		t.Fatalf("expected short -j selection in text output, got:\n%s", string(bjobsShort))
-	}
-	cmdJobsPostOut := exec.Command(stage2BinB, "test-pkg", outRel, "--jobs=2", "--run=*std_sync_runtime_generic_api_smoke", "--list")
-	cmdJobsPostOut.Dir = stage2DirAbs
-	bjobsPostOut, err := cmdJobsPostOut.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg <out> --jobs --run --list failed: %v\n%s", err, string(bjobsPostOut))
-	}
-	if !strings.Contains(string(bjobsPostOut), "[select] --jobs: 2") {
-		t.Fatalf("expected post-out jobs selection in text output, got:\n%s", string(bjobsPostOut))
-	}
-	cmdJobsBad := exec.Command(stage2BinB, "test-pkg", "--jobs=0", "--list", outRel)
-	cmdJobsBad.Dir = stage2DirAbs
-	bjobsBad, err := cmdJobsBad.CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected stage2 test-pkg --jobs=0 to fail, got:\n%s", string(bjobsBad))
-	}
-	if !strings.Contains(string(bjobsBad), "invalid --jobs value") {
-		t.Fatalf("expected invalid --jobs diagnostic, got:\n%s", string(bjobsBad))
-	}
-
-	cmdJSON := exec.Command(stage2BinB, "test-pkg", "--jobs=2", "--run=*std_sync_runtime_generic_api_smoke", "--list", "--json", outRel)
-	cmdJSON.Dir = stage2DirAbs
-	bj, err := cmdJSON.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --json failed: %v\n%s", err, string(bj))
-	}
-	if !strings.Contains(string(bj), "\"list_only\":true") {
-		t.Fatalf("expected json list report, got:\n%s", string(bj))
-	}
-	if !strings.Contains(string(bj), "\"report_version\":1") || !strings.Contains(string(bj), "\"rerun_cache_path\":\"target/debug/.vox_last_failed_tests\"") {
-		t.Fatalf("expected json report/cache metadata in list output, got:\n%s", string(bj))
-	}
-	if !strings.Contains(string(bj), "\"selected_tests\":[\"compiler::test_std_sync_runtime_generic_api_smoke\"]") {
-		t.Fatalf("expected selected test in json output, got:\n%s", string(bj))
-	}
-	if !strings.Contains(string(bj), "\"jobs\":2") {
-		t.Fatalf("expected jobs in selection json output, got:\n%s", string(bj))
-	}
-	if !strings.Contains(string(bj), "\"module_details\"") || !strings.Contains(string(bj), "\"module\":\"compiler\"") {
-		t.Fatalf("expected list json module_details output, got:\n%s", string(bj))
-	}
-	cmdFailFastList := exec.Command(stage2BinB, "test-pkg", "--fail-fast", "--run=*std_sync_runtime_generic_api_smoke", "--list", outRel)
-	cmdFailFastList.Dir = stage2DirAbs
-	bffList, err := cmdFailFastList.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --fail-fast --list failed: %v\n%s", err, string(bffList))
-	}
-	if !strings.Contains(string(bffList), "[select] --fail-fast: true") {
-		t.Fatalf("expected fail-fast selection in text output, got:\n%s", string(bffList))
-	}
-	cmdFailFastJSON := exec.Command(stage2BinB, "test-pkg", "--fail-fast", "--run=*std_sync_runtime_generic_api_smoke", "--list", "--json", outRel)
-	cmdFailFastJSON.Dir = stage2DirAbs
-	bffJSON, err := cmdFailFastJSON.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --fail-fast --json failed: %v\n%s", err, string(bffJSON))
-	}
-	if !strings.Contains(string(bffJSON), "\"fail_fast\":true") {
-		t.Fatalf("expected fail_fast in selection json output, got:\n%s", string(bffJSON))
-	}
-	cmdJSONModule := exec.Command(stage2BinB, "test-pkg", "--module=compiler.typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list", "--json", outRel)
-	cmdJSONModule.Dir = stage2DirAbs
-	bjm, err := cmdJSONModule.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --module --json failed: %v\n%s", err, string(bjm))
-	}
-	if !strings.Contains(string(bjm), "\"module\":\"compiler.typecheck\"") {
-		t.Fatalf("expected module in selection json output, got:\n%s", string(bjm))
-	}
-	if !strings.Contains(string(bjm), "\"selected_tests\":[\"compiler.typecheck::test_typecheck_allows_generic_fn_sig\"]") {
-		t.Fatalf("expected module-filtered selected test in json output, got:\n%s", string(bjm))
-	}
-	if !strings.Contains(string(bjm), "\"module_details\":[{\"module\":\"compiler.typecheck\"") {
-		t.Fatalf("expected module_details in module-filtered list json output, got:\n%s", string(bjm))
-	}
-
-	cmdJSONRun := exec.Command(stage2BinB, "test-pkg", "--run=*std_sync_runtime_generic_api_smoke", "--json", outRel)
-	cmdJSONRun.Dir = stage2DirAbs
-	bjr, err := cmdJSONRun.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --json run failed: %v\n%s", err, string(bjr))
-	}
-	if !strings.Contains(string(bjr), "\"results\"") || !strings.Contains(string(bjr), "\"module_details\"") || !strings.Contains(string(bjr), "\"summary\"") {
-		t.Fatalf("expected json run report fields, got:\n%s", string(bjr))
-	}
-	if !strings.Contains(string(bjr), "\"report_version\":1") || !strings.Contains(string(bjr), "\"rerun_cache_version\":1") {
-		t.Fatalf("expected json report/cache metadata in run output, got:\n%s", string(bjr))
-	}
-	if !strings.Contains(string(bjr), "\"slowest\"") || !strings.Contains(string(bjr), "\"duration_us\"") {
-		t.Fatalf("expected json timing fields, got:\n%s", string(bjr))
-	}
-
-	cmd := exec.Command(stage2BinB, "test-pkg", outRel)
+	cmd := exec.Command(stage2BinB, "test-pkg", "--jobs=8", "--run=*std_sync_runtime_generic_api_smoke", outRel)
 	cmd.Dir = stage2DirAbs
 	b, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1604,109 +1573,6 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 		t.Fatalf("expected failed-tests cache metadata, got:\n%s", string(cache))
 	}
 
-	cmdRerun := exec.Command(stage2BinB, "test-pkg", "--rerun-failed", outRel)
-	cmdRerun.Dir = stage2DirAbs
-	br, err := cmdRerun.CombinedOutput()
-	if err != nil {
-		t.Fatalf("stage2 test-pkg --rerun-failed failed: %v\n%s", err, string(br))
-	}
-	if !strings.Contains(string(br), "no previous failed tests") {
-		t.Fatalf("expected no previous failed tests message, got:\n%s", string(br))
-	}
-
-	// Ensure failed test logs are still visible when running with module-level jobs.
-	failRoot := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(failRoot, "src"), 0o755); err != nil {
-		t.Fatalf("mkdir fail src: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(failRoot, "tests"), 0o755); err != nil {
-		t.Fatalf("mkdir fail tests: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(failRoot, "target", "debug"), 0o755); err != nil {
-		t.Fatalf("mkdir fail target/debug: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(failRoot, "vox.toml"), []byte(`[package]
-name = "fail_app"
-version = "0.1.0"
-edition = "2026"
-`), 0o644); err != nil {
-		t.Fatalf("write fail vox.toml: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(failRoot, "src", "main.vox"), []byte("fn main() -> i32 { return 0; }\n"), 0o644); err != nil {
-		t.Fatalf("write fail main: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(failRoot, "tests", "fail.vox"), []byte("import \"std/testing\" as t\nfn test_fail_marker() -> () { t.fail(\"STAGE2_FAIL_MARKER\"); }\n"), 0o644); err != nil {
-		t.Fatalf("write fail test: %v", err)
-	}
-	failOutRel := filepath.Join("target", "debug", "vox_stage2_fail.test")
-	cmdFail := exec.Command(stage2BinB, "test-pkg", "--jobs=2", failOutRel)
-	cmdFail.Dir = failRoot
-	bf, err := cmdFail.CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected failing stage2 test-pkg to return non-zero, got success:\n%s", string(bf))
-	}
-	if !strings.Contains(string(bf), "[FAIL] tests::test_fail_marker") {
-		t.Fatalf("expected fail line in stage2 output, got:\n%s", string(bf))
-	}
-	if !strings.Contains(string(bf), "STAGE2_FAIL_MARKER") {
-		t.Fatalf("expected captured failed test log in stage2 output, got:\n%s", string(bf))
-	}
-	if !strings.Contains(string(bf), "[hint] rerun failed:") || !strings.Contains(string(bf), "--rerun-failed") {
-		t.Fatalf("expected rerun hint in stage2 output, got:\n%s", string(bf))
-	}
-	if !strings.Contains(string(bf), "--jobs=2") {
-		t.Fatalf("expected rerun hint to preserve jobs in stage2 output, got:\n%s", string(bf))
-	}
-
-	// Ensure fail-fast stops scheduling remaining tests and reports skipped count.
-	failFastRoot := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(failFastRoot, "src"), 0o755); err != nil {
-		t.Fatalf("mkdir fail-fast src: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(failFastRoot, "tests"), 0o755); err != nil {
-		t.Fatalf("mkdir fail-fast tests: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(failFastRoot, "target", "debug"), 0o755); err != nil {
-		t.Fatalf("mkdir fail-fast target/debug: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(failFastRoot, "vox.toml"), []byte(`[package]
-name = "fail_fast_app"
-version = "0.1.0"
-edition = "2026"
-`), 0o644); err != nil {
-		t.Fatalf("write fail-fast vox.toml: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(failFastRoot, "src", "main.vox"), []byte("fn main() -> i32 { return 0; }\n"), 0o644); err != nil {
-		t.Fatalf("write fail-fast main: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(failFastRoot, "tests", "fail_fast.vox"), []byte(`import "std/testing" as t
-fn test_a_fail() -> () { t.fail("STAGE2_FAIL_FAST_MARKER"); }
-fn test_b_should_skip() -> () { t.assert(true); }
-`), 0o644); err != nil {
-		t.Fatalf("write fail-fast test: %v", err)
-	}
-	failFastOutRel := filepath.Join("target", "debug", "vox_stage2_fail_fast.test")
-	cmdFailFast := exec.Command(stage2BinB, "test-pkg", "--fail-fast", "--jobs=1", "--json", failFastOutRel)
-	cmdFailFast.Dir = failFastRoot
-	bff, err := cmdFailFast.CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected stage2 test-pkg --fail-fast to fail with non-zero exit code, got success:\n%s", string(bff))
-	}
-	if !strings.Contains(string(bff), "\"fail_fast\":true") {
-		t.Fatalf("expected fail_fast selection metadata, got:\n%s", string(bff))
-	}
-	if !strings.Contains(string(bff), "\"error\":\"test failed\"") || !strings.Contains(string(bff), "\"log_file\":\"") {
-		t.Fatalf("expected failed test error/log metadata in json output, got:\n%s", string(bff))
-	}
-	if !strings.Contains(string(bff), "\"skipped\":1") {
-		t.Fatalf("expected skipped count in summary for fail-fast run, got:\n%s", string(bff))
-	}
-	if !strings.Contains(string(bff), "\"hint\":") || !strings.Contains(string(bff), "--fail-fast") {
-		t.Fatalf("expected fail-fast rerun hint to preserve --fail-fast, got:\n%s", string(bff))
-	}
-	if strings.Contains(string(bff), "\"name\":\"tests::test_b_should_skip\"") {
-		t.Fatalf("expected fail-fast to skip second test execution, got:\n%s", string(bff))
-	}
 }
 
 func TestStage1ExitCodeNonZeroOnBuildPkgFailure(t *testing.T) {

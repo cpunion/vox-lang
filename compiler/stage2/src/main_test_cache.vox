@@ -1,0 +1,164 @@
+import "std/fs" as fs
+import "compiler/loader" as ld
+
+fn source_file_insert_sorted(xs0: Vec[ld.SourceFile], x: ld.SourceFile) -> Vec[ld.SourceFile] {
+  let mut out: Vec[ld.SourceFile] = Vec();
+  let mut inserted: bool = false;
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    let cur: ld.SourceFile = xs0.get(i);
+    if !inserted && x.path < cur.path {
+      out.push(x);
+      inserted = true;
+    }
+    out.push(cur);
+    i = i + 1;
+  }
+  if !inserted { out.push(x); }
+  return out;
+}
+
+fn sort_source_files(xs0: Vec[ld.SourceFile]) -> Vec[ld.SourceFile] {
+  let mut out: Vec[ld.SourceFile] = Vec();
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    out = source_file_insert_sorted(out, xs0.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn test_build_cache_meta_path(out: String) -> String {
+  return out.concat(".test.cache.key");
+}
+
+fn test_build_cache_key(files0: Vec[ld.SourceFile], tests0: Vec[String]) -> String {
+  let mut h: u64 = 1469598103934665603 as u64;
+  h = lock_hash_text(h, "test-build-cache-v2\n");
+  h = lock_hash_text(h, if host_is_windows() { "windows\n" } else { "posix\n" });
+
+  let files: Vec[ld.SourceFile] = sort_source_files(files0);
+  let mut i: i32 = 0;
+  while i < files.len() {
+    let f: ld.SourceFile = files.get(i);
+    h = lock_hash_text(h, "F\n");
+    h = lock_hash_text(h, f.path);
+    h = lock_hash_text(h, "\n");
+    h = lock_hash_text(h, f.text);
+    h = lock_hash_text(h, "\n");
+    i = i + 1;
+  }
+
+  let tests: Vec[String] = sort_strings(tests0);
+  let mut j: i32 = 0;
+  while j < tests.len() {
+    h = lock_hash_text(h, "T\n");
+    h = lock_hash_text(h, tests.get(j));
+    h = lock_hash_text(h, "\n");
+    j = j + 1;
+  }
+  return h.to_string();
+}
+
+fn test_build_cache_hit(out: String, key: String, cpath: String, bin: String) -> bool {
+  let meta: String = test_build_cache_meta_path(out);
+  if !fs.exists(meta) { return false; }
+  if !fs.exists(cpath) { return false; }
+  if !fs.exists(bin) { return false; }
+  let cur: String = trim_space_main(fs.read_to_string(meta));
+  return cur == key;
+}
+
+fn write_test_build_cache(out: String, key: String) -> () {
+  let meta: String = test_build_cache_meta_path(out);
+  fs.write_string(meta, key.concat("\n"));
+}
+
+fn discover_tests_cache_key_path() -> String {
+  return "target/debug/.vox_test_discover.key";
+}
+
+fn discover_tests_cache_list_path() -> String {
+  return "target/debug/.vox_test_discover.list";
+}
+
+fn discover_tests_cache_key(paths0: Vec[String]) -> String {
+  let mut h: u64 = 1469598103934665603 as u64;
+  h = lock_hash_text(h, "discover-tests-cache-v1\n");
+
+  let mut test_paths: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < paths0.len() {
+    let p: String = paths0.get(i);
+    if is_test_file_for_discovery(p) {
+      test_paths.push(p);
+    }
+    i = i + 1;
+  }
+
+  let paths: Vec[String] = sort_strings(test_paths);
+  let mut j: i32 = 0;
+  while j < paths.len() {
+    let pth: String = paths.get(j);
+    h = lock_hash_text(h, "P\n");
+    h = lock_hash_text(h, pth);
+    h = lock_hash_text(h, "\n");
+    h = lock_hash_text(h, fs.read_to_string(pth));
+    h = lock_hash_text(h, "\n");
+    j = j + 1;
+  }
+  return h.to_string();
+}
+
+fn parse_discover_tests_cache_list(text: String) -> Vec[String] {
+  let lines: Vec[String] = lock_split_lines(text);
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < lines.len() {
+    let s: String = trim_space_main(lines.get(i));
+    if s != "" { out.push(s); }
+    i = i + 1;
+  }
+  return sort_strings(out);
+}
+
+fn format_discover_tests_cache_list(tests0: Vec[String]) -> String {
+  let tests: Vec[String] = sort_strings(tests0);
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < tests.len() {
+    out = out.concat(tests.get(i)).concat("\n");
+    i = i + 1;
+  }
+  return out;
+}
+
+fn write_discover_tests_cache(key: String, tests: Vec[String]) -> () {
+  fs.mkdir_p("target/debug");
+  fs.write_string(discover_tests_cache_key_path(), key.concat("\n"));
+  fs.write_string(discover_tests_cache_list_path(), format_discover_tests_cache_list(tests));
+}
+
+fn discover_tests_cached(paths: Vec[String]) -> Vec[String] {
+  let key: String = discover_tests_cache_key(paths);
+  let key_path: String = discover_tests_cache_key_path();
+  let list_path: String = discover_tests_cache_list_path();
+  if fs.exists(key_path) && fs.exists(list_path) {
+    let cached_key: String = trim_space_main(fs.read_to_string(key_path));
+    if cached_key == key {
+      return parse_discover_tests_cache_list(fs.read_to_string(list_path));
+    }
+  }
+  let tests: Vec[String] = discover_tests(paths);
+  write_discover_tests_cache(key, tests);
+  return tests;
+}
+
+fn discover_tests_cached_fast(paths: Vec[String]) -> Vec[String] {
+  let key_path: String = discover_tests_cache_key_path();
+  let list_path: String = discover_tests_cache_list_path();
+  if fs.exists(key_path) && fs.exists(list_path) {
+    return parse_discover_tests_cache_list(fs.read_to_string(list_path));
+  }
+  return discover_tests_cached(paths);
+}
