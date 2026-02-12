@@ -29,7 +29,7 @@ Canonical gate for each item:
    - Acceptance:
      - Add macroexpand tests for fallback vs expand decisions.
      - Update macro docs to match implemented behavior exactly.
-7. [ ] Diagnostics upgrade pass: tighten primary span usage and stable error code layering in remaining weak paths.
+7. [x] Diagnostics upgrade pass: tighten primary span usage and stable error code layering in remaining weak paths.
    - Acceptance:
      - Add failing tests that assert exact file/line/col + code.
 8. [ ] Stage2 runtime memory convergence pass: remove known temporary runtime ownership inconsistencies and pin behavior with tests.
