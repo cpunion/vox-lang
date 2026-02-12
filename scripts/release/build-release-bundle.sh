@@ -25,6 +25,42 @@ if [[ "$GOOS" == "windows" ]]; then
   EXE_SUFFIX=".exe"
 fi
 
+bootstrap_cc_env() {
+  if [[ "$GOOS" == "windows" ]]; then
+    local mingw_a="/c/ProgramData/mingw64/mingw64/bin"
+    local mingw_b="/c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin"
+    if [[ -d "$mingw_a" ]]; then
+      PATH="$mingw_a:$PATH"
+    fi
+    if [[ -d "$mingw_b" ]]; then
+      PATH="$mingw_b:$PATH"
+    fi
+    export PATH
+  fi
+
+  if [[ -n "${CC:-}" ]]; then
+    local cc_bin="${CC%% *}"
+    if command -v "$cc_bin" >/dev/null 2>&1; then
+      echo "[release] using CC from env: $CC"
+      return 0
+    fi
+    echo "[release] CC is set but not found in PATH: $CC" >&2
+  fi
+
+  local candidates=(cc gcc clang)
+  local c
+  for c in "${candidates[@]}"; do
+    if command -v "$c" >/dev/null 2>&1; then
+      export CC="$c"
+      echo "[release] auto-detected CC: $CC"
+      return 0
+    fi
+  done
+
+  echo "[release] no C compiler found (checked: cc, gcc, clang)" >&2
+  return 1
+}
+
 resolve_bin() {
   local base="$1"
   if [[ -f "$base" ]]; then
@@ -49,6 +85,7 @@ sha256_file() {
 }
 
 mkdir -p "$DIST_DIR"
+bootstrap_cc_env
 
 STAGE0_OUT="$ROOT/compiler/stage0/target/release/vox-stage0${EXE_SUFFIX}"
 mkdir -p "$(dirname "$STAGE0_OUT")"
