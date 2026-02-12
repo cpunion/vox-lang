@@ -58,11 +58,14 @@ bootstrap_cc_env() {
   if [[ -n "${CC:-}" ]]; then
     local cc_bin="${CC%% *}"
     if command -v "$cc_bin" >/dev/null 2>&1; then
-      local cc_resolved="$(command -v "$cc_bin")"
       if [[ "$GOOS" == "windows" ]]; then
-        cc_resolved="$(normalize_windows_exe_path "$cc_resolved")"
+        # stage1/stage2 invoke CC through shell command text; keep bare command
+        # name on Windows to avoid backslash path escaping issues.
+        export CC="$cc_bin"
+      else
+        local cc_resolved="$(command -v "$cc_bin")"
+        export CC="$cc_resolved"
       fi
-      export CC="$cc_resolved"
       echo "[release] using CC from env: $CC"
       return 0
     fi
@@ -83,11 +86,12 @@ bootstrap_cc_env() {
   local c
   for c in "${candidates[@]}"; do
     if command -v "$c" >/dev/null 2>&1; then
-      local resolved="$(command -v "$c")"
       if [[ "$GOOS" == "windows" ]]; then
-        resolved="$(normalize_windows_exe_path "$resolved")"
+        export CC="$c"
+      else
+        local resolved="$(command -v "$c")"
+        export CC="$resolved"
       fi
-      export CC="$resolved"
       echo "[release] auto-detected CC: $CC"
       return 0
     fi
@@ -122,7 +126,6 @@ sha256_file() {
 
 mkdir -p "$DIST_DIR"
 bootstrap_cc_env
-
 STAGE0_OUT="$ROOT/compiler/stage0/target/release/vox-stage0${EXE_SUFFIX}"
 mkdir -p "$(dirname "$STAGE0_OUT")"
 
