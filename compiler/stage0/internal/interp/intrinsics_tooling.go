@@ -33,6 +33,11 @@ func (rt *Runtime) callToolIntrinsic(name string, args []Value) (Value, bool, er
 			return unit(), true, err
 		}
 		return Value{K: VString, S: p}, true, nil
+	case "__getenv":
+		if len(args) != 1 || args[0].K != VString {
+			return unit(), true, fmt.Errorf("__getenv expects (String)")
+		}
+		return Value{K: VString, S: os.Getenv(args[0].S)}, true, nil
 	case "__now_ns":
 		if len(args) != 0 {
 			return unit(), true, fmt.Errorf("__now_ns expects ()")

@@ -110,6 +110,7 @@ vox_stage1 test-pkg  <out.bin>   # 从 ./src 与 ./tests 发现并运行 test_*
 - `build-pkg/test-pkg` 会读取当前目录的 `vox.toml`，加载其中声明的 path 依赖（包含传递依赖；依赖只加载其 `src/**`，不加载 tests）。
   - `vox.toml` 无效或出现重复依赖名时，命令会失败并返回非 0。
 - Stage1 会按可执行文件路径推导 Stage1 根目录，并从其 `src/std/**` 注入标准库源码（用于自举期最小 std）。
+- Stage1/Stage2 的 C 编译命令优先读取环境变量 `CC`；若未设置则回退到平台默认（Unix: `cc`，Windows: `gcc`）。
 
 ## Stage2 CLI（当前主迭代线）
 

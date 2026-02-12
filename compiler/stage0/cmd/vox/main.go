@@ -71,6 +71,11 @@ type testOptions struct {
 	jsonOutput  bool
 }
 
+type cCompilerSpec struct {
+	cmd  string
+	args []string
+}
+
 func parseEngineAndDir(args []string) (eng engine, dir string, err error) {
 	eng = engineC
 	dir = "."
@@ -1339,6 +1344,30 @@ func compile(dir string) (string, error) {
 	return compileWithDriver(dir, codegen.DriverMainUser)
 }
 
+func lookupCCompiler() (cCompilerSpec, error) {
+	if ccEnv := strings.TrimSpace(os.Getenv("CC")); ccEnv != "" {
+		parts := strings.Fields(ccEnv)
+		if len(parts) != 0 {
+			cmdPath, err := exec.LookPath(parts[0])
+			if err != nil {
+				return cCompilerSpec{}, fmt.Errorf("CC command not found in PATH: %s", parts[0])
+			}
+			return cCompilerSpec{cmd: cmdPath, args: parts[1:]}, nil
+		}
+	}
+
+	candidates := []string{"cc", "gcc", "clang"}
+	var tried []string
+	for _, name := range candidates {
+		path, err := exec.LookPath(name)
+		if err == nil {
+			return cCompilerSpec{cmd: path, args: nil}, nil
+		}
+		tried = append(tried, name)
+	}
+	return cCompilerSpec{}, fmt.Errorf("no C compiler found in PATH (tried: %s)", strings.Join(tried, ", "))
+}
+
 func compileWithDriver(dir string, driver codegen.DriverMainKind) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -1381,11 +1410,12 @@ func compileWithDriver(dir string, driver codegen.DriverMainKind) (string, error
 		return "", err
 	}
 
-	cc, err := exec.LookPath("cc")
+	ccSpec, err := lookupCCompiler()
 	if err != nil {
-		return "", fmt.Errorf("cc not found in PATH")
+		return "", err
 	}
-	ccArgs := []string{"-std=c11", "-O0", "-g"}
+	ccArgs := append([]string{}, ccSpec.args...)
+	ccArgs = append(ccArgs, "-std=c11", "-O0", "-g")
 	if runtime.GOOS != "windows" {
 		ccArgs = append(ccArgs, "-D_POSIX_C_SOURCE=200809L", "-D_DEFAULT_SOURCE")
 	}
@@ -1393,7 +1423,7 @@ func compileWithDriver(dir string, driver codegen.DriverMainKind) (string, error
 	if runtime.GOOS == "windows" {
 		ccArgs = append(ccArgs, "-lws2_32")
 	}
-	cmd := exec.Command(cc, ccArgs...)
+	cmd := exec.Command(ccSpec.cmd, ccArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -1577,15 +1607,20 @@ func compileTests(dir string, res *loader.BuildResult, testNames []string) (stri
 	if err := os.WriteFile(cPath, []byte(csrc), 0o644); err != nil {
 		return "", err
 	}
-	cc, err := exec.LookPath("cc")
+	ccSpec, err := lookupCCompiler()
 	if err != nil {
-		return "", fmt.Errorf("cc not found in PATH")
+		return "", err
 	}
-	ccArgs := []string{"-std=c11", "-O0", "-g", cPath, "-o", binPath}
+	ccArgs := append([]string{}, ccSpec.args...)
+	ccArgs = append(ccArgs, "-std=c11", "-O0", "-g")
+	if runtime.GOOS != "windows" {
+		ccArgs = append(ccArgs, "-D_POSIX_C_SOURCE=200809L", "-D_DEFAULT_SOURCE")
+	}
+	ccArgs = append(ccArgs, cPath, "-o", binPath)
 	if runtime.GOOS == "windows" {
 		ccArgs = append(ccArgs, "-lws2_32")
 	}
-	cmd := exec.Command(cc, ccArgs...)
+	cmd := exec.Command(ccSpec.cmd, ccArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

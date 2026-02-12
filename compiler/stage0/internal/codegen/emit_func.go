@@ -515,6 +515,20 @@ func emitInstr(out *bytes.Buffer, p *ir.Program, ins ir.Instr) error {
 			out.WriteString(" = vox_builtin_exe_path();\n")
 			return nil
 		}
+		if i.Name == "__getenv" {
+			if len(i.Args) != 1 {
+				return fmt.Errorf("__getenv expects 1 arg")
+			}
+			if i.Ret.K == ir.TUnit {
+				return fmt.Errorf("__getenv must return a value")
+			}
+			out.WriteString("  ")
+			out.WriteString(cTempName(i.Dst.ID))
+			out.WriteString(" = vox_builtin_getenv(")
+			out.WriteString(cValue(i.Args[0]))
+			out.WriteString(");\n")
+			return nil
+		}
 		if i.Name == "__now_ns" {
 			if len(i.Args) != 0 {
 				return fmt.Errorf("__now_ns expects 0 args")

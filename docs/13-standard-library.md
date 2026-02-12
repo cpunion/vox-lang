@@ -7,7 +7,7 @@
 - `std::prelude`：基础 trait 与常用类型导出
 - `std::string`：`String`、`str`、`StrView`
 - `std::fs`：最小文件系统能力（读写文件、枚举源文件；用于 stage1 工具链自举）
-- `std::process`：最小进程能力（args/exec；用于 stage1 工具链自举）
+- `std::process`：最小进程能力（args/exec/exe_path/getenv；用于 stage1 工具链自举）
 - `std::time`：最小时钟能力（`now_ns`；用于测试与工具链计时）
 - `std::sync`：并发原语（`Mutex[T]/Atomic[T]` 泛型 API）
 - `std::collections`：`Vec`、`Map` 等
@@ -29,7 +29,7 @@
   - `map_set`（存在则覆盖，不存在则插入）、`map_remove`
   - 其中键比较相关 API 需要 `K: Eq`。
   - 同时提供 `MapOps` trait（`impl[K: Eq, V] MapOps for Map[K,V]`），可用方法风格调用：`m.remove(k)`、`m.contains_key(k)`、`m.len()`、`m.clear()`（插入/读取值当前使用 `map_set/map_get/map_get_or`）。
-- `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取）。
+- `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取、环境变量读取）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`，以及 `File`/`file_read_all`/`file_write_all`/`file_exists`/`mkdir_p`。网络部分提供 `NetAddr` + `NetConn` 与最小 TCP API：`net_connect` / `net_send` / `net_recv` / `net_close`（解释器与 C 后端一致可用；失败时统一 panic）。
 - `std::sync` 当前 API 为泛型句柄：`Mutex[T]` / `Atomic[T]`（当前 `T` 由 `SyncScalar` 约束，已覆盖 `i32/i64`）；底层统一基于 runtime `i64` handle intrinsic。`fetch_add/swap/load/store` 已在解释器与 C 后端对齐。

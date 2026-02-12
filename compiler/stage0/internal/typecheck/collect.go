@@ -208,6 +208,7 @@ func (c *checker) collectFuncSigs() {
 	c.funcSigs["__args"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
 	c.funcSigs["__walk_vox_files"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyVec, Elem: &Type{K: TyString}}}
 	c.funcSigs["__exe_path"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyString}}
+	c.funcSigs["__getenv"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyString}}, Ret: Type{K: TyString}}
 	c.funcSigs["__now_ns"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: nil, Ret: Type{K: TyI64}}
 	// Stage1 std/sync intrinsics (i32 MVP).
 	c.funcSigs["__mutex_i32_new"] = FuncSig{Vis: ast.VisPub, Pub: true, OwnerPkg: "", OwnerMod: nil, Params: []Type{{K: TyI32}}, Ret: Type{K: TyI64}}
