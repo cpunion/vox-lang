@@ -163,6 +163,15 @@ if [[ $stage1_tool_rc -ne 0 ]]; then
   echo "[release] stage1 tool build log begin" >&2
   cat "$STAGE1_TOOL_LOG" >&2 || true
   echo "[release] stage1 tool build log end" >&2
+  echo "[release] stage1 tool retry (unredirected) begin" >&2
+  set +e
+  (
+    cd "$ROOT/compiler/stage1"
+    "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
+  )
+  stage1_retry_rc=$?
+  set -e
+  echo "[release] stage1 tool retry exit: $stage1_retry_rc" >&2
   if [[ "$GOOS" == "windows" ]]; then
     echo "[release] windows fallback: stage0 build-tool for stage1" >&2
     "$STAGE0_OUT" build-tool "$ROOT/compiler/stage1"
@@ -233,6 +242,15 @@ if [[ $stage2_tool_rc -ne 0 ]]; then
   echo "[release] stage2 tool build log begin" >&2
   cat "$STAGE2_TOOL_LOG" >&2 || true
   echo "[release] stage2 tool build log end" >&2
+  echo "[release] stage2 tool retry (unredirected) begin" >&2
+  set +e
+  (
+    cd "$ROOT/compiler/stage2"
+    "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+  )
+  stage2_retry_rc=$?
+  set -e
+  echo "[release] stage2 tool retry exit: $stage2_retry_rc" >&2
   exit $stage2_tool_rc
 fi
 
