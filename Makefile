@@ -1,4 +1,4 @@
-.PHONY: fmt test test-go test-stage1 test-stage1-c test-stage1-interp test-stage2 test-stage2-tests \ release-bundle
+.PHONY: fmt test test-go test-stage1 test-stage1-c test-stage1-interp test-stage2 test-stage2-tests test-stage2-p0p1 \ release-bundle
 	test-examples test-examples-c test-examples-interp test-stage1-toolchain test-selfhost test-stage2-selfhost \
 	test-active audit-vox-lines
 
@@ -70,6 +70,10 @@ test-stage2-selfhost:
 # Dedicated stage2 suite gate: stage1 -> stage2 -> stage2 test-pkg.
 test-stage2-tests:
 	cd compiler/stage0 && VOX_RUN_SELFHOST_TESTS=1 go test ./cmd/vox -run 'TestStage1BuildsStage2AndRunsStage2Tests' -count=1
+
+# Stage2 P0/P1 closure gate (docs/25-stage2-p0p1-closure.md).
+test-stage2-p0p1:
+	./scripts/ci/verify-stage2-p0p1.sh
 
 # Audit long lines in Vox sources (default max width: 140, override with MAX=<n>).
 audit-vox-lines:
