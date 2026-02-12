@@ -62,11 +62,15 @@ bootstrap_cc_env() {
         # stage1/stage2 invoke CC through shell command text; keep bare command
         # name on Windows to avoid backslash path escaping issues.
         export CC="$cc_bin"
+        export CC_ABS="$(command -v "$cc_bin")"
       else
         local cc_resolved="$(command -v "$cc_bin")"
         export CC="$cc_resolved"
       fi
       echo "[release] using CC from env: $CC"
+      if [[ -n "${CC_ABS:-}" ]]; then
+        echo "[release] using CC (resolved): $CC_ABS"
+      fi
       return 0
     fi
     if [[ "$GOOS" == "windows" && "$cc_bin" =~ ^[A-Za-z]:\\ ]]; then
@@ -78,7 +82,7 @@ bootstrap_cc_env() {
 
   local candidates=()
   if [[ "$GOOS" == "windows" ]]; then
-    candidates=(gcc clang cc)
+    candidates=(x86_64-w64-mingw32-gcc gcc clang cc)
   else
     candidates=(cc gcc clang)
   fi
@@ -87,12 +91,17 @@ bootstrap_cc_env() {
   for c in "${candidates[@]}"; do
     if command -v "$c" >/dev/null 2>&1; then
       if [[ "$GOOS" == "windows" ]]; then
+        local resolved="$(command -v "$c")"
         export CC="$c"
+        export CC_ABS="$resolved"
       else
         local resolved="$(command -v "$c")"
         export CC="$resolved"
       fi
       echo "[release] auto-detected CC: $CC"
+      if [[ -n "${CC_ABS:-}" ]]; then
+        echo "[release] auto-detected CC (resolved): $CC_ABS"
+      fi
       return 0
     fi
   done
@@ -126,6 +135,10 @@ sha256_file() {
 
 mkdir -p "$DIST_DIR"
 bootstrap_cc_env
+CC_BASH="${CC_ABS:-${CC:-}}"
+if [[ -n "$CC_BASH" ]]; then
+  echo "[release] bash CC command: $CC_BASH"
+fi
 STAGE0_OUT="$ROOT/compiler/stage0/target/release/vox-stage0${EXE_SUFFIX}"
 mkdir -p "$(dirname "$STAGE0_OUT")"
 
@@ -155,7 +168,7 @@ set +e
   cd "$ROOT/compiler/stage1"
   if [[ "$GOOS" == "windows" ]]; then
     if "$STAGE1_USER" emit-pkg-c --driver=tool target/release/vox_stage1.c; then
-      "$CC" -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static
+      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static
     else
       "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
     fi
@@ -177,7 +190,7 @@ if [[ $stage1_tool_rc -ne 0 ]]; then
     cd "$ROOT/compiler/stage1"
     if [[ "$GOOS" == "windows" ]]; then
       if "$STAGE1_USER" emit-pkg-c --driver=tool target/release/vox_stage1.c; then
-        "$CC" -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static
+        "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static
       else
         "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
       fi
@@ -250,7 +263,7 @@ set +e
   cd "$ROOT/compiler/stage2"
   if [[ "$GOOS" == "windows" ]]; then
     if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
-      "$CC" -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static
+      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static
     else
       "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
     fi
@@ -272,7 +285,7 @@ if [[ $stage2_tool_rc -ne 0 ]]; then
     cd "$ROOT/compiler/stage2"
     if [[ "$GOOS" == "windows" ]]; then
       if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
-        "$CC" -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static
+        "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static
       else
         "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
       fi
