@@ -1,4 +1,4 @@
-.PHONY: fmt test test-go test-stage1 test-stage1-c test-stage1-interp test-stage2 test-stage2-tests \
+.PHONY: fmt test test-go test-stage1 test-stage1-c test-stage1-interp test-stage2 test-stage2-tests \ release-bundle
 	test-examples test-examples-c test-examples-interp test-stage1-toolchain test-selfhost test-stage2-selfhost \
 	test-active audit-vox-lines
 
@@ -81,3 +81,12 @@ audit-vox-lines:
 		exit 0; \
 	fi; \
 	awk -v max="$$max" 'length($$0) > max { printf "%s:%d:%d\n", FILENAME, FNR, length($$0); count++ } END { printf "[audit] %d line(s) longer than %d chars\n", count + 0, max }' $$files
+
+# Build local release bundle (stage0/stage1/stage2) for current host platform.
+# Usage: make release-bundle VERSION=v0.1.0
+release-bundle:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "usage: make release-bundle VERSION=v0.1.0"; \
+		exit 1; \
+	fi
+	./scripts/release/build-release-bundle.sh $(VERSION)

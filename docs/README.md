@@ -31,6 +31,7 @@ Documents:
 - `docs/20-bootstrap.md`
 - `docs/21-stage1-compiler.md`
 - `docs/22-stage2-backlog.md`
+- `docs/24-release-process.md`
 
 Current stage policy:
 

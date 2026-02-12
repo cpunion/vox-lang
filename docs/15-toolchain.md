@@ -131,3 +131,13 @@ vox_stage2 test-pkg  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=
 - `test-pkg` 的筛选参数支持放在 `<out.bin>` 前后（等价）：
   - `vox_stage2 test-pkg --run='*typecheck*' --list target/debug/vox_stage2.test`
   - `vox_stage2 test-pkg target/debug/vox_stage2.test --run='*typecheck*' --list`
+
+## 发布与滚动二进制
+
+版本化发布与滚动自举策略见：`docs/24-release-process.md`。
+
+当前约定：
+
+- `v0.1.0` 使用冷启动链路：`stage0 -> stage1 -> stage2`
+- 后续版本优先使用上一版 `stage2` 二进制滚动构建
+- 如滚动构建不可用，自动回退 `stage1` 构建 `stage2`
