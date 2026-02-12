@@ -83,6 +83,7 @@ Stage1/Stage2 的 C runtime 已从“扩容链式泄漏”收敛到共享存储�
 Stage2 补充（在不引入语言级 drop 的前提下）：
 
 - C runtime 增加了“运行时分配跟踪 + `atexit` 清理”机制：`vox_vec` backing storage、字符串运行时结果（`slice/concat/to_string` 等）和部分句柄分配会注册到跟踪表，并在进程退出时统一释放。
+- 目录遍历/路径辅助运行时（`mkdir_p`、`walk_vox_files`、`path_join2`）已统一使用 `vox_rt_malloc` 跟踪分配，不再混用裸 `malloc/free`。
 - 该机制只解决“进程生命周期内累计泄漏”问题，不改变值语义；容器共享 backing storage、浅拷贝行为与当前 type system 约束保持不变。
 
 当前补充：

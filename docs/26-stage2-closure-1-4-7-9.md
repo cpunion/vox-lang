@@ -32,7 +32,7 @@ Canonical gate for each item:
 7. [x] Diagnostics upgrade pass: tighten primary span usage and stable error code layering in remaining weak paths.
    - Acceptance:
      - Add failing tests that assert exact file/line/col + code.
-8. [ ] Stage2 runtime memory convergence pass: remove known temporary runtime ownership inconsistencies and pin behavior with tests.
+8. [x] Stage2 runtime memory convergence pass: remove known temporary runtime ownership inconsistencies and pin behavior with tests.
    - Acceptance:
      - Add runtime/codegen tests for the fixed ownership/reallocation behavior.
 9. [ ] Release/rolling bootstrap operational closure: make locked-stage2 rolling path the default verified release lane.
