@@ -1,0 +1,952 @@
+import "std/testing" as t
+import "compiler/parse" as p
+import "compiler/typecheck" as tc
+import "compiler/macroexpand" as mx
+import "compiler/ast" as ast
+
+fn me_contains(hay: String, needle: String) -> bool {
+  if needle.len() == 0 { return true; }
+  if hay.len() < needle.len() { return false; }
+  let mut i: i32 = 0;
+  while i <= hay.len() - needle.len() {
+    if hay.slice(i, i + needle.len()) == needle { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn me_notes_contains(notes: Vec[String], needle: String) -> bool {
+  let mut i: i32 = 0;
+  while i < notes.len() {
+    if me_contains(notes.get(i), needle) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn me_world_from(path: String, src: String) -> tc.World {
+  let r: p.ParseResult = p.parse_text_with_path("src/main.vox", src);
+  t.assert(r.err == p.ParseError.None);
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, path, r.prog);
+  return w;
+}
+
+fn me_world_add(w: tc.World, path: String, src: String) -> tc.World {
+  let r: p.ParseResult = p.parse_text_with_path("src/main.vox", src);
+  t.assert(r.err == p.ParseError.None);
+  return tc.world_add(w, path, r.prog);
+}
+
+fn me_main_return_expr_node(w: tc.World, mod_path: String) -> ast.ExprNode {
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let wm: tc.WorldModule = w.mods.get(mi);
+    if wm.path == mod_path {
+      let mut fi: i32 = 0;
+      while fi < wm.prog.funcs.len() {
+        let fd: ast.FuncDecl = wm.prog.funcs.get(fi);
+        if fd.name == "main" {
+          let mut si: i32 = 0;
+          while si < fd.body.stmts.len() {
+            let st: ast.Stmt = fd.body.stmts.get(si);
+            if match st { ast.Stmt.ReturnStmt(_sp, has_ex, _ex) => has_ex, _ => false } {
+              let ex: i32 = match st { ast.Stmt.ReturnStmt(_sp, _has_ex, id) => id, _ => -1 };
+              return ast.expr_pool_get(wm.prog.exprs, ex);
+            }
+            si = si + 1;
+          }
+        }
+        fi = fi + 1;
+      }
+    }
+    mi = mi + 1;
+  }
+  return ast.ExprNode.Int("0");
+}
+
+fn me_func_count(w: tc.World, mod_path: String) -> i32 {
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let wm: tc.WorldModule = w.mods.get(mi);
+    if wm.path == mod_path { return wm.prog.funcs.len(); }
+    mi = mi + 1;
+  }
+  return -1;
+}
+
+fn me_is_int_lit(w: tc.World, mod_path: String, id: i32, text: String) -> bool {
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let wm: tc.WorldModule = w.mods.get(mi);
+    if wm.path == mod_path {
+      let n: ast.ExprNode = ast.expr_pool_get(wm.prog.exprs, id);
+      return match n { ast.ExprNode.Int(v) => v == text, _ => false };
+    }
+    mi = mi + 1;
+  }
+  return false;
+}
+
+fn me_deep_macro_expr(depth: i32) -> String {
+  let mut out: String = "1";
+  let mut i: i32 = 0;
+  while i < depth {
+    out = "id!(".concat(out).concat(")");
+    i = i + 1;
+  }
+  return out;
+}
+
+fn test_macroexpand_no_macro_smoke() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { return 1 + 2; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  t.assert(er.err == tc.TcError.None);
+}
+
+fn test_macroexpand_user_macro_sugar_lowers_to_call() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { return add1!(41); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  t.assert(er.rounds == 1);
+  t.assert(er.notes.len() >= 2);
+  t.assert(me_notes_contains(er.notes, "inline skipped"));
+  t.assert(me_notes_contains(er.notes, "callee function not found"));
+  t.assert(me_notes_contains(er.notes, "lowered to call sugar"));
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(!tr.ok);
+  let msg: String = tc.tc_error_to_string(tr.err);
+  t.assert(me_contains(msg, "unknown fn"));
+  t.assert(me_contains(msg, "add1"));
+}
+
+fn test_macroexpand_compile_bang_splices_expr_smoke() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { return compile!(1 + 2); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  t.assert(er.rounds == 1);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_sugar_preserves_type_args() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn id[T](x: T) -> T { return x; }\n"
+      .concat("fn main() -> i32 { return id[i32]!(7); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_sugar_in_const_init_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: i32) -> i32 { return x + 1; }\n"
+      .concat("const X: i32 = add1!(41)\n")
+      .concat("fn main() -> i32 { return X; }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_sugar_and_builtin_macro_compose_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: i32) -> i32 { return compile!(x + 1); }\n"
+      .concat("fn main() -> i32 { return add1!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_local_template_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: i32) -> i32 { return x + 1; }\n"
+      .concat("fn main() -> i32 { return add1!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_ast_expr_macro_fn_exec_and_strip_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: AstExpr) -> AstExpr { return x + 1; }\n"
+      .concat("fn main() -> i32 { return add1!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false }, "expected AstExpr macro fn to expand at call site");
+  t.assert_with(me_func_count(er.world, "main") == 1, "AstExpr macro fn should be stripped before typecheck");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_block_template_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: i32) -> i32 { return { let y: i32 = x + 1; y }; }\n"
+      .concat("fn main() -> i32 { return add1!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Block(_b) => true, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_multi_stmt_template_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: i32) -> i32 { let y: i32 = x + 1; return y; }\n"
+      .concat("fn main() -> i32 { return add1!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Block(_b) => true, _ => false }, "expected inline to synthesize block template from multi-stmt fn body");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_multi_stmt_with_early_return_fallback_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: i32) -> i32 { if x > 0 { return x; } return x + 1; }\n"
+      .concat("fn main() -> i32 { return add1!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Call(_c, _ta, _args) => true, _ => false }, "expected fallback to call sugar when prefix contains return");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_match_template_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn pick(x: i32) -> i32 { return match x { 0 => 1, _ => x }; }\n"
+      .concat("fn main() -> i32 { return pick!(0); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Match(_scrut, _arms) => true, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_try_block_template_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, String] { return .Ok(7); }\n")
+      .concat("fn id(x: Result[i32, String]) -> Result[i32, String] { return try { let v: i32 = x?; v }; }\n")
+      .concat("fn main() -> Result[i32, String] { return id!(get()); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.TryBlock(_b) => true, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_member_callee_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn add1(x: i32) -> i32 { return x + 1; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return dep.add1!(41); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_member_fallback_for_cross_module_ident_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep",
+    "pub fn helper(x: i32) -> i32 { return x + 2; }\n"
+      .concat("pub fn add1(x: i32) -> i32 { return helper(x); }"));
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return dep.add1!(41); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  t.assert_with(me_notes_contains(er.notes, "cross-module template is not scope-safe (root:"), "expected detailed cross-module fallback reason");
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Call(_c, _ta, _args) => true, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_member_block_template_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep",
+    "pub fn add1(x: i32) -> i32 { return { let y: i32 = x + 1; y }; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return dep.add1!(41); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Block(_b) => true, _ => false }, "expected cross-module block template inline");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_member_multi_stmt_template_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep",
+    "pub fn add1(x: i32) -> i32 { let y: i32 = x + 1; return y; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return dep.add1!(41); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Block(_b) => true, _ => false }, "expected cross-module multi-stmt fn body inline");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_member_match_template_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep",
+    "pub fn pick(x: i32) -> i32 { return match x { 0 => 1, _ => x }; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return dep.pick!(0); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Match(_scrut, _arms) => true, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_member_try_block_template_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep",
+    "pub enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("pub fn id(x: Result[i32, String]) -> Result[i32, String] { return try { let v: i32 = x?; v }; }"));
+  w = me_world_add(w, "main",
+    "import \"dep\" as dep\n"
+      .concat("fn get() -> dep.Result[i32, String] { return dep.Result[i32, String].Ok(7); }\n")
+      .concat("fn main() -> dep.Result[i32, String] { return dep.id!(get()); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.TryBlock(_b) => true, _ => false }, "expected cross-module try-block template inline");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_generic_type_args_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn id[T](x: T) -> T { return x; }\n"
+      .concat("fn main() -> i32 { return id[i32]!(7); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Int(v) => v == "7", _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_const_generic_args_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn callee[const N: i32](x: i32) -> i32 { return x + N; }\n"
+      .concat("fn wrap[const N: i32](x: i32) -> i32 { return callee[N](x); }\n")
+      .concat("fn main() -> i32 { return wrap[3]!(7); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Call(_c, targs, _args) => targs.len() == 1 && targs.get(0).parts.len() == 2 && targs.get(0).parts.get(0) == "@const" && targs.get(0).parts.get(1) == "3",
+      _ => false,
+    },
+    "expected const-generic inline to forward const arg into callee call");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_const_generic_value_substitution_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn addn[const N: i32](x: i32) -> i32 { return x + N; }\n"
+      .concat("fn main() -> i32 { return addn[3]!(40); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "3"),
+      _ => false,
+    },
+    "expected const-generic param N to be substituted as integer literal");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_member_generic_type_args_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn id[T](x: T) -> T { return x; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return dep.id[i32]!(7); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Int(v) => v == "7", _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_named_import_generic_type_args_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn id[T](x: T) -> T { return x; }");
+  w = me_world_add(w, "main", "import { id as inc } from \"dep\"\nfn main() -> i32 { return inc[i32]!(7); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Int(v) => v == "7", _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_generic_missing_targs_fallback_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn id[T](x: T) -> T { return x; }\n"
+      .concat("fn main() -> i32 { return id!(7); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  t.assert(er.notes.len() >= 2);
+  t.assert(me_notes_contains(er.notes, "generic arg count mismatch"));
+  t.assert(me_notes_contains(er.notes, "lowered to call sugar"));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Call(_callee, _ta, _args) => true, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_named_import_generic_missing_targs_fallback_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn id[T](x: T) -> T { return x; }");
+  w = me_world_add(w, "main", "import { id as inc } from \"dep\"\nfn main() -> i32 { return inc!(7); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  t.assert(er.notes.len() >= 2);
+  t.assert(me_notes_contains(er.notes, "generic arg count mismatch"));
+  t.assert(me_notes_contains(er.notes, "lowered to call sugar"));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Call(_callee, _ta, _args) => true, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_member_generic_missing_targs_fallback_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn id[T](x: T) -> T { return x; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return dep.id!(7); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  t.assert(er.notes.len() >= 2);
+  t.assert(me_notes_contains(er.notes, "generic arg count mismatch"));
+  t.assert(me_notes_contains(er.notes, "lowered to call sugar"));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Call(_callee, _ta, _args) => true, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_user_macro_inline_const_generic_missing_targs_uses_default_inline_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn addn[const N: i32 = 2](x: i32) -> i32 { return x + N; }\n"
+      .concat("fn main() -> i32 { return addn!(40); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "2"),
+      _ => false,
+    },
+    "expected default const arg to be substituted during inline");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_named_import_const_generic_missing_targs_uses_default_inline_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn addn[const N: i32 = 2](x: i32) -> i32 { return x + N; }");
+  w = me_world_add(w, "main", "import { addn as inc } from \"dep\"\nfn main() -> i32 { return inc!(40); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "2"),
+      _ => false,
+    },
+    "expected named-import default const arg to be substituted during inline");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_member_const_generic_missing_targs_uses_default_inline_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn addn[const N: i32 = 2](x: i32) -> i32 { return x + N; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return dep.addn!(40); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "2"),
+      _ => false,
+    },
+    "expected member default const arg to be substituted during inline");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_deep_user_macro_chain_smoke() -> () {
+  let expr: String = me_deep_macro_expr(80);
+  let src: String =
+    "fn id(x: i32) -> i32 { return x; }\n"
+      .concat("fn main() -> i32 { return ")
+      .concat(expr)
+      .concat("; }");
+  let w: tc.World = me_world_from("main", src);
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_compile_bang_nested_splices_expr_smoke() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { return compile!(compile!(1 + 2)); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  t.assert(er.rounds == 2);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_compile_bang_executes_ast_expr_fn_call_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: AstExpr) -> AstExpr { return x + 1; }\n"
+      .concat("fn main() -> i32 { return compile!(add1(41)); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false }, "expected compile!(ast-expr-call) to execute macro fn call");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_user_macro_inline_named_import_const_generic_value_substitution_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn addn[const N: i32](x: i32) -> i32 { return x + N; }");
+  w = me_world_add(w, "main", "import { addn as inc } from \"dep\"\nfn main() -> i32 { return inc[3]!(40); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "3"),
+      _ => false,
+    },
+    "expected named-import const generic N substitution in macro template");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_executes_cross_module_ast_expr_fn_call_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn add1(x: AstExpr) -> AstExpr { return x + 1; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return compile!(dep.add1(41)); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false }, "expected compile!(dep.macro_fn(...)) to execute across module");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_executes_named_import_ast_expr_fn_call_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn add1(x: AstExpr) -> AstExpr { return x + 1; }");
+  w = me_world_add(w, "main", "import { add1 as inc } from \"dep\"\nfn main() -> i32 { return compile!(inc(41)); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false }, "expected compile!(named-import(...)) to execute macro fn call");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_executes_named_import_const_generic_ast_expr_fn_call_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn addn[const N: i32](x: AstExpr) -> AstExpr { return x + N; }");
+  w = me_world_add(w, "main", "import { addn as inc } from \"dep\"\nfn main() -> i32 { return compile!(inc[3](40)); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "3"),
+      _ => false,
+    },
+    "expected compile!(named-import const-generic ast fn call) to substitute N");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_executes_member_const_generic_ast_expr_fn_call_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn addn[const N: i32](x: AstExpr) -> AstExpr { return x + N; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return compile!(dep.addn[3](40)); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "3"),
+      _ => false,
+    },
+    "expected compile!(member const-generic ast fn call) to substitute N");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_executes_const_generic_ast_expr_fn_call_default_arg_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn addn[const N: i32 = 2](x: AstExpr) -> AstExpr { return x + N; }\n"
+      .concat("fn main() -> i32 { return compile!(addn(40)); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "2"),
+      _ => false,
+    },
+    "expected compile!(const-generic ast fn call) to use default N");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_executes_named_import_const_generic_ast_expr_fn_call_default_arg_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn addn[const N: i32 = 2](x: AstExpr) -> AstExpr { return x + N; }");
+  w = me_world_add(w, "main", "import { addn as inc } from \"dep\"\nfn main() -> i32 { return compile!(inc(40)); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "2"),
+      _ => false,
+    },
+    "expected compile!(named-import const-generic ast fn call) to use default N");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_executes_member_const_generic_ast_expr_fn_call_default_arg_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn addn[const N: i32 = 2](x: AstExpr) -> AstExpr { return x + N; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return compile!(dep.addn(40)); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Binary(ast.BinaryOp.Add, l, r) =>
+        me_is_int_lit(er.world, "main", l, "40") && me_is_int_lit(er.world, "main", r, "2"),
+      _ => false,
+    },
+    "expected compile!(member const-generic ast fn call) to use default N");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_named_import_ast_expr_fn_call_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn add1(x: AstExpr) -> AstExpr { return x + 1; }");
+  w = me_world_add(w, "main", "import { add1 as inc } from \"dep\"\nfn main() -> i32 { return inc!(41); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false }, "expected named-import macro call to execute macro fn call");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_ast_expr_fn_call_can_expand_nested_macros_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: AstExpr) -> AstExpr { return x + 1; }\n"
+      .concat("fn add2(x: AstExpr) -> AstExpr { return add1!(add1!(x)); }\n")
+      .concat("fn main() -> i32 { return compile!(add2(40)); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false }, "expected compile!(add2(...)) to keep expanding nested macro calls");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_cross_module_ast_expr_fn_call_can_expand_nested_macros_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep",
+    "pub fn add1(x: AstExpr) -> AstExpr { return x + 1; }\n"
+      .concat("pub fn add2(x: AstExpr) -> AstExpr { return add1!(add1!(x)); }"));
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return compile!(dep.add2(40)); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false }, "expected compile!(dep.add2(...)) to keep expanding nested macro calls");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_quote_unquote_mvp_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: AstExpr) -> AstExpr { return quote!(unquote!(x) + 1); }\n"
+      .concat("fn main() -> i32 { return add1!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false }, "expected quote!/unquote! to lower into plain expr");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_quote_expr_dollar_surface_syntax_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: AstExpr) -> AstExpr { return quote expr { $x + 1 }; }\n"
+      .concat("fn main() -> i32 { return add1!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false }, "expected quote expr {$x} to lower via quote!/unquote!");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_quote_unquote_if_expr_shape_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add_if(x: AstExpr) -> AstExpr { return quote!(if true { unquote!(x) + 1 } else { 0 }); }\n"
+      .concat("fn main() -> i32 { return add_if!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.If(_c, _t, _e) => true, _ => false }, "expected quote!/unquote! to preserve if expression shape");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_quote_unquote_match_expr_shape_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn into_match(x: AstExpr) -> AstExpr { return quote!(match unquote!(x) { 0 => 1, _ => 2 }); }\n"
+      .concat("fn main() -> i32 { return into_match!(0); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Match(_scrut, _arms) => true, _ => false }, "expected quote!/unquote! to preserve match expression shape");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_quote_bang_bad_arity_rejected() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { return quote!(1, 2); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(!er.ok);
+  let msg: String = tc.tc_error_to_string(er.err);
+  t.assert(me_contains(msg, "quote! expects exactly one value arg"));
+}
+
+fn test_macroexpand_unquote_bang_bad_arity_rejected() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { return unquote!(1, 2); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(!er.ok);
+  let msg: String = tc.tc_error_to_string(er.err);
+  t.assert(me_contains(msg, "unquote! expects exactly one value arg"));
+}
+
+fn test_macroexpand_compile_bang_const_init_smoke() -> () {
+  let w: tc.World = me_world_from("main", "const X: i32 = compile!(1 + 2)\nfn main() -> i32 { return X; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  t.assert(er.rounds == 1);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_compile_bang_in_trait_default_method_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "trait A { fn a(x: Self) -> i32 { return compile!(1 + 2); } }\nimpl A for i32 {}\nfn main() -> i32 { return A.a(1); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_compile_bang_in_impl_method_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "trait A { fn a(x: Self) -> i32; }\nimpl A for i32 { fn a(x: i32) -> i32 { return compile!(x + 1); } }\nfn main() -> i32 { return A.a(1); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_compile_bang_bad_arity_rejected() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { return compile!(1, 2); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(!er.ok);
+  let msg: String = tc.tc_error_to_string(er.err);
+  t.assert(me_contains(msg, "compile! expects exactly one value arg"));
+}
+
+fn test_macroexpand_panic_bang_smoke() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { if false { panic!(\"boom\"); } return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_panic_bang_bad_arity_rejected() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { panic!(\"a\", \"b\"); return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(!er.ok);
+  let msg: String = tc.tc_error_to_string(er.err);
+  t.assert(me_contains(msg, "panic! expects exactly one value arg"));
+}
+
+fn test_macroexpand_compile_error_bang_smoke() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { compile_error!(\"boom\"); return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(!tr.ok);
+  let msg: String = tc.tc_error_to_string(tr.err);
+  t.assert(me_contains(msg, "boom"));
+}
+
+fn test_macroexpand_compile_error_bang_bad_arity_rejected() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { compile_error!(\"a\", \"b\"); return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(!er.ok);
+  let msg: String = tc.tc_error_to_string(er.err);
+  t.assert(me_contains(msg, "compile_error! expects exactly one value arg"));
+}
+
+fn test_macroexpand_assert_bang_smoke() -> () {
+  let w: tc.World = me_world_from("main", "fn assert(cond: bool) -> () { if !cond { panic(\"bad\"); } }\nfn main() -> i32 { assert!(true); return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_assert_bang_with_msg_smoke() -> () {
+  let w: tc.World = me_world_from("main", "fn assert_with(cond: bool, msg: String) -> () { if !cond { panic(msg); } }\nfn main() -> i32 { assert!(true, \"ok\"); return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_assert_bang_with_msg_member_callee_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep", "pub fn assert_with(cond: bool, msg: String) -> () { if !cond { panic(msg); } }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { dep.assert!(true, \"ok\"); return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_assert_bang_bad_arity_rejected() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { assert!(); return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(!er.ok);
+  let msg: String = tc.tc_error_to_string(er.err);
+  t.assert(me_contains(msg, "assert! expects one or two value args"));
+}
+
+fn test_macroexpand_assert_cmp_bang_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn assert_eq(a: i32, b: i32) -> () {}\n"
+      .concat("fn assert_ne(a: i32, b: i32) -> () {}\n")
+      .concat("fn assert_lt(a: i32, b: i32) -> () {}\n")
+      .concat("fn assert_le(a: i32, b: i32) -> () {}\n")
+      .concat("fn assert_gt(a: i32, b: i32) -> () {}\n")
+      .concat("fn assert_ge(a: i32, b: i32) -> () {}\n")
+      .concat("fn main() -> i32 {\n")
+      .concat("  assert_eq!(1, 1);\n")
+      .concat("  assert_ne!(1, 2);\n")
+      .concat("  assert_lt!(1, 2);\n")
+      .concat("  assert_le!(1, 1);\n")
+      .concat("  assert_gt!(2, 1);\n")
+      .concat("  assert_ge!(2, 2);\n")
+      .concat("  return 0;\n")
+      .concat("}"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_assert_cmp_bang_member_callee_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "dep",
+    "pub fn assert_eq(a: i32, b: i32) -> () {}\n"
+      .concat("pub fn assert_ne(a: i32, b: i32) -> () {}\n")
+      .concat("pub fn assert_lt(a: i32, b: i32) -> () {}\n")
+      .concat("pub fn assert_le(a: i32, b: i32) -> () {}\n")
+      .concat("pub fn assert_gt(a: i32, b: i32) -> () {}\n")
+      .concat("pub fn assert_ge(a: i32, b: i32) -> () {}"));
+  w = me_world_add(w, "main",
+    "import \"dep\" as dep\n"
+      .concat("fn main() -> i32 {\n")
+      .concat("  dep.assert_eq!(1, 1);\n")
+      .concat("  dep.assert_ne!(1, 2);\n")
+      .concat("  dep.assert_lt!(1, 2);\n")
+      .concat("  dep.assert_le!(1, 1);\n")
+      .concat("  dep.assert_gt!(2, 1);\n")
+      .concat("  dep.assert_ge!(2, 2);\n")
+      .concat("  return 0;\n")
+      .concat("}"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(er.ok);
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert(tr.ok);
+}
+
+fn test_macroexpand_assert_cmp_bang_bad_arity_rejected() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> i32 { assert_eq!(1); return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(!er.ok);
+  let msg: String = tc.tc_error_to_string(er.err);
+  t.assert(me_contains(msg, "assert_eq! expects exactly two value args and no type args"));
+}
+
+fn test_macroexpand_exceeds_max_rounds_rejected() -> () {
+  let w: tc.World = me_world_from("main", """
+    fn helper() -> i32 {
+      return compile!(compile!(1 + 2));
+    }
+    fn main() -> i32 { return helper(); }
+  """);
+  let er: mx.ExpandResult = mx.expand_world(w, mx.ExpandConfig { max_rounds: 1 });
+  t.assert(!er.ok);
+  let msg: String = tc.tc_error_to_string(er.err);
+  t.assert(me_contains(msg, "src/main.vox:2:"));
+  t.assert(!me_contains(msg, "src/main.vox:1:1:"));
+  t.assert(me_contains(msg, "macro expansion exceeded max rounds"));
+  t.assert(me_contains(msg, "pending macro calls:"));
+  t.assert(me_contains(msg, "next: main::compile!"));
+}

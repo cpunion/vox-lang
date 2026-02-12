@@ -1,0 +1,224 @@
+import "compiler/ast" as ast
+import "compiler/ir" as ir
+import "compiler/typecheck" as tc
+
+struct AssignParentSlot {
+  parent_slot: i32,
+  field: String,
+  child_slot: i32,
+  child_ty: i32,
+}
+
+fn split_field_path(path: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut start: i32 = 0;
+  let mut i: i32 = 0;
+  while i < path.len() {
+    if path.byte_at(i) == 46 {
+      out.push(path.slice(start, i));
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  out.push(path.slice(start, path.len()));
+  return out;
+}
+
+fn subs_lookup_inst(subs: Vec[tc.TySub], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < subs.len() {
+    let s: tc.TySub = subs.get(i);
+    if s.name == name { return s.ty; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn resolve_type_inst(ctx: tc.Ctx, w: tc.World, mod_path: String, imps: tc.Imports, subs: Vec[tc.TySub], tn: ast.TypeName) -> tc.ResolveTyResult {
+  // Substitute type params inside monomorphized generic function bodies.
+  if tn.parts.len() == 1 && tn.args.len() == 0 {
+    let n: String = tn.parts.get(0);
+    let idx: i32 = subs_lookup_inst(subs, n);
+    if idx != -1 { return tc.ResolveTyResult { ctx: ctx, ok: true, idx: idx }; }
+  }
+  // Vec[T]
+  if tn.parts.len() == 1 && tn.args.len() == 1 && tn.parts.get(0) == "Vec" {
+    let r0: tc.ResolveTyResult = resolve_type_inst(ctx, w, mod_path, imps, subs, tn.args.get(0));
+    if !r0.ok { return r0; }
+    return tc.intern_vec(r0.ctx, r0.idx);
+  }
+  // Fallback for nominal / primitive types.
+  return tc.resolve_type(ctx, w, mod_path, imps, Vec(), tn);
+}
+
+fn gen_stmt_let(g0: Gen, mutable: bool, name: String, has_ann: bool, ann: ast.TypeName, init: i32) -> GenStmtResult {
+  let mut g: Gen = g0;
+  let mut expected: i32 = -1;
+  if has_ann {
+    let rr: tc.ResolveTyResult = resolve_type_inst(g.ctx, g.w, g.mod_path, g.imps, g.type_subs, ann);
+    if !rr.ok { return GenStmtResult { ok: false, err: "bad let annotation", g: g }; }
+    g.ctx = rr.ctx;
+    expected = rr.idx;
+  }
+  let er: GenExprResult = gen_expr(g, init, expected);
+  if !er.ok { return GenStmtResult { ok: false, err: er.err, g: er.g }; }
+  g = er.g;
+  let ty: i32 = if expected != -1 { expected } else { er.ty };
+
+  let rs: GenNewIdResult = gen_new_slot(g);
+  g = rs.g;
+  let sid: i32 = rs.id;
+  g = gen_emit(g, ir.Instr.SlotDecl(sid, ty));
+  g = gen_emit(g, ir.Instr.Store(sid, er.val));
+
+  g.slots = slots_decl(g.slots, name, sid, ty, mutable);
+  g.locals = tc.locals_decl(g.locals, name, ty, mutable);
+  return GenStmtResult { ok: true, err: "", g: g };
+}
+
+fn gen_stmt_assign(g0: Gen, name: String, rhs: i32) -> GenStmtResult {
+  let mut g: Gen = g0;
+  let sr: LookupSlotResult = slots_lookup(g.slots, name);
+  if !sr.found { return GenStmtResult { ok: false, err: "unknown var", g: g }; }
+  if !sr.mutable { return GenStmtResult { ok: false, err: "assign to immutable var", g: g }; }
+  let er: GenExprResult = gen_expr(g, rhs, sr.ty);
+  if !er.ok { return GenStmtResult { ok: false, err: er.err, g: er.g }; }
+  g = er.g;
+  g = gen_emit(g, ir.Instr.Store(sr.slot, er.val));
+  return GenStmtResult { ok: true, err: "", g: g };
+}
+
+fn gen_stmt_assign_field(g0: Gen, recv: String, field: String, rhs: i32) -> GenStmtResult {
+  let mut g: Gen = g0;
+  let sr: LookupSlotResult = slots_lookup(g.slots, recv);
+  if !sr.found { return GenStmtResult { ok: false, err: "unknown var", g: g }; }
+  if !sr.mutable { return GenStmtResult { ok: false, err: "assign to immutable var", g: g }; }
+
+  let parts: Vec[String] = split_field_path(field);
+  let mut cur_slot: i32 = sr.slot;
+  let mut cur_ty: i32 = sr.ty;
+  let mut parents: Vec[AssignParentSlot] = Vec();
+
+  let mut pi: i32 = 0;
+  while pi < parts.len() - 1 {
+    let rt: ir.Ty = ir.ty_pool_get(g.ctx.pool, cur_ty);
+    if rt.kind != ir.TyKind.Struct { return GenStmtResult { ok: false, err: "field assign recv must be struct", g: g }; }
+    let fs: tc.FindStructResult = tc.find_struct(g.ctx, rt.mod_path, rt.name);
+    if !fs.found { return GenStmtResult { ok: false, err: "unknown struct type", g: g }; }
+    if !tc.vis_allows(fs.sig.vis, fs.sig.mod_path, g.mod_path) { return GenStmtResult { ok: false, err: "type is private", g: g }; }
+
+    let mut found: bool = false;
+    let mut next_ty: i32 = g.ctx.ty_bad;
+    let mut fvis: i32 = ast.vis_private();
+    let mut fi: i32 = 0;
+    while fi < fs.sig.fields.len() {
+      let f: tc.StructFieldSig = fs.sig.fields.get(fi);
+      if f.name == parts.get(pi) {
+        found = true;
+        next_ty = f.ty;
+        fvis = f.vis;
+        break;
+      }
+      fi = fi + 1;
+    }
+    if !found { return GenStmtResult { ok: false, err: "unknown field", g: g }; }
+    if !tc.vis_allows(fvis, fs.sig.mod_path, g.mod_path) { return GenStmtResult { ok: false, err: "field is private", g: g }; }
+
+    let nt: GenNewIdResult = gen_new_temp(g);
+    g = nt.g;
+    let tid: i32 = nt.id;
+    g = gen_emit(g, ir.Instr.FieldGet(tid, cur_ty, ir.v_slot(cur_slot), parts.get(pi)));
+    let ns: GenNewIdResult = gen_new_slot(g);
+    g = ns.g;
+    let sid: i32 = ns.id;
+    g = gen_emit(g, ir.Instr.SlotDecl(sid, next_ty));
+    g = gen_emit(g, ir.Instr.Store(sid, ir.v_temp(tid)));
+
+    parents.push(AssignParentSlot { parent_slot: cur_slot, field: parts.get(pi), child_slot: sid, child_ty: next_ty });
+    cur_slot = sid;
+    cur_ty = next_ty;
+    pi = pi + 1;
+  }
+
+  let rt_last: ir.Ty = ir.ty_pool_get(g.ctx.pool, cur_ty);
+  if rt_last.kind != ir.TyKind.Struct { return GenStmtResult { ok: false, err: "field assign recv must be struct", g: g }; }
+  let fs_last: tc.FindStructResult = tc.find_struct(g.ctx, rt_last.mod_path, rt_last.name);
+  if !fs_last.found { return GenStmtResult { ok: false, err: "unknown struct type", g: g }; }
+  if !tc.vis_allows(fs_last.sig.vis, fs_last.sig.mod_path, g.mod_path) { return GenStmtResult { ok: false, err: "type is private", g: g }; }
+
+  let leaf: String = parts.get(parts.len() - 1);
+  let mut found_last: bool = false;
+  let mut fty: i32 = g.ctx.ty_bad;
+  let mut fvis_last: i32 = ast.vis_private();
+  let mut i: i32 = 0;
+  while i < fs_last.sig.fields.len() {
+    let f: tc.StructFieldSig = fs_last.sig.fields.get(i);
+    if f.name == leaf {
+      found_last = true;
+      fty = f.ty;
+      fvis_last = f.vis;
+      break;
+    }
+    i = i + 1;
+  }
+  if !found_last { return GenStmtResult { ok: false, err: "unknown field", g: g }; }
+  if !tc.vis_allows(fvis_last, fs_last.sig.mod_path, g.mod_path) { return GenStmtResult { ok: false, err: "field is private", g: g }; }
+
+  let er: GenExprResult = gen_expr(g, rhs, fty);
+  if !er.ok { return GenStmtResult { ok: false, err: er.err, g: er.g }; }
+  g = er.g;
+  g = gen_emit(g, ir.Instr.StoreField(cur_slot, leaf, er.val));
+
+  let mut ri: i32 = parents.len() - 1;
+  while ri >= 0 {
+    let ps: AssignParentSlot = parents.get(ri);
+    let nt: GenNewIdResult = gen_new_temp(g);
+    g = nt.g;
+    let tid: i32 = nt.id;
+    g = gen_emit(g, ir.Instr.Load(tid, ps.child_ty, ps.child_slot));
+    g = gen_emit(g, ir.Instr.StoreField(ps.parent_slot, ps.field, ir.v_temp(tid)));
+    ri = ri - 1;
+  }
+  return GenStmtResult { ok: true, err: "", g: g };
+}
+
+fn gen_stmt_expr(g0: Gen, eid: i32) -> GenStmtResult {
+  // Treat `panic(msg);` as a terminator so control-flow is explicit (and we don't need dummy returns).
+  let n: ast.ExprNode = ast.expr_pool_get(g0.exprs, eid);
+  if match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.Call(c, _targs, _args) => c, _ => -1 };
+    let args: Vec[i32] = match n { ast.ExprNode.Call(_c, _targs, a) => a, _ => Vec() };
+    if args.len() == 1 {
+      let cn: ast.ExprNode = ast.expr_pool_get(g0.exprs, callee);
+      if match cn { ast.ExprNode.Ident(name) => name == "panic", _ => false } {
+        let er_msg: GenExprResult = gen_expr(g0, args.get(0), g0.ctx.ty_string);
+        if !er_msg.ok { return GenStmtResult { ok: false, err: er_msg.err, g: er_msg.g }; }
+        let mut g: Gen = er_msg.g;
+        g = gen_term(g, ir.Term.Panic(er_msg.val));
+        return GenStmtResult { ok: true, err: "", g: g };
+      }
+    }
+  }
+
+  let er: GenExprResult = gen_expr(g0, eid, -1);
+  if !er.ok { return GenStmtResult { ok: false, err: er.err, g: er.g }; }
+  return GenStmtResult { ok: true, err: "", g: er.g };
+}
+
+fn gen_stmt_return(g0: Gen, has: bool, eid: i32) -> GenStmtResult {
+  let mut g: Gen = g0;
+  if !has {
+    if g.ret_ty != g.ctx.ty_unit {
+      return GenStmtResult { ok: false, err: "return type mismatch", g: g };
+    }
+    g = gen_term(g, ir.Term.Ret(false, ir.v_int(0)));
+    return GenStmtResult { ok: true, err: "", g: g };
+  }
+  let er: GenExprResult = gen_expr(g, eid, g.ret_ty);
+  if !er.ok { return GenStmtResult { ok: false, err: er.err, g: er.g }; }
+  g = er.g;
+  g = gen_term(g, ir.Term.Ret(true, er.val));
+  return GenStmtResult { ok: true, err: "", g: g };
+}
+
+// Control-flow lowering lives in gen_cf.vox.

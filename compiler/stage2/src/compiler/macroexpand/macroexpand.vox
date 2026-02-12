@@ -1,0 +1,826 @@
+import "compiler/ast" as ast
+import "compiler/typecheck" as tc
+
+pub struct ExpandConfig {
+  pub max_rounds: i32,
+}
+
+pub struct ExpandResult {
+  pub ok: bool,
+  pub err: tc.TcError,
+  pub world: tc.World,
+  pub rounds: i32,
+  pub notes: Vec[String],
+}
+
+struct ExpandRoundResult {
+  ok: bool,
+  err: tc.TcError,
+  changed: bool,
+  world: tc.World,
+  notes: Vec[String],
+}
+
+struct MacroSite {
+  found: bool,
+  mod_idx: i32,
+  expr_id: i32,
+  callee: i32,
+  targs: Vec[ast.TypeName],
+  args: Vec[i32],
+  sp: ast.Span,
+  name: String,
+}
+
+fn no_site() -> MacroSite {
+  return MacroSite {
+    found: false,
+    mod_idx: -1,
+    expr_id: -1,
+    callee: -1,
+    targs: Vec(),
+    args: Vec(),
+    sp: ast.span0(),
+    name: "",
+  };
+}
+
+fn find_macro_callee_name(exprs: ast.ExprPool, callee: i32) -> String {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+  return match n {
+    ast.ExprNode.Ident(s) => s,
+    ast.ExprNode.Member(_recv, name) => name,
+    _ => "<expr>",
+  };
+}
+
+fn site_from_macro_call(exprs: ast.ExprPool, mod_idx: i32, expr_id: i32, callee: i32, targs: Vec[ast.TypeName], args: Vec[i32]) -> MacroSite {
+  let name: String = find_macro_callee_name(exprs, callee);
+  return MacroSite {
+    found: true,
+    mod_idx: mod_idx,
+    expr_id: expr_id,
+    callee: callee,
+    targs: targs,
+    args: args,
+    sp: ast.expr_pool_span(exprs, expr_id),
+    name: name,
+  };
+}
+
+fn find_macro_site_in_expr_block(exprs: ast.ExprPool, mod_idx: i32, b: ast.ExprBlock) -> MacroSite {
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    let s: MacroSite = find_macro_site_in_stmt(exprs, mod_idx, b.stmts.get(i));
+    if s.found { return s; }
+    i = i + 1;
+  }
+  if b.has_tail { return find_macro_site_in_expr(exprs, mod_idx, b.tail); }
+  return no_site();
+}
+
+fn find_macro_site_in_block(exprs: ast.ExprPool, mod_idx: i32, b: ast.Block) -> MacroSite {
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    let s: MacroSite = find_macro_site_in_stmt(exprs, mod_idx, b.stmts.get(i));
+    if s.found { return s; }
+    i = i + 1;
+  }
+  return no_site();
+}
+
+fn find_macro_site_in_if_stmt(exprs: ast.ExprPool, mod_idx: i32, cond: i32, then_b: ast.Block, has_else: bool, else_b: ast.Block) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, cond);
+  if s0.found { return s0; }
+  let s1: MacroSite = find_macro_site_in_block(exprs, mod_idx, then_b);
+  if s1.found { return s1; }
+  if has_else { return find_macro_site_in_block(exprs, mod_idx, else_b); }
+  return no_site();
+}
+
+fn find_macro_site_in_while_stmt(exprs: ast.ExprPool, mod_idx: i32, cond: i32, body: ast.Block) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, cond);
+  if s0.found { return s0; }
+  return find_macro_site_in_block(exprs, mod_idx, body);
+}
+
+fn find_macro_site_in_if_expr(exprs: ast.ExprPool, mod_idx: i32, c0: i32, t0: i32, e0: i32) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, c0);
+  if s0.found { return s0; }
+  let s1: MacroSite = find_macro_site_in_expr(exprs, mod_idx, t0);
+  if s1.found { return s1; }
+  return find_macro_site_in_expr(exprs, mod_idx, e0);
+}
+
+fn find_macro_site_in_binary_expr(exprs: ast.ExprPool, mod_idx: i32, l: i32, r: i32) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, l);
+  if s0.found { return s0; }
+  return find_macro_site_in_expr(exprs, mod_idx, r);
+}
+
+fn find_macro_site_in_call_expr(exprs: ast.ExprPool, mod_idx: i32, callee: i32, args: Vec[i32]) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, callee);
+  if s0.found { return s0; }
+  let mut i: i32 = 0;
+  while i < args.len() {
+    let si: MacroSite = find_macro_site_in_expr(exprs, mod_idx, args.get(i));
+    if si.found { return si; }
+    i = i + 1;
+  }
+  return no_site();
+}
+
+fn find_macro_site_in_struct_lit_expr(exprs: ast.ExprPool, mod_idx: i32, tyex: i32, fields: Vec[ast.StructLitField]) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, tyex);
+  if s0.found { return s0; }
+  let mut i: i32 = 0;
+  while i < fields.len() {
+    let si: MacroSite = find_macro_site_in_expr(exprs, mod_idx, fields.get(i).expr);
+    if si.found { return si; }
+    i = i + 1;
+  }
+  return no_site();
+}
+
+fn find_macro_site_in_match_expr(exprs: ast.ExprPool, mod_idx: i32, scrut: i32, arms: Vec[ast.MatchArm]) -> MacroSite {
+  let s0: MacroSite = find_macro_site_in_expr(exprs, mod_idx, scrut);
+  if s0.found { return s0; }
+  let mut i: i32 = 0;
+  while i < arms.len() {
+    let si: MacroSite = find_macro_site_in_expr(exprs, mod_idx, arms.get(i).expr);
+    if si.found { return si; }
+    i = i + 1;
+  }
+  return no_site();
+}
+
+fn find_macro_site_in_stmt(exprs: ast.ExprPool, mod_idx: i32, st: ast.Stmt) -> MacroSite {
+  return match st {
+    ast.Stmt.Let(_sp, _mut, _name, _has_ann, _ann, init) => find_macro_site_in_expr(exprs, mod_idx, init),
+    ast.Stmt.Assign(_sp, _name, ex) => find_macro_site_in_expr(exprs, mod_idx, ex),
+    ast.Stmt.AssignField(_sp, _recv, _field, ex) => find_macro_site_in_expr(exprs, mod_idx, ex),
+    ast.Stmt.ExprStmt(_sp, ex) => find_macro_site_in_expr(exprs, mod_idx, ex),
+    ast.Stmt.IfStmt(_sp, cond, then_b, has_else, else_b) => find_macro_site_in_if_stmt(exprs, mod_idx, cond, then_b, has_else, else_b),
+    ast.Stmt.WhileStmt(_sp, cond, body) => find_macro_site_in_while_stmt(exprs, mod_idx, cond, body),
+    ast.Stmt.Break(_sp) => no_site(),
+    ast.Stmt.Continue(_sp) => no_site(),
+    ast.Stmt.ReturnStmt(_sp, has_ex, ex) => if has_ex { find_macro_site_in_expr(exprs, mod_idx, ex) } else { no_site() },
+  };
+}
+
+fn find_macro_site_in_expr(exprs: ast.ExprPool, mod_idx: i32, id: i32) -> MacroSite {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
+  return match n {
+    ast.ExprNode.Int(_v) => no_site(),
+    ast.ExprNode.Float(_v) => no_site(),
+    ast.ExprNode.Bool(_v) => no_site(),
+    ast.ExprNode.Ident(_s) => no_site(),
+    ast.ExprNode.Str(_s) => no_site(),
+    ast.ExprNode.DotIdent(_s) => no_site(),
+    ast.ExprNode.Block(b) => find_macro_site_in_expr_block(exprs, mod_idx, b),
+    ast.ExprNode.If(c0, t0, e0) => find_macro_site_in_if_expr(exprs, mod_idx, c0, t0, e0),
+    ast.ExprNode.Unary(_op, a) => find_macro_site_in_expr(exprs, mod_idx, a),
+    ast.ExprNode.As(a, _tn) => find_macro_site_in_expr(exprs, mod_idx, a),
+    ast.ExprNode.Binary(_op, l, r) => find_macro_site_in_binary_expr(exprs, mod_idx, l, r),
+    ast.ExprNode.Member(recv, _name) => find_macro_site_in_expr(exprs, mod_idx, recv),
+    ast.ExprNode.Call(callee, _targs, args) => find_macro_site_in_call_expr(exprs, mod_idx, callee, args),
+    ast.ExprNode.MacroCall(callee, targs, args) => site_from_macro_call(exprs, mod_idx, id, callee, targs, args),
+    ast.ExprNode.TryBlock(bid) => find_macro_site_in_expr(exprs, mod_idx, bid),
+    ast.ExprNode.Try(a) => find_macro_site_in_expr(exprs, mod_idx, a),
+    ast.ExprNode.StructLit(tyex, fields) => find_macro_site_in_struct_lit_expr(exprs, mod_idx, tyex, fields),
+    ast.ExprNode.Match(scrut, arms) => find_macro_site_in_match_expr(exprs, mod_idx, scrut, arms),
+  };
+}
+
+fn find_first_macro_site_in_prog(prog: ast.Program, mod_idx: i32) -> MacroSite {
+  let mut ci: i32 = 0;
+  while ci < prog.consts.len() {
+    let s: MacroSite = find_macro_site_in_expr(prog.exprs, mod_idx, prog.consts.get(ci).init);
+    if s.found { return s; }
+    ci = ci + 1;
+  }
+
+  let mut fi: i32 = 0;
+  while fi < prog.funcs.len() {
+    let s: MacroSite = find_macro_site_in_block(prog.exprs, mod_idx, prog.funcs.get(fi).body);
+    if s.found { return s; }
+    fi = fi + 1;
+  }
+
+  let mut ti: i32 = 0;
+  while ti < prog.traits.len() {
+    let mut mi: i32 = 0;
+    while mi < prog.traits.get(ti).methods.len() {
+      let md: ast.TraitMethodDecl = prog.traits.get(ti).methods.get(mi);
+      if md.has_body {
+        let s: MacroSite = find_macro_site_in_block(prog.exprs, mod_idx, md.body);
+        if s.found { return s; }
+      }
+      mi = mi + 1;
+    }
+    ti = ti + 1;
+  }
+
+  let mut ii: i32 = 0;
+  while ii < prog.impls.len() {
+    let mut mi: i32 = 0;
+    while mi < prog.impls.get(ii).methods.len() {
+      let s: MacroSite = find_macro_site_in_block(prog.exprs, mod_idx, prog.impls.get(ii).methods.get(mi).body);
+      if s.found { return s; }
+      mi = mi + 1;
+    }
+    ii = ii + 1;
+  }
+
+  return no_site();
+}
+
+fn site_mod_path(w: tc.World, s: MacroSite) -> String {
+  if !s.found { return ""; }
+  if s.mod_idx < 0 || s.mod_idx >= w.mods.len() { return ""; }
+  return w.mods.get(s.mod_idx).path;
+}
+
+fn site_before(w: tc.World, a: MacroSite, b: MacroSite) -> bool {
+  if !a.found { return false; }
+  if !b.found { return true; }
+  let am: String = site_mod_path(w, a);
+  let bm: String = site_mod_path(w, b);
+  if am < bm { return true; }
+  if am > bm { return false; }
+  if a.sp.file < b.sp.file { return true; }
+  if a.sp.file > b.sp.file { return false; }
+  if a.sp.line < b.sp.line { return true; }
+  if a.sp.line > b.sp.line { return false; }
+  if a.sp.col < b.sp.col { return true; }
+  if a.sp.col > b.sp.col { return false; }
+  if a.expr_id < b.expr_id { return true; }
+  if a.expr_id > b.expr_id { return false; }
+  return a.name < b.name;
+}
+
+fn find_first_macro_site_in_world(w: tc.World) -> MacroSite {
+  let mut best: MacroSite = no_site();
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(i);
+    let s: MacroSite = find_first_macro_site_in_prog(m.prog, i);
+    if site_before(w, s, best) { best = s; }
+    i = i + 1;
+  }
+  return best;
+}
+
+fn expr_pool_replace(exprs: ast.ExprPool, id: i32, n: ast.ExprNode, sp: ast.Span) -> ast.ExprPool {
+  let mut nodes: Vec[ast.ExprNode] = Vec();
+  let mut spans: Vec[ast.Span] = Vec();
+  let mut i: i32 = 0;
+  while i < exprs.nodes.len() {
+    if i == id {
+      nodes.push(n);
+      spans.push(sp);
+    } else {
+      nodes.push(ast.expr_pool_get(exprs, i));
+      spans.push(ast.expr_pool_span(exprs, i));
+    }
+    i = i + 1;
+  }
+  return ast.ExprPool { nodes: nodes, spans: spans };
+}
+
+fn program_with_exprs(prog: ast.Program, exprs: ast.ExprPool) -> ast.Program {
+  return ast.Program {
+    imports: prog.imports,
+    types: prog.types,
+    consts: prog.consts,
+    structs: prog.structs,
+    enums: prog.enums,
+    traits: prog.traits,
+    impls: prog.impls,
+    funcs: prog.funcs,
+    exprs: exprs,
+  };
+}
+
+fn world_replace_mod_prog(w: tc.World, mod_idx: i32, prog: ast.Program) -> tc.World {
+  let mut mods: Vec[tc.WorldModule] = Vec();
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(i);
+    if i == mod_idx {
+      mods.push(tc.WorldModule { path: m.path, prog: prog });
+    } else {
+      mods.push(m);
+    }
+    i = i + 1;
+  }
+  return tc.World { mods: mods };
+}
+
+fn type_name_is_simple(tn: ast.TypeName, name: String) -> bool {
+  return tn.parts.len() == 1 && tn.parts.get(0) == name && tn.args.len() == 0;
+}
+
+fn is_macro_exec_ret_type(tn: ast.TypeName) -> bool {
+  return
+    type_name_is_simple(tn, "AstExpr") ||
+    type_name_is_simple(tn, "AstStmt") ||
+    type_name_is_simple(tn, "AstItem") ||
+    type_name_is_simple(tn, "AstBlock");
+}
+
+struct MacroExecFnRef {
+  mod_path: String,
+  name: String,
+}
+
+fn macro_exec_fn_ref_exists(refs: Vec[MacroExecFnRef], mod_path: String, name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < refs.len() {
+    let r: MacroExecFnRef = refs.get(i);
+    if r.mod_path == mod_path && r.name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn collect_macro_exec_fn_refs(w: tc.World) -> Vec[MacroExecFnRef] {
+  let mut out: Vec[MacroExecFnRef] = Vec();
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(mi);
+    let mut fi: i32 = 0;
+    while fi < m.prog.funcs.len() {
+      let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+      if is_macro_exec_ret_type(fd.ret) {
+        out.push(MacroExecFnRef { mod_path: m.path, name: fd.name });
+      }
+      fi = fi + 1;
+    }
+    mi = mi + 1;
+  }
+  return out;
+}
+
+fn import_name_local(nm: ast.ImportName) -> String {
+  if nm.alias != "" { return nm.alias; }
+  return nm.name;
+}
+
+fn find_named_func_import(named_funcs: Vec[tc.NamedFuncImport], local: String) -> tc.NamedFuncImport {
+  let mut i: i32 = 0;
+  while i < named_funcs.len() {
+    let nf: tc.NamedFuncImport = named_funcs.get(i);
+    if nf.local == local { return nf; }
+    i = i + 1;
+  }
+  return tc.NamedFuncImport { local: "", mod_path: "", name: "" };
+}
+
+fn strip_macro_exec_named_imports_prog(w: tc.World, mod_path: String, prog: ast.Program, refs: Vec[MacroExecFnRef]) -> ast.Program {
+  let mut out_imps: Vec[ast.ImportDecl] = Vec();
+  let mut ii: i32 = 0;
+  while ii < prog.imports.len() {
+    let imp: ast.ImportDecl = prog.imports.get(ii);
+    if imp.names.len() == 0 {
+      out_imps.push(imp);
+      ii = ii + 1;
+      continue;
+    }
+
+    let ir: tc.ImportsResult = tc.build_imports(w, mod_path, prog.imports, imp.file);
+    if !ir.ok {
+      out_imps.push(imp);
+      ii = ii + 1;
+      continue;
+    }
+
+    let mut keep_names: Vec[ast.ImportName] = Vec();
+    let mut ni: i32 = 0;
+    while ni < imp.names.len() {
+      let nm: ast.ImportName = imp.names.get(ni);
+      let local: String = import_name_local(nm);
+      let nf: tc.NamedFuncImport = find_named_func_import(ir.imps.named_funcs, local);
+      if nf.local == "" || !macro_exec_fn_ref_exists(refs, nf.mod_path, nf.name) {
+        keep_names.push(nm);
+      }
+      ni = ni + 1;
+    }
+
+    if keep_names.len() != 0 {
+      out_imps.push(ast.ImportDecl {
+        file: imp.file,
+        sp: imp.sp,
+        path: imp.path,
+        alias: imp.alias,
+        names: keep_names,
+      });
+    }
+    ii = ii + 1;
+  }
+
+  return ast.Program {
+    imports: out_imps,
+    types: prog.types,
+    consts: prog.consts,
+    structs: prog.structs,
+    enums: prog.enums,
+    traits: prog.traits,
+    impls: prog.impls,
+    funcs: prog.funcs,
+    exprs: prog.exprs,
+  };
+}
+
+fn strip_macro_exec_funcs_prog(prog: ast.Program) -> ast.Program {
+  let mut fs: Vec[ast.FuncDecl] = Vec();
+  let mut i: i32 = 0;
+  while i < prog.funcs.len() {
+    let f: ast.FuncDecl = prog.funcs.get(i);
+    if !is_macro_exec_ret_type(f.ret) {
+      fs.push(f);
+    }
+    i = i + 1;
+  }
+  return ast.Program {
+    imports: prog.imports,
+    types: prog.types,
+    consts: prog.consts,
+    structs: prog.structs,
+    enums: prog.enums,
+    traits: prog.traits,
+    impls: prog.impls,
+    funcs: fs,
+    exprs: prog.exprs,
+  };
+}
+
+fn strip_macro_exec_funcs_world(w: tc.World) -> tc.World {
+  let refs: Vec[MacroExecFnRef] = collect_macro_exec_fn_refs(w);
+  let mut mods: Vec[tc.WorldModule] = Vec();
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(i);
+    let prog1: ast.Program = strip_macro_exec_named_imports_prog(w, m.path, m.prog, refs);
+    mods.push(tc.WorldModule {
+      path: m.path,
+      prog: strip_macro_exec_funcs_prog(prog1),
+    });
+    i = i + 1;
+  }
+  return tc.World { mods: mods };
+}
+
+fn notes0() -> Vec[String] { return Vec(); }
+
+fn notes1(s: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  if s != "" { out.push(s); }
+  return out;
+}
+
+fn notes_cat(a0: Vec[String], b: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = a0;
+  let mut i: i32 = 0;
+  while i < b.len() {
+    out.push(b.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn round_ok(w: tc.World, changed: bool) -> ExpandRoundResult {
+  return ExpandRoundResult { ok: true, err: tc.TcError.None, changed: changed, world: w, notes: notes0() };
+}
+
+fn round_ok_with_notes(w: tc.World, changed: bool, notes: Vec[String]) -> ExpandRoundResult {
+  return ExpandRoundResult { ok: true, err: tc.TcError.None, changed: changed, world: w, notes: notes };
+}
+
+fn round_err(w: tc.World, e: tc.TcError) -> ExpandRoundResult {
+  return ExpandRoundResult { ok: false, err: e, changed: false, world: w, notes: notes0() };
+}
+
+fn round_replace_expr(w: tc.World, site: MacroSite, n: ast.ExprNode) -> ExpandRoundResult {
+  let m: tc.WorldModule = w.mods.get(site.mod_idx);
+  let exprs2: ast.ExprPool = expr_pool_replace(m.prog.exprs, site.expr_id, n, site.sp);
+  let prog2: ast.Program = program_with_exprs(m.prog, exprs2);
+  let w2: tc.World = world_replace_mod_prog(w, site.mod_idx, prog2);
+  return round_ok(w2, true);
+}
+
+struct CompileBangArgResult {
+  ok: bool,
+  err: tc.TcError,
+  node: ast.ExprNode,
+}
+
+fn compile_bang_arg_ok(node: ast.ExprNode) -> CompileBangArgResult {
+  return CompileBangArgResult { ok: true, err: tc.TcError.None, node: node };
+}
+
+fn compile_bang_arg_err(err: tc.TcError) -> CompileBangArgResult {
+  return CompileBangArgResult { ok: false, err: err, node: ast.ExprNode.Int("0") };
+}
+
+fn compile_bang_try_lower_call_to_macro_call(w: tc.World, site: MacroSite, arg_node: ast.ExprNode) -> CompileBangArgResult {
+  // `compile!(f(...))` where `f` returns Ast* should behave like macro execution.
+  // Parse stores `f(...)` as `Call`; we rewrite it to `MacroCall` here.
+  if !match arg_node { ast.ExprNode.Call(_callee, _ta, _args) => true, _ => false } {
+    return compile_bang_arg_ok(arg_node);
+  }
+
+  let callee: i32 = match arg_node { ast.ExprNode.Call(c, _ta, _args) => c, _ => -1 };
+  let targs: Vec[ast.TypeName] = match arg_node { ast.ExprNode.Call(_c, ta, _args) => ta, _ => Vec() };
+  let args: Vec[i32] = match arg_node { ast.ExprNode.Call(_c, _ta, as0) => as0, _ => Vec() };
+
+  let call_mod: tc.WorldModule = w.mods.get(site.mod_idx);
+  let callee_node: ast.ExprNode = ast.expr_pool_get(call_mod.prog.exprs, callee);
+
+  let mut callee_mod_idx: i32 = site.mod_idx;
+  let mut callee_name: String = "";
+  let mut callee_is_ident: bool = false;
+
+  if match callee_node { ast.ExprNode.Ident(_s) => true, _ => false } {
+    callee_is_ident = true;
+    callee_name = match callee_node { ast.ExprNode.Ident(s) => s, _ => "" };
+  } else if match callee_node { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+    let recv_id: i32 = match callee_node { ast.ExprNode.Member(recv, _name) => recv, _ => -1 };
+    let name1: String = match callee_node { ast.ExprNode.Member(_recv, name) => name, _ => "" };
+    let recv_node: ast.ExprNode = ast.expr_pool_get(call_mod.prog.exprs, recv_id);
+    if !match recv_node { ast.ExprNode.Ident(_a) => true, _ => false } {
+      return compile_bang_arg_ok(arg_node);
+    }
+    let alias: String = match recv_node { ast.ExprNode.Ident(a) => a, _ => "" };
+    let ar: tc.ImportAliasesResult = tc.build_import_aliases(w, call_mod.prog.imports, site.sp.file);
+    if !ar.ok { return compile_bang_arg_err(ar.err); }
+    let target_path: String = tc.find_alias(ar.aliases, alias);
+    if target_path == "" { return compile_bang_arg_ok(arg_node); }
+    let mi: i32 = find_world_mod_idx(w, target_path);
+    if mi < 0 { return compile_bang_arg_ok(arg_node); }
+    callee_mod_idx = mi;
+    callee_name = name1;
+  } else {
+    return compile_bang_arg_ok(arg_node);
+  }
+
+  if callee_name == "" { return compile_bang_arg_ok(arg_node); }
+
+  let mut fi: i32 = find_local_func_idx(w.mods.get(callee_mod_idx).prog, callee_name);
+  if fi < 0 && callee_is_ident {
+    let ir: tc.ImportsResult = tc.build_imports(w, call_mod.path, call_mod.prog.imports, site.sp.file);
+    if !ir.ok { return compile_bang_arg_err(ir.err); }
+    let mut ni: i32 = 0;
+    while ni < ir.imps.named_funcs.len() {
+      let nf: tc.NamedFuncImport = ir.imps.named_funcs.get(ni);
+      if nf.local == callee_name {
+        let mi: i32 = find_world_mod_idx(w, nf.mod_path);
+        if mi >= 0 {
+          callee_mod_idx = mi;
+          callee_name = nf.name;
+          fi = find_local_func_idx(w.mods.get(callee_mod_idx).prog, callee_name);
+        }
+        ni = ir.imps.named_funcs.len();
+      } else {
+        ni = ni + 1;
+      }
+    }
+  }
+  if fi < 0 && callee_is_ident {
+    let prelude_idx: i32 = find_world_mod_idx(w, "std/prelude");
+    if prelude_idx >= 0 {
+      let fip: i32 = find_local_func_idx(w.mods.get(prelude_idx).prog, callee_name);
+      if fip >= 0 {
+        callee_mod_idx = prelude_idx;
+        fi = fip;
+      }
+    }
+  }
+  if fi < 0 { return compile_bang_arg_ok(arg_node); }
+  let callee_mod: tc.WorldModule = w.mods.get(callee_mod_idx);
+  let fd: ast.FuncDecl = callee_mod.prog.funcs.get(fi);
+  if !is_macro_exec_ret_type(fd.ret) { return compile_bang_arg_ok(arg_node); }
+
+  return compile_bang_arg_ok(ast.ExprNode.MacroCall(callee, targs, args));
+}
+
+fn expand_compile_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+  if site.targs.len() != 0 || site.args.len() != 1 {
+    return round_err(w, tc.tc_type_error_at(site.sp, "compile! expects exactly one value arg and no type args"));
+  }
+  let m: tc.WorldModule = w.mods.get(site.mod_idx);
+  let arg_id: i32 = site.args.get(0);
+  let arg_node: ast.ExprNode = ast.expr_pool_get(m.prog.exprs, arg_id);
+  let rr: CompileBangArgResult = compile_bang_try_lower_call_to_macro_call(w, site, arg_node);
+  if !rr.ok { return round_err(w, rr.err); }
+  return round_replace_expr(w, site, rr.node);
+}
+
+fn expand_quote_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+  if site.targs.len() != 0 || site.args.len() != 1 {
+    return round_err(w, tc.tc_type_error_at(site.sp, "quote! expects exactly one value arg and no type args"));
+  }
+  let m: tc.WorldModule = w.mods.get(site.mod_idx);
+  let arg_id: i32 = site.args.get(0);
+  let arg_node: ast.ExprNode = ast.expr_pool_get(m.prog.exprs, arg_id);
+  return round_replace_expr(w, site, arg_node);
+}
+
+fn expand_unquote_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+  if site.targs.len() != 0 || site.args.len() != 1 {
+    return round_err(w, tc.tc_type_error_at(site.sp, "unquote! expects exactly one value arg and no type args"));
+  }
+  let m: tc.WorldModule = w.mods.get(site.mod_idx);
+  let arg_id: i32 = site.args.get(0);
+  let arg_node: ast.ExprNode = ast.expr_pool_get(m.prog.exprs, arg_id);
+  return round_replace_expr(w, site, arg_node);
+}
+
+fn expand_panic_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+  if site.targs.len() != 0 || site.args.len() != 1 {
+    return round_err(w, tc.tc_type_error_at(site.sp, "panic! expects exactly one value arg and no type args"));
+  }
+  return round_replace_expr(w, site, ast.ExprNode.Call(site.callee, Vec(), site.args));
+}
+
+fn expand_compile_error_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+  if site.targs.len() != 0 || site.args.len() != 1 {
+    return round_err(w, tc.tc_type_error_at(site.sp, "compile_error! expects exactly one value arg and no type args"));
+  }
+  let m: tc.WorldModule = w.mods.get(site.mod_idx);
+  let ar: ast.AddExprResult = ast.expr_pool_add(m.prog.exprs, ast.ExprNode.Ident("@compile_error"), site.sp);
+  let call: ast.ExprNode = ast.ExprNode.Call(ar.id, Vec(), site.args);
+  let exprs2: ast.ExprPool = expr_pool_replace(ar.pool, site.expr_id, call, site.sp);
+  let prog2: ast.Program = program_with_exprs(m.prog, exprs2);
+  let w2: tc.World = world_replace_mod_prog(w, site.mod_idx, prog2);
+  return round_ok(w2, true);
+}
+
+fn assert_with_callee_node(exprs: ast.ExprPool, callee: i32) -> ast.ExprNode {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+  return match n {
+    ast.ExprNode.Ident(_s) => ast.ExprNode.Ident("assert_with"),
+    ast.ExprNode.Member(recv, _name) => ast.ExprNode.Member(recv, "assert_with"),
+    _ => ast.ExprNode.Ident("assert_with"),
+  };
+}
+
+fn expand_assert_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+  if site.targs.len() != 0 {
+    return round_err(w, tc.tc_type_error_at(site.sp, "assert! expects no type args"));
+  }
+  if site.args.len() == 1 {
+    return round_replace_expr(w, site, ast.ExprNode.Call(site.callee, Vec(), site.args));
+  }
+  if site.args.len() == 2 {
+    let m: tc.WorldModule = w.mods.get(site.mod_idx);
+    let ar: ast.AddExprResult = ast.expr_pool_add(m.prog.exprs, assert_with_callee_node(m.prog.exprs, site.callee), site.sp);
+    let call: ast.ExprNode = ast.ExprNode.Call(ar.id, Vec(), site.args);
+    let exprs2: ast.ExprPool = expr_pool_replace(ar.pool, site.expr_id, call, site.sp);
+    let prog2: ast.Program = program_with_exprs(m.prog, exprs2);
+    let w2: tc.World = world_replace_mod_prog(w, site.mod_idx, prog2);
+    return round_ok(w2, true);
+  }
+  return round_err(w, tc.tc_type_error_at(site.sp, "assert! expects one or two value args"));
+}
+
+fn is_binary_assert_macro_name(name: String) -> bool {
+  return name == "assert_eq" ||
+    name == "assert_ne" ||
+    name == "assert_lt" ||
+    name == "assert_le" ||
+    name == "assert_gt" ||
+    name == "assert_ge";
+}
+
+fn expand_binary_assert_bang(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+  if site.targs.len() != 0 || site.args.len() != 2 {
+    return round_err(w, tc.tc_type_error_at(site.sp, site.name.concat("! expects exactly two value args and no type args")));
+  }
+  return round_replace_expr(w, site, ast.ExprNode.Call(site.callee, Vec(), site.args));
+}
+
+fn expand_user_macro_call_as_fn_call(w: tc.World, site: MacroSite) -> ExpandRoundResult {
+  // Stage2 transitional behavior:
+  // 1) try local macro-style inline (single `return <expr>;` template)
+  // 2) fallback: lower `name!(...)` to plain `name(...)`
+  let inl: ExpandRoundResult = try_expand_local_user_macro_inline(w, site);
+  if !inl.ok { return inl; }
+  if inl.changed { return inl; }
+  let rr: ExpandRoundResult = round_replace_expr(w, site, ast.ExprNode.Call(site.callee, site.targs, site.args));
+  if !rr.ok { return rr; }
+  let mut ns: Vec[String] = inl.notes;
+  ns = notes_cat(ns, notes1("macro ".concat(site.name).concat("!: lowered to call sugar")));
+  return round_ok_with_notes(rr.world, rr.changed, ns);
+}
+
+fn expand_world_round(w: tc.World) -> ExpandRoundResult {
+  let site: MacroSite = find_first_macro_site_in_world(w);
+  if !site.found { return round_ok(w, false); }
+
+  if site.name == "compile" {
+    return expand_compile_bang(w, site);
+  }
+  if site.name == "quote" {
+    return expand_quote_bang(w, site);
+  }
+  if site.name == "unquote" {
+    return expand_unquote_bang(w, site);
+  }
+  if site.name == "panic" {
+    return expand_panic_bang(w, site);
+  }
+  if site.name == "compile_error" {
+    return expand_compile_error_bang(w, site);
+  }
+  if site.name == "assert" {
+    return expand_assert_bang(w, site);
+  }
+  if is_binary_assert_macro_name(site.name) {
+    return expand_binary_assert_bang(w, site);
+  }
+
+  return expand_user_macro_call_as_fn_call(w, site);
+}
+
+pub fn default_config() -> ExpandConfig { return ExpandConfig { max_rounds: 512 }; }
+
+fn macro_call_count_in_pool(exprs: ast.ExprPool) -> i32 {
+  let mut n: i32 = 0;
+  let mut i: i32 = 0;
+  while i < exprs.nodes.len() {
+    let en: ast.ExprNode = ast.expr_pool_get(exprs, i);
+    if match en { ast.ExprNode.MacroCall(_callee, _ta, _args) => true, _ => false } {
+      n = n + 1;
+    }
+    i = i + 1;
+  }
+  return n;
+}
+
+fn world_macro_call_count(w: tc.World) -> i32 {
+  let mut out: i32 = 0;
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    out = out + macro_call_count_in_pool(w.mods.get(i).prog.exprs);
+    i = i + 1;
+  }
+  return out;
+}
+
+fn max_rounds_error(w: tc.World, cfg: ExpandConfig) -> tc.TcError {
+  let pending: i32 = world_macro_call_count(w);
+  let mut msg: String = "macro expansion exceeded max rounds: ".concat(cfg.max_rounds.to_string());
+  msg = msg.concat(" (pending macro calls: ").concat(pending.to_string()).concat(")");
+  let site: MacroSite = find_first_macro_site_in_world(w);
+  if site.found {
+    let mut mod_path: String = "";
+    if site.mod_idx >= 0 && site.mod_idx < w.mods.len() { mod_path = w.mods.get(site.mod_idx).path; }
+    if mod_path != "" && site.name != "" {
+      msg = msg.concat(" (next: ").concat(mod_path).concat("::").concat(site.name).concat("!)");
+    }
+    return tc.tc_type_error_at(site.sp, msg);
+  }
+  return tc.tc_type_error("", msg);
+}
+
+pub fn expand_world(w: tc.World, cfg0: ExpandConfig) -> ExpandResult {
+  // Stage2 skeleton:
+  // - reserves a dedicated expansion phase between parse/load and typecheck
+  // - iterates in rounds until fixed-point / limit
+  // - currently supports a minimal built-in macro set
+  //   (`compile!`, `panic!`, `compile_error!`, `assert!`, `assert_eq!/assert_ne!/assert_lt!/assert_le!/assert_gt!/assert_ge!`)
+  // - non-builtin macro calls try local inline template expansion first;
+  //   unsupported shapes fallback to call sugar: `name!(...)` => `name(...)`
+  let cfg: ExpandConfig =
+    if cfg0.max_rounds <= 0 {
+      default_config()
+    } else {
+      cfg0
+    };
+
+  let mut cur: tc.World = w;
+  let mut round: i32 = 0;
+  let mut notes: Vec[String] = Vec();
+  while round < cfg.max_rounds {
+    let rr: ExpandRoundResult = expand_world_round(cur);
+    notes = notes_cat(notes, rr.notes);
+    if !rr.ok {
+      return ExpandResult { ok: false, err: rr.err, world: rr.world, rounds: round, notes: notes };
+    }
+    cur = rr.world;
+    if !rr.changed {
+      let out_world: tc.World = strip_macro_exec_funcs_world(cur);
+      return ExpandResult { ok: true, err: tc.TcError.None, world: out_world, rounds: round, notes: notes };
+    }
+    round = round + 1;
+  }
+
+  return ExpandResult {
+    ok: false,
+    err: max_rounds_error(cur, cfg),
+    world: cur,
+    rounds: cfg.max_rounds,
+    notes: notes,
+  };
+}

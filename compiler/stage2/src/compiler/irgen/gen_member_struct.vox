@@ -1,0 +1,77 @@
+import "compiler/ast" as ast
+import "compiler/ir" as ir
+import "compiler/typecheck" as tc
+
+fn gen_expr_member(g0: Gen, recv: i32, name: String, out_ty: i32) -> GenExprResult {
+  // Struct field get or unit enum variant value.
+  let rty: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.imps, g0.exprs, g0.locals, recv, -1);
+  if rty.ok && tc.is_struct_ty(g0.ctx, rty.ty) {
+    let rr: GenExprResult = gen_expr(g0, recv, -1);
+    if !rr.ok { return rr; }
+    let mut g: Gen = rr.g;
+    let rt: GenNewIdResult = gen_new_temp(g);
+    g = rt.g;
+    let tid: i32 = rt.id;
+    g = gen_emit(g, ir.Instr.FieldGet(tid, out_ty, rr.val, name));
+    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
+  }
+
+  // Module const: `alias.NAME` / `alias.mod.NAME`.
+  let pr: tc.ExprPartsResult = tc.expr_parts_member(g0.exprs, recv, name);
+  if pr.ok && pr.parts.len() >= 2 {
+    let base: String = tc.find_alias(g0.imps.aliases, pr.parts.get(0));
+    if base != "" {
+      let const_mod: String = if pr.parts.len() == 2 { base } else { base.concat("/").concat(pr.parts.get(1)) };
+      let const_name: String = if pr.parts.len() == 2 { pr.parts.get(1) } else { pr.parts.get(2) };
+      let cs: tc.ConstSig = tc.find_const(g0.ctx, const_mod, const_name);
+      if cs.name != "" {
+        let inl: GenInlineConstResult = gen_inline_const_sig(g0, cs);
+        if !inl.ok { return GenExprResult { ok: false, err: inl.err, g: inl.g, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+        return GenExprResult { ok: true, err: "", g: inl.g, val: inl.val, ty: inl.ty };
+      }
+    }
+  }
+
+  // Enum unit variant value: `E.None` / `alias.E.None`.
+  let mut g: Gen = g0;
+  let rt2: GenNewIdResult = gen_new_temp(g);
+  g = rt2.g;
+  let tid2: i32 = rt2.id;
+  g = gen_emit(g, ir.Instr.EnumInit(tid2, out_ty, name, Vec()));
+  return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid2), ty: out_ty };
+}
+
+fn gen_expr_struct_lit(g0: Gen, _ty_expr: i32, fields: Vec[ast.StructLitField], out_ty: i32) -> GenExprResult {
+  let mut g: Gen = g0;
+  let t: ir.Ty = ir.ty_pool_get(g.ctx.pool, out_ty);
+  let fs: tc.FindStructResult = tc.find_struct(g.ctx, tc.ty_mod(t), tc.ty_name(t));
+  if !fs.found { return GenExprResult { ok: false, err: "unknown struct", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  let sig: tc.StructSig = fs.sig;
+
+  let rt: GenNewIdResult = gen_new_temp(g);
+  g = rt.g;
+  let tid: i32 = rt.id;
+
+  let mut inits: Vec[ir.StructInitField] = Vec();
+  let mut i: i32 = 0;
+  while i < fields.len() {
+    let f: ast.StructLitField = fields.get(i);
+    // Find field type.
+    let mut want: i32 = g.ctx.ty_bad;
+    let mut fi: i32 = 0;
+    while fi < sig.fields.len() {
+      let sf: tc.StructFieldSig = sig.fields.get(fi);
+      if sf.name == f.name { want = sf.ty; }
+      fi = fi + 1;
+    }
+    if want == g.ctx.ty_bad { return GenExprResult { ok: false, err: "unknown struct field", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    let er: GenExprResult = gen_expr(g, f.expr, want);
+    if !er.ok { return er; }
+    g = er.g;
+    inits.push(ir.StructInitField { name: f.name, val: er.val });
+    i = i + 1;
+  }
+
+  g = gen_emit(g, ir.Instr.StructInit(tid, out_ty, inits));
+  return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
+}

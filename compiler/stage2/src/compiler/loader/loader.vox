@@ -1,0 +1,165 @@
+import "compiler/ast" as ast
+import "compiler/parse" as p
+import "compiler/typecheck" as tc
+
+pub struct SourceFile {
+  pub path: String, // e.g. "src/main.vox", "src/a/a.vox", "tests/basic.vox"
+  pub text: String,
+}
+
+pub struct LoadWorldResult {
+  pub ok: bool,
+  pub err_kind: i32,
+  pub err_code: String,
+  pub err_message: String,
+  pub err: String,
+  pub world: tc.World,
+}
+
+pub fn load_diag_kind_none() -> i32 { return 0; }
+pub fn load_diag_kind_parse() -> i32 { return 1; }
+pub fn load_diag_kind_lex() -> i32 { return 2; }
+pub fn load_diag_kind_loader() -> i32 { return 3; }
+
+fn load_code_bad_path() -> String { return "E_LOAD_0001"; }
+
+fn load_ok(mods: Vec[tc.WorldModule]) -> LoadWorldResult {
+  return LoadWorldResult {
+    ok: true,
+    err_kind: load_diag_kind_none(),
+    err_code: "",
+    err_message: "",
+    err: "",
+    world: tc.World { mods: mods },
+  };
+}
+
+fn load_err(kind: i32, code: String, msg: String, rendered: String) -> LoadWorldResult {
+  return LoadWorldResult {
+    ok: false,
+    err_kind: kind,
+    err_code: code,
+    err_message: msg,
+    err: rendered,
+    world: tc.World { mods: Vec() },
+  };
+}
+
+fn load_kind_from_parse(k: i32) -> i32 {
+  if k == p.parse_diag_kind_parse() { return load_diag_kind_parse(); }
+  if k == p.parse_diag_kind_lex() { return load_diag_kind_lex(); }
+  return load_diag_kind_none();
+}
+
+pub fn world_from_files(files: Vec[SourceFile]) -> LoadWorldResult {
+  let mut mods: Vec[tc.WorldModule] = Vec();
+
+  let mut i: i32 = 0;
+  while i < files.len() {
+    let f: SourceFile = files.get(i);
+    let mp: String = mod_path_from_file_path(f.path);
+    if mp == "" {
+      let code: String = load_code_bad_path();
+      let msg: String = "unsupported file path: ".concat(f.path);
+      return load_err(load_diag_kind_loader(), code, msg, msg.concat(" [").concat(code).concat("]"));
+    }
+
+    let r: p.ParseResult = p.parse_text_with_path(f.path, f.text);
+    if r.err != p.ParseError.None {
+      let d: p.ParseDiag = p.parse_error_diag(f.path, f.text, r.err);
+      return load_err(load_kind_from_parse(d.kind), d.code, d.message, d.rendered);
+    }
+
+    mods = upsert_mod(mods, mp, r.prog);
+    i = i + 1;
+  }
+
+  return load_ok(mods);
+}
+
+fn upsert_mod(mods: Vec[tc.WorldModule], mp: String, prog: ast.Program) -> Vec[tc.WorldModule] {
+  let mut out: Vec[tc.WorldModule] = Vec();
+  let mut replaced: bool = false;
+  let mut i: i32 = 0;
+  while i < mods.len() {
+    let m: tc.WorldModule = mods.get(i);
+    if m.path == mp {
+      out.push(tc.WorldModule { path: mp, prog: ast.program_merge(m.prog, prog) });
+      replaced = true;
+    } else {
+      out.push(m);
+    }
+    i = i + 1;
+  }
+  if !replaced {
+    out.push(tc.WorldModule { path: mp, prog: prog });
+  }
+  return out;
+}
+
+pub fn mod_path_from_file_path(pth: String) -> String {
+  // Optional dependency prefix: "<depName>/src/..." or "<depName>/tests/...".
+  let r0: Cut1Result = cut1(pth);
+  if r0.ok && (has_prefix(r0.tail, "src/") || has_prefix(r0.tail, "tests/")) {
+    let owner: String = "pkg/".concat(r0.head);
+    let tail: String = r0.tail;
+    if has_prefix(tail, "src/") {
+      let rest: String = tail.slice(4, tail.len());
+      let dir: String = dir_part(rest);
+      if dir == "" { return owner; }
+      return owner.concat("/").concat(dir);
+    }
+    // tests/
+    let rest: String = tail.slice(6, tail.len());
+    let dir: String = dir_part(rest);
+    if dir == "" { return owner.concat("/tests"); }
+    return owner.concat("/tests/").concat(dir);
+  }
+
+  // Root package.
+  if has_prefix(pth, "src/") {
+    let rest: String = pth.slice(4, pth.len());
+    let dir: String = dir_part(rest);
+    if dir == "" { return "main"; }
+    return dir;
+  }
+  if has_prefix(pth, "tests/") {
+    let rest: String = pth.slice(6, pth.len());
+    let dir: String = dir_part(rest);
+    if dir == "" { return "tests"; }
+    return "tests/".concat(dir);
+  }
+  return "";
+}
+
+fn has_prefix(s: String, pre: String) -> bool {
+  if s.len() < pre.len() { return false; }
+  return s.slice(0, pre.len()) == pre;
+}
+
+struct Cut1Result { ok: bool, head: String, tail: String }
+
+fn cut1(s: String) -> Cut1Result {
+  let n: i32 = s.len();
+  let mut i: i32 = 0;
+  while i < n {
+    if s.byte_at(i) == 47 { // '/'
+      return Cut1Result { ok: true, head: s.slice(0, i), tail: s.slice(i + 1, n) };
+    }
+    i = i + 1;
+  }
+  return Cut1Result { ok: false, head: "", tail: "" };
+}
+
+fn dir_part(rel: String) -> String {
+  // Return directory part of "a/b/c.vox" -> "a/b"; of "x.vox" -> "".
+  let n: i32 = rel.len();
+  let mut i: i32 = n - 1;
+  while i >= 0 {
+    if rel.byte_at(i) == 47 { // '/'
+      return rel.slice(0, i);
+    }
+    i = i - 1;
+  }
+  return "";
+}

@@ -1,0 +1,1297 @@
+import "compiler/ast" as ast
+
+struct TcCtxResult {
+  ok: bool,
+  err: TcError,
+  ctx: Ctx,
+}
+
+struct CollectConstWhereResult {
+  ok: bool,
+  err: TcError,
+  bounds: Vec[ConstWhereBoundSig],
+}
+
+struct AliasItem { mod_path: String, decl: ast.TypeAliasDecl }
+
+fn alias_qname(mod_path: String, name: String) -> String {
+  return mod_path.concat("::").concat(name);
+}
+
+fn contains_str_local(vs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < vs.len() {
+    if vs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn has_type_param_pack_decl(tp_packs: Vec[String]) -> bool {
+  return tp_packs.len() != 0;
+}
+
+fn is_pack_type_name(tn: ast.TypeName) -> bool {
+  return tn.parts.len() == 1 && tn.parts.get(0) == "@pack" && tn.args.len() == 1;
+}
+
+fn has_variadic_param_decl(ps: Vec[ast.Param]) -> bool {
+  let mut i: i32 = 0;
+  while i < ps.len() {
+    if is_pack_type_name(ps.get(i).ty) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+struct ValidateTypeParamPacksResult {
+  ok: bool,
+  err: TcError,
+}
+
+fn type_param_pos_local(tps: Vec[String], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < tps.len() {
+    if tps.get(i) == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn validate_type_param_packs(sp: ast.Span, tps: Vec[String], tp_packs: Vec[String]) -> ValidateTypeParamPacksResult {
+  if tp_packs.len() == 0 { return ValidateTypeParamPacksResult { ok: true, err: TcError.None }; }
+  if tp_packs.len() > 1 {
+    return ValidateTypeParamPacksResult { ok: false, err: type_error_at(sp, "only one type parameter pack is currently supported"), };
+  }
+  let p: String = tp_packs.get(0);
+  if type_param_pos_local(tps, p) == -1 {
+    return ValidateTypeParamPacksResult { ok: false, err: type_error_at(sp, "unknown type parameter pack: ".concat(p)), };
+  }
+  if type_param_pos_local(tps, p) != tps.len() - 1 {
+    return ValidateTypeParamPacksResult { ok: false, err: type_error_at(sp, "type parameter pack must be the last type parameter"), };
+  }
+  return ValidateTypeParamPacksResult { ok: true, err: TcError.None };
+}
+
+struct NormalizeParamTypeResult {
+  ok: bool,
+  err: TcError,
+  ty: ast.TypeName,
+}
+
+fn vec_type_name(elem: ast.TypeName) -> ast.TypeName {
+  let mut parts: Vec[String] = Vec();
+  parts.push("Vec");
+  let mut args: Vec[ast.TypeName] = Vec();
+  args.push(elem);
+  return ast.TypeName { parts: parts, args: args };
+}
+
+fn normalize_param_type(sp: ast.Span, ps: Vec[ast.Param], idx: i32, ty: ast.TypeName) -> NormalizeParamTypeResult {
+  if !is_pack_type_name(ty) {
+    return NormalizeParamTypeResult { ok: true, err: TcError.None, ty: ty };
+  }
+  if idx != ps.len() - 1 {
+    return NormalizeParamTypeResult { ok: false, err: type_error_at(sp, "variadic parameter must be the last parameter"), ty: ty };
+  }
+  let elem: ast.TypeName = ty.args.get(0);
+  if is_pack_type_name(elem) {
+    return NormalizeParamTypeResult { ok: false, err: type_error_at(sp, "nested variadic parameter is not allowed"), ty: ty };
+  }
+  return NormalizeParamTypeResult { ok: true, err: TcError.None, ty: vec_type_name(elem) };
+}
+
+fn contains_i32(vs: Vec[i32], x: i32) -> bool {
+  let mut i: i32 = 0;
+  while i < vs.len() {
+    if vs.get(i) == x { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn find_alias_item(items: Vec[AliasItem], mod_path: String, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < items.len() {
+    let it: AliasItem = items.get(i);
+    if it.mod_path == mod_path && it.decl.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn has_resolved_alias(ctx: Ctx, mod_path: String, name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < ctx.type_aliases.len() {
+    let a: TypeAliasSig = ctx.type_aliases.get(i);
+    if a.mod_path == mod_path && a.name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn set_i32_at(xs0: Vec[i32], idx: i32, val: i32) -> Vec[i32] {
+  let mut xs: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    xs.push(if i == idx { val } else { xs0.get(i) });
+    i = i + 1;
+  }
+  return xs;
+}
+
+fn collect_alias_deps(items: Vec[AliasItem], cur_mod: String, imps: Imports, tn: ast.TypeName) -> Vec[i32] {
+  let mut deps: Vec[i32] = Vec();
+
+  // Visit the current node (only when not generic).
+  if tn.args.len() == 0 {
+    if tn.parts.len() == 1 {
+      let mut mod_path: String = cur_mod;
+      let mut name: String = tn.parts.get(0);
+      let ni: NamedTypeImport = find_named_type(imps.named_types, name);
+      if ni.local != "" {
+        mod_path = ni.mod_path;
+        name = ni.name;
+      }
+      let ai: i32 = find_alias_item(items, mod_path, name);
+      if ai != -1 && !contains_i32(deps, ai) { deps.push(ai); }
+    } else if tn.parts.len() == 2 {
+      let mp: String = find_alias(imps.aliases, tn.parts.get(0));
+      if mp != "" {
+        let ai: i32 = find_alias_item(items, mp, tn.parts.get(1));
+        if ai != -1 && !contains_i32(deps, ai) { deps.push(ai); }
+      }
+    }
+  }
+
+  // Recurse into generic args.
+  let mut i: i32 = 0;
+  while i < tn.args.len() {
+    let ds: Vec[i32] = collect_alias_deps(items, cur_mod, imps, tn.args.get(i));
+    let mut j: i32 = 0;
+    while j < ds.len() {
+      let d: i32 = ds.get(j);
+      if !contains_i32(deps, d) { deps.push(d); }
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+
+  return deps;
+}
+
+struct ResolveAliasResult { ok: bool, err: TcError, ctx: Ctx, states: Vec[i32] }
+
+fn resolve_alias(ctx0: Ctx, w: World, items: Vec[AliasItem], states0: Vec[i32], idx: i32) -> ResolveAliasResult {
+  let st: i32 = states0.get(idx); // 0 pending, 1 resolving, 2 done
+  if st == 2 { return ResolveAliasResult { ok: true, err: TcError.None, ctx: ctx0, states: states0 }; }
+  if st == 1 {
+    let it0: AliasItem = items.get(idx);
+    return ResolveAliasResult { ok: false, err: type_error_at(it0.decl.sp, "type alias cycle: ".concat(alias_qname(it0.mod_path, it0.decl.name))), ctx: ctx0, states: states0 };
+  }
+
+  let mut c: Ctx = ctx0;
+  let mut states: Vec[i32] = set_i32_at(states0, idx, 1);
+  let it: AliasItem = items.get(idx);
+
+  let fm: FindModResult = find_mod(w, it.mod_path);
+  if !fm.found {
+    return ResolveAliasResult { ok: false, err: type_error_at(it.decl.sp, "unknown module for type alias"), ctx: c, states: states };
+  }
+  let m: WorldModule = w.mods.get(fm.idx);
+  let ir: ImportsResult = build_imports(w, it.mod_path, m.prog.imports, it.decl.file);
+  if !ir.ok { return ResolveAliasResult { ok: false, err: ir.err, ctx: c, states: states }; }
+  let imps: Imports = ir.imps;
+
+  // Resolve dependencies (other type aliases referenced from the RHS).
+  let deps: Vec[i32] = collect_alias_deps(items, it.mod_path, imps, it.decl.ty);
+  let mut di: i32 = 0;
+  while di < deps.len() {
+    let dep_idx: i32 = deps.get(di);
+    if dep_idx != idx {
+      let rr: ResolveAliasResult = resolve_alias(c, w, items, states, dep_idx);
+      if !rr.ok { return rr; }
+      c = rr.ctx;
+      states = rr.states;
+    }
+    di = di + 1;
+  }
+
+  // Resolve the alias RHS type.
+  let tr: ResolveTyResult = resolve_type(c, w, it.mod_path, imps, Vec(), it.decl.ty);
+  c = tr.ctx;
+  if !tr.ok {
+    return ResolveAliasResult {
+      ok: false,
+      err: type_error_at(it.decl.sp, resolve_fail_msg(it.decl.ty, "type resolve failed in type alias")),
+      ctx: c,
+      states: states,
+    };
+  }
+
+  // Cache the resolved alias for later use sites.
+  if !has_resolved_alias(c, it.mod_path, it.decl.name) {
+    c.type_aliases.push(TypeAliasSig { mod_path: it.mod_path, name: it.decl.name, vis: it.decl.vis, is_pub: it.decl.is_pub, ty: tr.idx });
+  }
+
+  states = set_i32_at(states, idx, 2);
+  return ResolveAliasResult { ok: true, err: TcError.None, ctx: c, states: states };
+}
+
+fn collect_type_aliases(ctx: Ctx, w: World) -> TcCtxResult {
+  let mut c: Ctx = ctx;
+
+  // Gather all type alias decls across modules (multi-file modules are already merged).
+  let mut items: Vec[AliasItem] = Vec();
+  let mut seen: Vec[String] = Vec();
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: WorldModule = w.mods.get(mi);
+    let mut ti: i32 = 0;
+    while ti < m.prog.types.len() {
+      let td: ast.TypeAliasDecl = m.prog.types.get(ti);
+      if is_reserved_intrinsic_name(td.name) {
+        return TcCtxResult { ok: false, err: type_error_at(td.sp, "reserved name: ".concat(td.name)), ctx: c };
+      }
+      let qn: String = alias_qname(m.path, td.name);
+      if contains_str_local(seen, qn) {
+        return TcCtxResult { ok: false, err: type_error_at(td.sp, "duplicate type alias: ".concat(td.name)), ctx: c };
+      }
+      seen.push(qn);
+      items.push(AliasItem { mod_path: m.path, decl: td });
+      ti = ti + 1;
+    }
+    mi = mi + 1;
+  }
+
+  // Resolve with recursion + cycle detection.
+  let mut states: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < items.len() { states.push(0); i = i + 1; }
+
+  i = 0;
+  while i < items.len() {
+    let rr: ResolveAliasResult = resolve_alias(c, w, items, states, i);
+    if !rr.ok { return TcCtxResult { ok: false, err: rr.err, ctx: rr.ctx }; }
+    c = rr.ctx;
+    states = rr.states;
+    i = i + 1;
+  }
+
+  return TcCtxResult { ok: true, err: TcError.None, ctx: c };
+}
+
+fn collect_structs(ctx: Ctx, w: World) -> TcCtxResult {
+  let mut c: Ctx = ctx;
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: WorldModule = w.mods.get(mi);
+    let mut si: i32 = 0;
+    while si < m.prog.structs.len() {
+      let sd: ast.StructDecl = m.prog.structs.get(si);
+      if is_reserved_intrinsic_name(sd.name) {
+        return TcCtxResult { ok: false, err: type_error_at(sd.sp, "reserved name: ".concat(sd.name)), ctx: c };
+      }
+      // Generic nominal declarations are instantiated on-demand in resolve_type.
+      if sd.type_params.len() != 0 {
+        let cwr_gs: CollectConstWhereResult = collect_const_where_bounds(sd.sp, sd.type_params, Vec(), sd.const_where_bounds);
+        if !cwr_gs.ok { return TcCtxResult { ok: false, err: cwr_gs.err, ctx: c }; }
+        si = si + 1;
+        continue;
+      }
+      let ir: ImportsResult = build_imports(w, m.path, m.prog.imports, sd.file);
+      if !ir.ok { return TcCtxResult { ok: false, err: ir.err, ctx: c }; }
+      let imps: Imports = ir.imps;
+      let mut fields: Vec[StructFieldSig] = Vec();
+      let mut fi: i32 = 0;
+      while fi < sd.fields.len() {
+        let fd: ast.FieldDecl = sd.fields.get(fi);
+          let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), fd.ty);
+          c = rr.ctx;
+          if !rr.ok {
+          return TcCtxResult { ok: false, err: type_error_at(sd.sp, resolve_fail_msg(fd.ty, "type resolve failed in struct field")), ctx: c };
+          }
+        fields.push(StructFieldSig { name: fd.name, ty: rr.idx, vis: fd.vis, is_pub: fd.is_pub });
+        fi = fi + 1;
+      }
+      c.structs.push(StructSig { mod_path: m.path, name: sd.name, base_name: sd.name, vis: sd.vis, is_pub: sd.is_pub, fields: fields });
+      // Pre-intern nominal struct type so later passes (e.g. const collection)
+      // can reference a stable ty index without relying on resolve_type side effects.
+      let mut self_parts: Vec[String] = Vec();
+      self_parts.push(sd.name);
+      let self_ty: ast.TypeName = ast.TypeName { parts: self_parts, args: Vec() };
+      let self_r: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), self_ty);
+      c = self_r.ctx;
+      if !self_r.ok {
+        return TcCtxResult { ok: false, err: type_error_at(sd.sp, resolve_fail_msg(self_ty, "type resolve failed for struct self type")), ctx: c };
+      }
+      si = si + 1;
+    }
+    mi = mi + 1;
+  }
+  return TcCtxResult { ok: true, err: TcError.None, ctx: c };
+}
+
+fn collect_enums(ctx: Ctx, w: World) -> TcCtxResult {
+  let mut c: Ctx = ctx;
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: WorldModule = w.mods.get(mi);
+    let mut ei: i32 = 0;
+    while ei < m.prog.enums.len() {
+      let ed: ast.EnumDecl = m.prog.enums.get(ei);
+      if is_reserved_intrinsic_name(ed.name) {
+        return TcCtxResult { ok: false, err: type_error_at(ed.sp, "reserved name: ".concat(ed.name)), ctx: c };
+      }
+      // Generic nominal declarations are instantiated on-demand in resolve_type.
+      if ed.type_params.len() != 0 {
+        let cwr_ge: CollectConstWhereResult = collect_const_where_bounds(ed.sp, ed.type_params, Vec(), ed.const_where_bounds);
+        if !cwr_ge.ok { return TcCtxResult { ok: false, err: cwr_ge.err, ctx: c }; }
+        ei = ei + 1;
+        continue;
+      }
+      let ir: ImportsResult = build_imports(w, m.path, m.prog.imports, ed.file);
+      if !ir.ok { return TcCtxResult { ok: false, err: ir.err, ctx: c }; }
+      let imps: Imports = ir.imps;
+      let mut vars: Vec[EnumVariantSig] = Vec();
+      let mut vi: i32 = 0;
+      while vi < ed.variants.len() {
+        let vd: ast.EnumVariantDecl = ed.variants.get(vi);
+        let mut ftys: Vec[i32] = Vec();
+        let mut fi: i32 = 0;
+        while fi < vd.fields.len() {
+          let tr: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), vd.fields.get(fi));
+          c = tr.ctx;
+          if !tr.ok {
+            return TcCtxResult { ok: false, err: type_error_at(ed.sp, resolve_fail_msg(vd.fields.get(fi), "type resolve failed in enum variant")), ctx: c };
+          }
+          ftys.push(tr.idx);
+          fi = fi + 1;
+        }
+        vars.push(EnumVariantSig { name: vd.name, fields: ftys });
+        vi = vi + 1;
+      }
+      c.enums.push(EnumSig { mod_path: m.path, name: ed.name, base_name: ed.name, vis: ed.vis, is_pub: ed.is_pub, vars: vars });
+      // Pre-intern nominal enum type so later passes (e.g. const collection)
+      // can reference a stable ty index without relying on resolve_type side effects.
+      let mut self_parts: Vec[String] = Vec();
+      self_parts.push(ed.name);
+      let self_ty: ast.TypeName = ast.TypeName { parts: self_parts, args: Vec() };
+      let self_r: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), self_ty);
+      c = self_r.ctx;
+      if !self_r.ok {
+        return TcCtxResult { ok: false, err: type_error_at(ed.sp, resolve_fail_msg(self_ty, "type resolve failed for enum self type")), ctx: c };
+      }
+      ei = ei + 1;
+    }
+    mi = mi + 1;
+  }
+  return TcCtxResult { ok: true, err: TcError.None, ctx: c };
+}
+
+struct TypeWalkResult {
+  ok: bool,
+  err: TcError,
+  ctx: Ctx,
+}
+
+fn type_walk_ok(c: Ctx) -> TypeWalkResult { return TypeWalkResult { ok: true, err: TcError.None, ctx: c }; }
+fn type_walk_err(c: Ctx, e: TcError) -> TypeWalkResult { return TypeWalkResult { ok: false, err: e, ctx: c }; }
+
+fn type_name_text(tn: ast.TypeName) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < tn.parts.len() {
+    if i > 0 { out = out.concat("."); }
+    out = out.concat(tn.parts.get(i));
+    i = i + 1;
+  }
+  if tn.args.len() == 0 { return out; }
+  out = out.concat("[");
+  i = 0;
+  while i < tn.args.len() {
+    if i > 0 { out = out.concat(", "); }
+    out = out.concat(type_name_text(tn.args.get(i)));
+    i = i + 1;
+  }
+  return out.concat("]");
+}
+
+fn resolve_fail_msg(tn: ast.TypeName, fallback: String) -> String {
+  let msg: String = named_lifetime_type_error(tn);
+  if msg != "" { return msg; }
+  return fallback;
+}
+
+// Typed-path marker pre-resolution:
+// parser encodes `TypePath[T]` (before `.member` or `{ ... }`) as `Call(path, [T], [])`.
+// We resolve it here to ensure typecheck/irgen can rely on already-interned nominal types.
+fn maybe_resolve_typed_path_marker(ctx: Ctx, w: World, mod_path: String, imps: Imports, type_params: Vec[String], exprs: ast.ExprPool, id: i32) -> Ctx {
+  let mut c: Ctx = ctx;
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
+  if !match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } { return c; }
+
+  let callee: i32 = match n { ast.ExprNode.Call(x, _ts, _as) => x, _ => -1 };
+  let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_x, ts, _as) => ts, _ => Vec() };
+  let args: Vec[i32] = match n { ast.ExprNode.Call(_x, _ts, as0) => as0, _ => Vec() };
+  if args.len() != 0 || targs.len() == 0 { return c; }
+  // `Call(path, [@const...], [])` is not a typed-path marker.
+  let mut ti0: i32 = 0;
+  while ti0 < targs.len() {
+    if is_const_generic_arg_tn(targs.get(ti0)) { return c; }
+    ti0 = ti0 + 1;
+  }
+
+  let pr: ExprPartsResult = expr_parts(exprs, callee);
+  if !pr.ok { return c; }
+  if pr.parts.len() != 1 && pr.parts.len() != 2 { return c; }
+
+  let tn: ast.TypeName = ast.TypeName { parts: pr.parts, args: targs };
+  let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, tn);
+  // Best-effort pre-warm only; real type errors are reported in main typecheck pass.
+  if tr.ok { c = tr.ctx; }
+  return c;
+}
+
+fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, type_params: Vec[String], exprs: ast.ExprPool, id: i32, owner_file: String) -> TypeWalkResult {
+  let mut c: Ctx = ctx;
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
+
+  if match n { ast.ExprNode.As(_a, _tn) => true, _ => false } {
+    let tn: ast.TypeName = match n { ast.ExprNode.As(_a, t) => t, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+    let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, tn);
+    c = tr.ctx;
+    if !tr.ok {
+      return type_walk_err(c, type_error(owner_file, resolve_fail_msg(tn, "type resolve failed in expression type annotation: ".concat(type_name_text(tn)))));
+    }
+  }
+  if match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } {
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, ts, _a) => ts, _ => Vec() };
+    let mut ti: i32 = 0;
+    while ti < targs.len() {
+      let ta: ast.TypeName = targs.get(ti);
+      if !is_const_generic_arg_tn(ta) {
+        let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, ta);
+        c = tr.ctx;
+        if !tr.ok {
+          return type_walk_err(c, type_error(owner_file, resolve_fail_msg(ta, "type resolve failed in call type arg: ".concat(type_name_text(ta)))));
+        }
+      }
+      ti = ti + 1;
+    }
+  }
+  if match n { ast.ExprNode.MacroCall(_callee, _targs, _args) => true, _ => false } {
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.MacroCall(_c, ts, _a) => ts, _ => Vec() };
+    let mut ti: i32 = 0;
+    while ti < targs.len() {
+      let ta: ast.TypeName = targs.get(ti);
+      if !is_const_generic_arg_tn(ta) {
+        let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, ta);
+        c = tr.ctx;
+        if !tr.ok {
+          return type_walk_err(c, type_error(owner_file, resolve_fail_msg(ta, "type resolve failed in macro call type arg: ".concat(type_name_text(ta)))));
+        }
+      }
+      ti = ti + 1;
+    }
+  }
+  if match n { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+    let recv: i32 = match n { ast.ExprNode.Member(r, _n) => r, _ => -1 };
+    c = maybe_resolve_typed_path_marker(c, w, mod_path, imps, type_params, exprs, recv);
+  }
+  if match n { ast.ExprNode.StructLit(_tyex, _fields) => true, _ => false } {
+    let tyex: i32 = match n { ast.ExprNode.StructLit(t, _fs) => t, _ => -1 };
+    c = maybe_resolve_typed_path_marker(c, w, mod_path, imps, type_params, exprs, tyex);
+  }
+
+  let wr: TypeWalkResult = match n {
+    ast.ExprNode.Int(_v) => type_walk_ok(c),
+    ast.ExprNode.Float(_v) => type_walk_ok(c),
+    ast.ExprNode.Bool(_v) => type_walk_ok(c),
+    ast.ExprNode.Ident(_s) => type_walk_ok(c),
+    ast.ExprNode.Str(_s) => type_walk_ok(c),
+    ast.ExprNode.DotIdent(_s) => type_walk_ok(c),
+    ast.ExprNode.Block(b) => walk_expr_block_type_names(c, w, mod_path, imps, type_params, exprs, b, owner_file),
+    ast.ExprNode.If(c0, t0, e0) => {
+      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, c0, owner_file);
+      if !r0.ok { r0 } else {
+        let r1: TypeWalkResult = walk_expr_type_names(r0.ctx, w, mod_path, imps, type_params, exprs, t0, owner_file);
+        if !r1.ok { r1 } else { walk_expr_type_names(r1.ctx, w, mod_path, imps, type_params, exprs, e0, owner_file) }
+      }
+    },
+    ast.ExprNode.Unary(_op, a) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, a, owner_file),
+    ast.ExprNode.As(a, _tn) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, a, owner_file),
+    ast.ExprNode.Binary(_op, l, r) => {
+      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, l, owner_file);
+      if !r0.ok { r0 } else { walk_expr_type_names(r0.ctx, w, mod_path, imps, type_params, exprs, r, owner_file) }
+    },
+    ast.ExprNode.Member(recv, _name) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, recv, owner_file),
+    ast.ExprNode.TryBlock(bid) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, bid, owner_file),
+    ast.ExprNode.Try(a) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, a, owner_file),
+    ast.ExprNode.Call(callee, _targs, args) => {
+      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, callee, owner_file);
+      if !r0.ok { r0 } else {
+        let mut c1: Ctx = r0.ctx;
+        let mut ai: i32 = 0;
+        let mut ok1: bool = true;
+        while ok1 && ai < args.len() {
+          let ri: TypeWalkResult = walk_expr_type_names(c1, w, mod_path, imps, type_params, exprs, args.get(ai), owner_file);
+          if !ri.ok { ok1 = false; c1 = ri.ctx; } else { c1 = ri.ctx; ai = ai + 1; }
+        }
+        if ok1 { type_walk_ok(c1) } else { type_walk_err(c1, type_error(owner_file, "type resolve failed in call arg expression")) }
+      }
+    },
+    ast.ExprNode.MacroCall(callee, _targs, args) => {
+      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, callee, owner_file);
+      if !r0.ok { r0 } else {
+        let mut c1: Ctx = r0.ctx;
+        let mut ai: i32 = 0;
+        let mut ok1: bool = true;
+        while ok1 && ai < args.len() {
+          let ri: TypeWalkResult = walk_expr_type_names(c1, w, mod_path, imps, type_params, exprs, args.get(ai), owner_file);
+          if !ri.ok { ok1 = false; c1 = ri.ctx; } else { c1 = ri.ctx; ai = ai + 1; }
+        }
+        if ok1 { type_walk_ok(c1) } else { type_walk_err(c1, type_error(owner_file, "type resolve failed in macro call arg expression")) }
+      }
+    },
+    ast.ExprNode.StructLit(tyex, fields) => {
+      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, tyex, owner_file);
+      if !r0.ok { r0 } else {
+        let mut c1: Ctx = r0.ctx;
+        let mut fi: i32 = 0;
+        let mut ok1: bool = true;
+        while ok1 && fi < fields.len() {
+          let rf: TypeWalkResult = walk_expr_type_names(c1, w, mod_path, imps, type_params, exprs, fields.get(fi).expr, owner_file);
+          if !rf.ok { ok1 = false; c1 = rf.ctx; } else { c1 = rf.ctx; fi = fi + 1; }
+        }
+        if ok1 { type_walk_ok(c1) } else { type_walk_err(c1, type_error(owner_file, "type resolve failed in struct literal field expression")) }
+      }
+    },
+    ast.ExprNode.Match(scrut, arms) => {
+      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, scrut, owner_file);
+      if !r0.ok { r0 } else {
+        let mut c1: Ctx = r0.ctx;
+        let mut ai: i32 = 0;
+        let mut ok1: bool = true;
+        while ok1 && ai < arms.len() {
+          let ra: TypeWalkResult = walk_expr_type_names(c1, w, mod_path, imps, type_params, exprs, arms.get(ai).expr, owner_file);
+          if !ra.ok { ok1 = false; c1 = ra.ctx; } else { c1 = ra.ctx; ai = ai + 1; }
+        }
+        if ok1 { type_walk_ok(c1) } else { type_walk_err(c1, type_error(owner_file, "type resolve failed in match arm expression")) }
+      }
+    },
+  };
+  return wr;
+}
+
+fn walk_stmt_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, type_params: Vec[String], exprs: ast.ExprPool, st: ast.Stmt, owner_file: String) -> TypeWalkResult {
+  let mut c: Ctx = ctx;
+  return match st {
+    ast.Stmt.Let(_sp, _mut, _name, has_ann, ann, init) => {
+      if has_ann {
+        let tr: ResolveTyResult = resolve_type(c, w, mod_path, imps, type_params, ann);
+        c = tr.ctx;
+        if !tr.ok {
+          return type_walk_err(c, type_error(owner_file, resolve_fail_msg(ann, "type resolve failed in let annotation: ".concat(type_name_text(ann)))));
+        }
+      }
+      walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, init, owner_file)
+    },
+    ast.Stmt.Assign(_sp, _name, ex) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, ex, owner_file),
+    ast.Stmt.AssignField(_sp, _recv, _field, ex) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, ex, owner_file),
+    ast.Stmt.ExprStmt(_sp, ex) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, ex, owner_file),
+    ast.Stmt.IfStmt(_sp, cond, then_b, has_else, else_b) => {
+      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, cond, owner_file);
+      if !r0.ok { r0 } else {
+        let r1: TypeWalkResult = walk_block_type_names(r0.ctx, w, mod_path, imps, type_params, exprs, then_b, owner_file);
+        if !r1.ok { r1 } else if has_else { walk_block_type_names(r1.ctx, w, mod_path, imps, type_params, exprs, else_b, owner_file) } else { r1 }
+      }
+    },
+    ast.Stmt.WhileStmt(_sp, cond, body) => {
+      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, cond, owner_file);
+      if !r0.ok { r0 } else { walk_block_type_names(r0.ctx, w, mod_path, imps, type_params, exprs, body, owner_file) }
+    },
+    ast.Stmt.Break(_sp) => type_walk_ok(c),
+    ast.Stmt.Continue(_sp) => type_walk_ok(c),
+    ast.Stmt.ReturnStmt(_sp, has_ex, ex) => if has_ex { walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, ex, owner_file) } else { type_walk_ok(c) },
+  };
+}
+
+fn walk_expr_block_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, type_params: Vec[String], exprs: ast.ExprPool, b: ast.ExprBlock, owner_file: String) -> TypeWalkResult {
+  let mut c: Ctx = ctx;
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    let wr: TypeWalkResult = walk_stmt_type_names(c, w, mod_path, imps, type_params, exprs, b.stmts.get(i), owner_file);
+    if !wr.ok { return wr; }
+    c = wr.ctx;
+    i = i + 1;
+  }
+  if b.has_tail {
+    return walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, b.tail, owner_file);
+  }
+  return type_walk_ok(c);
+}
+
+fn walk_block_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, type_params: Vec[String], exprs: ast.ExprPool, b: ast.Block, owner_file: String) -> TypeWalkResult {
+  let mut c: Ctx = ctx;
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    let wr: TypeWalkResult = walk_stmt_type_names(c, w, mod_path, imps, type_params, exprs, b.stmts.get(i), owner_file);
+    if !wr.ok { return wr; }
+    c = wr.ctx;
+    i = i + 1;
+  }
+  return type_walk_ok(c);
+}
+
+fn collect_body_type_names(ctx: Ctx, w: World) -> TcCtxResult {
+  let mut c: Ctx = ctx;
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: WorldModule = w.mods.get(mi);
+
+    // Non-generic function bodies.
+    let mut fi: i32 = 0;
+    while fi < m.prog.funcs.len() {
+      let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+      if fd.type_params.len() == 0 && fd.const_params.len() == 0 {
+        let ir: ImportsResult = build_imports(w, m.path, m.prog.imports, fd.file);
+        if !ir.ok { return TcCtxResult { ok: false, err: ir.err, ctx: c }; }
+        let wr: TypeWalkResult = walk_block_type_names(c, w, m.path, ir.imps, fd.type_params, m.prog.exprs, fd.body, fd.file);
+        if !wr.ok { return TcCtxResult { ok: false, err: wr.err, ctx: wr.ctx }; }
+        c = wr.ctx;
+      }
+      fi = fi + 1;
+    }
+
+    // Non-generic impl method bodies.
+    let mut ii: i32 = 0;
+    while ii < m.prog.impls.len() {
+      let id: ast.ImplDecl = m.prog.impls.get(ii);
+      if id.type_params.len() == 0 {
+        let ir: ImportsResult = build_imports(w, m.path, m.prog.imports, id.file);
+        if !ir.ok { return TcCtxResult { ok: false, err: ir.err, ctx: c }; }
+        let mut mdi: i32 = 0;
+        while mdi < id.methods.len() {
+          let md: ast.FuncDecl = id.methods.get(mdi);
+          if md.type_params.len() == 0 && md.const_params.len() == 0 {
+            let wr: TypeWalkResult = walk_block_type_names(c, w, m.path, ir.imps, md.type_params, m.prog.exprs, md.body, md.file);
+            if !wr.ok { return TcCtxResult { ok: false, err: wr.err, ctx: wr.ctx }; }
+            c = wr.ctx;
+          }
+          mdi = mdi + 1;
+        }
+      }
+      ii = ii + 1;
+    }
+
+    mi = mi + 1;
+  }
+  return TcCtxResult { ok: true, err: TcError.None, ctx: c };
+}
+
+fn has_bound_sig(bs: Vec[TypeParamBoundSig], tp: String, trait_mod: String, trait_name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < bs.len() {
+    let b: TypeParamBoundSig = bs.get(i);
+    if b.type_param == tp && b.trait_mod_path == trait_mod && b.trait_name == trait_name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn find_const_param_sig(cps: Vec[ConstParamSig], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < cps.len() {
+    if cps.get(i).name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn find_type_param_name(tps: Vec[String], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < tps.len() {
+    if tps.get(i) == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn const_where_op_supported(op: ast.BinaryOp) -> bool {
+  return
+    match op {
+      ast.BinaryOp.Eq => true,
+      ast.BinaryOp.Ne => true,
+      ast.BinaryOp.Lt => true,
+      ast.BinaryOp.Le => true,
+      ast.BinaryOp.Gt => true,
+      ast.BinaryOp.Ge => true,
+      _ => false,
+    };
+}
+
+struct CollectRhsReflectDecode {
+  ok: bool,
+  kind: i32,
+  name: String,
+}
+
+fn collect_rhs_reflect_decode(s: String) -> CollectRhsReflectDecode {
+  let pfx: String = "__cwref__:";
+  if s.len() <= pfx.len() || s.slice(0, pfx.len()) != pfx {
+    return CollectRhsReflectDecode { ok: false, kind: ast.comptime_where_lhs_const_param(), name: "" };
+  }
+  let rest: String = s.slice(pfx.len(), s.len());
+  let mut cut: i32 = -1;
+  let mut i: i32 = 0;
+  while i < rest.len() {
+    if rest.byte_at(i) == 58 {
+      cut = i;
+      i = rest.len();
+    } else {
+      i = i + 1;
+    }
+  }
+  if cut <= 0 || cut + 1 >= rest.len() {
+    return CollectRhsReflectDecode { ok: false, kind: ast.comptime_where_lhs_const_param(), name: "" };
+  }
+  let tag: String = rest.slice(0, cut);
+  let name: String = rest.slice(cut + 1, rest.len());
+  let kind: i32 =
+    if tag == "size_of" {
+      ast.comptime_where_lhs_size_of()
+    } else if tag == "align_of" {
+      ast.comptime_where_lhs_align_of()
+    } else if tag == "field_count" {
+      ast.comptime_where_lhs_field_count()
+    } else if tag == "type" {
+      ast.comptime_where_lhs_type()
+    } else {
+      ast.comptime_where_lhs_const_param()
+    };
+  if kind == ast.comptime_where_lhs_const_param() {
+    return CollectRhsReflectDecode { ok: false, kind: kind, name: "" };
+  }
+  return CollectRhsReflectDecode { ok: true, kind: kind, name: name };
+}
+
+fn has_const_where_sig(bs: Vec[ConstWhereBoundSig], lhs_kind: i32, name: String, op: ast.BinaryOp, rhs_is_param: bool, rhs_param: String, rhs_iv: i64) -> bool {
+  let mut i: i32 = 0;
+  while i < bs.len() {
+    let b: ConstWhereBoundSig = bs.get(i);
+    let rhs_ok: bool =
+      if b.rhs_is_param != rhs_is_param {
+        false
+      } else if rhs_is_param {
+        b.rhs_param == rhs_param
+      } else {
+        b.rhs_iv == rhs_iv
+      };
+    if b.lhs_kind == lhs_kind && b.name == name && rhs_ok {
+      if match b.op { ast.BinaryOp.Eq => true, _ => false } && match op { ast.BinaryOp.Eq => true, _ => false } { return true; }
+      if match b.op { ast.BinaryOp.Ne => true, _ => false } && match op { ast.BinaryOp.Ne => true, _ => false } { return true; }
+      if match b.op { ast.BinaryOp.Lt => true, _ => false } && match op { ast.BinaryOp.Lt => true, _ => false } { return true; }
+      if match b.op { ast.BinaryOp.Le => true, _ => false } && match op { ast.BinaryOp.Le => true, _ => false } { return true; }
+      if match b.op { ast.BinaryOp.Gt => true, _ => false } && match op { ast.BinaryOp.Gt => true, _ => false } { return true; }
+      if match b.op { ast.BinaryOp.Ge => true, _ => false } && match op { ast.BinaryOp.Ge => true, _ => false } { return true; }
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn collect_const_where_bounds(sp: ast.Span, tps: Vec[String], cps: Vec[ConstParamSig], ds: Vec[ast.ConstWhereDecl]) -> CollectConstWhereResult {
+  let mut out: Vec[ConstWhereBoundSig] = Vec();
+  let mut i: i32 = 0;
+  while i < ds.len() {
+    let d: ast.ConstWhereDecl = ds.get(i);
+    if !const_where_op_supported(d.op) {
+      return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unsupported comptime where operator"), bounds: out };
+    }
+    if d.lhs_kind == ast.comptime_where_lhs_const_param() {
+      if find_const_param_sig(cps, d.name) == -1 {
+        return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown const param in comptime where: ".concat(d.name)), bounds: out };
+      }
+      if d.rhs_is_param {
+        let rr: CollectRhsReflectDecode = collect_rhs_reflect_decode(d.rhs_param);
+        if rr.ok {
+          if find_type_param_name(tps, rr.name) == -1 {
+            return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown type param in comptime where rhs: ".concat(rr.name)), bounds: out };
+          }
+        } else if find_const_param_sig(cps, d.rhs_param) == -1 {
+          return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown const param in comptime where rhs: ".concat(d.rhs_param)), bounds: out };
+        }
+        out.push(ConstWhereBoundSig {
+          lhs_kind: d.lhs_kind,
+          name: d.name,
+          op: d.op,
+          rhs_is_param: true,
+          rhs_param: d.rhs_param,
+          rhs_iv: 0,
+          rhs_text: d.rhs_text,
+        });
+      } else {
+        let pr: ParseI64DecResult = parse_i64_dec(d.rhs_text);
+        if !pr.ok {
+          return CollectConstWhereResult { ok: false, err: type_error_at(sp, "comptime where rhs out of range: ".concat(d.rhs_text)), bounds: out };
+        }
+        out.push(ConstWhereBoundSig {
+          lhs_kind: d.lhs_kind,
+          name: d.name,
+          op: d.op,
+          rhs_is_param: false,
+          rhs_param: "",
+          rhs_iv: pr.val,
+          rhs_text: d.rhs_text,
+        });
+      }
+    } else if
+      d.lhs_kind == ast.comptime_where_lhs_size_of() ||
+      d.lhs_kind == ast.comptime_where_lhs_align_of() ||
+      d.lhs_kind == ast.comptime_where_lhs_field_count() ||
+      d.lhs_kind == ast.comptime_where_lhs_type()
+    {
+      if find_type_param_name(tps, d.name) == -1 {
+        return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown type param in comptime where: ".concat(d.name)), bounds: out };
+      }
+      if d.rhs_is_param {
+        let rr2: CollectRhsReflectDecode = collect_rhs_reflect_decode(d.rhs_param);
+        if rr2.ok {
+          if find_type_param_name(tps, rr2.name) == -1 {
+            return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown type param in comptime where rhs: ".concat(rr2.name)), bounds: out };
+          }
+        } else if find_const_param_sig(cps, d.rhs_param) == -1 {
+          return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown const param in comptime where rhs: ".concat(d.rhs_param)), bounds: out };
+        }
+        out.push(ConstWhereBoundSig {
+          lhs_kind: d.lhs_kind,
+          name: d.name,
+          op: d.op,
+          rhs_is_param: true,
+          rhs_param: d.rhs_param,
+          rhs_iv: 0,
+          rhs_text: d.rhs_text,
+        });
+      } else {
+        let pr2: ParseI64DecResult = parse_i64_dec(d.rhs_text);
+        if !pr2.ok {
+          return CollectConstWhereResult { ok: false, err: type_error_at(sp, "comptime where rhs out of range: ".concat(d.rhs_text)), bounds: out };
+        }
+        out.push(ConstWhereBoundSig {
+          lhs_kind: d.lhs_kind,
+          name: d.name,
+          op: d.op,
+          rhs_is_param: false,
+          rhs_param: "",
+          rhs_iv: pr2.val,
+          rhs_text: d.rhs_text,
+        });
+      }
+    } else {
+      return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unsupported comptime where lhs"), bounds: out };
+    }
+    i = i + 1;
+  }
+
+  // Validate defaults eagerly for const-param lhs constraints only: if a const
+  // param has default, it must satisfy comptime where constraints at declaration.
+  let mut defaults: Vec[ConstSub] = Vec();
+  i = 0;
+  while i < cps.len() {
+    let cp: ConstParamSig = cps.get(i);
+    if cp.has_default {
+      defaults.push(ConstSub { name: cp.name, ty: cp.ty, iv: cp.default_iv, text: cp.default_text });
+    }
+    i = i + 1;
+  }
+  let mut wi: i32 = 0;
+  while wi < out.len() {
+    let wb: ConstWhereBoundSig = out.get(wi);
+    if wb.lhs_kind == ast.comptime_where_lhs_const_param() {
+      let mut cfi: i32 = 0;
+      while cfi < cps.len() {
+        let cp2: ConstParamSig = cps.get(cfi);
+        if cp2.name == wb.name && cp2.has_default {
+          // Eagerly validate only when every value used by the bound has defaults.
+          let mut can_check: bool = true;
+          if wb.rhs_is_param {
+            let mut has_rhs_default: bool = false;
+            let mut di: i32 = 0;
+            while di < defaults.len() {
+              if defaults.get(di).name == wb.rhs_param { has_rhs_default = true; }
+              di = di + 1;
+            }
+            can_check = has_rhs_default;
+          }
+          if can_check {
+            let mut lhs_find: i64 = 0;
+            let mut lhs_ok: bool = false;
+            let mut li: i32 = 0;
+            while li < defaults.len() {
+              let dli: ConstSub = defaults.get(li);
+              if dli.name == wb.name {
+                lhs_ok = true;
+                lhs_find = dli.iv;
+                li = defaults.len();
+              } else {
+                li = li + 1;
+              }
+            }
+            if !lhs_ok {
+              return CollectConstWhereResult { ok: false, err: type_error_at(sp, "const param default violates comptime where: ".concat(wb.name)), bounds: out };
+            }
+            let mut rhs_find: i64 = wb.rhs_iv;
+            if wb.rhs_is_param {
+              let mut rhs_ok: bool = false;
+              let mut ri: i32 = 0;
+              while ri < defaults.len() {
+                let dri: ConstSub = defaults.get(ri);
+                if dri.name == wb.rhs_param {
+                  rhs_ok = true;
+                  rhs_find = dri.iv;
+                  ri = defaults.len();
+                } else {
+                  ri = ri + 1;
+                }
+              }
+              if !rhs_ok {
+                return CollectConstWhereResult { ok: false, err: type_error_at(sp, "const param default violates comptime where: ".concat(wb.name)), bounds: out };
+              }
+            }
+            if !const_where_eval_i64(wb.op, lhs_find, rhs_find) {
+              return CollectConstWhereResult { ok: false, err: type_error_at(sp, "const param default violates comptime where: ".concat(wb.name)), bounds: out };
+            }
+          }
+        }
+        cfi = cfi + 1;
+      }
+    } else {
+      // Type layout constraints are checked when type args are known.
+    }
+    wi = wi + 1;
+  }
+  return CollectConstWhereResult { ok: true, err: TcError.None, bounds: out };
+}
+
+fn vec1_const_where(x: ConstWhereBoundSig) -> Vec[ConstWhereBoundSig] {
+  let mut v: Vec[ConstWhereBoundSig] = Vec();
+  v.push(x);
+  return v;
+}
+
+fn builtin_func_sym(
+  name: String,
+  params: Vec[i32],
+  ret: i32,
+  type_params: Vec[String],
+  const_params: Vec[ConstParamSig]
+) -> FuncSym {
+  return FuncSym {
+    mod_path: "",
+    name: name,
+    sig: FuncSig {
+      params: params,
+      ret: ret,
+      vis: ast.vis_pub(),
+      is_pub: true,
+      type_params: type_params,
+      type_param_packs: Vec(),
+      const_params: const_params,
+      type_param_bounds: Vec(),
+      const_where_bounds: Vec(),
+    },
+  };
+}
+
+fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
+  let mut c: Ctx = ctx;
+
+  // Builtins (stage1): keep minimal and stable.
+  // Higher-level helpers should live in stdlib Vox sources.
+  c.funcs.push(builtin_func_sym("panic", vec1(c.ty_string), c.ty_unit, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("print", vec1(c.ty_string), c.ty_unit, Vec(), Vec()));
+  // Type reflection intrinsics (Stage1 subset): parsed as `@name(Type)`.
+  let mut tp_reflect: Vec[String] = Vec();
+  tp_reflect.push("T");
+  c.funcs.push(builtin_func_sym("@size_of", Vec(), c.ty_usize, tp_reflect, Vec()));
+  let mut tp_reflect2: Vec[String] = Vec();
+  tp_reflect2.push("T");
+  c.funcs.push(builtin_func_sym("@align_of", Vec(), c.ty_usize, tp_reflect2, Vec()));
+  let mut tp_reflect3: Vec[String] = Vec();
+  tp_reflect3.push("T");
+  c.funcs.push(builtin_func_sym("@type", Vec(), c.ty_usize, tp_reflect3, Vec()));
+  let mut tp_reflect3b: Vec[String] = Vec();
+  tp_reflect3b.push("T");
+  c.funcs.push(builtin_func_sym("@type_name", Vec(), c.ty_string, tp_reflect3b, Vec()));
+  let mut tp_reflect4: Vec[String] = Vec();
+  tp_reflect4.push("T");
+  c.funcs.push(builtin_func_sym("@field_count", Vec(), c.ty_usize, tp_reflect4, Vec()));
+  let mut tp_reflect4b: Vec[String] = Vec();
+  tp_reflect4b.push("T");
+  let mut cp_reflect_name: Vec[ConstParamSig] = Vec();
+  cp_reflect_name.push(ConstParamSig { name: "I", ty: c.ty_usize, has_default: false, default_iv: 0, default_text: "" });
+  c.funcs.push(builtin_func_sym("@field_name", Vec(), c.ty_string, tp_reflect4b, cp_reflect_name));
+  let mut tp_reflect4c: Vec[String] = Vec();
+  tp_reflect4c.push("T");
+  let mut cp_reflect_type: Vec[ConstParamSig] = Vec();
+  cp_reflect_type.push(ConstParamSig { name: "I", ty: c.ty_usize, has_default: false, default_iv: 0, default_text: "" });
+  c.funcs.push(builtin_func_sym("@field_type", Vec(), c.ty_string, tp_reflect4c, cp_reflect_type));
+  let mut tp_reflect4e: Vec[String] = Vec();
+  tp_reflect4e.push("T");
+  let mut cp_reflect_type_id: Vec[ConstParamSig] = Vec();
+  cp_reflect_type_id.push(ConstParamSig { name: "I", ty: c.ty_usize, has_default: false, default_iv: 0, default_text: "" });
+  c.funcs.push(builtin_func_sym("@field_type_id", Vec(), c.ty_usize, tp_reflect4e, cp_reflect_type_id));
+  let mut tp_reflect4d: Vec[String] = Vec();
+  tp_reflect4d.push("A");
+  tp_reflect4d.push("B");
+  c.funcs.push(builtin_func_sym("@same_type", Vec(), c.ty_bool, tp_reflect4d, Vec()));
+  let mut tp_reflect4f: Vec[String] = Vec();
+  tp_reflect4f.push("Src");
+  tp_reflect4f.push("Dst");
+  c.funcs.push(builtin_func_sym("@assignable_to", Vec(), c.ty_bool, tp_reflect4f, Vec()));
+  let mut tp_reflect4g: Vec[String] = Vec();
+  tp_reflect4g.push("Src");
+  tp_reflect4g.push("Dst");
+  c.funcs.push(builtin_func_sym("@castable_to", Vec(), c.ty_bool, tp_reflect4g, Vec()));
+  let mut tp_reflect4h: Vec[String] = Vec();
+  tp_reflect4h.push("A");
+  tp_reflect4h.push("B");
+  c.funcs.push(builtin_func_sym("@eq_comparable_with", Vec(), c.ty_bool, tp_reflect4h, Vec()));
+  let mut tp_reflect4i: Vec[String] = Vec();
+  tp_reflect4i.push("A");
+  tp_reflect4i.push("B");
+  c.funcs.push(builtin_func_sym("@ordered_with", Vec(), c.ty_bool, tp_reflect4i, Vec()));
+  let mut tp_reflect4j: Vec[String] = Vec();
+  tp_reflect4j.push("A");
+  tp_reflect4j.push("B");
+  c.funcs.push(builtin_func_sym("@same_layout", Vec(), c.ty_bool, tp_reflect4j, Vec()));
+  let mut tp_reflect4k: Vec[String] = Vec();
+  tp_reflect4k.push("A");
+  tp_reflect4k.push("B");
+  c.funcs.push(builtin_func_sym("@bitcastable", Vec(), c.ty_bool, tp_reflect4k, Vec()));
+  let mut tp_reflect5: Vec[String] = Vec();
+  tp_reflect5.push("T");
+  c.funcs.push(builtin_func_sym("@is_integer", Vec(), c.ty_bool, tp_reflect5, Vec()));
+  let mut tp_reflect6: Vec[String] = Vec();
+  tp_reflect6.push("T");
+  c.funcs.push(builtin_func_sym("@is_signed_int", Vec(), c.ty_bool, tp_reflect6, Vec()));
+  let mut tp_reflect6b: Vec[String] = Vec();
+  tp_reflect6b.push("T");
+  c.funcs.push(builtin_func_sym("@is_unsigned_int", Vec(), c.ty_bool, tp_reflect6b, Vec()));
+  let mut tp_reflect7: Vec[String] = Vec();
+  tp_reflect7.push("T");
+  c.funcs.push(builtin_func_sym("@is_float", Vec(), c.ty_bool, tp_reflect7, Vec()));
+  let mut tp_reflect8: Vec[String] = Vec();
+  tp_reflect8.push("T");
+  c.funcs.push(builtin_func_sym("@is_bool", Vec(), c.ty_bool, tp_reflect8, Vec()));
+  let mut tp_reflect9: Vec[String] = Vec();
+  tp_reflect9.push("T");
+  c.funcs.push(builtin_func_sym("@is_string", Vec(), c.ty_bool, tp_reflect9, Vec()));
+  let mut tp_reflect10: Vec[String] = Vec();
+  tp_reflect10.push("T");
+  c.funcs.push(builtin_func_sym("@is_struct", Vec(), c.ty_bool, tp_reflect10, Vec()));
+  let mut tp_reflect11: Vec[String] = Vec();
+  tp_reflect11.push("T");
+  c.funcs.push(builtin_func_sym("@is_enum", Vec(), c.ty_bool, tp_reflect11, Vec()));
+  let mut tp_reflect12: Vec[String] = Vec();
+  tp_reflect12.push("T");
+  c.funcs.push(builtin_func_sym("@is_vec", Vec(), c.ty_bool, tp_reflect12, Vec()));
+  let mut tp_reflect13: Vec[String] = Vec();
+  tp_reflect13.push("T");
+  c.funcs.push(builtin_func_sym("@is_range", Vec(), c.ty_bool, tp_reflect13, Vec()));
+  let mut tp_reflect14: Vec[String] = Vec();
+  tp_reflect14.push("T");
+  c.funcs.push(builtin_func_sym("@is_eq_comparable", Vec(), c.ty_bool, tp_reflect14, Vec()));
+  let mut tp_reflect15: Vec[String] = Vec();
+  tp_reflect15.push("T");
+  c.funcs.push(builtin_func_sym("@is_ordered", Vec(), c.ty_bool, tp_reflect15, Vec()));
+  let mut tp_reflect16: Vec[String] = Vec();
+  tp_reflect16.push("T");
+  c.funcs.push(builtin_func_sym("@is_unit", Vec(), c.ty_bool, tp_reflect16, Vec()));
+  let mut tp_reflect17: Vec[String] = Vec();
+  tp_reflect17.push("T");
+  c.funcs.push(builtin_func_sym("@is_numeric", Vec(), c.ty_bool, tp_reflect17, Vec()));
+  let mut tp_reflect18: Vec[String] = Vec();
+  tp_reflect18.push("T");
+  c.funcs.push(builtin_func_sym("@is_zero_sized", Vec(), c.ty_bool, tp_reflect18, Vec()));
+  // Tooling/stdlib support builtins (stage1): used by std/fs and std/process.
+  // Keep these low-level and prefer std wrappers.
+  let v1: ResolveTyResult = intern_vec(c, c.ty_string);
+  c = v1.ctx;
+  let vec_string: i32 = v1.idx;
+  c.funcs.push(builtin_func_sym("__args", Vec(), vec_string, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__exe_path", Vec(), c.ty_string, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__getenv", vec1(c.ty_string), c.ty_string, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__now_ns", Vec(), c.ty_i64, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__read_file", vec1(c.ty_string), c.ty_string, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__write_file", vec2(c.ty_string, c.ty_string), c.ty_unit, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__path_exists", vec1(c.ty_string), c.ty_bool, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__mkdir_p", vec1(c.ty_string), c.ty_unit, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__exec", vec1(c.ty_string), c.ty_i32, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__walk_vox_files", vec1(c.ty_string), vec_string, Vec(), Vec()));
+  // std/sync low-level intrinsics (i32 compatibility).
+  c.funcs.push(builtin_func_sym("__mutex_i32_new", vec1(c.ty_i32), c.ty_i64, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__mutex_i32_load", vec1(c.ty_i64), c.ty_i32, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__mutex_i32_store", vec2(c.ty_i64, c.ty_i32), c.ty_unit, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__atomic_i32_new", vec1(c.ty_i32), c.ty_i64, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__atomic_i32_load", vec1(c.ty_i64), c.ty_i32, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__atomic_i32_store", vec2(c.ty_i64, c.ty_i32), c.ty_unit, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__atomic_i32_fetch_add", vec2(c.ty_i64, c.ty_i32), c.ty_i32, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__atomic_i32_swap", vec2(c.ty_i64, c.ty_i32), c.ty_i32, Vec(), Vec()));
+  // std/sync low-level intrinsics (i64 generic storage backend).
+  c.funcs.push(builtin_func_sym("__mutex_i64_new", vec1(c.ty_i64), c.ty_i64, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__mutex_i64_load", vec1(c.ty_i64), c.ty_i64, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__mutex_i64_store", vec2(c.ty_i64, c.ty_i64), c.ty_unit, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__atomic_i64_new", vec1(c.ty_i64), c.ty_i64, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__atomic_i64_load", vec1(c.ty_i64), c.ty_i64, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__atomic_i64_store", vec2(c.ty_i64, c.ty_i64), c.ty_unit, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__atomic_i64_fetch_add", vec2(c.ty_i64, c.ty_i64), c.ty_i64, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__atomic_i64_swap", vec2(c.ty_i64, c.ty_i64), c.ty_i64, Vec(), Vec()));
+  // std/io minimal TCP intrinsics.
+  c.funcs.push(builtin_func_sym("__tcp_connect", vec2(c.ty_string, c.ty_i32), c.ty_i64, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__tcp_send", vec2(c.ty_i64, c.ty_string), c.ty_i32, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__tcp_recv", vec2(c.ty_i64, c.ty_i32), c.ty_string, Vec(), Vec()));
+  c.funcs.push(builtin_func_sym("__tcp_close", vec1(c.ty_i64), c.ty_unit, Vec(), Vec()));
+
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: WorldModule = w.mods.get(mi);
+    let mut fi: i32 = 0;
+    while fi < m.prog.funcs.len() {
+      let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+      let vpr: ValidateTypeParamPacksResult = validate_type_param_packs(fd.sp, fd.type_params, fd.type_param_packs);
+      if !vpr.ok { return TcCtxResult { ok: false, err: vpr.err, ctx: c }; }
+      if is_reserved_intrinsic_name(fd.name) {
+        return TcCtxResult { ok: false, err: type_error_at(fd.sp, "reserved name: ".concat(fd.name)), ctx: c };
+      }
+      let ir: ImportsResult = build_imports(w, m.path, m.prog.imports, fd.file);
+      if !ir.ok { return TcCtxResult { ok: false, err: ir.err, ctx: c }; }
+      let imps: Imports = ir.imps;
+      let mut cps: Vec[ConstParamSig] = Vec();
+      let mut cpi: i32 = 0;
+      while cpi < fd.const_params.len() {
+        let cp: ast.ConstParamDecl = fd.const_params.get(cpi);
+        if contains_str_local(fd.type_params, cp.name) {
+          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "const param duplicates type param: ".concat(cp.name)), ctx: c };
+        }
+        let mut dup: bool = false;
+        let mut cj: i32 = 0;
+        while cj < cps.len() {
+          if cps.get(cj).name == cp.name { dup = true; }
+          cj = cj + 1;
+        }
+        if dup {
+          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "duplicate const param: ".concat(cp.name)), ctx: c };
+        }
+        let cpr: ResolveTyResult = resolve_type(c, w, m.path, imps, fd.type_params, cp.ty);
+        c = cpr.ctx;
+        if !cpr.ok {
+          return TcCtxResult { ok: false, err: type_error_at(fd.sp, resolve_fail_msg(cp.ty, "type resolve failed in const param")), ctx: c };
+        }
+        if !is_int_like_ty(c, cpr.idx) {
+          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "const param type must be integer"), ctx: c };
+        }
+        let mut has_default: bool = false;
+        let mut default_iv: i64 = 0;
+        let mut default_text: String = "";
+        if cp.has_default {
+          let mut dparts: Vec[String] = Vec();
+          dparts.push("@const");
+          dparts.push(cp.default_text);
+          let dpr: ParseConstGenericArgResult = parse_const_generic_arg(c, ast.TypeName { parts: dparts, args: Vec() }, cpr.idx);
+          if !dpr.ok {
+            return TcCtxResult { ok: false, err: type_error_at(fd.sp, "const param default out of range"), ctx: c };
+          }
+          has_default = true;
+          default_iv = dpr.iv;
+          default_text = dpr.text;
+        }
+        cps.push(ConstParamSig { name: cp.name, ty: cpr.idx, has_default: has_default, default_iv: default_iv, default_text: default_text });
+        cpi = cpi + 1;
+      }
+      // Resolve signature types (skip bodies for generic fns; still collect signature).
+      let mut ps: Vec[i32] = Vec();
+      let mut pi: i32 = 0;
+      while pi < fd.params.len() {
+        let pr: ast.Param = fd.params.get(pi);
+        let nr: NormalizeParamTypeResult = normalize_param_type(fd.sp, fd.params, pi, pr.ty);
+        if !nr.ok { return TcCtxResult { ok: false, err: nr.err, ctx: c }; }
+        let tr: ResolveTyResult = resolve_type(c, w, m.path, imps, fd.type_params, nr.ty);
+        c = tr.ctx;
+        if !tr.ok {
+          return TcCtxResult { ok: false, err: type_error_at(fd.sp, resolve_fail_msg(nr.ty, "type resolve failed in fn param")), ctx: c };
+        }
+        ps.push(tr.idx);
+        pi = pi + 1;
+      }
+      let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, fd.type_params, fd.ret);
+      c = rr.ctx;
+      if !rr.ok {
+        return TcCtxResult { ok: false, err: type_error_at(fd.sp, resolve_fail_msg(fd.ret, "type resolve failed in fn ret")), ctx: c };
+      }
+
+      let mut tbs: Vec[TypeParamBoundSig] = Vec();
+      let mut bi: i32 = 0;
+      while bi < fd.type_param_bounds.len() {
+        let bdecl: ast.TypeParamBoundsDecl = fd.type_param_bounds.get(bi);
+        if !contains_str_local(fd.type_params, bdecl.name) {
+          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "unknown type param in bound: ".concat(bdecl.name)), ctx: c };
+        }
+        let mut bj: i32 = 0;
+        while bj < bdecl.bounds.len() {
+          let rtr: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, bdecl.bounds.get(bj));
+          if !rtr.ok {
+            return TcCtxResult { ok: false, err: type_error_at(fd.sp, "bad trait bound"), ctx: c };
+          }
+          let tf: FindTraitResult = find_trait(c, rtr.mod_path, rtr.name);
+          if !tf.found {
+            return TcCtxResult { ok: false, err: type_error_at(fd.sp, "unknown trait in bound"), ctx: c };
+          }
+          if !vis_allows(tf.sig.vis, rtr.mod_path, m.path) {
+            return TcCtxResult { ok: false, err: type_error_at(fd.sp, "trait bound refers to private trait"), ctx: c };
+          }
+          if !has_bound_sig(tbs, bdecl.name, rtr.mod_path, rtr.name) {
+            tbs.push(TypeParamBoundSig { type_param: bdecl.name, trait_mod_path: rtr.mod_path, trait_name: rtr.name });
+          }
+          bj = bj + 1;
+        }
+        bi = bi + 1;
+      }
+
+      let mut pj: i32 = 0;
+      while pj < fd.params.len() {
+        let pr0: ast.Param = fd.params.get(pj);
+        let nr0: NormalizeParamTypeResult = normalize_param_type(fd.sp, fd.params, pj, pr0.ty);
+        if !nr0.ok { return TcCtxResult { ok: false, err: nr0.err, ctx: c }; }
+        let perr0: String = projection_bound_issue(c, fd.type_params, tbs, nr0.ty);
+        if perr0 != "" { return TcCtxResult { ok: false, err: type_error_at(fd.sp, perr0), ctx: c }; }
+        pj = pj + 1;
+      }
+      let perr1: String = projection_bound_issue(c, fd.type_params, tbs, fd.ret);
+      if perr1 != "" { return TcCtxResult { ok: false, err: type_error_at(fd.sp, perr1), ctx: c }; }
+
+      let cwr: CollectConstWhereResult = collect_const_where_bounds(fd.sp, fd.type_params, cps, fd.const_where_bounds);
+      if !cwr.ok { return TcCtxResult { ok: false, err: cwr.err, ctx: c }; }
+
+      let sig: FuncSig = FuncSig {
+        params: ps,
+        ret: rr.idx,
+        vis: fd.vis,
+        is_pub: fd.is_pub,
+        type_params: fd.type_params,
+        type_param_packs: fd.type_param_packs,
+        const_params: cps,
+        type_param_bounds: tbs,
+        const_where_bounds: cwr.bounds,
+      };
+      c.funcs.push(FuncSym { mod_path: m.path, name: fd.name, sig: sig });
+      fi = fi + 1;
+    }
+    mi = mi + 1;
+  }
+  return TcCtxResult { ok: true, err: TcError.None, ctx: c };
+}
+
+fn vec1(x: i32) -> Vec[i32] { let mut v: Vec[i32] = Vec(); v.push(x); return v; }
+fn vec2(a: i32, b: i32) -> Vec[i32] { let mut v: Vec[i32] = Vec(); v.push(a); v.push(b); return v; }

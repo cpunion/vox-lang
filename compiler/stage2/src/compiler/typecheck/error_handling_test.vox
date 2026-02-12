@@ -1,0 +1,280 @@
+import "std/testing" as t
+import "compiler/parse" as p
+import "compiler/typecheck" as tc
+
+fn eh_parse_prog(src: String) -> p.ParseResult { return p.parse_text(src); }
+
+fn eh_add_mod(w: tc.World, path: String, src: String) -> tc.World {
+  let r: p.ParseResult = eh_parse_prog(src);
+  t.assert(r.err == p.ParseError.None);
+  return tc.world_add(w, path, r.prog);
+}
+
+fn eh_contains(hay: String, needle: String) -> bool {
+  if needle.len() == 0 { return true; }
+  if hay.len() < needle.len() { return false; }
+  let mut i: i32 = 0;
+  while i <= hay.len() - needle.len() {
+    if hay.slice(i, i + needle.len()) == needle { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn test_typecheck_question_propagation_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get(flag: bool) -> Result[i32, String] {\n")
+      .concat("  if flag { return .Ok(7); }\n")
+      .concat("  return .Err(\"bad\");\n")
+      .concat("}\n")
+      .concat("fn main(flag: bool) -> Result[i32, String] {\n")
+      .concat("  let v: i32 = get(flag)?;\n")
+      .concat("  return .Ok(v + 1);\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_try_block_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, String] { return .Ok(3); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let r: Result[i32, String] = try {\n")
+      .concat("    let v: i32 = get()?;\n")
+      .concat("    v + 2\n")
+      .concat("  };\n")
+      .concat("  return r;\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_macro_call_reports_unimplemented_expand() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 { return add1!(41); }";
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(eh_contains(msg, "internal: unexpanded macro call reached typecheck"));
+}
+
+fn test_typecheck_const_macro_call_reports_unimplemented_expand() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "const X: i32 = add1!(41)\n"
+      .concat("fn main() -> i32 { return X; }");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(eh_contains(msg, "internal: unexpanded macro call reached const eval"));
+}
+
+fn test_typecheck_const_reflect_intrinsic_type_mismatch_reports_call_span() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "struct S { a: i32 }\n"
+      .concat("const X: i32 = @field_name(S, 0)\n")
+      .concat("fn main() -> i32 { return 0; }");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(eh_contains(msg, "src/main.vox:2:"), msg);
+  t.assert_with(eh_contains(msg, "const intrinsic type mismatch"), msg);
+}
+
+fn test_typecheck_const_reflect_intrinsic_type_error_reports_call_span() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "\n\nconst X: String = @field_name(i32, 0)\n"
+      .concat("fn main() -> i32 { return 0; }");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(eh_contains(msg, "src/main.vox:3:"), msg);
+  t.assert_with(eh_contains(msg, "field_name expects struct or enum"), msg);
+}
+
+fn test_typecheck_compile_bang_call_reports_unimplemented_expand() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 { return compile!(1); }";
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(eh_contains(msg, "internal: unexpanded macro call reached typecheck"));
+  t.assert(eh_contains(msg, "compile!"));
+}
+
+fn test_typecheck_option_question_propagation_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Option[T] { Some(T), None }\n"
+      .concat("fn get(flag: bool) -> Option[i32] { if flag { return .Some(5); } return .None; }\n")
+      .concat("fn main(flag: bool) -> Option[i32] {\n")
+      .concat("  let v: i32 = get(flag)?;\n")
+      .concat("  return .Some(v + 1);\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_try_block_infers_target_from_fn_ret_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let r = try { 1 };\n")
+      .concat("  return r;\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_question_requires_result_return_type() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, String] { return .Ok(1); }\n")
+      .concat("fn main() -> i32 {\n")
+      .concat("  let v: i32 = get()?;\n")
+      .concat("  return v;\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+}
+
+fn test_typecheck_try_block_requires_container_target() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 { let x = try { 1 }; return x; }";
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(eh_contains(msg, "try {}` requires expected Result/Option"));
+}
+
+fn test_typecheck_question_result_option_mismatch_has_reason() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("enum Option[T] { Some(T), None }\n")
+      .concat("fn get() -> Option[i32] { return .Some(1); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let v: i32 = get()?;\n")
+      .concat("  return .Ok(v);\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(eh_contains(msg, "Option `?`"));
+}
+
+fn test_typecheck_question_result_err_mismatch_has_reason() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, i32] { return .Err(1); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let v: i32 = get()?;\n")
+      .concat("  return .Ok(v);\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(eh_contains(msg, "Err type mismatch"));
+}
+
+fn test_typecheck_question_result_err_into_conversion_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let prelude_src: String =
+    "pub trait Into { type Target; fn into(x: Self) -> Self.Target; }\n"
+      .concat("impl Into for i32 { type Target = String; fn into(x: i32) -> String { return x.to_string(); } }");
+  w = eh_add_mod(w, "std/prelude", prelude_src);
+
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, i32] { return .Err(7); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let _v: i32 = get()?;\n")
+      .concat("  return .Ok(1);\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_question_result_err_into_target_mismatch_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let prelude_src: String =
+    "pub trait Into { type Target; fn into(x: Self) -> Self.Target; }\n"
+      .concat("impl Into for i32 { type Target = bool; fn into(x: i32) -> bool { return x > 0; } }");
+  w = eh_add_mod(w, "std/prelude", prelude_src);
+
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, i32] { return .Err(1); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let _v: i32 = get()?;\n")
+      .concat("  return .Ok(0);\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(eh_contains(msg, "Err type mismatch"));
+}
+
+fn test_typecheck_question_result_err_generic_into_conversion_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let prelude_src: String =
+    "pub trait Into { type Target; fn into[T](x: Self) -> Self.Target; }\n"
+      .concat("impl Into for i32 { type Target = String; fn into[T](x: i32) -> String { return x.to_string(); } }");
+  w = eh_add_mod(w, "std/prelude", prelude_src);
+
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, i32] { return .Err(7); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let _v: i32 = get()?;\n")
+      .concat("  return .Ok(1);\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_question_result_err_generic_into_target_mismatch_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let prelude_src: String =
+    "pub trait Into { type Target; fn into[T](x: Self) -> Self.Target; }\n"
+      .concat("impl Into for i32 { type Target = String; fn into[T](x: i32) -> String { return x.to_string(); } }");
+  w = eh_add_mod(w, "std/prelude", prelude_src);
+
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, i32] { return .Err(1); }\n")
+      .concat("fn main() -> Result[i32, bool] {\n")
+      .concat("  let _v: i32 = get()?;\n")
+      .concat("  return .Ok(0 > 1);\n")
+      .concat("}");
+  w = eh_add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(eh_contains(msg, "Err type mismatch"));
+}
