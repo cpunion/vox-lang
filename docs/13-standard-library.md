@@ -22,13 +22,13 @@
 - `std::collections` 已提供 `Slice[T]`（拥有型 `Vec[T]` 视图）及最小 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`get`、`to_vec`、`contains`、`index_of`、`last_index_of`，以及子切片匹配 API：`starts_with`、`ends_with`、`contains_slice`、`index_of_slice`、`last_index_of_slice`（均要求 `T: Eq`）。
   - 另提供比较 API：`equals`/`equals_vec`（`T: Eq`）、`compare`/`compare_vec`（`T: Ord`）。
 - `std::collections` 还提供最小泛型 `Map[K,V]`（线性实现）：
-  - `map[K,V]()`、`map_len`、`map_is_empty`、`map_clear`
-  - `map_index_of_key`、`map_contains_key`、`map_get`
-  - `map_get_or`（缺失键时返回调用方提供的 fallback）
-  - `map_keys`、`map_values`（按当前存储顺序返回拷贝）
-  - `map_set`（存在则覆盖，不存在则插入）、`map_remove`
+  - 构造函数：`map[K,V]()`
+  - `MapOps` trait（`impl[K: Eq, V] MapOps for Map[K,V]`）方法：
+    - `len`、`is_empty`、`index_of_key`、`contains_key`
+    - `get`、`get_or`（缺失键时返回调用方提供的 fallback）
+    - `keys`、`values`（按当前存储顺序返回拷贝）
+    - `set`（存在则覆盖，不存在则插入）、`remove`、`clear`
   - 其中键比较相关 API 需要 `K: Eq`。
-  - 同时提供 `MapOps` trait（`impl[K: Eq, V] MapOps for Map[K,V]`），可用方法风格调用：`m.remove(k)`、`m.contains_key(k)`、`m.len()`、`m.clear()`（插入/读取值当前使用 `map_set/map_get/map_get_or`）。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取、环境变量读取）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`，以及 `File`/`file_read_all`/`file_write_all`/`file_exists`/`mkdir_p`。网络部分提供 `NetAddr` + `NetConn` 与最小 TCP API：`net_connect` / `net_send` / `net_recv` / `net_close`（解释器与 C 后端一致可用；失败时统一 panic）。
