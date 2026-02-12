@@ -7,8 +7,8 @@ Purpose:
 - Closed batches must not be re-listed here.
 
 Do-not-relist batches:
-- `docs/25-stage2-p0p1-closure.md` (items 1-12 closed)
-- `docs/26-stage2-closure-1-4-7-9.md` (items 1-4/7-9 closed)
+- `docs/archive/25-stage2-p0p1-closure.md` (items 1-12 closed)
+- `docs/archive/26-stage2-closure-1-4-7-9.md` (items 1-4/7-9 closed)
 
 ## Why Tasks Repeated Before
 

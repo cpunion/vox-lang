@@ -71,7 +71,7 @@ test-stage2-selfhost:
 test-stage2-tests:
 	cd compiler/stage0 && VOX_RUN_SELFHOST_TESTS=1 go test ./cmd/vox -run 'TestStage1BuildsStage2AndRunsStage2Tests' -count=1
 
-# Stage2 P0/P1 closure gate (docs/25-stage2-p0p1-closure.md).
+# Stage2 P0/P1 closure gate (docs/archive/25-stage2-p0p1-closure.md).
 test-stage2-p0p1:
 	./scripts/ci/verify-stage2-p0p1.sh
 
