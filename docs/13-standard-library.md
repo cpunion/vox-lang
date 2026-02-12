@@ -13,14 +13,22 @@
 - `std::collections`：`Vec`、`Map` 等
 - `std::io`：输出 + 最小文件抽象 + 最小 TCP 抽象
 
-当前 stage1 落地：
+当前 stage2 落地：
 
 - `std::prelude` 已提供默认 trait：`Eq`、`Ord`、`Show`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
 - 未显式 import 时，函数名会回退到 `std/prelude`；trait 静态调用与 `impl Trait for ...` 也支持回退到 `std/prelude` 的公开 trait。
-- `std::string` 已提供 `StrView`（拥有型字符串视图）及最小 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`byte_at`、`to_string`、`starts_with`、`ends_with`、`contains`、`index_of`、`last_index_of`、`equals`、`compare`，以及 `StrView` 对 `StrView` 的匹配/比较 API：`starts_with_view`、`ends_with_view`、`contains_view`、`index_of_view`、`last_index_of_view`、`equals_view`、`compare_view`。
+- `std::string` 已提供 `StrView`（拥有型字符串视图）。
+  - 基础 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`byte_at`、`to_string`。
+  - view-first 子串 API（推荐）：`take_prefix`、`take_suffix`、`drop_prefix`、`drop_suffix`。
+  - 匹配/查找 API：
+    - `String` 参数版本：`starts_with`、`ends_with`、`contains`、`index_of`、`last_index_of`、`equals`、`compare`
+    - `StrView` 参数版本：`starts_with_view`、`ends_with_view`、`contains_view`、`index_of_view`、`last_index_of_view`、`equals_view`、`compare_view`
   - 另外，语言层当前支持 `str` 作为 `String` 的同义类型（类型别名语义），并支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法（当前过渡语义映射到 `T`）。
-- `std::collections` 已提供 `Slice[T]`（拥有型 `Vec[T]` 视图）及最小 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`get`、`to_vec`、`contains`、`index_of`、`last_index_of`，以及子切片匹配 API：`starts_with`、`ends_with`、`contains_slice`、`index_of_slice`、`last_index_of_slice`（均要求 `T: Eq`）。
-  - 另提供比较 API：`equals`/`equals_vec`（`T: Eq`）、`compare`/`compare_vec`（`T: Ord`）。
+- `std::collections` 已提供 `Slice[T]`（拥有型 `Vec[T]` 视图）。
+  - 基础 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`get`、`to_vec`。
+  - view-first 子切片 API（推荐）：`take_prefix`、`take_suffix`、`drop_prefix`、`drop_suffix`。
+  - 查找与匹配 API：`contains`、`index_of`、`last_index_of`、`starts_with`、`ends_with`、`contains_slice`、`index_of_slice`、`last_index_of_slice`（相关 API 需要 `T: Eq`）。
+  - 比较 API：`equals`/`equals_vec`（`T: Eq`）、`compare`/`compare_vec`（`T: Ord`）。
 - `std::collections` 还提供最小泛型 `Map[K,V]`（线性实现）：
   - 构造函数：`map[K,V]()`
   - inherent impl（`impl[K: Eq, V] Map[K,V]`）方法：
@@ -34,4 +42,4 @@
 - `std::io` 已提供：`out`、`out_ln`、`fail`，以及 `File`/`file_read_all`/`file_write_all`/`file_exists`/`mkdir_p`。网络部分提供 `NetAddr` + `NetConn` 与最小 TCP API：`net_connect` / `net_send` / `net_recv` / `net_close`（解释器与 C 后端一致可用；失败时统一 panic）。
 - `std::sync` 当前 API 为泛型句柄：`Mutex[T]` / `Atomic[T]`（当前 `T` 由 `SyncScalar` 约束，已覆盖 `i32/i64`）；底层统一基于 runtime `i64` handle intrinsic。`fetch_add/swap/load/store` 已在解释器与 C 后端对齐。
 
-重要：由于 Vox 的“临时借用”规则，标准库应优先提供“可长期保存的拥有型视图”（例如 `StrView`），避免 API 设计依赖 `&T` 返回值。
+重要：由于 Vox 的“临时借用”规则，标准库应优先提供“可长期保存的拥有型视图”（例如 `StrView` / `Slice[T]`），并优先使用 view-first API（避免不必要的 `to_string` / `to_vec` 物化）。

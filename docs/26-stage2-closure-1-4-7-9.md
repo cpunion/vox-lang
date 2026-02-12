@@ -17,7 +17,7 @@ Canonical gate for each item:
    - Acceptance:
      - Add parser/typecheck tests for allowed/disallowed positions.
      - Keep `&'static T` allowed.
-2. [ ] String/slice transition pass: strengthen `std/string` + `std/collections` APIs for view-first usage and reduce accidental owned-copy paths.
+2. [x] String/slice transition pass: strengthen `std/string` + `std/collections` APIs for view-first usage and reduce accidental owned-copy paths.
    - Acceptance:
      - Add/adjust std tests showing view-first APIs.
      - Update docs (`07/13/14`) to exact behavior.

@@ -274,7 +274,7 @@ type Value = I32: i32 | Str: String;
 - Stage0/Stage1/Stage2 当前实现中，字符串字面量仍视为 `String`（后端以 `const char*` 表示）。
 - Stage2 当前提供 `str` 作为 `String` 的同义类型（类型层别名语义，便于未来向 `&str` 方向迁移）。
 - Stage2 已支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法，但当前仍是过渡语义：类型检查阶段擦除为 `T`（非 static 的命名 lifetime 目前拒绝）。
-- 过渡到切片方向的当前落地是 `std/string` 的 `StrView { owner: String, lo, hi }`（拥有型视图），用于“可长期保存的子串视图”。
+- 过渡到切片方向的当前落地是 `std/string` 的 `StrView { owner: String, lo, hi }`（拥有型视图），用于“可长期保存的子串视图”；推荐优先使用 view-first API（如 `sub`、`take_prefix`、`take_suffix`、`drop_prefix`、`drop_suffix`）并尽量延后 `to_string` 物化。
 
 ## 范围类型语法（已定，草案）
 
