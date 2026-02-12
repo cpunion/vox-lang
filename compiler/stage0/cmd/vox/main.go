@@ -34,6 +34,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  vox ir [--engine=c|interp] [dir]")
 	fmt.Fprintln(os.Stderr, "  vox c [dir]")
 	fmt.Fprintln(os.Stderr, "  vox build [--engine=c|interp] [dir]")
+	fmt.Fprintln(os.Stderr, "  vox build-tool [dir]")
 	fmt.Fprintln(os.Stderr, "  vox run [--engine=c|interp] [dir]")
 	fmt.Fprintln(os.Stderr, "  vox test [--engine=c|interp] [dir]")
 	fmt.Fprintln(os.Stderr, "  vox fmt [dir]")
@@ -302,6 +303,16 @@ func main() {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
+	case "build-tool":
+		dir, err := parseDirArg(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		if err := buildTool(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
 	case "run":
 		// Allow forwarding program args after `--`.
 		raw := os.Args[2:]
@@ -438,6 +449,11 @@ func build(dir string, eng engine) error {
 		return nil
 	}
 	_, err := compile(dir)
+	return err
+}
+
+func buildTool(dir string) error {
+	_, err := compileWithDriver(dir, codegen.DriverMainTool)
 	return err
 }
 

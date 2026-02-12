@@ -145,17 +145,30 @@ echo "[release] stage1 user probe exit: $probe_code"
 
 echo "[release] build stage1 tool binary"
 mkdir -p "$ROOT/compiler/stage1/target/release"
+set +e
 (
   cd "$ROOT/compiler/stage1"
-  set +e
   "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
-  rc=$?
-  set -e
-  if [[ $rc -ne 0 ]]; then
-    echo "[release] stage1 tool build failed: exit $rc" >&2
-    exit $rc
-  fi
 )
+stage1_tool_rc=$?
+set -e
+
+if [[ $stage1_tool_rc -ne 0 ]]; then
+  echo "[release] stage1 tool self-build failed: exit $stage1_tool_rc" >&2
+  if [[ "$GOOS" == "windows" ]]; then
+    echo "[release] windows fallback: stage0 build-tool for stage1" >&2
+    "$STAGE0_OUT" build-tool "$ROOT/compiler/stage1"
+    STAGE1_TOOL_DEBUG="$(resolve_bin "$ROOT/compiler/stage1/target/debug/vox_stage1")"
+    cp "$STAGE1_TOOL_DEBUG" "$ROOT/compiler/stage1/target/release/vox_stage1${EXE_SUFFIX}"
+    stage1_tool_rc=0
+  fi
+fi
+
+if [[ $stage1_tool_rc -ne 0 ]]; then
+  echo "[release] stage1 tool build failed" >&2
+  exit $stage1_tool_rc
+fi
+
 STAGE1_TOOL="$(resolve_bin "$ROOT/compiler/stage1/target/release/vox_stage1")"
 
 BOOTSTRAP_MODE="stage1-fallback"
