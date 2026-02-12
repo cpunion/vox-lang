@@ -58,6 +58,7 @@ fn usage() -> () {
   let bin: String = path_base_name(proc.exe_path());
   print(bin.concat(" usage:\n"));
   print("  ".concat(bin).concat(" emit-c <out.c> <src...>\n"));
+  print("  ".concat(bin).concat(" emit-pkg-c <out.c>   # emit C from ./src\n"));
   print("  ".concat(bin).concat(" build  <out.bin> <src...>\n"));
   print("  ".concat(bin).concat(" build-pkg <out.bin>   # build from ./src\n"));
   print("  ".concat(bin).concat(" test-pkg <out.bin>    # build+run tests from ./src and ./tests\n"));
@@ -1788,6 +1789,34 @@ fn main() -> i32 {
       print("cc exit: ".concat(code.to_string()).concat("\n"));
       return 1;
     }
+    return 0;
+  }
+  if cmd == "emit-pkg-c" {
+    let all: Vec[String] = fs.walk_vox_files(".");
+    let paths: Vec[String] = filter_pkg_sources(all);
+    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths) { Vec() } else { load_stage1_std() };
+    let dr: DepsResult = load_deps_from_manifest();
+    if !dr.ok {
+      print("invalid vox.toml: ".concat(dr.err).concat("\n"));
+      return 1;
+    }
+    let vr: LockVerifyResult = verify_lockfile_or_ok(dr.resolved);
+    if !vr.ok {
+      print_invalid_lock_error(vr.err);
+      return 1;
+    }
+    write_lockfile(dr.resolved);
+    let mut di: i32 = 0;
+    while di < dr.files.len() { files.push(dr.files.get(di)); di = di + 1; }
+    let user: Vec[ld.SourceFile] = load_files(paths);
+    let mut ui: i32 = 0;
+    while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
+    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: true, driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
+    if !r.ok {
+      print("compile failed: ".concat(r.err).concat("\n"));
+      return 1;
+    }
+    fs.write_string(out, r.c);
     return 0;
   }
   if cmd == "build-pkg" {

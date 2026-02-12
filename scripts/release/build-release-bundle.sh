@@ -153,7 +153,15 @@ STAGE1_TOOL_LOG="$ROOT/compiler/stage1/target/release/stage1-tool-build.log"
 set +e
 (
   cd "$ROOT/compiler/stage1"
-  "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
+  if [[ "$GOOS" == "windows" ]]; then
+    if "$STAGE1_USER" emit-pkg-c --driver=tool target/release/vox_stage1.c; then
+      "$CC" -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static
+    else
+      "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
+    fi
+  else
+    "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
+  fi
 ) >"$STAGE1_TOOL_LOG" 2>&1
 stage1_tool_rc=$?
 set -e
@@ -167,7 +175,15 @@ if [[ $stage1_tool_rc -ne 0 ]]; then
   set +e
   (
     cd "$ROOT/compiler/stage1"
-    "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
+    if [[ "$GOOS" == "windows" ]]; then
+      if "$STAGE1_USER" emit-pkg-c --driver=tool target/release/vox_stage1.c; then
+        "$CC" -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static
+      else
+        "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
+      fi
+    else
+      "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
+    fi
   )
   stage1_retry_rc=$?
   set -e
@@ -232,7 +248,15 @@ STAGE2_TOOL_LOG="$ROOT/compiler/stage2/target/release/stage2-tool-build.log"
 set +e
 (
   cd "$ROOT/compiler/stage2"
-  "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+  if [[ "$GOOS" == "windows" ]]; then
+    if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
+      "$CC" -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static
+    else
+      "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+    fi
+  else
+    "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+  fi
 ) >"$STAGE2_TOOL_LOG" 2>&1
 stage2_tool_rc=$?
 set -e
@@ -246,7 +270,15 @@ if [[ $stage2_tool_rc -ne 0 ]]; then
   set +e
   (
     cd "$ROOT/compiler/stage2"
-    "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+    if [[ "$GOOS" == "windows" ]]; then
+      if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
+        "$CC" -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static
+      else
+        "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+      fi
+    else
+      "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+    fi
   )
   stage2_retry_rc=$?
   set -e
