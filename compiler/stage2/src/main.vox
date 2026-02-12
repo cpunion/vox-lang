@@ -52,6 +52,24 @@ fn normalize_host_fs_path(p0: String) -> String {
   return p0;
 }
 
+fn shell_exec_path(p0: String) -> String {
+  let p: String = normalize_host_fs_path(p0);
+  if !host_is_windows() { return p; }
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < p.len() {
+    if p.byte_at(i) == 47 {
+      out = out.concat("\\");
+    } else {
+      out = out.concat(p.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  if !is_abs_path(out) && !has_prefix(out, ".\\") && !has_prefix(out, "..\\") {
+    return ".\\".concat(out);
+  }
+  return out;
+}
 fn cc_link_flags() -> String {
   if host_is_windows() { return " -lws2_32 -static -Wl,--stack,8388608"; }
   return "";
@@ -879,12 +897,24 @@ fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test
   let tag: String = module_idx.to_string().concat("_").concat(seq.to_string());
   let rc_file: String = path_join(run_dir, "job_".concat(tag).concat(".rc"));
   let log_file: String = path_join(run_dir, "job_".concat(tag).concat(".log"));
-  // Keep command shell-portable: `&&`/`||` works in both sh/cmd.
+  let bin_exec: String = shell_exec_path(bin);
+  let cmd_head: String = shell_quote(bin_exec).concat(" ").concat(shell_quote(test_name));
+  let log_redir: String = " > ".concat(shell_quote(shell_exec_path(log_file))).concat(" 2>&1");
+  if host_is_windows() {
+    let rc: i32 = proc.exec(cmd_head.concat(log_redir));
+    fs.write_string(rc_file, if rc == 0 { "0" } else { "1" });
+    return RunningJob {
+      module_idx: module_idx,
+      name: test_name,
+      rc_file: rc_file,
+      log_file: log_file,
+      start_ns: tm.now_ns(),
+    };
+  }
   let run_cmd: String =
-    bin.concat(" ").concat(test_name)
-      .concat(" > ").concat(log_file).concat(" 2>&1")
-      .concat(" && echo 0 > ").concat(rc_file)
-      .concat(" || echo 1 > ").concat(rc_file);
+    cmd_head.concat(log_redir)
+      .concat(" && echo 0 > ").concat(shell_quote(shell_exec_path(rc_file)))
+      .concat(" || echo 1 > ").concat(shell_quote(shell_exec_path(rc_file)));
   let bg_cmd: String = "( ".concat(run_cmd).concat(" ) &");
   let _rc: i32 = proc.exec(bg_cmd);
   return RunningJob {
@@ -1274,6 +1304,20 @@ fn sanitize_path_part(s: String) -> String {
 }
 
 fn shell_quote(s: String) -> String {
+  if host_is_windows() {
+    let mut outw: String = "\"";
+    let mut iw: i32 = 0;
+    while iw < s.len() {
+      let chw: i32 = s.byte_at(iw);
+      if chw == 34 { // '"'
+        outw = outw.concat("\\\"");
+      } else {
+        outw = outw.concat(s.slice(iw, iw + 1));
+      }
+      iw = iw + 1;
+    }
+    return outw.concat("\"");
+  }
   let mut out: String = "'";
   let mut i: i32 = 0;
   while i < s.len() {
@@ -1287,7 +1331,6 @@ fn shell_quote(s: String) -> String {
   }
   return out.concat("'");
 }
-
 fn is_space_ch(ch: i32) -> bool { return ch == 32 || ch == 9 || ch == 10 || ch == 13; }
 
 fn trim_space_main(s: String) -> String {
