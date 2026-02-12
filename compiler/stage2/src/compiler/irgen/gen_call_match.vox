@@ -1451,22 +1451,99 @@ fn gen_pack_arity_error(sig: tc.FuncSig, got: i32) -> String {
   return "type arg arity mismatch";
 }
 
+struct GenVariadicPackResult { ok: bool, err: String, g: Gen, val: ir.Value }
+
+fn gen_pack_variadic_values(g0: Gen, vec_ty: i32, elem_ty: i32, vals: Vec[ir.Value]) -> GenVariadicPackResult {
+  let mut g: Gen = g0;
+
+  let nt0: GenNewIdResult = gen_new_temp(g);
+  g = nt0.g;
+  let vec_tid: i32 = nt0.id;
+  g = gen_emit(g, ir.Instr.VecNew(vec_tid, vec_ty, elem_ty));
+
+  let ns: GenNewIdResult = gen_new_slot(g);
+  g = ns.g;
+  let vec_slot: i32 = ns.id;
+  g = gen_emit(g, ir.Instr.SlotDecl(vec_slot, vec_ty));
+  g = gen_emit(g, ir.Instr.Store(vec_slot, ir.v_temp(vec_tid)));
+
+  let mut i: i32 = 0;
+  while i < vals.len() {
+    g = gen_emit(g, ir.Instr.VecPush(vec_slot, elem_ty, vals.get(i)));
+    i = i + 1;
+  }
+
+  let nt1: GenNewIdResult = gen_new_temp(g);
+  g = nt1.g;
+  let out_tid: i32 = nt1.id;
+  g = gen_emit(g, ir.Instr.Load(out_tid, vec_ty, vec_slot));
+  return GenVariadicPackResult { ok: true, err: "", g: g, val: ir.v_temp(out_tid) };
+}
+
 fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, type_args: Vec[ast.TypeName], args: Vec[i32], out_ty: i32) -> GenExprResult {
   let mut g: Gen = g0;
-  if args.len() != sig.params.len() { return GenExprResult { ok: false, err: "arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  let mut pack_mode: bool = false;
+  let mut fixed_n: i32 = sig.params.len();
+
+  if sig.has_variadic {
+    if sig.params.len() == 0 {
+      return GenExprResult { ok: false, err: "invalid variadic signature", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+    fixed_n = sig.params.len() - 1;
+    if args.len() < fixed_n {
+      return GenExprResult { ok: false, err: "arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+    if args.len() > sig.params.len() || args.len() == fixed_n {
+      pack_mode = true;
+    } else {
+      let variadic_vec_ty: i32 = sig.params.get(fixed_n);
+      let probe: GenExprResult = gen_expr(g, args.get(fixed_n), variadic_vec_ty);
+      pack_mode = !probe.ok;
+    }
+  } else {
+    if args.len() != sig.params.len() { return GenExprResult { ok: false, err: "arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  }
 
   if sig.type_params.len() == 0 && sig.const_params.len() == 0 {
     if type_args.len() != 0 { return GenExprResult { ok: false, err: "non-generic fn with type args", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
 
     let mut vs: Vec[ir.Value] = Vec();
-    let mut i: i32 = 0;
-    while i < args.len() {
-      let want: i32 = sig.params.get(i);
-      let er: GenExprResult = gen_expr(g, args.get(i), want);
-      if !er.ok { return er; }
-      g = er.g;
-      vs.push(er.val);
-      i = i + 1;
+    if !pack_mode {
+      let mut i: i32 = 0;
+      while i < args.len() {
+        let want: i32 = sig.params.get(i);
+        let er: GenExprResult = gen_expr(g, args.get(i), want);
+        if !er.ok { return er; }
+        g = er.g;
+        vs.push(er.val);
+        i = i + 1;
+      }
+    } else {
+      let mut i: i32 = 0;
+      while i < fixed_n {
+        let want_fixed: i32 = sig.params.get(i);
+        let erf: GenExprResult = gen_expr(g, args.get(i), want_fixed);
+        if !erf.ok { return erf; }
+        g = erf.g;
+        vs.push(erf.val);
+        i = i + 1;
+      }
+
+      let mut tail_vals: Vec[ir.Value] = Vec();
+      let mut j: i32 = fixed_n;
+      while j < args.len() {
+        let erv: GenExprResult = gen_expr(g, args.get(j), sig.variadic_elem);
+        if !erv.ok { return erv; }
+        g = erv.g;
+        tail_vals.push(erv.val);
+        j = j + 1;
+      }
+
+      let variadic_vec_ty2: i32 = sig.params.get(fixed_n);
+      let pkr: GenVariadicPackResult = gen_pack_variadic_values(g, variadic_vec_ty2, sig.variadic_elem, tail_vals);
+      if !pkr.ok { return GenExprResult { ok: false, err: pkr.err, g: pkr.g, val: ir.v_int(0), ty: pkr.g.ctx.ty_bad }; }
+      g = pkr.g;
+      vs.push(pkr.val);
     }
 
     let qn: String = qname(target_mod, name);
@@ -1567,20 +1644,55 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
 
   // Infer from args while generating their IR values.
   let mut vs2: Vec[ir.Value] = Vec();
-  let mut i2: i32 = 0;
-  while i2 < args.len() {
-    let want0: i32 = tc.subst_ty(g.ctx, sig.params.get(i2), subs);
-    if want0 == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad generic arg type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-    let want_t: ir.Ty = ir.ty_pool_get(g.ctx.pool, want0);
-    let want: i32 = if want_t.kind == ir.TyKind.Param || tc.ty_has_param(g.ctx, want0) { -1 } else { want0 };
-    let er2: GenExprResult = gen_expr(g, args.get(i2), want);
-    if !er2.ok { return er2; }
-    g = er2.g;
-    vs2.push(er2.val);
-    let ur2: tc.UnifyResult = tc.unify_ty(g.ctx, sig.params.get(i2), er2.ty, subs);
-    if !ur2.ok { return GenExprResult { ok: false, err: "cannot infer generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-    subs = ur2.subs;
-    i2 = i2 + 1;
+  let mut variadic_tail_vals: Vec[ir.Value] = Vec();
+  if !pack_mode {
+    let mut i2: i32 = 0;
+    while i2 < args.len() {
+      let want0: i32 = tc.subst_ty(g.ctx, sig.params.get(i2), subs);
+      if want0 == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad generic arg type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+      let want_t: ir.Ty = ir.ty_pool_get(g.ctx.pool, want0);
+      let want: i32 = if want_t.kind == ir.TyKind.Param || tc.ty_has_param(g.ctx, want0) { -1 } else { want0 };
+      let er2: GenExprResult = gen_expr(g, args.get(i2), want);
+      if !er2.ok { return er2; }
+      g = er2.g;
+      vs2.push(er2.val);
+      let ur2: tc.UnifyResult = tc.unify_ty(g.ctx, sig.params.get(i2), er2.ty, subs);
+      if !ur2.ok { return GenExprResult { ok: false, err: "cannot infer generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+      subs = ur2.subs;
+      i2 = i2 + 1;
+    }
+  } else {
+    let mut i2: i32 = 0;
+    while i2 < fixed_n {
+      let want0_fixed: i32 = tc.subst_ty(g.ctx, sig.params.get(i2), subs);
+      if want0_fixed == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad generic arg type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+      let want_t_fixed: ir.Ty = ir.ty_pool_get(g.ctx.pool, want0_fixed);
+      let want_fixed: i32 = if want_t_fixed.kind == ir.TyKind.Param || tc.ty_has_param(g.ctx, want0_fixed) { -1 } else { want0_fixed };
+      let erf: GenExprResult = gen_expr(g, args.get(i2), want_fixed);
+      if !erf.ok { return erf; }
+      g = erf.g;
+      vs2.push(erf.val);
+      let urf: tc.UnifyResult = tc.unify_ty(g.ctx, sig.params.get(i2), erf.ty, subs);
+      if !urf.ok { return GenExprResult { ok: false, err: "cannot infer generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+      subs = urf.subs;
+      i2 = i2 + 1;
+    }
+
+    let mut j2: i32 = fixed_n;
+    while j2 < args.len() {
+      let want0_var: i32 = tc.subst_ty(g.ctx, sig.variadic_elem, subs);
+      if want0_var == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad generic arg type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+      let want_t_var: ir.Ty = ir.ty_pool_get(g.ctx.pool, want0_var);
+      let want_var: i32 = if want_t_var.kind == ir.TyKind.Param || tc.ty_has_param(g.ctx, want0_var) { -1 } else { want0_var };
+      let erv: GenExprResult = gen_expr(g, args.get(j2), want_var);
+      if !erv.ok { return erv; }
+      g = erv.g;
+      variadic_tail_vals.push(erv.val);
+      let urv: tc.UnifyResult = tc.unify_ty(g.ctx, sig.variadic_elem, erv.ty, subs);
+      if !urv.ok { return GenExprResult { ok: false, err: "cannot infer generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+      subs = urv.subs;
+      j2 = j2 + 1;
+    }
   }
 
   // Ensure all type params are bound.
@@ -1637,6 +1749,8 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   let inst_sig: tc.FuncSig = tc.FuncSig {
     params: ps,
     ret: rty,
+    has_variadic: false,
+    variadic_elem: -1,
     vis: sig.vis,
     is_pub: sig.is_pub,
     type_params: Vec(),
@@ -1649,6 +1763,20 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   let inst: String = tc.inst_name_ex(g.ctx, name, sig.type_params, sig.const_params, subs, csubs);
   let inst_qn: String = qname(target_mod, inst);
   g.pending = pending_add(g.pending, PendingInst { qname: inst_qn, mod_path: target_mod, base_name: name, inst_name: inst, sig: inst_sig, subs: subs, const_subs: csubs });
+
+  if pack_mode {
+    let variadic_vec_ty3: i32 = ps.get(ps.len() - 1);
+    let variadic_elem_ty3: i32 = tc.subst_ty(g.ctx, sig.variadic_elem, subs);
+    if variadic_elem_ty3 == g.ctx.ty_bad {
+      return GenExprResult { ok: false, err: "bad substituted variadic elem type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+    let pkr2: GenVariadicPackResult = gen_pack_variadic_values(g, variadic_vec_ty3, variadic_elem_ty3, variadic_tail_vals);
+    if !pkr2.ok {
+      return GenExprResult { ok: false, err: pkr2.err, g: pkr2.g, val: ir.v_int(0), ty: pkr2.g.ctx.ty_bad };
+    }
+    g = pkr2.g;
+    vs2.push(pkr2.val);
+  }
 
   if out_ty == g.ctx.ty_unit {
     g = gen_emit(g, ir.Instr.Call(false, 0, out_ty, inst_qn, vs2));

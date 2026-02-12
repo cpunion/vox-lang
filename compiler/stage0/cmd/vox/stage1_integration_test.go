@@ -1369,16 +1369,16 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(bl), "[select] discovered:") {
 		t.Fatalf("expected stage2 selection summary, got:\n%s", string(bl))
 	}
-	if !strings.Contains(string(bl), "[list] (root) (") {
+	if !strings.Contains(string(bl), "[list] compiler (") {
 		t.Fatalf("expected stage2 grouped list output for root module, got:\n%s", string(bl))
 	}
 	if !strings.Contains(string(bl), "[list] total:") {
 		t.Fatalf("expected stage2 list total footer, got:\n%s", string(bl))
 	}
-	if !strings.Contains(string(bl), "[test] test_std_sync_runtime_generic_api_smoke") {
+	if !strings.Contains(string(bl), "[test] compiler::test_std_sync_runtime_generic_api_smoke") {
 		t.Fatalf("expected filtered test in list output, got:\n%s", string(bl))
 	}
-	if strings.Contains(string(bl), "[test] test_std_testing_smoke") {
+	if strings.Contains(string(bl), "[test] compiler::test_std_testing_smoke") {
 		t.Fatalf("expected filter to exclude unrelated tests, got:\n%s", string(bl))
 	}
 	cmdListAll := exec.Command(stage2BinB, "test-pkg", "--list", outRel)
@@ -1387,8 +1387,8 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stage2 test-pkg --list(all) failed: %v\n%s", err, string(bla))
 	}
-	iRoot := strings.Index(string(bla), "[list] (root) (")
-	iCodegen := strings.Index(string(bla), "[list] codegen (")
+	iRoot := strings.Index(string(bla), "[list] compiler (")
+	iCodegen := strings.Index(string(bla), "[list] compiler.codegen (")
 	if iRoot < 0 || iCodegen < 0 {
 		t.Fatalf("expected root/codegen list groups in stage2 output, got:\n%s", string(bla))
 	}
@@ -1402,7 +1402,7 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stage2 test-pkg --run failed: %v\n%s", err, string(brun))
 	}
-	if !strings.Contains(string(brun), "[test] test_std_testing_smoke") {
+	if !strings.Contains(string(brun), "[test] compiler::test_std_testing_smoke") {
 		t.Fatalf("expected run pattern to select std testing smoke, got:\n%s", string(brun))
 	}
 	cmdRunSplit := exec.Command(stage2BinB, "test-pkg", "--run", "*std_testing*", "--list", outRel)
@@ -1411,31 +1411,31 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stage2 test-pkg --run <value> failed: %v\n%s", err, string(brunSplit))
 	}
-	if !strings.Contains(string(brunSplit), "[test] test_std_testing_smoke") {
+	if !strings.Contains(string(brunSplit), "[test] compiler::test_std_testing_smoke") {
 		t.Fatalf("expected split run pattern to select std testing smoke, got:\n%s", string(brunSplit))
 	}
-	cmdModule := exec.Command(stage2BinB, "test-pkg", "--module=typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list", outRel)
+	cmdModule := exec.Command(stage2BinB, "test-pkg", "--module=compiler.typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list", outRel)
 	cmdModule.Dir = stage2DirAbs
 	bmod, err := cmdModule.CombinedOutput()
 	if err != nil {
 		t.Fatalf("stage2 test-pkg --module failed: %v\n%s", err, string(bmod))
 	}
-	if !strings.Contains(string(bmod), "[select] --module: \"typecheck\"") {
+	if !strings.Contains(string(bmod), "[select] --module: \"compiler.typecheck\"") {
 		t.Fatalf("expected module filter in text selection output, got:\n%s", string(bmod))
 	}
-	if !strings.Contains(string(bmod), "[test] typecheck::test_typecheck_allows_generic_fn_sig") {
+	if !strings.Contains(string(bmod), "[test] compiler.typecheck::test_typecheck_allows_generic_fn_sig") {
 		t.Fatalf("expected module-filtered test in list output, got:\n%s", string(bmod))
 	}
-	if strings.Contains(string(bmod), "[test] parse::test_parse_single_fn_return_int") {
+	if strings.Contains(string(bmod), "[test] compiler.parse::test_parse_single_fn_return_int") {
 		t.Fatalf("expected module filter to exclude parse tests, got:\n%s", string(bmod))
 	}
-	cmdModuleSplit := exec.Command(stage2BinB, "test-pkg", "--module", "typecheck", "--run", "*typecheck_allows_generic_fn_sig", "--list", outRel)
+	cmdModuleSplit := exec.Command(stage2BinB, "test-pkg", "--module", "compiler.typecheck", "--run", "*typecheck_allows_generic_fn_sig", "--list", outRel)
 	cmdModuleSplit.Dir = stage2DirAbs
 	bmodSplit, err := cmdModuleSplit.CombinedOutput()
 	if err != nil {
 		t.Fatalf("stage2 test-pkg --module <value> failed: %v\n%s", err, string(bmodSplit))
 	}
-	if !strings.Contains(string(bmodSplit), "[select] --module: \"typecheck\"") {
+	if !strings.Contains(string(bmodSplit), "[select] --module: \"compiler.typecheck\"") {
 		t.Fatalf("expected split module filter in selection output, got:\n%s", string(bmodSplit))
 	}
 	cmdFilterSplit := exec.Command(stage2BinB, "test-pkg", "--filter", "std_sync_runtime_generic_api_smoke", "--list", outRel)
@@ -1444,7 +1444,7 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stage2 test-pkg --filter <value> failed: %v\n%s", err, string(bfilterSplit))
 	}
-	if !strings.Contains(string(bfilterSplit), "[test] test_std_sync_runtime_generic_api_smoke") {
+	if !strings.Contains(string(bfilterSplit), "[test] compiler::test_std_sync_runtime_generic_api_smoke") {
 		t.Fatalf("expected split filter to select target test, got:\n%s", string(bfilterSplit))
 	}
 	cmdFilterPostOut := exec.Command(stage2BinB, "test-pkg", outRel, "--filter=std_sync_runtime_generic_api_smoke", "--list")
@@ -1453,19 +1453,19 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stage2 test-pkg <out> --filter --list failed: %v\n%s", err, string(bfilterPostOut))
 	}
-	if !strings.Contains(string(bfilterPostOut), "[test] test_std_sync_runtime_generic_api_smoke") {
+	if !strings.Contains(string(bfilterPostOut), "[test] compiler::test_std_sync_runtime_generic_api_smoke") {
 		t.Fatalf("expected post-out filter to select target test, got:\n%s", string(bfilterPostOut))
 	}
-	cmdModulePostOut := exec.Command(stage2BinB, "test-pkg", outRel, "--module=typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list")
+	cmdModulePostOut := exec.Command(stage2BinB, "test-pkg", outRel, "--module=compiler.typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list")
 	cmdModulePostOut.Dir = stage2DirAbs
 	bmodPostOut, err := cmdModulePostOut.CombinedOutput()
 	if err != nil {
 		t.Fatalf("stage2 test-pkg <out> --module --run --list failed: %v\n%s", err, string(bmodPostOut))
 	}
-	if !strings.Contains(string(bmodPostOut), "[select] --module: \"typecheck\"") {
+	if !strings.Contains(string(bmodPostOut), "[select] --module: \"compiler.typecheck\"") {
 		t.Fatalf("expected post-out module filter in selection output, got:\n%s", string(bmodPostOut))
 	}
-	if !strings.Contains(string(bmodPostOut), "[test] typecheck::test_typecheck_allows_generic_fn_sig") {
+	if !strings.Contains(string(bmodPostOut), "[test] compiler.typecheck::test_typecheck_allows_generic_fn_sig") {
 		t.Fatalf("expected post-out module+run filters to select target test, got:\n%s", string(bmodPostOut))
 	}
 
@@ -1518,13 +1518,13 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(bj), "\"report_version\":1") || !strings.Contains(string(bj), "\"rerun_cache_path\":\"target/debug/.vox_last_failed_tests\"") {
 		t.Fatalf("expected json report/cache metadata in list output, got:\n%s", string(bj))
 	}
-	if !strings.Contains(string(bj), "\"selected_tests\":[\"test_std_sync_runtime_generic_api_smoke\"]") {
+	if !strings.Contains(string(bj), "\"selected_tests\":[\"compiler::test_std_sync_runtime_generic_api_smoke\"]") {
 		t.Fatalf("expected selected test in json output, got:\n%s", string(bj))
 	}
 	if !strings.Contains(string(bj), "\"jobs\":2") {
 		t.Fatalf("expected jobs in selection json output, got:\n%s", string(bj))
 	}
-	if !strings.Contains(string(bj), "\"module_details\"") || !strings.Contains(string(bj), "\"module\":\"(root)\"") {
+	if !strings.Contains(string(bj), "\"module_details\"") || !strings.Contains(string(bj), "\"module\":\"compiler\"") {
 		t.Fatalf("expected list json module_details output, got:\n%s", string(bj))
 	}
 	cmdFailFastList := exec.Command(stage2BinB, "test-pkg", "--fail-fast", "--run=*std_sync_runtime_generic_api_smoke", "--list", outRel)
@@ -1545,19 +1545,19 @@ func TestStage1BuildsStage2AndRunsStage2Tests(t *testing.T) {
 	if !strings.Contains(string(bffJSON), "\"fail_fast\":true") {
 		t.Fatalf("expected fail_fast in selection json output, got:\n%s", string(bffJSON))
 	}
-	cmdJSONModule := exec.Command(stage2BinB, "test-pkg", "--module=typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list", "--json", outRel)
+	cmdJSONModule := exec.Command(stage2BinB, "test-pkg", "--module=compiler.typecheck", "--run=*typecheck_allows_generic_fn_sig", "--list", "--json", outRel)
 	cmdJSONModule.Dir = stage2DirAbs
 	bjm, err := cmdJSONModule.CombinedOutput()
 	if err != nil {
 		t.Fatalf("stage2 test-pkg --module --json failed: %v\n%s", err, string(bjm))
 	}
-	if !strings.Contains(string(bjm), "\"module\":\"typecheck\"") {
+	if !strings.Contains(string(bjm), "\"module\":\"compiler.typecheck\"") {
 		t.Fatalf("expected module in selection json output, got:\n%s", string(bjm))
 	}
-	if !strings.Contains(string(bjm), "\"selected_tests\":[\"typecheck::test_typecheck_allows_generic_fn_sig\"]") {
+	if !strings.Contains(string(bjm), "\"selected_tests\":[\"compiler.typecheck::test_typecheck_allows_generic_fn_sig\"]") {
 		t.Fatalf("expected module-filtered selected test in json output, got:\n%s", string(bjm))
 	}
-	if !strings.Contains(string(bjm), "\"module_details\":[{\"module\":\"typecheck\"") {
+	if !strings.Contains(string(bjm), "\"module_details\":[{\"module\":\"compiler.typecheck\"") {
 		t.Fatalf("expected module_details in module-filtered list json output, got:\n%s", string(bjm))
 	}
 

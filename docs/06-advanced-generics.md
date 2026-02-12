@@ -90,19 +90,36 @@ where
 - 偏序不比较方法体语义；`where` 的完整逻辑强弱比较仍未纳入（当前比较的是 impl 头部 `for` + 头部 type bounds）。
 - 仅在当前 `unify_ty` 支持的类型构造上参与判定（如 `Vec[T]` 场景）。
 
-## 4. 可变参数泛型（Stage2 最小可用）
+## 4. 可变参数泛型（Stage2 当前实现）
 
 当前 Stage2 行为：
 
-- parser 接受类型参数 pack 语法：`fn zip[T...](...) -> ...`
-- parser/typecheck 接受值参数 variadic 语法：`fn zip[T](xs: T...) -> ...`
-- 语义（当前实现）：
-  - `T...`（type param pack 声明）当前仅作为“声明层语法”保留，暂不做真正 pack 展开；
-  - `xs: T...` 在 typecheck 收集阶段降级为 `xs: Vec[T]`；
-  - 规则：当前只允许一个 type param pack，且必须位于类型参数列表末尾；
-  - 限制：variadic 参数必须是最后一个参数，否则报错 `variadic parameter must be the last parameter`。
-- 调用点约束：
-  - 若对包含 `T...` 的函数提供超过声明上限的显式类型实参，会报
+- parser/typecheck 接受类型参数 pack 声明语法：`fn zip[T...](...) -> ...`
+- parser/typecheck 接受值参数 variadic 语法：`fn sum(xs: T...) -> ...`
+- 参数降级规则：`xs: T...` 在收集阶段降级为 `xs: Vec[T]`，并保留 variadic 元信息用于调用点规则。
+- 声明约束：
+  - variadic 参数必须是最后一个参数，否则报错 `variadic parameter must be the last parameter`；
+  - 当前只允许一个 type parameter pack，且必须位于类型参数列表末尾。
+
+调用点（已实现双模式）：
+
+- 打包调用（pack-call）：
+  - `sum(1, 2, 3)` 会在调用侧自动构造 `Vec[T]` 作为最后一个实参；
+  - `sum()`（无 variadic 实参）也合法，会传入空 `Vec[T]`。
+- 显式 `Vec` 调用（vec-call）：
+  - `let xs: Vec[i32] = Vec(); sum(xs);` 直接把最后一个实参当作已构造好的 `Vec[T]`。
+- 固定参数 + variadic：
+  - 对 `fn f(x: i32, ys: i32...)`，至少需要提供固定参数数量；不足时报
+    `wrong number of args: expected at least N, got M`。
+
+类型参数 pack 的当前语义：
+
+- `T...`（type param pack 声明）当前仍是“最小可用”语义：
+  - 不做真实 pack 展开，仅用于语法与 arity 校验；
+  - 若显式类型实参超过声明上限，会报
     `wrong number of type args: expected at most N, got M`。
 
-说明：真正的 pack 展开、基于 arity 的特化与更强代码生成策略，仍在后续条目推进。
+后续（未做）：
+
+- 真正的 type/value pack 展开；
+- 基于 arity 的专门化与更激进的代码生成优化。

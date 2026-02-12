@@ -257,9 +257,12 @@ fn subst_self_in_sig(ctx: Ctx, sig: FuncSig, recv_ty: i32) -> FuncSig {
     i = i + 1;
   }
   let rr: i32 = subst_self_ty(ctx, sig.ret, recv_ty);
+  let ve: i32 = if sig.has_variadic { subst_self_ty(ctx, sig.variadic_elem, recv_ty) } else { sig.variadic_elem };
   return FuncSig {
     params: ps,
     ret: rr,
+    has_variadic: sig.has_variadic,
+    variadic_elem: ve,
     vis: sig.vis,
     is_pub: sig.is_pub,
     type_params: sig.type_params,
@@ -828,22 +831,68 @@ fn tc_call_func_sig(
   expected: i32
 ) -> ExprTyResult {
   let _tm: String = target_mod; // reserved for future: implicit receiver / UFCS.
-  if args.len() != sig.params.len() {
-    let msg: String =
-      "wrong number of args: expected ".concat(sig.params.len().to_string())
-        .concat(", got ").concat(args.len().to_string());
-    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+  let mut pack_mode: bool = false;
+  let mut fixed_n: i32 = sig.params.len();
+
+  if sig.has_variadic {
+    if sig.params.len() == 0 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "invalid variadic function signature") };
+    }
+    fixed_n = sig.params.len() - 1;
+    if args.len() < fixed_n {
+      let msgv0: String =
+        "wrong number of args: expected at least ".concat(fixed_n.to_string())
+          .concat(", got ").concat(args.len().to_string());
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgv0) };
+    }
+    if args.len() > sig.params.len() || args.len() == fixed_n {
+      pack_mode = true;
+    } else {
+      let variadic_vec_ty: i32 = sig.params.get(fixed_n);
+      let probe_last: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(fixed_n), variadic_vec_ty);
+      if probe_last.ok && assignable_to(ctx, variadic_vec_ty, probe_last.ty) {
+        pack_mode = false;
+      } else {
+        pack_mode = true;
+      }
+    }
+  } else {
+    if args.len() != sig.params.len() {
+      let msg: String =
+        "wrong number of args: expected ".concat(sig.params.len().to_string())
+          .concat(", got ").concat(args.len().to_string());
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+    }
   }
 
   if sig.type_params.len() == 0 && sig.const_params.len() == 0 {
     if type_args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let mut i: i32 = 0;
-    while i < args.len() {
-      let want: i32 = sig.params.get(i);
-      let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want);
-      if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-      if !assignable_to(ctx, want, ar.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-      i = i + 1;
+    if !pack_mode {
+      let mut i: i32 = 0;
+      while i < args.len() {
+        let want: i32 = sig.params.get(i);
+        let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want);
+        if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        if !assignable_to(ctx, want, ar.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        i = i + 1;
+      }
+    } else {
+      let mut i: i32 = 0;
+      while i < fixed_n {
+        let want_fixed: i32 = sig.params.get(i);
+        let arf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want_fixed);
+        if !arf.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        if !assignable_to(ctx, want_fixed, arf.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        i = i + 1;
+      }
+      let mut j: i32 = fixed_n;
+      while j < args.len() {
+        let want_var: i32 = sig.variadic_elem;
+        let arv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), want_var);
+        if !arv.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        if !assignable_to(ctx, want_var, arv.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        j = j + 1;
+      }
     }
     if expected != -1 && !assignable_to(ctx, expected, sig.ret) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     return ExprTyResult { ok: true, ty: sig.ret, err: TcError.None };
@@ -933,17 +982,44 @@ fn tc_call_func_sig(
   }
 
   // Infer from arguments.
-  let mut i: i32 = 0;
-  while i < args.len() {
-    let want0: i32 = subst_ty(ctx, sig.params.get(i), subs);
-    let want_t: ir.Ty = ir.ty_pool_get(ctx.pool, want0);
-    let want: i32 = if want_t.kind == ir.TyKind.Param || ty_has_param(ctx, want0) { -1 } else { want0 };
-    let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want);
-    if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let ur2: UnifyResult = unify_ty(ctx, sig.params.get(i), ar.ty, subs);
-    if !ur2.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    subs = ur2.subs;
-    i = i + 1;
+  if !pack_mode {
+    let mut i: i32 = 0;
+    while i < args.len() {
+      let want0: i32 = subst_ty(ctx, sig.params.get(i), subs);
+      let want_t: ir.Ty = ir.ty_pool_get(ctx.pool, want0);
+      let want: i32 = if want_t.kind == ir.TyKind.Param || ty_has_param(ctx, want0) { -1 } else { want0 };
+      let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want);
+      if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      let ur2: UnifyResult = unify_ty(ctx, sig.params.get(i), ar.ty, subs);
+      if !ur2.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      subs = ur2.subs;
+      i = i + 1;
+    }
+  } else {
+    let mut i: i32 = 0;
+    while i < fixed_n {
+      let want0_fixed: i32 = subst_ty(ctx, sig.params.get(i), subs);
+      let want_t_fixed: ir.Ty = ir.ty_pool_get(ctx.pool, want0_fixed);
+      let want_fixed: i32 = if want_t_fixed.kind == ir.TyKind.Param || ty_has_param(ctx, want0_fixed) { -1 } else { want0_fixed };
+      let arf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want_fixed);
+      if !arf.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      let urf: UnifyResult = unify_ty(ctx, sig.params.get(i), arf.ty, subs);
+      if !urf.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      subs = urf.subs;
+      i = i + 1;
+    }
+    let mut j: i32 = fixed_n;
+    while j < args.len() {
+      let want0_var: i32 = subst_ty(ctx, sig.variadic_elem, subs);
+      let want_t_var: ir.Ty = ir.ty_pool_get(ctx.pool, want0_var);
+      let want_var: i32 = if want_t_var.kind == ir.TyKind.Param || ty_has_param(ctx, want0_var) { -1 } else { want0_var };
+      let arv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), want_var);
+      if !arv.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      let urv: UnifyResult = unify_ty(ctx, sig.variadic_elem, arv.ty, subs);
+      if !urv.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      subs = urv.subs;
+      j = j + 1;
+    }
   }
 
   // Ensure all type params are bound.
