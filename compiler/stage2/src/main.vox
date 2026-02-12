@@ -32,13 +32,50 @@ fn path_base_name(p: String) -> String {
 }
 
 fn host_is_windows() -> bool {
+  let os: String = proc.getenv("OS");
+  if os == "Windows_NT" { return true; }
   let exe: String = proc.exe_path();
-  if exe.len() < 4 { return false; }
-  return exe.slice(exe.len() - 4, exe.len()) == ".exe";
+  if exe.len() >= 4 && exe.slice(exe.len() - 4, exe.len()) == ".exe" { return true; }
+  if exe.len() >= 2 && exe.byte_at(1) == 58 && is_alpha_ascii(exe.byte_at(0)) { return true; } // C:
+  if exe.len() >= 3 && exe.byte_at(0) == 47 && is_alpha_ascii(exe.byte_at(1)) && exe.byte_at(2) == 47 { return true; } // /c/
+  return false;
 }
 
+
+fn is_alpha_ascii(ch: i32) -> bool {
+  if ch >= 65 && ch <= 90 { return true; }
+  if ch >= 97 && ch <= 122 { return true; }
+  return false;
+}
+
+fn normalize_host_fs_path(p0: String) -> String {
+  if !host_is_windows() { return p0; }
+  if p0.len() >= 3 && p0.byte_at(0) == 47 && p0.byte_at(2) == 47 && is_alpha_ascii(p0.byte_at(1)) {
+    return p0.slice(1, 2).concat(":").concat(p0.slice(2, p0.len()));
+  }
+  return p0;
+}
+
+fn shell_exec_path(p0: String) -> String {
+  let p: String = normalize_host_fs_path(p0);
+  if !host_is_windows() { return p; }
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < p.len() {
+    if p.byte_at(i) == 47 {
+      out = out.concat("\\");
+    } else {
+      out = out.concat(p.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  if !is_abs_path(out) && !has_prefix(out, ".\\") && !has_prefix(out, "..\\") {
+    return ".\\".concat(out);
+  }
+  return out;
+}
 fn cc_link_flags() -> String {
-  if host_is_windows() { return " -lws2_32 -static"; }
+  if host_is_windows() { return " -lws2_32 -static -Wl,--stack,8388608"; }
   return "";
 }
 
@@ -58,6 +95,7 @@ fn usage() -> () {
   let bin: String = path_base_name(proc.exe_path());
   print(bin.concat(" usage:\n"));
   print("  ".concat(bin).concat(" emit-c <out.c> <src...>\n"));
+  print("  ".concat(bin).concat(" emit-pkg-c <out.c>   # emit C from ./src\n"));
   print("  ".concat(bin).concat(" build  <out.bin> <src...>\n"));
   print("  ".concat(bin).concat(" build-pkg <out.bin>   # build from ./src\n"));
   print("  ".concat(bin).concat(" test-pkg <out.bin>    # build+run tests from ./src and ./tests\n"));
@@ -141,7 +179,7 @@ fn dir_name(p: String) -> String {
   let n: i32 = p.len();
   let mut i: i32 = n - 1;
   while i >= 0 {
-    if p.byte_at(i) == 47 { // '/'
+    if p.byte_at(i) == 47 || p.byte_at(i) == 92 { // '/' or '\\'
       if i == 0 { return "/"; }
       return p.slice(0, i);
     }
@@ -171,7 +209,7 @@ fn path_join(a: String, b: String) -> String {
 
 fn stage1_root() -> String {
   // stage0 places binaries at: <pkg>/target/debug/<name>
-  let exe: String = proc.exe_path();
+  let exe: String = normalize_host_fs_path(proc.exe_path());
   let d1: String = dir_name(exe);
   let d2: String = dir_name(d1);
   let d3: String = dir_name(d2);
@@ -863,12 +901,27 @@ fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test
   let tag: String = module_idx.to_string().concat("_").concat(seq.to_string());
   let rc_file: String = path_join(run_dir, "job_".concat(tag).concat(".rc"));
   let log_file: String = path_join(run_dir, "job_".concat(tag).concat(".log"));
-  // Keep command shell-portable: `&&`/`||` works in both sh/cmd.
+  let bin_exec: String = shell_exec_path(bin);
+  let cmd_head: String = shell_quote(bin_exec).concat(" ").concat(shell_quote(test_name));
+  let log_redir: String = " > ".concat(shell_quote(shell_exec_path(log_file))).concat(" 2>&1");
+  if host_is_windows() {
+    let run_cmd_win: String =
+      bin_exec.concat(" ").concat(test_name)
+        .concat(" > ").concat(shell_exec_path(log_file)).concat(" 2>&1");
+    let rc: i32 = proc.exec(run_cmd_win);
+    fs.write_string(rc_file, if rc == 0 { "0" } else { "1" });
+    return RunningJob {
+      module_idx: module_idx,
+      name: test_name,
+      rc_file: rc_file,
+      log_file: log_file,
+      start_ns: tm.now_ns(),
+    };
+  }
   let run_cmd: String =
-    bin.concat(" ").concat(test_name)
-      .concat(" > ").concat(log_file).concat(" 2>&1")
-      .concat(" && echo 0 > ").concat(rc_file)
-      .concat(" || echo 1 > ").concat(rc_file);
+    cmd_head.concat(log_redir)
+      .concat(" && echo 0 > ").concat(shell_quote(shell_exec_path(rc_file)))
+      .concat(" || echo 1 > ").concat(shell_quote(shell_exec_path(rc_file)));
   let bg_cmd: String = "( ".concat(run_cmd).concat(" ) &");
   let _rc: i32 = proc.exec(bg_cmd);
   return RunningJob {
@@ -1258,6 +1311,7 @@ fn sanitize_path_part(s: String) -> String {
 }
 
 fn shell_quote(s: String) -> String {
+  if host_is_windows() { return "\"".concat(s).concat("\""); }
   let mut out: String = "'";
   let mut i: i32 = 0;
   while i < s.len() {
@@ -1271,7 +1325,6 @@ fn shell_quote(s: String) -> String {
   }
   return out.concat("'");
 }
-
 fn is_space_ch(ch: i32) -> bool { return ch == 32 || ch == 9 || ch == 10 || ch == 13; }
 
 fn trim_space_main(s: String) -> String {
@@ -1784,9 +1837,38 @@ fn main() -> i32 {
     let cmdline: String = cc_cmd().concat(" -std=c11 -O0 -g").concat(cc_common_flags()).concat(" ").concat(cpath).concat(" -o ").concat(out).concat(cc_link_flags());
     let code: i32 = proc.exec(cmdline);
     if code != 0 {
-      print("cc failed\n");
+      print("cc failed: ".concat(cmdline).concat("\n"));
+      print("cc exit: ".concat(code.to_string()).concat("\n"));
       return 1;
     }
+    return 0;
+  }
+  if cmd == "emit-pkg-c" {
+    let all: Vec[String] = fs.walk_vox_files(".");
+    let paths: Vec[String] = filter_pkg_sources(all);
+    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths) { Vec() } else { load_stage1_std() };
+    let dr: DepsResult = load_deps_from_manifest();
+    if !dr.ok {
+      print("invalid vox.toml: ".concat(dr.err).concat("\n"));
+      return 1;
+    }
+    let vr: LockVerifyResult = verify_lockfile_or_ok(dr.resolved);
+    if !vr.ok {
+      print_invalid_lock_error(vr.err);
+      return 1;
+    }
+    write_lockfile(dr.resolved);
+    let mut di: i32 = 0;
+    while di < dr.files.len() { files.push(dr.files.get(di)); di = di + 1; }
+    let user: Vec[ld.SourceFile] = load_files(paths);
+    let mut ui: i32 = 0;
+    while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
+    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: true, driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
+    if !r.ok {
+      print("compile failed: ".concat(r.err).concat("\n"));
+      return 1;
+    }
+    fs.write_string(out, r.c);
     return 0;
   }
   if cmd == "build-pkg" {
@@ -1819,7 +1901,8 @@ fn main() -> i32 {
     let cmdline: String = cc_cmd().concat(" -std=c11 -O0 -g").concat(cc_common_flags()).concat(" ").concat(cpath).concat(" -o ").concat(out).concat(cc_link_flags());
     let code: i32 = proc.exec(cmdline);
     if code != 0 {
-      print("cc failed\n");
+      print("cc failed: ".concat(cmdline).concat("\n"));
+      print("cc exit: ".concat(code.to_string()).concat("\n"));
       return 1;
     }
     return 0;
@@ -1893,7 +1976,8 @@ fn main() -> i32 {
     let cmdline: String = cc_cmd().concat(" -std=c11 -O0 -g").concat(cc_common_flags()).concat(" ").concat(cpath).concat(" -o ").concat(bin).concat(cc_link_flags());
     let code: i32 = proc.exec(cmdline);
     if code != 0 {
-      print("cc failed\n");
+      print("cc failed: ".concat(cmdline).concat("\n"));
+      print("cc exit: ".concat(code.to_string()).concat("\n"));
       return 1;
     }
 

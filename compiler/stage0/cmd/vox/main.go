@@ -34,6 +34,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  vox ir [--engine=c|interp] [dir]")
 	fmt.Fprintln(os.Stderr, "  vox c [dir]")
 	fmt.Fprintln(os.Stderr, "  vox build [--engine=c|interp] [dir]")
+	fmt.Fprintln(os.Stderr, "  vox build-tool [dir]")
 	fmt.Fprintln(os.Stderr, "  vox run [--engine=c|interp] [dir]")
 	fmt.Fprintln(os.Stderr, "  vox test [--engine=c|interp] [dir]")
 	fmt.Fprintln(os.Stderr, "  vox fmt [dir]")
@@ -302,6 +303,16 @@ func main() {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
+	case "build-tool":
+		dir, err := parseDirArg(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		if err := buildTool(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
 	case "run":
 		// Allow forwarding program args after `--`.
 		raw := os.Args[2:]
@@ -438,6 +449,11 @@ func build(dir string, eng engine) error {
 		return nil
 	}
 	_, err := compile(dir)
+	return err
+}
+
+func buildTool(dir string) error {
+	_, err := compileWithDriver(dir, codegen.DriverMainTool)
 	return err
 }
 
@@ -1421,7 +1437,7 @@ func compileWithDriver(dir string, driver codegen.DriverMainKind) (string, error
 	}
 	ccArgs = append(ccArgs, cPath, "-o", binPath)
 	if runtime.GOOS == "windows" {
-		ccArgs = append(ccArgs, "-lws2_32", "-static")
+		ccArgs = append(ccArgs, "-lws2_32", "-static", "-Wl,--stack,8388608")
 	}
 	cmd := exec.Command(ccSpec.cmd, ccArgs...)
 	cmd.Stdout = os.Stdout
@@ -1618,7 +1634,7 @@ func compileTests(dir string, res *loader.BuildResult, testNames []string) (stri
 	}
 	ccArgs = append(ccArgs, cPath, "-o", binPath)
 	if runtime.GOOS == "windows" {
-		ccArgs = append(ccArgs, "-lws2_32", "-static")
+		ccArgs = append(ccArgs, "-lws2_32", "-static", "-Wl,--stack,8388608")
 	}
 	cmd := exec.Command(ccSpec.cmd, ccArgs...)
 	cmd.Stdout = os.Stdout

@@ -25,6 +25,23 @@ if [[ "$GOOS" == "windows" ]]; then
   EXE_SUFFIX=".exe"
 fi
 
+normalize_windows_exe_path() {
+  local p="$1"
+  if [[ "$GOOS" != "windows" ]]; then
+    printf '%s\n' "$p"
+    return 0
+  fi
+  if command -v cygpath >/dev/null 2>&1; then
+    local wp=""
+    wp="$(cygpath -w "$p" 2>/dev/null || true)"
+    if [[ -n "$wp" ]]; then
+      printf '%s\n' "$wp"
+      return 0
+    fi
+  fi
+  printf '%s\n' "$p"
+}
+
 bootstrap_cc_env() {
   if [[ "$GOOS" == "windows" ]]; then
     local mingw_a="/c/ProgramData/mingw64/mingw64/bin"
@@ -41,7 +58,23 @@ bootstrap_cc_env() {
   if [[ -n "${CC:-}" ]]; then
     local cc_bin="${CC%% *}"
     if command -v "$cc_bin" >/dev/null 2>&1; then
+      if [[ "$GOOS" == "windows" ]]; then
+        # stage1/stage2 invoke CC through shell command text; keep bare command
+        # name on Windows to avoid backslash path escaping issues.
+        export CC="$cc_bin"
+        export CC_ABS="$(command -v "$cc_bin")"
+      else
+        local cc_resolved="$(command -v "$cc_bin")"
+        export CC="$cc_resolved"
+      fi
       echo "[release] using CC from env: $CC"
+      if [[ -n "${CC_ABS:-}" ]]; then
+        echo "[release] using CC (resolved): $CC_ABS"
+      fi
+      return 0
+    fi
+    if [[ "$GOOS" == "windows" && "$cc_bin" =~ ^[A-Za-z]:\\ ]]; then
+      echo "[release] using CC from env (absolute windows path): $CC"
       return 0
     fi
     echo "[release] CC is set but not found in PATH: $CC" >&2
@@ -49,7 +82,7 @@ bootstrap_cc_env() {
 
   local candidates=()
   if [[ "$GOOS" == "windows" ]]; then
-    candidates=(gcc clang cc)
+    candidates=(x86_64-w64-mingw32-gcc gcc clang cc)
   else
     candidates=(cc gcc clang)
   fi
@@ -57,8 +90,18 @@ bootstrap_cc_env() {
   local c
   for c in "${candidates[@]}"; do
     if command -v "$c" >/dev/null 2>&1; then
-      export CC="$c"
-      echo "[release] auto-detected CC: $CC ($(command -v "$c"))"
+      if [[ "$GOOS" == "windows" ]]; then
+        local resolved="$(command -v "$c")"
+        export CC="$c"
+        export CC_ABS="$resolved"
+      else
+        local resolved="$(command -v "$c")"
+        export CC="$resolved"
+      fi
+      echo "[release] auto-detected CC: $CC"
+      if [[ -n "${CC_ABS:-}" ]]; then
+        echo "[release] auto-detected CC (resolved): $CC_ABS"
+      fi
       return 0
     fi
   done
@@ -92,7 +135,10 @@ sha256_file() {
 
 mkdir -p "$DIST_DIR"
 bootstrap_cc_env
-
+CC_BASH="${CC_ABS:-${CC:-}}"
+if [[ -n "$CC_BASH" ]]; then
+  echo "[release] bash CC command: $CC_BASH"
+fi
 STAGE0_OUT="$ROOT/compiler/stage0/target/release/vox-stage0${EXE_SUFFIX}"
 mkdir -p "$(dirname "$STAGE0_OUT")"
 
@@ -115,18 +161,70 @@ echo "[release] stage1 user probe exit: $probe_code"
 
 echo "[release] build stage1 tool binary"
 mkdir -p "$ROOT/compiler/stage1/target/release"
+STAGE1_TOOL=""
+STAGE1_TOOL_LOG="$ROOT/compiler/stage1/target/release/stage1-tool-build.log"
+set +e
 (
   cd "$ROOT/compiler/stage1"
-  set +e
-  "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
-  rc=$?
-  set -e
-  if [[ $rc -ne 0 ]]; then
-    echo "[release] stage1 tool build failed: exit $rc" >&2
-    exit $rc
+  if [[ "$GOOS" == "windows" ]]; then
+    if "$STAGE1_USER" emit-pkg-c --driver=tool target/release/vox_stage1.c; then
+      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static -Wl,--stack,8388608
+    else
+      "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
+    fi
+  else
+    "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
   fi
-)
-STAGE1_TOOL="$(resolve_bin "$ROOT/compiler/stage1/target/release/vox_stage1")"
+) >"$STAGE1_TOOL_LOG" 2>&1
+stage1_tool_rc=$?
+set -e
+
+if [[ $stage1_tool_rc -ne 0 ]]; then
+  echo "[release] stage1 tool self-build failed: exit $stage1_tool_rc" >&2
+  echo "[release] stage1 tool build log begin" >&2
+  cat "$STAGE1_TOOL_LOG" >&2 || true
+  echo "[release] stage1 tool build log end" >&2
+  echo "[release] stage1 tool retry (unredirected) begin" >&2
+  set +e
+  (
+    cd "$ROOT/compiler/stage1"
+    if [[ "$GOOS" == "windows" ]]; then
+      if "$STAGE1_USER" emit-pkg-c --driver=tool target/release/vox_stage1.c; then
+        "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static -Wl,--stack,8388608
+      else
+        "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
+      fi
+    else
+      "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
+    fi
+  )
+  stage1_retry_rc=$?
+  set -e
+  echo "[release] stage1 tool retry exit: $stage1_retry_rc" >&2
+  if [[ "$GOOS" == "windows" ]]; then
+    echo "[release] windows fallback: stage0 build-tool for stage1" >&2
+    "$STAGE0_OUT" build-tool "$ROOT/compiler/stage1"
+    STAGE1_TOOL_DEBUG="$(resolve_bin "$ROOT/compiler/stage1/target/debug/vox_stage1")"
+    cp "$STAGE1_TOOL_DEBUG" "$ROOT/compiler/stage1/target/release/vox_stage1${EXE_SUFFIX}"
+    STAGE1_TOOL="$STAGE1_TOOL_DEBUG"
+    stage1_tool_rc=0
+  fi
+fi
+
+if [[ $stage1_tool_rc -ne 0 ]]; then
+  echo "[release] stage1 tool build failed" >&2
+  exit $stage1_tool_rc
+fi
+
+if [[ -z "$STAGE1_TOOL" ]]; then
+  STAGE1_TOOL="$(resolve_bin "$ROOT/compiler/stage1/target/release/vox_stage1")"
+fi
+
+set +e
+"$STAGE1_TOOL" >/dev/null 2>&1
+stage1_tool_probe=$?
+set -e
+echo "[release] stage1 tool probe exit: $stage1_tool_probe"
 
 BOOTSTRAP_MODE="stage1-fallback"
 STAGE2_BOOTSTRAP=""
@@ -148,11 +246,59 @@ else
   echo "[release] build stage2 tool via stage1 fallback"
 fi
 
+echo "[release] stage2 bootstrap binary: $STAGE2_BOOTSTRAP"
+if [[ -f "$STAGE2_BOOTSTRAP" ]]; then
+  ls -l "$STAGE2_BOOTSTRAP"
+fi
+set +e
+"$STAGE2_BOOTSTRAP" >/dev/null 2>&1
+stage2_bootstrap_probe=$?
+set -e
+echo "[release] stage2 bootstrap probe exit: $stage2_bootstrap_probe"
+
 mkdir -p "$ROOT/compiler/stage2/target/release"
+STAGE2_TOOL_LOG="$ROOT/compiler/stage2/target/release/stage2-tool-build.log"
+set +e
 (
   cd "$ROOT/compiler/stage2"
-  "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
-)
+  if [[ "$GOOS" == "windows" ]]; then
+    if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
+      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static -Wl,--stack,8388608
+    else
+      "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+    fi
+  else
+    "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+  fi
+) >"$STAGE2_TOOL_LOG" 2>&1
+stage2_tool_rc=$?
+set -e
+
+if [[ $stage2_tool_rc -ne 0 ]]; then
+  echo "[release] stage2 tool build failed: exit $stage2_tool_rc" >&2
+  echo "[release] stage2 tool build log begin" >&2
+  cat "$STAGE2_TOOL_LOG" >&2 || true
+  echo "[release] stage2 tool build log end" >&2
+  echo "[release] stage2 tool retry (unredirected) begin" >&2
+  set +e
+  (
+    cd "$ROOT/compiler/stage2"
+    if [[ "$GOOS" == "windows" ]]; then
+      if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
+        "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static -Wl,--stack,8388608
+      else
+        "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+      fi
+    else
+      "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+    fi
+  )
+  stage2_retry_rc=$?
+  set -e
+  echo "[release] stage2 tool retry exit: $stage2_retry_rc" >&2
+  exit $stage2_tool_rc
+fi
+
 STAGE2_TOOL="$(resolve_bin "$ROOT/compiler/stage2/target/release/vox_stage2")"
 
 BUNDLE_NAME="vox-lang-${VERSION}-${PLATFORM}"
