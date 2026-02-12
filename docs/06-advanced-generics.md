@@ -112,6 +112,8 @@ where
   - `sum()`（无 variadic 实参）也合法，会传入空 `Vec[T]`。
 - 显式 `Vec` 调用（vec-call）：
   - `let xs: Vec[i32] = Vec(); sum(xs);` 直接把最后一个实参当作已构造好的 `Vec[T]`。
+- 双模式一致性：
+  - 对 `fn take[T, const N: i32](head: T, tail: T...) -> T`，`take[i32, 3](7, 8, 9)`（pack-call）与 `take[i32, 3](7, xs)`（vec-call）均可通过。
 - 固定参数 + variadic：
   - 对 `fn f(x: i32, ys: i32...)`，至少需要提供固定参数数量；不足时报
     `wrong number of args: expected at least N, got M`。
