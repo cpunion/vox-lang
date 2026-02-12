@@ -25,7 +25,7 @@ Canonical gate for each item:
    - Acceptance:
      - Add typecheck + compile tests that pin current supported behavior.
      - Eliminate contradictory diagnostics around pack arity/usage.
-4. [ ] Macro pipeline hardening: close remaining fallback ambiguity in `name!(...)` expansion path and improve deterministic diagnostics.
+4. [x] Macro pipeline hardening: close remaining fallback ambiguity in `name!(...)` expansion path and improve deterministic diagnostics.
    - Acceptance:
      - Add macroexpand tests for fallback vs expand decisions.
      - Update macro docs to match implemented behavior exactly.
