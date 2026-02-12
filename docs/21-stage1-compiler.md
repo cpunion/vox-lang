@@ -24,7 +24,7 @@
 说明：
 
 - Stage1 lexer 的 `Token` 不直接携带 `lexeme`，而是携带 `[start,end)` 的 byte offset。解析器需要通过 `source.slice(start, end)` 拉取 token 文本。
-- Stage0/Stage1/Stage2 当前仍使用 `String.slice(start, end) -> String` 作为子串基础操作；切片方向通过标准库 `std/string::StrView`（`owner + lo/hi`）补齐。Stage2 已支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法，但当前在类型层仍按 `T` 过渡语义处理。
+- Stage0/Stage1/Stage2 当前仍使用 `String.slice(start, end) -> String` 作为子串基础操作；切片方向通过标准库 `std/string::StrView`（`owner + lo/hi`）补齐。Stage2 已支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法，但当前在类型层仍按 `T` 过渡语义处理；命名 lifetime（`&'a T`）由 parser 直接拒绝。
 
 当前进度（实现状态以代码为准）：
 

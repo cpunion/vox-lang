@@ -32,6 +32,10 @@ Governance from now on:
   - [ ] A01-2 Heterogeneous type pack binding + true per-position substitution model.
     - [x] A01-2a Allow heterogeneous trailing explicit type args when pack is only a placeholder (not materialized in params/ret/variadic/bounds).
     - [ ] A01-2b True per-position substitution model for materialized heterogeneous packs.
+      - [x] Runtime call, const-eval call, and IRGen all support per-position materialization for params/ret/variadic type slots.
+      - [x] Heterogeneous pack instantiation names are disambiguated (`pack`, `pack__1`, ...), avoiding monomorph collisions.
+      - [ ] Pack projection members (`Pack.N`) in materialization are still unsupported.
+      - [ ] Heterogeneous pack participation in bounds/where clauses is still unsupported.
   - [x] A01-3 Value pack expansion and call-site lowering coherence.
     - Verified by pack-call/vec-call dual-mode tests in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - Source: `docs/06-advanced-generics.md`.

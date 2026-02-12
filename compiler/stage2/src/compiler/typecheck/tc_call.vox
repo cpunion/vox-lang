@@ -107,6 +107,167 @@ fn sig_allows_heterogeneous_pack_args(ctx: Ctx, sig: FuncSig, pack: String) -> b
   return true;
 }
 
+
+struct MaterializePackTyResult {
+  ok: bool,
+  err: String,
+  ty: i32,
+  next: i32,
+}
+
+struct MaterializePackSigResult {
+  ok: bool,
+  err: String,
+  sig: FuncSig,
+}
+
+fn sig_has_pack_in_bounds(sig: FuncSig, pack: String) -> bool {
+  let mut bi: i32 = 0;
+  while bi < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(bi);
+    if type_name_is_pack_member(b.type_param, pack) { return true; }
+    bi = bi + 1;
+  }
+
+  let mut ci: i32 = 0;
+  while ci < sig.const_where_bounds.len() {
+    let b2: ConstWhereBoundSig = sig.const_where_bounds.get(ci);
+    if type_name_is_pack_member(b2.name, pack) { return true; }
+    ci = ci + 1;
+  }
+  return false;
+}
+
+fn find_vec_ty_idx_tc_call(ctx: Ctx, elem: i32) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Vec && t.elem == elem { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn find_range_ty_idx_tc_call(ctx: Ctx, elem: i32, lo: i64, hi: i64) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Range && t.elem == elem && t.lo == lo && t.hi == hi { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn materialize_pack_ty(
+  ctx: Ctx,
+  ty: i32,
+  pack: String,
+  pack_tys: Vec[i32],
+  occ0: i32
+) -> MaterializePackTyResult {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param {
+    if t.name == pack {
+      if occ0 >= pack_tys.len() {
+        return MaterializePackTyResult { ok: false, err: "pack arity mismatch: too many materialized pack positions in signature", ty: ctx.ty_bad, next: occ0 };
+      }
+      return MaterializePackTyResult { ok: true, err: "", ty: pack_tys.get(occ0), next: occ0 + 1 };
+    }
+    if starts_with(t.name, pack.concat(".")) {
+      return MaterializePackTyResult { ok: false, err: "heterogeneous pack materialization does not support projection members yet", ty: ctx.ty_bad, next: occ0 };
+    }
+    return MaterializePackTyResult { ok: true, err: "", ty: ty, next: occ0 };
+  }
+
+  if t.kind == ir.TyKind.Vec {
+    let er: MaterializePackTyResult = materialize_pack_ty(ctx, t.elem, pack, pack_tys, occ0);
+    if !er.ok { return er; }
+    if er.ty == t.elem {
+      return MaterializePackTyResult { ok: true, err: "", ty: ty, next: er.next };
+    }
+    let vidx: i32 = find_vec_ty_idx_tc_call(ctx, er.ty);
+    if vidx == -1 {
+      return MaterializePackTyResult { ok: false, err: "pack materialization produced unknown Vec element type", ty: ctx.ty_bad, next: er.next };
+    }
+    return MaterializePackTyResult { ok: true, err: "", ty: vidx, next: er.next };
+  }
+
+  if t.kind == ir.TyKind.Range {
+    let br: MaterializePackTyResult = materialize_pack_ty(ctx, t.elem, pack, pack_tys, occ0);
+    if !br.ok { return br; }
+    if br.ty == t.elem {
+      return MaterializePackTyResult { ok: true, err: "", ty: ty, next: br.next };
+    }
+    let ridx: i32 = find_range_ty_idx_tc_call(ctx, br.ty, t.lo, t.hi);
+    if ridx == -1 {
+      return MaterializePackTyResult { ok: false, err: "pack materialization produced unknown range base type", ty: ctx.ty_bad, next: br.next };
+    }
+    return MaterializePackTyResult { ok: true, err: "", ty: ridx, next: br.next };
+  }
+
+  return MaterializePackTyResult { ok: true, err: "", ty: ty, next: occ0 };
+}
+
+fn materialize_pack_sig_types(
+  ctx: Ctx,
+  sig: FuncSig,
+  pack: String,
+  pack_tys: Vec[i32]
+) -> MaterializePackSigResult {
+  let mut occ: i32 = 0;
+  let mut ps: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < sig.params.len() {
+    let pr: MaterializePackTyResult = materialize_pack_ty(ctx, sig.params.get(i), pack, pack_tys, occ);
+    if !pr.ok {
+      return MaterializePackSigResult { ok: false, err: pr.err, sig: sig };
+    }
+    ps.push(pr.ty);
+    occ = pr.next;
+    i = i + 1;
+  }
+
+  let rr: MaterializePackTyResult = materialize_pack_ty(ctx, sig.ret, pack, pack_tys, occ);
+  if !rr.ok {
+    return MaterializePackSigResult { ok: false, err: rr.err, sig: sig };
+  }
+  let ret: i32 = rr.ty;
+  occ = rr.next;
+
+  let mut variadic_elem: i32 = sig.variadic_elem;
+  if sig.has_variadic {
+    let vr: MaterializePackTyResult = materialize_pack_ty(ctx, sig.variadic_elem, pack, pack_tys, occ);
+    if !vr.ok {
+      return MaterializePackSigResult { ok: false, err: vr.err, sig: sig };
+    }
+    variadic_elem = vr.ty;
+    occ = vr.next;
+  }
+
+  if occ != pack_tys.len() {
+    let msg: String = "pack arity mismatch: materialized signature positions = "
+      .concat(occ.to_string())
+      .concat(", explicit pack args = ")
+      .concat(pack_tys.len().to_string());
+    return MaterializePackSigResult { ok: false, err: msg, sig: sig };
+  }
+
+  let out: FuncSig = FuncSig {
+    params: ps,
+    ret: ret,
+    has_variadic: sig.has_variadic,
+    variadic_elem: variadic_elem,
+    vis: sig.vis,
+    is_pub: sig.is_pub,
+    type_params: sig.type_params,
+    type_param_packs: sig.type_param_packs,
+    const_params: sig.const_params,
+    type_param_bounds: sig.type_param_bounds,
+    const_where_bounds: sig.const_where_bounds,
+  };
+  return MaterializePackSigResult { ok: true, err: "", sig: out };
+}
+
 fn method_cand_key(mod_path: String, trait_name: String) -> String {
   return mod_path.concat("::").concat(trait_name);
 }
@@ -1032,38 +1193,86 @@ fn tc_call_func_sig(
 
   // Explicit type args win (when provided). For a trailing type-parameter
   // pack, extra explicit type args bind to the pack name.
+  let has_pack: bool = has_type_param_pack(sig);
+  let pack_name: String = if has_pack { sig.type_param_packs.get(0) } else { "" };
+  let mut pack_explicit_tys: Vec[i32] = Vec();
+
   let mut ti: i32 = 0;
   while ti < explicit_targs.len() {
     let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, l0.type_params, explicit_targs.get(ti));
     if !tr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     let tp: String = explicit_type_arg_bind_name(sig, ti);
+    let is_pack_bind: bool = has_pack && tp == pack_name;
+    if is_pack_bind {
+      pack_explicit_tys.push(tr.idx);
+      let cur_pack: i32 = subs_lookup(subs, tp);
+      if cur_pack == -1 { subs.push(TySub { name: tp, ty: tr.idx }); }
+      ti = ti + 1;
+      continue;
+    }
+
     let cur: i32 = subs_lookup(subs, tp);
     if cur != -1 && cur != tr.idx {
-      let is_pack_bind: bool = has_type_param_pack(sig) && tp == sig.type_param_packs.get(0);
-      if is_pack_bind && sig_allows_heterogeneous_pack_args(ctx, sig, tp) {
-        ti = ti + 1;
-        continue;
-      }
       return ExprTyResult {
         ok: false,
         ty: ctx.ty_bad,
-        err: type_error_at(call_sp, "heterogeneous explicit type arguments for type parameter pack are not supported yet"),
+        err: type_error_at(call_sp, "explicit type argument conflicts with inferred type parameter"),
       };
     }
     if cur == -1 { subs.push(TySub { name: tp, ty: tr.idx }); }
     ti = ti + 1;
   }
 
+  let mut sig_use: FuncSig = sig;
+  if has_pack && pack_explicit_tys.len() > 0 {
+    let mut all_same: bool = true;
+    let mut pi: i32 = 1;
+    while pi < pack_explicit_tys.len() {
+      if pack_explicit_tys.get(pi) != pack_explicit_tys.get(0) {
+        all_same = false;
+        pi = pack_explicit_tys.len();
+      } else {
+        pi = pi + 1;
+      }
+    }
+
+    // Keep base pack binding for body-annotation substitution and the existing
+    // bound checks that rely on type-param names.
+    let cur_pack0: i32 = subs_lookup(subs, pack_name);
+    if cur_pack0 == -1 {
+      subs.push(TySub { name: pack_name, ty: pack_explicit_tys.get(0) });
+    } else if cur_pack0 != pack_explicit_tys.get(0) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "explicit pack head type conflicts with inferred return constraint") };
+    }
+
+    if !all_same {
+      if sig_allows_heterogeneous_pack_args(ctx, sig, pack_name) {
+        // Placeholder-only pack usage (A01-2a): keep as-is.
+      } else {
+        if sig_has_pack_in_bounds(sig, pack_name) {
+          return ExprTyResult {
+            ok: false,
+            ty: ctx.ty_bad,
+            err: type_error_at(call_sp, "heterogeneous explicit type arguments for type parameter pack in bounds are not supported yet"),
+          };
+        }
+        let mr: MaterializePackSigResult = materialize_pack_sig_types(ctx, sig, pack_name, pack_explicit_tys);
+        if !mr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, mr.err) }; }
+        sig_use = mr.sig;
+      }
+    }
+  }
+
   // Infer from arguments.
   if !pack_mode {
     let mut i: i32 = 0;
     while i < args.len() {
-      let want0: i32 = subst_ty(ctx, sig.params.get(i), subs);
+      let want0: i32 = subst_ty(ctx, sig_use.params.get(i), subs);
       let want_t: ir.Ty = ir.ty_pool_get(ctx.pool, want0);
       let want: i32 = if want_t.kind == ir.TyKind.Param || ty_has_param(ctx, want0) { -1 } else { want0 };
       let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want);
       if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-      let ur2: UnifyResult = unify_ty(ctx, sig.params.get(i), ar.ty, subs);
+      let ur2: UnifyResult = unify_ty(ctx, sig_use.params.get(i), ar.ty, subs);
       if !ur2.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       subs = ur2.subs;
       i = i + 1;
@@ -1071,24 +1280,24 @@ fn tc_call_func_sig(
   } else {
     let mut i: i32 = 0;
     while i < fixed_n {
-      let want0_fixed: i32 = subst_ty(ctx, sig.params.get(i), subs);
+      let want0_fixed: i32 = subst_ty(ctx, sig_use.params.get(i), subs);
       let want_t_fixed: ir.Ty = ir.ty_pool_get(ctx.pool, want0_fixed);
       let want_fixed: i32 = if want_t_fixed.kind == ir.TyKind.Param || ty_has_param(ctx, want0_fixed) { -1 } else { want0_fixed };
       let arf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want_fixed);
       if !arf.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-      let urf: UnifyResult = unify_ty(ctx, sig.params.get(i), arf.ty, subs);
+      let urf: UnifyResult = unify_ty(ctx, sig_use.params.get(i), arf.ty, subs);
       if !urf.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       subs = urf.subs;
       i = i + 1;
     }
     let mut j: i32 = fixed_n;
     while j < args.len() {
-      let want0_var: i32 = subst_ty(ctx, sig.variadic_elem, subs);
+      let want0_var: i32 = subst_ty(ctx, sig_use.variadic_elem, subs);
       let want_t_var: ir.Ty = ir.ty_pool_get(ctx.pool, want0_var);
       let want_var: i32 = if want_t_var.kind == ir.TyKind.Param || ty_has_param(ctx, want0_var) { -1 } else { want0_var };
       let arv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), want_var);
       if !arv.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-      let urv: UnifyResult = unify_ty(ctx, sig.variadic_elem, arv.ty, subs);
+      let urv: UnifyResult = unify_ty(ctx, sig_use.variadic_elem, arv.ty, subs);
       if !urv.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       subs = urv.subs;
       j = j + 1;
@@ -1097,21 +1306,21 @@ fn tc_call_func_sig(
 
   // Ensure all type params are bound.
   let mut j: i32 = 0;
-  while j < sig.type_params.len() {
-    let tp: String = sig.type_params.get(j);
+  while j < sig_use.type_params.len() {
+    let tp: String = sig_use.type_params.get(j);
     if subs_lookup(subs, tp) == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "cannot infer type argument: ".concat(tp)) }; }
     j = j + 1;
   }
 
   if !has_unresolved_const_arg {
-    let cwr: ConstWhereCheckResult = check_const_where_bounds(ctx, sig.const_where_bounds, subs, csubs);
+    let cwr: ConstWhereCheckResult = check_const_where_bounds(ctx, sig_use.const_where_bounds, subs, csubs);
     if !cwr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, cwr.err) }; }
   }
 
   // Check trait bounds for inferred/explicit type args.
   let mut bi: i32 = 0;
-  while bi < sig.type_param_bounds.len() {
-    let b: TypeParamBoundSig = sig.type_param_bounds.get(bi);
+  while bi < sig_use.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig_use.type_param_bounds.get(bi);
     let ty0: i32 = subs_lookup(subs, b.type_param);
     if ty0 == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     let ty1: i32 = strip_range(ctx, ty0);
@@ -1137,11 +1346,11 @@ fn tc_call_func_sig(
     bi = bi + 1;
   }
 
-  let asr: AssocProjSubsResult = add_assoc_proj_subs(ctx, l0, call_sp, sig, subs);
+  let asr: AssocProjSubsResult = add_assoc_proj_subs(ctx, l0, call_sp, sig_use, subs);
   if !asr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: asr.err }; }
   subs = asr.subs;
 
-  let mut out_ty: i32 = subst_ty(ctx, sig.ret, subs);
+  let mut out_ty: i32 = subst_ty(ctx, sig_use.ret, subs);
   if out_ty == ctx.ty_bad { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   if expected != -1 && !ty_has_param(ctx, expected) && ty_has_param(ctx, out_ty) {
     // Call-site expected type can concretize unresolved generic nominal returns.
