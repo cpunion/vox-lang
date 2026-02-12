@@ -23,7 +23,7 @@
   - 另提供比较 API：`equals`/`equals_vec`（`T: Eq`）、`compare`/`compare_vec`（`T: Ord`）。
 - `std::collections` 还提供最小泛型 `Map[K,V]`（线性实现）：
   - 构造函数：`map[K,V]()`
-  - `MapOps` trait（`impl[K: Eq, V] MapOps for Map[K,V]`）方法：
+  - inherent impl（`impl[K: Eq, V] Map[K,V]`）方法：
     - `len`、`is_empty`、`index_of_key`、`contains_key`
     - `get`、`get_or`（缺失键时返回调用方提供的 fallback）
     - `keys`、`values`（按当前存储顺序返回拷贝）

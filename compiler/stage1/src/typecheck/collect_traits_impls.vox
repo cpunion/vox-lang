@@ -163,6 +163,30 @@ fn fresh_impl_lowered_name(c: Ctx, mod_path: String, ts: TraitSig, method: Strin
   return impl_lowered_name(ts, method, seed);
 }
 
+fn inherent_lowered_name(method: String, nth: i32) -> String {
+  return "impl$inherent$".concat(method).concat("$").concat(nth.to_string());
+}
+
+fn fresh_inherent_lowered_name(c: Ctx, mod_path: String, method: String, seed: i32) -> String {
+  let mut n: i32 = seed;
+  while true {
+    let lowered: String = inherent_lowered_name(method, n);
+    let ex: FindFuncResult = find_func(c, mod_path, lowered);
+    if !ex.found { return lowered; }
+    n = n + 1;
+  }
+  return inherent_lowered_name(method, seed);
+}
+
+fn impl_method_sig_exists(ms: Vec[ImplMethodSig], name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < ms.len() {
+    if ms.get(i).name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn impl_method_decl_name_unique(ds: Vec[ast.FuncDecl], name: String, idx: i32) -> bool {
   let mut i: i32 = 0;
   while i < ds.len() {
@@ -592,12 +616,208 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
     let mut ii: i32 = 0;
     while ii < m.prog.impls.len() {
       let id: ast.ImplDecl = m.prog.impls.get(ii);
-      if id.is_inherent {
-        return TcCtxResult { ok: false, err: type_error_at(id.sp, "inherent impl is not supported in stage1 bootstrap"), ctx: c };
-      }
       let imr: ImportsResult = build_imports(w, m.path, m.prog.imports, id.file);
       if !imr.ok { return TcCtxResult { ok: false, err: imr.err, ctx: c }; }
       let imps: Imports = imr.imps;
+      if id.is_inherent {
+        let mut head_tpbs: Vec[TypeParamBoundSig] = Vec();
+        let mut bi0_inh: i32 = 0;
+        while bi0_inh < id.type_param_bounds.len() {
+          let bdecl0_inh: ast.TypeParamBoundsDecl = id.type_param_bounds.get(bi0_inh);
+          if !contains_str_local(id.type_params, bdecl0_inh.name) {
+            return TcCtxResult { ok: false, err: type_error_at(id.sp, "unknown type param in impl bound: ".concat(bdecl0_inh.name)), ctx: c };
+          }
+          let mut bj0_inh: i32 = 0;
+          while bj0_inh < bdecl0_inh.bounds.len() {
+            let rtr0_inh: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, bdecl0_inh.bounds.get(bj0_inh));
+            if !rtr0_inh.ok { return TcCtxResult { ok: false, err: type_error_at(id.sp, "bad impl type bound"), ctx: c }; }
+            let tf0_inh: FindTraitResult = find_trait(c, rtr0_inh.mod_path, rtr0_inh.name);
+            if !tf0_inh.found { return TcCtxResult { ok: false, err: type_error_at(id.sp, "unknown trait in impl bound"), ctx: c }; }
+            if !vis_allows(tf0_inh.sig.vis, rtr0_inh.mod_path, m.path) {
+              return TcCtxResult { ok: false, err: type_error_at(id.sp, "impl bound refers to private trait"), ctx: c };
+            }
+            if !has_bound_sig(head_tpbs, bdecl0_inh.name, rtr0_inh.mod_path, rtr0_inh.name) {
+              head_tpbs.push(TypeParamBoundSig { type_param: bdecl0_inh.name, trait_mod_path: rtr0_inh.mod_path, trait_name: rtr0_inh.name });
+            }
+            bj0_inh = bj0_inh + 1;
+          }
+          bi0_inh = bi0_inh + 1;
+        }
+
+        let fr_inh: ResolveTyResult = resolve_type(c, w, m.path, imps, id.type_params, id.for_ty);
+        c = fr_inh.ctx;
+        if !fr_inh.ok {
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, "bad impl target type"), ctx: c };
+        }
+        let for_ty_inh: i32 = strip_range(c, fr_inh.idx);
+
+        if id.assoc_types.len() != 0 {
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, "inherent impl does not support associated types"), ctx: c };
+        }
+
+        let mut di_inh: i32 = 0;
+        while di_inh < c.impls.len() {
+          let ds_inh: ImplSig = c.impls.get(di_inh);
+          if ds_inh.is_inherent && impl_for_ty_overlap(c, ds_inh.for_ty, for_ty_inh) {
+            let mut mj_inh: i32 = 0;
+            while mj_inh < id.methods.len() {
+              let mn_inh: String = id.methods.get(mj_inh).name;
+              if impl_method_sig_exists(ds_inh.methods, mn_inh) {
+                let msg_inh: String = "overlapping inherent impl method: ".concat(mn_inh).concat(" for ").concat(ty_inst_str(c, for_ty_inh));
+                return TcCtxResult { ok: false, err: type_error_at(id.sp, msg_inh), ctx: c };
+              }
+              mj_inh = mj_inh + 1;
+            }
+          }
+          di_inh = di_inh + 1;
+        }
+
+        let mut ims_inh: Vec[ImplMethodSig] = Vec();
+        let mut mdi_inh: i32 = 0;
+        while mdi_inh < id.methods.len() {
+          let md_inh: ast.FuncDecl = id.methods.get(mdi_inh);
+          if !impl_method_decl_name_unique(id.methods, md_inh.name, mdi_inh) {
+            return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "duplicate inherent impl method: ".concat(md_inh.name)), ctx: c };
+          }
+
+          let mut hpi_inh: i32 = 0;
+          while hpi_inh < id.type_params.len() {
+            if contains_str_local(md_inh.type_params, id.type_params.get(hpi_inh)) {
+              return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "inherent impl method type param duplicates impl type param"), ctx: c };
+            }
+            hpi_inh = hpi_inh + 1;
+          }
+
+          let mut cps_inh: Vec[ConstParamSig] = Vec();
+          let mut cpi_inh: i32 = 0;
+          while cpi_inh < md_inh.const_params.len() {
+            let cp_inh: ast.ConstParamDecl = md_inh.const_params.get(cpi_inh);
+            if contains_str_local(md_inh.type_params, cp_inh.name) {
+              return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "inherent impl method const param duplicates type param"), ctx: c };
+            }
+            let mut hpi2_inh: i32 = 0;
+            while hpi2_inh < id.type_params.len() {
+              if id.type_params.get(hpi2_inh) == cp_inh.name {
+                return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "inherent impl method const param duplicates impl type param"), ctx: c };
+              }
+              hpi2_inh = hpi2_inh + 1;
+            }
+            let cpr_inh: ResolveTyResult = resolve_type(c, w, m.path, imps, concat_strs(id.type_params, md_inh.type_params), cp_inh.ty);
+            c = cpr_inh.ctx;
+            if !cpr_inh.ok {
+              return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "inherent impl method const param type resolve failed"), ctx: c };
+            }
+            let mut default_iv_inh: i64 = 0;
+            if cp_inh.has_default {
+              let mut dparts_inh: Vec[String] = Vec();
+              dparts_inh.push("@const");
+              dparts_inh.push(cp_inh.default_text);
+              let dpr_inh: ParseConstGenericArgResult = parse_const_generic_arg(c, ast.TypeName { parts: dparts_inh, args: Vec() }, cpr_inh.idx);
+              if !dpr_inh.ok {
+                return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "inherent impl method const param default out of range"), ctx: c };
+              }
+              default_iv_inh = dpr_inh.iv;
+            }
+            cps_inh.push(ConstParamSig {
+              name: cp_inh.name,
+              ty: cpr_inh.idx,
+              has_default: cp_inh.has_default,
+              default_iv: default_iv_inh,
+              default_text: cp_inh.default_text,
+            });
+            cpi_inh = cpi_inh + 1;
+          }
+
+          let mut got_tbs_inh: Vec[TypeParamBoundSig] = Vec();
+          let mut bi_inh: i32 = 0;
+          while bi_inh < md_inh.type_param_bounds.len() {
+            let bdecl_inh: ast.TypeParamBoundsDecl = md_inh.type_param_bounds.get(bi_inh);
+            if !contains_str_local(md_inh.type_params, bdecl_inh.name) {
+              return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "unknown type param in inherent impl method bound: ".concat(bdecl_inh.name)), ctx: c };
+            }
+            let mut bj_inh: i32 = 0;
+            while bj_inh < bdecl_inh.bounds.len() {
+              let rtr_inh: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, bdecl_inh.bounds.get(bj_inh));
+              if !rtr_inh.ok { return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "bad inherent impl method bound"), ctx: c }; }
+              let tf_inh: FindTraitResult = find_trait(c, rtr_inh.mod_path, rtr_inh.name);
+              if !tf_inh.found { return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "unknown trait in inherent impl method bound"), ctx: c }; }
+              if !vis_allows(tf_inh.sig.vis, rtr_inh.mod_path, m.path) {
+                return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "inherent impl method bound refers to private trait"), ctx: c };
+              }
+              if !has_bound_sig(got_tbs_inh, bdecl_inh.name, rtr_inh.mod_path, rtr_inh.name) {
+                got_tbs_inh.push(TypeParamBoundSig { type_param: bdecl_inh.name, trait_mod_path: rtr_inh.mod_path, trait_name: rtr_inh.name });
+              }
+              bj_inh = bj_inh + 1;
+            }
+            bi_inh = bi_inh + 1;
+          }
+
+          let mut ps_inh: Vec[i32] = Vec();
+          let mut pi_inh: i32 = 0;
+          while pi_inh < md_inh.params.len() {
+            let pr_inh: ast.Param = md_inh.params.get(pi_inh);
+            let rr_inh: ResolveTyResult = resolve_type_bound(c, w, m.path, imps, concat_strs(id.type_params, md_inh.type_params), impl_self_assoc_binds(for_ty_inh, Vec()), pr_inh.ty);
+            c = rr_inh.ctx;
+            if !rr_inh.ok {
+              return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "inherent impl method param type resolve failed"), ctx: c };
+            }
+            ps_inh.push(rr_inh.idx);
+            pi_inh = pi_inh + 1;
+          }
+          if ps_inh.len() == 0 {
+            return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "inherent impl method requires receiver parameter"), ctx: c };
+          }
+          if strip_range(c, ps_inh.get(0)) != for_ty_inh {
+            return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "inherent impl method receiver type mismatch"), ctx: c };
+          }
+
+          let ret_inh: ResolveTyResult = resolve_type_bound(c, w, m.path, imps, concat_strs(id.type_params, md_inh.type_params), impl_self_assoc_binds(for_ty_inh, Vec()), md_inh.ret);
+          c = ret_inh.ctx;
+          if !ret_inh.ok {
+            return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "inherent impl method ret type resolve failed"), ctx: c };
+          }
+
+          let cwr_inh: CollectConstWhereResult = collect_const_where_bounds(md_inh.sp, concat_strs(id.type_params, md_inh.type_params), cps_inh, md_inh.const_where_bounds);
+          if !cwr_inh.ok { return TcCtxResult { ok: false, err: cwr_inh.err, ctx: c }; }
+
+          let emit_inh: FuncSig = FuncSig {
+            params: ps_inh,
+            ret: ret_inh.idx,
+            vis: ast.vis_private(),
+            is_pub: false,
+            type_params: concat_strs(id.type_params, md_inh.type_params),
+            const_params: cps_inh,
+            type_param_bounds: concat_bounds(head_tpbs, got_tbs_inh),
+            const_where_bounds: cwr_inh.bounds,
+          };
+          let lowered_inh: String = fresh_inherent_lowered_name(c, m.path, md_inh.name, c.impls.len() * 1000 + mdi_inh);
+          c.funcs.push(FuncSym { mod_path: m.path, name: lowered_inh, sig: emit_inh });
+          ims_inh.push(ImplMethodSig {
+            name: md_inh.name,
+            lowered_name: lowered_inh,
+            sig: emit_inh,
+            from_default: false,
+            default_mod_path: "",
+            default_file: "",
+            default_params: Vec(),
+            default_body: ast.Block { stmts: Vec() },
+          });
+          mdi_inh = mdi_inh + 1;
+        }
+
+        c.impls.push(ImplSig {
+          mod_path: m.path,
+          decl_idx: ii,
+          is_inherent: true,
+          trait_mod_path: "",
+          trait_name: "",
+          for_ty: for_ty_inh,
+          assoc_types: Vec(),
+          methods: ims_inh,
+        });
+        ii = ii + 1;
+        continue;
+      }
 
       let trr: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, id.trait_name);
       if !trr.ok {
@@ -910,6 +1130,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
       c.impls.push(ImplSig {
         mod_path: m.path,
         decl_idx: ii,
+        is_inherent: false,
         trait_mod_path: trr.mod_path,
         trait_name: trr.name,
         for_ty: for_ty,
@@ -925,6 +1146,10 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
   let mut ii2: i32 = 0;
   while ii2 < c.impls.len() {
     let isg: ImplSig = c.impls.get(ii2);
+    if isg.is_inherent {
+      ii2 = ii2 + 1;
+      continue;
+    }
     let tf2: FindTraitResult = find_trait(c, isg.trait_mod_path, isg.trait_name);
     if !tf2.found {
       return TcCtxResult { ok: false, err: type_error_at(impl_decl_span(w, isg.mod_path, isg.decl_idx), "unknown trait in impl"), ctx: c };
