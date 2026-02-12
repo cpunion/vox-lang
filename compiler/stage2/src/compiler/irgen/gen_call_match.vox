@@ -1508,155 +1508,6 @@ fn gen_sig_allows_heterogeneous_pack_args(ctx: tc.Ctx, sig: tc.FuncSig, pack: St
 }
 
 
-struct GenMaterializePackTyResult {
-  ok: bool,
-  err: String,
-  ty: i32,
-  next: i32,
-}
-
-struct GenMaterializePackSigResult {
-  ok: bool,
-  err: String,
-  sig: tc.FuncSig,
-}
-
-fn gen_sig_has_pack_in_bounds(sig: tc.FuncSig, pack: String) -> bool {
-  let mut bi: i32 = 0;
-  while bi < sig.type_param_bounds.len() {
-    let b: tc.TypeParamBoundSig = sig.type_param_bounds.get(bi);
-    if gen_type_name_is_pack_member(b.type_param, pack) { return true; }
-    bi = bi + 1;
-  }
-
-  let mut ci: i32 = 0;
-  while ci < sig.const_where_bounds.len() {
-    let b2: tc.ConstWhereBoundSig = sig.const_where_bounds.get(ci);
-    if gen_type_name_is_pack_member(b2.name, pack) { return true; }
-    ci = ci + 1;
-  }
-  return false;
-}
-
-fn gen_find_vec_ty_idx(ctx: tc.Ctx, elem: i32) -> i32 {
-  let mut i: i32 = 0;
-  while i < ctx.pool.tys.len() {
-    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
-    if t.kind == ir.TyKind.Vec && t.elem == elem { return i; }
-    i = i + 1;
-  }
-  return -1;
-}
-
-fn gen_find_range_ty_idx(ctx: tc.Ctx, elem: i32, lo: i64, hi: i64) -> i32 {
-  let mut i: i32 = 0;
-  while i < ctx.pool.tys.len() {
-    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
-    if t.kind == ir.TyKind.Range && t.elem == elem && t.lo == lo && t.hi == hi { return i; }
-    i = i + 1;
-  }
-  return -1;
-}
-
-fn gen_materialize_pack_ty(
-  ctx: tc.Ctx,
-  ty: i32,
-  pack: String,
-  pack_tys: Vec[i32],
-  occ0: i32
-) -> GenMaterializePackTyResult {
-  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
-  if t.kind == ir.TyKind.Param {
-    if t.name == pack {
-      if occ0 >= pack_tys.len() {
-        return GenMaterializePackTyResult { ok: false, err: "pack arity mismatch: too many materialized pack positions in signature", ty: ctx.ty_bad, next: occ0 };
-      }
-      return GenMaterializePackTyResult { ok: true, err: "", ty: pack_tys.get(occ0), next: occ0 + 1 };
-    }
-    if starts_with(t.name, pack.concat(".")) {
-      return GenMaterializePackTyResult { ok: false, err: "heterogeneous pack materialization does not support projection members yet", ty: ctx.ty_bad, next: occ0 };
-    }
-    return GenMaterializePackTyResult { ok: true, err: "", ty: ty, next: occ0 };
-  }
-
-  if t.kind == ir.TyKind.Vec {
-    let er: GenMaterializePackTyResult = gen_materialize_pack_ty(ctx, t.elem, pack, pack_tys, occ0);
-    if !er.ok { return er; }
-    if er.ty == t.elem { return GenMaterializePackTyResult { ok: true, err: "", ty: ty, next: er.next }; }
-    let vidx: i32 = gen_find_vec_ty_idx(ctx, er.ty);
-    if vidx == -1 {
-      return GenMaterializePackTyResult { ok: false, err: "pack materialization produced unknown Vec element type", ty: ctx.ty_bad, next: er.next };
-    }
-    return GenMaterializePackTyResult { ok: true, err: "", ty: vidx, next: er.next };
-  }
-
-  if t.kind == ir.TyKind.Range {
-    let br: GenMaterializePackTyResult = gen_materialize_pack_ty(ctx, t.elem, pack, pack_tys, occ0);
-    if !br.ok { return br; }
-    if br.ty == t.elem { return GenMaterializePackTyResult { ok: true, err: "", ty: ty, next: br.next }; }
-    let ridx: i32 = gen_find_range_ty_idx(ctx, br.ty, t.lo, t.hi);
-    if ridx == -1 {
-      return GenMaterializePackTyResult { ok: false, err: "pack materialization produced unknown range base type", ty: ctx.ty_bad, next: br.next };
-    }
-    return GenMaterializePackTyResult { ok: true, err: "", ty: ridx, next: br.next };
-  }
-
-  return GenMaterializePackTyResult { ok: true, err: "", ty: ty, next: occ0 };
-}
-
-fn gen_materialize_pack_sig_types(
-  ctx: tc.Ctx,
-  sig: tc.FuncSig,
-  pack: String,
-  pack_tys: Vec[i32]
-) -> GenMaterializePackSigResult {
-  let mut occ: i32 = 0;
-  let mut ps: Vec[i32] = Vec();
-  let mut i: i32 = 0;
-  while i < sig.params.len() {
-    let pr: GenMaterializePackTyResult = gen_materialize_pack_ty(ctx, sig.params.get(i), pack, pack_tys, occ);
-    if !pr.ok { return GenMaterializePackSigResult { ok: false, err: pr.err, sig: sig }; }
-    ps.push(pr.ty);
-    occ = pr.next;
-    i = i + 1;
-  }
-
-  let rr: GenMaterializePackTyResult = gen_materialize_pack_ty(ctx, sig.ret, pack, pack_tys, occ);
-  if !rr.ok { return GenMaterializePackSigResult { ok: false, err: rr.err, sig: sig }; }
-  let ret: i32 = rr.ty;
-  occ = rr.next;
-
-  let mut variadic_elem: i32 = sig.variadic_elem;
-  if sig.has_variadic {
-    let vr: GenMaterializePackTyResult = gen_materialize_pack_ty(ctx, sig.variadic_elem, pack, pack_tys, occ);
-    if !vr.ok { return GenMaterializePackSigResult { ok: false, err: vr.err, sig: sig }; }
-    variadic_elem = vr.ty;
-    occ = vr.next;
-  }
-
-  if occ != pack_tys.len() {
-    let msg: String = "pack arity mismatch: materialized signature positions = "
-      .concat(occ.to_string())
-      .concat(", explicit pack args = ")
-      .concat(pack_tys.len().to_string());
-    return GenMaterializePackSigResult { ok: false, err: msg, sig: sig };
-  }
-
-  let out: tc.FuncSig = tc.FuncSig {
-    params: ps,
-    ret: ret,
-    has_variadic: sig.has_variadic,
-    variadic_elem: variadic_elem,
-    vis: sig.vis,
-    is_pub: sig.is_pub,
-    type_params: sig.type_params,
-    type_param_packs: sig.type_param_packs,
-    const_params: sig.const_params,
-    type_param_bounds: sig.type_param_bounds,
-    const_where_bounds: sig.const_where_bounds,
-  };
-  return GenMaterializePackSigResult { ok: true, err: "", sig: out };
-}
 
 struct GenVariadicPackResult { ok: bool, err: String, g: Gen, val: ir.Value }
 
@@ -1890,14 +1741,13 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
       return GenExprResult { ok: false, err: "explicit pack head type conflicts with inferred return constraint", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
     }
 
+    subs = tc.append_pack_alias_subs(subs, pack_name, pack_explicit_tys);
+
     if !all_same {
       if gen_sig_allows_heterogeneous_pack_args(g.ctx, sig, pack_name) {
         // Placeholder-only pack usage (A01-2a): keep as-is.
       } else {
-        if gen_sig_has_pack_in_bounds(sig, pack_name) {
-          return GenExprResult { ok: false, err: "heterogeneous explicit type arguments for type parameter pack in bounds are not supported yet", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
-        }
-        let mr: GenMaterializePackSigResult = gen_materialize_pack_sig_types(g.ctx, sig, pack_name, pack_explicit_tys);
+        let mr: tc.MaterializePackSigResult = tc.materialize_pack_sig_types(g.ctx, sig, pack_name, pack_explicit_tys);
         if !mr.ok { return GenExprResult { ok: false, err: mr.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
         sig_use = mr.sig;
         materialized_pack_hetero = true;

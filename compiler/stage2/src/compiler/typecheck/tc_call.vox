@@ -115,29 +115,319 @@ struct MaterializePackTyResult {
   next: i32,
 }
 
-struct MaterializePackSigResult {
+pub struct MaterializePackSigResult {
+  pub ok: bool,
+  pub err: String,
+  pub sig: FuncSig,
+}
+
+struct ParsePackIndexResult {
   ok: bool,
   err: String,
-  sig: FuncSig,
+  idx: i32,
 }
 
-fn sig_has_pack_in_bounds(sig: FuncSig, pack: String) -> bool {
-  let mut bi: i32 = 0;
-  while bi < sig.type_param_bounds.len() {
-    let b: TypeParamBoundSig = sig.type_param_bounds.get(bi);
-    if type_name_is_pack_member(b.type_param, pack) { return true; }
-    bi = bi + 1;
-  }
-
-  let mut ci: i32 = 0;
-  while ci < sig.const_where_bounds.len() {
-    let b2: ConstWhereBoundSig = sig.const_where_bounds.get(ci);
-    if type_name_is_pack_member(b2.name, pack) { return true; }
-    ci = ci + 1;
-  }
-  return false;
+struct PackMemberDecodeResult {
+  ok: bool,
+  err: String,
+  matched: bool,
+  is_all: bool,
+  idx: i32,
 }
 
+struct ExpandPackMemberNamesResult {
+  ok: bool,
+  err: String,
+  matched: bool,
+  is_all: bool,
+  names: Vec[String],
+}
+
+struct DecodeCwReflectRhsResult {
+  ok: bool,
+  err: String,
+  is_reflect: bool,
+  tag: String,
+  name: String,
+}
+
+struct RemapCwReflectRhsResult {
+  ok: bool,
+  err: String,
+  rhs_param: String,
+}
+
+struct MaterializeTypeParamBoundsResult {
+  ok: bool,
+  err: String,
+  bounds: Vec[TypeParamBoundSig],
+}
+
+struct MaterializeConstWhereBoundsResult {
+  ok: bool,
+  err: String,
+  bounds: Vec[ConstWhereBoundSig],
+}
+
+fn pack_elem_alias_name(pack: String, idx: i32) -> String {
+  if idx == 0 { return pack; }
+  return pack.concat("__").concat(idx.to_string());
+}
+
+fn parse_pack_index_text(s: String) -> ParsePackIndexResult {
+  if s.len() == 0 {
+    return ParsePackIndexResult { ok: false, err: "pack projection index is empty", idx: 0 };
+  }
+  let mut i: i32 = 0;
+  let mut v: i32 = 0;
+  while i < s.len() {
+    let b: i32 = s.byte_at(i);
+    if b < 48 || b > 57 {
+      return ParsePackIndexResult { ok: false, err: "pack projection index must be a decimal integer", idx: 0 };
+    }
+    let d: i32 = b - 48;
+    if v > 214748364 {
+      return ParsePackIndexResult { ok: false, err: "pack projection index overflows i32", idx: 0 };
+    }
+    v = v * 10 + d;
+    if v < 0 {
+      return ParsePackIndexResult { ok: false, err: "pack projection index overflows i32", idx: 0 };
+    }
+    i = i + 1;
+  }
+  return ParsePackIndexResult { ok: true, err: "", idx: v };
+}
+
+fn decode_pack_member(name: String, pack: String) -> PackMemberDecodeResult {
+  if name == pack {
+    return PackMemberDecodeResult { ok: true, err: "", matched: true, is_all: true, idx: -1 };
+  }
+  let pfx: String = pack.concat(".");
+  if name.len() <= pfx.len() || name.slice(0, pfx.len()) != pfx {
+    return PackMemberDecodeResult { ok: true, err: "", matched: false, is_all: false, idx: -1 };
+  }
+  let suf: String = name.slice(pfx.len(), name.len());
+  let pr: ParsePackIndexResult = parse_pack_index_text(suf);
+  if !pr.ok {
+    return PackMemberDecodeResult { ok: false, err: pr.err, matched: true, is_all: false, idx: -1 };
+  }
+  return PackMemberDecodeResult { ok: true, err: "", matched: true, is_all: false, idx: pr.idx };
+}
+
+fn expand_pack_member_names(name: String, pack: String, pack_tys: Vec[i32], idx_for_all: i32) -> ExpandPackMemberNamesResult {
+  let dr: PackMemberDecodeResult = decode_pack_member(name, pack);
+  if !dr.ok {
+    return ExpandPackMemberNamesResult { ok: false, err: dr.err, matched: true, is_all: false, names: Vec() };
+  }
+  let mut out: Vec[String] = Vec();
+  if !dr.matched {
+    out.push(name);
+    return ExpandPackMemberNamesResult { ok: true, err: "", matched: false, is_all: false, names: out };
+  }
+
+  if dr.is_all {
+    if idx_for_all >= 0 {
+      if idx_for_all >= pack_tys.len() {
+        return ExpandPackMemberNamesResult { ok: false, err: "pack projection index out of range", matched: true, is_all: true, names: out };
+      }
+      out.push(pack_elem_alias_name(pack, idx_for_all));
+      return ExpandPackMemberNamesResult { ok: true, err: "", matched: true, is_all: true, names: out };
+    }
+    let mut i: i32 = 0;
+    while i < pack_tys.len() {
+      out.push(pack_elem_alias_name(pack, i));
+      i = i + 1;
+    }
+    return ExpandPackMemberNamesResult { ok: true, err: "", matched: true, is_all: true, names: out };
+  }
+
+  if dr.idx < 0 || dr.idx >= pack_tys.len() {
+    return ExpandPackMemberNamesResult { ok: false, err: "pack projection index out of range", matched: true, is_all: false, names: out };
+  }
+  out.push(pack_elem_alias_name(pack, dr.idx));
+  return ExpandPackMemberNamesResult { ok: true, err: "", matched: true, is_all: false, names: out };
+}
+
+fn decode_cw_reflect_rhs(rhs_param: String) -> DecodeCwReflectRhsResult {
+  let pfx: String = "__cwref__:";
+  if rhs_param.len() <= pfx.len() || rhs_param.slice(0, pfx.len()) != pfx {
+    return DecodeCwReflectRhsResult { ok: true, err: "", is_reflect: false, tag: "", name: "" };
+  }
+  let rest: String = rhs_param.slice(pfx.len(), rhs_param.len());
+  let mut cut: i32 = -1;
+  let mut i: i32 = 0;
+  while i < rest.len() {
+    if rest.byte_at(i) == 58 {
+      cut = i;
+      i = rest.len();
+    } else {
+      i = i + 1;
+    }
+  }
+  if cut <= 0 || cut + 1 >= rest.len() {
+    return DecodeCwReflectRhsResult { ok: false, err: "invalid comptime where rhs reflect encoding", is_reflect: true, tag: "", name: "" };
+  }
+  let tag: String = rest.slice(0, cut);
+  let name: String = rest.slice(cut + 1, rest.len());
+  return DecodeCwReflectRhsResult { ok: true, err: "", is_reflect: true, tag: tag, name: name };
+}
+
+fn remap_cw_reflect_rhs(rhs_param: String, pack: String, pack_tys: Vec[i32], idx_for_all: i32) -> RemapCwReflectRhsResult {
+  let dr: DecodeCwReflectRhsResult = decode_cw_reflect_rhs(rhs_param);
+  if !dr.ok {
+    return RemapCwReflectRhsResult { ok: false, err: dr.err, rhs_param: "" };
+  }
+  if !dr.is_reflect {
+    return RemapCwReflectRhsResult { ok: true, err: "", rhs_param: rhs_param };
+  }
+
+  let er: ExpandPackMemberNamesResult = expand_pack_member_names(dr.name, pack, pack_tys, idx_for_all);
+  if !er.ok {
+    return RemapCwReflectRhsResult { ok: false, err: er.err, rhs_param: "" };
+  }
+  if er.names.len() != 1 {
+    return RemapCwReflectRhsResult { ok: false, err: "comptime where rhs pack projection requires a concrete index context", rhs_param: "" };
+  }
+  let out: String = "__cwref__:".concat(dr.tag).concat(":").concat(er.names.get(0));
+  return RemapCwReflectRhsResult { ok: true, err: "", rhs_param: out };
+}
+
+fn materialize_type_param_bounds(sig: FuncSig, pack: String, pack_tys: Vec[i32]) -> MaterializeTypeParamBoundsResult {
+  let mut out: Vec[TypeParamBoundSig] = Vec();
+  let mut i: i32 = 0;
+  while i < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(i);
+    let er: ExpandPackMemberNamesResult = expand_pack_member_names(b.type_param, pack, pack_tys, -1);
+    if !er.ok {
+      return MaterializeTypeParamBoundsResult { ok: false, err: er.err, bounds: out };
+    }
+    let mut j: i32 = 0;
+    while j < er.names.len() {
+      out.push(TypeParamBoundSig {
+        type_param: er.names.get(j),
+        trait_mod_path: b.trait_mod_path,
+        trait_name: b.trait_name,
+      });
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return MaterializeTypeParamBoundsResult { ok: true, err: "", bounds: out };
+}
+
+fn materialize_const_where_bounds(sig: FuncSig, pack: String, pack_tys: Vec[i32]) -> MaterializeConstWhereBoundsResult {
+  let mut out: Vec[ConstWhereBoundSig] = Vec();
+  let mut i: i32 = 0;
+  while i < sig.const_where_bounds.len() {
+    let b: ConstWhereBoundSig = sig.const_where_bounds.get(i);
+    let lhs_is_type: bool =
+      b.lhs_kind == ast.comptime_where_lhs_size_of() ||
+      b.lhs_kind == ast.comptime_where_lhs_align_of() ||
+      b.lhs_kind == ast.comptime_where_lhs_field_count() ||
+      b.lhs_kind == ast.comptime_where_lhs_type();
+
+    let lhs_dr: PackMemberDecodeResult =
+      if lhs_is_type {
+        decode_pack_member(b.name, pack)
+      } else {
+        PackMemberDecodeResult { ok: true, err: "", matched: false, is_all: false, idx: -1 }
+      };
+    if !lhs_dr.ok {
+      return MaterializeConstWhereBoundsResult { ok: false, err: lhs_dr.err, bounds: out };
+    }
+
+    let rhs_ref: DecodeCwReflectRhsResult =
+      if b.rhs_is_param {
+        decode_cw_reflect_rhs(b.rhs_param)
+      } else {
+        DecodeCwReflectRhsResult { ok: true, err: "", is_reflect: false, tag: "", name: "" }
+      };
+    if !rhs_ref.ok {
+      return MaterializeConstWhereBoundsResult { ok: false, err: rhs_ref.err, bounds: out };
+    }
+    let rhs_dr: PackMemberDecodeResult =
+      if rhs_ref.is_reflect {
+        decode_pack_member(rhs_ref.name, pack)
+      } else {
+        PackMemberDecodeResult { ok: true, err: "", matched: false, is_all: false, idx: -1 }
+      };
+    if !rhs_dr.ok {
+      return MaterializeConstWhereBoundsResult { ok: false, err: rhs_dr.err, bounds: out };
+    }
+
+    let mut indices: Vec[i32] = Vec();
+    if lhs_is_type && lhs_dr.matched {
+      if lhs_dr.is_all {
+        let mut pi: i32 = 0;
+        while pi < pack_tys.len() {
+          indices.push(pi);
+          pi = pi + 1;
+        }
+      } else {
+        if lhs_dr.idx < 0 || lhs_dr.idx >= pack_tys.len() {
+          return MaterializeConstWhereBoundsResult { ok: false, err: "pack projection index out of range", bounds: out };
+        }
+        indices.push(lhs_dr.idx);
+      }
+    } else if rhs_dr.matched && rhs_dr.is_all {
+      let mut ri: i32 = 0;
+      while ri < pack_tys.len() {
+        indices.push(ri);
+        ri = ri + 1;
+      }
+    } else {
+      indices.push(-1);
+    }
+
+    let mut k: i32 = 0;
+    while k < indices.len() {
+      let idx_sel: i32 = indices.get(k);
+      let lhs_name: String =
+        if lhs_is_type && lhs_dr.matched {
+          if idx_sel < 0 {
+            return MaterializeConstWhereBoundsResult { ok: false, err: "comptime where lhs pack projection requires a concrete index context", bounds: out };
+          }
+          pack_elem_alias_name(pack, idx_sel)
+        } else {
+          b.name
+        };
+      let mut rhs_param2: String = b.rhs_param;
+      if b.rhs_is_param {
+        let rr: RemapCwReflectRhsResult = remap_cw_reflect_rhs(b.rhs_param, pack, pack_tys, idx_sel);
+        if !rr.ok {
+          return MaterializeConstWhereBoundsResult { ok: false, err: rr.err, bounds: out };
+        }
+        rhs_param2 = rr.rhs_param;
+      }
+      out.push(ConstWhereBoundSig {
+        lhs_kind: b.lhs_kind,
+        name: lhs_name,
+        op: b.op,
+        rhs_is_param: b.rhs_is_param,
+        rhs_param: rhs_param2,
+        rhs_iv: b.rhs_iv,
+        rhs_text: b.rhs_text,
+      });
+      k = k + 1;
+    }
+    i = i + 1;
+  }
+  return MaterializeConstWhereBoundsResult { ok: true, err: "", bounds: out };
+}
+
+pub fn append_pack_alias_subs(subs0: Vec[TySub], pack: String, pack_tys: Vec[i32]) -> Vec[TySub] {
+  let mut subs: Vec[TySub] = subs0;
+  let mut i: i32 = 0;
+  while i < pack_tys.len() {
+    let nm: String = pack_elem_alias_name(pack, i);
+    let cur: i32 = subs_lookup(subs, nm);
+    if cur == -1 {
+      subs.push(TySub { name: nm, ty: pack_tys.get(i) });
+    }
+    i = i + 1;
+  }
+  return subs;
+}
 fn find_vec_ty_idx_tc_call(ctx: Ctx, elem: i32) -> i32 {
   let mut i: i32 = 0;
   while i < ctx.pool.tys.len() {
@@ -167,14 +457,28 @@ fn materialize_pack_ty(
 ) -> MaterializePackTyResult {
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
   if t.kind == ir.TyKind.Param {
-    if t.name == pack {
-      if occ0 >= pack_tys.len() {
-        return MaterializePackTyResult { ok: false, err: "pack arity mismatch: too many materialized pack positions in signature", ty: ctx.ty_bad, next: occ0 };
-      }
-      return MaterializePackTyResult { ok: true, err: "", ty: pack_tys.get(occ0), next: occ0 + 1 };
+    let er: ExpandPackMemberNamesResult = expand_pack_member_names(t.name, pack, pack_tys, occ0);
+    if !er.ok {
+      return MaterializePackTyResult { ok: false, err: er.err, ty: ctx.ty_bad, next: occ0 };
     }
-    if starts_with(t.name, pack.concat(".")) {
-      return MaterializePackTyResult { ok: false, err: "heterogeneous pack materialization does not support projection members yet", ty: ctx.ty_bad, next: occ0 };
+    if er.matched {
+      if er.is_all {
+        if er.names.len() != 1 {
+          return MaterializePackTyResult { ok: false, err: "pack arity mismatch: materialized type slot needs a concrete pack element", ty: ctx.ty_bad, next: occ0 };
+        }
+        if occ0 >= pack_tys.len() {
+          return MaterializePackTyResult { ok: false, err: "pack arity mismatch: too many materialized pack positions in signature", ty: ctx.ty_bad, next: occ0 };
+        }
+        return MaterializePackTyResult { ok: true, err: "", ty: pack_tys.get(occ0), next: occ0 + 1 };
+      }
+      if er.names.len() != 1 {
+        return MaterializePackTyResult { ok: false, err: "pack projection materialization must resolve to one type", ty: ctx.ty_bad, next: occ0 };
+      }
+      let dr: PackMemberDecodeResult = decode_pack_member(t.name, pack);
+      if !dr.ok || !dr.matched || dr.is_all {
+        return MaterializePackTyResult { ok: false, err: "invalid pack projection materialization", ty: ctx.ty_bad, next: occ0 };
+      }
+      return MaterializePackTyResult { ok: true, err: "", ty: pack_tys.get(dr.idx), next: occ0 };
     }
     return MaterializePackTyResult { ok: true, err: "", ty: ty, next: occ0 };
   }
@@ -208,7 +512,7 @@ fn materialize_pack_ty(
   return MaterializePackTyResult { ok: true, err: "", ty: ty, next: occ0 };
 }
 
-fn materialize_pack_sig_types(
+pub fn materialize_pack_sig_types(
   ctx: Ctx,
   sig: FuncSig,
   pack: String,
@@ -251,6 +555,14 @@ fn materialize_pack_sig_types(
       .concat(pack_tys.len().to_string());
     return MaterializePackSigResult { ok: false, err: msg, sig: sig };
   }
+  let tbr: MaterializeTypeParamBoundsResult = materialize_type_param_bounds(sig, pack, pack_tys);
+  if !tbr.ok {
+    return MaterializePackSigResult { ok: false, err: tbr.err, sig: sig };
+  }
+  let cwr: MaterializeConstWhereBoundsResult = materialize_const_where_bounds(sig, pack, pack_tys);
+  if !cwr.ok {
+    return MaterializePackSigResult { ok: false, err: cwr.err, sig: sig };
+  }
 
   let out: FuncSig = FuncSig {
     params: ps,
@@ -262,8 +574,8 @@ fn materialize_pack_sig_types(
     type_params: sig.type_params,
     type_param_packs: sig.type_param_packs,
     const_params: sig.const_params,
-    type_param_bounds: sig.type_param_bounds,
-    const_where_bounds: sig.const_where_bounds,
+    type_param_bounds: tbr.bounds,
+    const_where_bounds: cwr.bounds,
   };
   return MaterializePackSigResult { ok: true, err: "", sig: out };
 }
@@ -1244,18 +1556,12 @@ fn tc_call_func_sig(
     } else if cur_pack0 != pack_explicit_tys.get(0) {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "explicit pack head type conflicts with inferred return constraint") };
     }
+    subs = append_pack_alias_subs(subs, pack_name, pack_explicit_tys);
 
     if !all_same {
       if sig_allows_heterogeneous_pack_args(ctx, sig, pack_name) {
         // Placeholder-only pack usage (A01-2a): keep as-is.
       } else {
-        if sig_has_pack_in_bounds(sig, pack_name) {
-          return ExprTyResult {
-            ok: false,
-            ty: ctx.ty_bad,
-            err: type_error_at(call_sp, "heterogeneous explicit type arguments for type parameter pack in bounds are not supported yet"),
-          };
-        }
         let mr: MaterializePackSigResult = materialize_pack_sig_types(ctx, sig, pack_name, pack_explicit_tys);
         if !mr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, mr.err) }; }
         sig_use = mr.sig;
