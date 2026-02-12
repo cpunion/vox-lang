@@ -253,6 +253,9 @@ fn collect_type_aliases(ctx: Ctx, w: World) -> TcCtxResult {
       if is_reserved_intrinsic_name(td.name) {
         return TcCtxResult { ok: false, err: type_error_at(td.sp, "reserved name: ".concat(td.name)), ctx: c };
       }
+      if tn_has_nonstatic_borrow(td.ty) {
+        return TcCtxResult { ok: false, err: type_error_at(td.sp, "non-static borrowed type is not allowed in type alias"), ctx: c };
+      }
       let qn: String = alias_qname(m.path, td.name);
       if contains_str_local(seen, qn) {
         return TcCtxResult { ok: false, err: type_error_at(td.sp, "duplicate type alias: ".concat(td.name)), ctx: c };
@@ -306,6 +309,9 @@ fn collect_structs(ctx: Ctx, w: World) -> TcCtxResult {
       let mut fi: i32 = 0;
       while fi < sd.fields.len() {
         let fd: ast.FieldDecl = sd.fields.get(fi);
+        if tn_has_nonstatic_borrow(fd.ty) {
+          return TcCtxResult { ok: false, err: type_error_at(sd.sp, "non-static borrowed type is not allowed in struct field"), ctx: c };
+        }
           let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), fd.ty);
           c = rr.ctx;
           if !rr.ok {
@@ -360,6 +366,9 @@ fn collect_enums(ctx: Ctx, w: World) -> TcCtxResult {
         let mut ftys: Vec[i32] = Vec();
         let mut fi: i32 = 0;
         while fi < vd.fields.len() {
+          if tn_has_nonstatic_borrow(vd.fields.get(fi)) {
+            return TcCtxResult { ok: false, err: type_error_at(ed.sp, "non-static borrowed type is not allowed in enum variant"), ctx: c };
+          }
           let tr: ResolveTyResult = resolve_type(c, w, m.path, imps, Vec(), vd.fields.get(fi));
           c = tr.ctx;
           if !tr.ok {
@@ -1219,6 +1228,9 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
         let pr: ast.Param = fd.params.get(pi);
         let nr: NormalizeParamTypeResult = normalize_param_type(fd.sp, fd.params, pi, pr.ty);
         if !nr.ok { return TcCtxResult { ok: false, err: nr.err, ctx: c }; }
+        if !tn_nonstatic_borrow_allowed_param_type(nr.ty) {
+          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "non-static borrowed type in parameter must be top-level &T or &mut T"), ctx: c };
+        }
         let tr: ResolveTyResult = resolve_type(c, w, m.path, imps, fd.type_params, nr.ty);
         c = tr.ctx;
         if !tr.ok {
@@ -1226,6 +1238,9 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
         }
         ps.push(tr.idx);
         pi = pi + 1;
+      }
+      if tn_has_nonstatic_borrow(fd.ret) {
+        return TcCtxResult { ok: false, err: type_error_at(fd.sp, "non-static borrowed type is not allowed in return type"), ctx: c };
       }
       let rr: ResolveTyResult = resolve_type(c, w, m.path, imps, fd.type_params, fd.ret);
       c = rr.ctx;
