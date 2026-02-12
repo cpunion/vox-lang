@@ -17,6 +17,18 @@
 
 冻结并不意味着不测试：`Stage0/Stage1` 仍保持强门禁，确保 `Stage2` 迭代不会破坏 bootstrap 链路与兼容性基线。
 
+## 自举收敛原则（避免无限 StageN 与长期退化）
+
+- 编译器阶段固定为 `Stage0 -> Stage1 -> Stage2`。`Stage3` 仅指工具链，不再新增编译器阶段编号。
+- `Stage1` 采用“特性冻结、兼容修复开放”：只有在 `stage1 -> stage2` 引导链路被阻断时，才允许最小修复进入 Stage1。
+- `Stage2` 新特性采用“两步落地”策略：
+  1. 先在 Stage2 编译器实现并完成测试（parser/typecheck/irgen/codegen）。
+  2. 仅当 `make test-stage2-tests` 通过后，才允许 Stage2 自身源码（含 `src/std/**`）使用该特性。
+- 对自举兼容写法（workaround）必须记录“退出条件”：
+  - 记录位置：`docs/21-stage1-compiler.md` 的“当前补充”或对应 backlog。
+  - 退出条件必须可测试（例如补齐能力后通过 `test-stage2-tests`）。
+- 当前实例：`src/std/collections/map.vox` 为保持 Stage1 引导稳定，暂用 bootstrap-safe 写法（不依赖 `Vec.set/remove/insert` 与局部 `Map[K,V]` let 注解）。当 Stage1 补齐相关能力后，再切换为更直接实现并删除兼容层。
+
 推荐日常命令：
 
 - `make test-active`：冻结维护期的主线门禁（`stage0` 单测 + `stage1 -> stage2` 引导链路 + `stage2` 自测套件）。

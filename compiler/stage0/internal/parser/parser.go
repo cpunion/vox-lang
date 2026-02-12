@@ -549,9 +549,17 @@ func (p *Parser) parseIgnoredAssocTypeDeclAfterType(where string) {
 
 func (p *Parser) parseImplDecl() *ast.ImplDecl {
 	startTok := p.prev() // `impl`
-	traitTy := p.parseType()
-	p.expect(lexer.TokenFor, "expected `for` in impl declaration")
-	forTy := p.parseType()
+	// Stage0 compatibility parse:
+	// - impl Trait for Type { ... }
+	// - impl[T] Type { ... }   (inherent impl)
+	_ = p.parseOptionalTypeParams()
+	headTy := p.parseType()
+	var traitTy ast.Type
+	forTy := headTy
+	if p.match(lexer.TokenFor) {
+		traitTy = headTy
+		forTy = p.parseType()
+	}
 	lbrace := p.expect(lexer.TokenLBrace, "expected `{` after impl header")
 	if lbrace.Kind != lexer.TokenLBrace {
 		return nil

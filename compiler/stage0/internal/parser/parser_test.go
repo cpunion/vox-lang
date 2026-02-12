@@ -1042,3 +1042,27 @@ fn main() -> i32 {
 		t.Fatalf("expected 1 typed-path type arg, got %d", len(ta.TypeArgs))
 	}
 }
+
+func TestParseInherentImplDeclCompat(t *testing.T) {
+	f := source.NewFile("test.vox", `struct I { v: i32 }
+impl[T] Vec[T] {
+  fn size(x: Vec[T]) -> i32 { return x.len(); }
+}
+impl I {
+  fn inc(x: I) -> i32 { return x.v + 1; }
+}
+fn main() -> i32 { return I { v: 1 }.inc(); }`)
+	prog, diags := Parse(f)
+	if diags != nil && len(diags.Items) > 0 {
+		t.Fatalf("unexpected diags: %+v", diags.Items)
+	}
+	if len(prog.Impls) != 2 {
+		t.Fatalf("expected 2 impls, got %d", len(prog.Impls))
+	}
+	if prog.Impls[0].Trait != nil || prog.Impls[1].Trait != nil {
+		t.Fatalf("expected inherent impls, got %#v", prog.Impls)
+	}
+	if len(prog.Impls[1].Methods) != 1 || prog.Impls[1].Methods[0].Name != "inc" {
+		t.Fatalf("unexpected inherent impl methods: %#v", prog.Impls[1].Methods)
+	}
+}
