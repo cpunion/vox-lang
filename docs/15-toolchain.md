@@ -27,6 +27,8 @@ vox doc
 make test
 make audit-vox-lines
 make audit-vox-lines MAX=180
+make release-dry-run VERSION=v0.1.0-rc1
+make release-verify VERSION=v0.1.0-rc1
 ```
 
 ## 执行引擎（Stage0：已实现）
@@ -142,4 +144,6 @@ vox_stage2 test-pkg  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=
 - `v0.1.0` 使用冷启动链路：`stage0 -> stage1 -> stage2`
 - 后续版本使用锁文件 `scripts/release/bootstrap-stage2.lock` 指定滚动 bootstrap 版本（`STAGE2_BOOTSTRAP_TAG`）
 - CI 通过 `scripts/release/prepare-locked-bootstrap.sh` 先下载锁定版 stage2，再构建新 stage2
+- CI 通过 `scripts/release/verify-release-bundle.sh <version> <platform>` 校验产物结构/校验和/`BOOTSTRAP_MODE`
 - CI 强制 `rolling-stage2`：锁定版不可用即失败；仅本地手工流程可选择回退到 `stage1`
+- 本地推荐用 `make release-dry-run VERSION=<vX.Y.Z-rcN>` 做滚动发布演练，或用 `make release-verify VERSION=<version>` 仅校验产物

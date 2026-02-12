@@ -1,6 +1,6 @@
-.PHONY: fmt test test-go test-stage1 test-stage1-c test-stage1-interp test-stage2 test-stage2-tests test-stage2-p0p1 \ release-bundle
+.PHONY: fmt test test-go test-stage1 test-stage1-c test-stage1-interp test-stage2 test-stage2-tests test-stage2-p0p1 \
 	test-examples test-examples-c test-examples-interp test-stage1-toolchain test-selfhost test-stage2-selfhost \
-	test-active audit-vox-lines
+	test-active audit-vox-lines release-bundle release-verify release-dry-run
 
 fmt:
 	cd compiler/stage0 && gofmt -w $$(find . -name '*.go' -type f)
@@ -94,3 +94,21 @@ release-bundle:
 		exit 1; \
 	fi
 	./scripts/release/build-release-bundle.sh $(VERSION)
+
+# Verify a local release bundle archive and rolling bootstrap metadata.
+# Usage: make release-verify VERSION=v0.1.0
+release-verify:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "usage: make release-verify VERSION=v0.1.0"; \
+		exit 1; \
+	fi
+	./scripts/release/verify-release-bundle.sh $(VERSION)
+
+# Local rolling bootstrap rehearsal (build bundle + smoke + verify).
+# Usage: make release-dry-run VERSION=v0.1.0-rc1
+release-dry-run:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "usage: make release-dry-run VERSION=v0.1.0-rc1"; \
+		exit 1; \
+	fi
+	./scripts/release/dry-run-rolling.sh $(VERSION)

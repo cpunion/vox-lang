@@ -84,7 +84,8 @@ CI 步骤：
 1. 三个平台均成功产出 `stage0/stage1/stage2` 二进制。
 2. 三个平台 `BOOTSTRAP_MODE` 均为 `rolling-stage2`。
 3. 每个平台产物均产出 `.sha256`。
-4. release 上传所有平台资产。
+4. `scripts/release/verify-release-bundle.sh` 对每个平台产物验证通过。
+5. tag 发布时 upload 全量资产到 GitHub Release。
 
 ## 6. 锁版本维护流程
 
@@ -98,12 +99,22 @@ CI 步骤：
 
 ## 7. 本地演练
 
-本地可先执行：
+推荐直接执行单命令 dry-run（构建 + 烟测 + 产物校验）：
 
 ```bash
-./scripts/release/prepare-locked-bootstrap.sh cpunion/vox-lang darwin-amd64
-./scripts/release/build-release-bundle.sh v0.1.0
-./scripts/release/smoke-toolchains.sh
+make release-dry-run VERSION=v0.1.0-rc1
+```
+
+等价脚本链路：
+
+```bash
+./scripts/release/dry-run-rolling.sh v0.1.0-rc1
+```
+
+若只做产物结构校验：
+
+```bash
+make release-verify VERSION=v0.1.0-rc1
 ```
 
 输出在 `dist/` 下。
