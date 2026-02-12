@@ -140,5 +140,6 @@ vox_stage2 test-pkg  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=
 当前约定：
 
 - `v0.1.0` 使用冷启动链路：`stage0 -> stage1 -> stage2`
-- 后续版本优先使用上一版 `stage2` 二进制滚动构建
-- 如滚动构建不可用，自动回退 `stage1` 构建 `stage2`
+- 后续版本使用锁文件 `scripts/release/bootstrap-stage2.lock` 指定滚动 bootstrap 版本（`STAGE2_BOOTSTRAP_TAG`）
+- CI 通过 `scripts/release/prepare-locked-bootstrap.sh` 先下载锁定版 stage2，再构建新 stage2
+- 锁定版不可用时按 `ALLOW_STAGE1_FALLBACK` 决定是否回退到 `stage1` 构建 `stage2`

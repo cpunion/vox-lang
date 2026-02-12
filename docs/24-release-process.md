@@ -1,11 +1,11 @@
-# Release Process（版本化发布 + 二进制滚动）
+# Release Process（版本化发布 + 锁定版滚动自举）
 
 本章定义 `vox-lang` 的发布策略：
 
 - 首个公开版本：`v0.1.0`
 - 产物覆盖：`stage0` / `stage1` / `stage2`
 - 平台覆盖：`linux` / `darwin` / `windows`
-- 后续升级：优先使用“上一版 stage2 二进制”滚动构建新的 stage2
+- 后续升级：采用“**锁定版本的 stage2 二进制**”滚动构建新的 stage2
 
 ## 1. 发布产物
 
@@ -21,6 +21,7 @@
 - `bin/vox-stage1[.exe]`
 - `bin/vox-stage2[.exe]`
 - `VERSION`
+- `BOOTSTRAP_MODE`（`rolling-stage2` 或 `stage1-fallback`）
 
 并发布对应校验文件：
 
@@ -36,23 +37,38 @@
 - `stage1` 先由 stage0 构建，再生成 tool driver 版本。
 - `stage2` 由 stage1(tool) 构建为 tool driver 版本。
 
-### 2.2 `v0.1.1+`（滚动）
+### 2.2 `v0.1.1+`（锁定版滚动）
 
 优先链路：
 
-`stage2(prev release) -> stage2(new)`
+`stage2(locked release) -> stage2(new)`
 
-回退链路：
+回退链路（按锁文件策略）：
 
 `stage1(tool) -> stage2(new)`
 
-规则：
+## 3. 锁文件与策略
 
-1. 如果找到并可执行上一版 stage2 二进制，则优先使用它构建新 stage2。
-2. 若上一版不可用或构建失败，自动回退到 stage1(tool) 构建。
-3. 回退属于发布日志中需要记录的事件。
+锁文件：`scripts/release/bootstrap-stage2.lock`
 
-## 3. 触发规则
+当前字段：
+
+- `STAGE2_BOOTSTRAP_TAG`：锁定用于滚动自举的 release tag
+- `ALLOW_STAGE1_FALLBACK`：锁定二进制不可用时是否允许回退 stage1
+
+CI 步骤：
+
+- `scripts/release/prepare-locked-bootstrap.sh <repo> <platform>`
+- 尝试下载锁定资产：`vox-lang-${STAGE2_BOOTSTRAP_TAG}-${platform}.tar.gz`
+- 成功则提取 `bin/vox-stage2[.exe]` 到 `compiler/stage2/target/bootstrap/vox_stage2_prev[.exe]`
+- 失败时按 `ALLOW_STAGE1_FALLBACK` 决定“回退继续”或“直接失败”
+
+策略建议：
+
+1. 新机制试运行阶段：`ALLOW_STAGE1_FALLBACK=true`
+2. 机制稳定后：切换为 `ALLOW_STAGE1_FALLBACK=false`
+
+## 4. 触发规则
 
 - CI 构建校验：`pull_request -> main`（三平台构建 + 烟测，不发布 release）
 - 版本发布：`push tag vX.Y.Z`（三平台构建 + 烟测 + GitHub Release）
@@ -61,7 +77,7 @@
   2. 打 tag
   3. GitHub Actions 上传 release 资产
 
-## 4. 验收门禁
+## 5. 验收门禁
 
 发布 workflow 至少满足：
 
@@ -69,12 +85,24 @@
 2. 每个平台产物均产出 `.sha256`。
 3. release 上传所有平台资产。
 
-## 5. 本地演练
+## 6. 锁版本维护流程
+
+发布 `vX.Y.Z` 成功后，建议更新锁文件：
+
+1. 把 `STAGE2_BOOTSTRAP_TAG` 更新为 `vX.Y.Z`
+2. 提交到 `main`
+3. 后续版本继续基于该锁定版本滚动
+
+这一步使“下一次发布使用哪个 stage2 自举”明确可审计，避免“自动选择最近 release”带来的不确定性。
+
+## 7. 本地演练
 
 本地可先执行：
 
 ```bash
+./scripts/release/prepare-locked-bootstrap.sh cpunion/vox-lang darwin-amd64
 ./scripts/release/build-release-bundle.sh v0.1.0
+./scripts/release/smoke-toolchains.sh
 ```
 
 输出在 `dist/` 下。
