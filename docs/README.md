@@ -32,6 +32,7 @@ Documents:
 - `docs/21-stage1-compiler.md`
 - `docs/22-stage2-backlog.md`
 - `docs/24-release-process.md`
+- `docs/27-stage2-active-backlog.md`
 
 Current stage policy:
 
@@ -43,3 +44,4 @@ Deferred for now:
 
 - `docs/08-thread-safety.md`
 - `docs/09-async-model.md`
+- `docs/16-platform-support.md`
