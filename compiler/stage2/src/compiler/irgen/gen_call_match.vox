@@ -1469,6 +1469,44 @@ fn gen_explicit_type_arg_bind_name(sig: tc.FuncSig, idx: i32) -> String {
   return sig.type_param_packs.get(0);
 }
 
+fn gen_type_name_is_pack_member(name: String, pack: String) -> bool {
+  if name == pack { return true; }
+  return starts_with(name, pack.concat("."));
+}
+
+fn gen_ty_contains_pack_param(ctx: tc.Ctx, ty: i32, pack: String) -> bool {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param { return gen_type_name_is_pack_member(t.name, pack); }
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range { return gen_ty_contains_pack_param(ctx, t.elem, pack); }
+  return false;
+}
+
+fn gen_sig_allows_heterogeneous_pack_args(ctx: tc.Ctx, sig: tc.FuncSig, pack: String) -> bool {
+  let mut i: i32 = 0;
+  while i < sig.params.len() {
+    if gen_ty_contains_pack_param(ctx, sig.params.get(i), pack) { return false; }
+    i = i + 1;
+  }
+  if gen_ty_contains_pack_param(ctx, sig.ret, pack) { return false; }
+  if sig.has_variadic && gen_ty_contains_pack_param(ctx, sig.variadic_elem, pack) { return false; }
+
+  let mut bi: i32 = 0;
+  while bi < sig.type_param_bounds.len() {
+    let b: tc.TypeParamBoundSig = sig.type_param_bounds.get(bi);
+    if gen_type_name_is_pack_member(b.type_param, pack) { return false; }
+    bi = bi + 1;
+  }
+
+  let mut ci: i32 = 0;
+  while ci < sig.const_where_bounds.len() {
+    let b2: tc.ConstWhereBoundSig = sig.const_where_bounds.get(ci);
+    if gen_type_name_is_pack_member(b2.name, pack) { return false; }
+    ci = ci + 1;
+  }
+
+  return true;
+}
+
 struct GenVariadicPackResult { ok: bool, err: String, g: Gen, val: ir.Value }
 
 fn gen_pack_variadic_values(g0: Gen, vec_ty: i32, elem_ty: i32, vals: Vec[ir.Value]) -> GenVariadicPackResult {
@@ -1661,6 +1699,11 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
     let tp: String = gen_explicit_type_arg_bind_name(sig, ti);
     let cur: i32 = subs_lookup(subs, tp);
     if cur != -1 && cur != tr.idx {
+      let is_pack_bind: bool = gen_has_type_param_pack(sig) && tp == sig.type_param_packs.get(0);
+      if is_pack_bind && gen_sig_allows_heterogeneous_pack_args(g.ctx, sig, tp) {
+        ti = ti + 1;
+        continue;
+      }
       return GenExprResult { ok: false, err: "heterogeneous explicit type arguments for type parameter pack are not supported yet", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
     }
     if cur == -1 { subs.push(tc.TySub { name: tp, ty: tr.idx }); }

@@ -498,6 +498,44 @@ fn const_explicit_type_arg_bind_name(sig: FuncSig, idx: i32) -> String {
   return sig.type_param_packs.get(0);
 }
 
+fn const_type_name_is_pack_member(name: String, pack: String) -> bool {
+  if name == pack { return true; }
+  return starts_with(name, pack.concat("."));
+}
+
+fn const_ty_contains_pack_param(ctx: Ctx, ty: i32, pack: String) -> bool {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param { return const_type_name_is_pack_member(t.name, pack); }
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range { return const_ty_contains_pack_param(ctx, t.elem, pack); }
+  return false;
+}
+
+fn const_sig_allows_heterogeneous_pack_args(ctx: Ctx, sig: FuncSig, pack: String) -> bool {
+  let mut i: i32 = 0;
+  while i < sig.params.len() {
+    if const_ty_contains_pack_param(ctx, sig.params.get(i), pack) { return false; }
+    i = i + 1;
+  }
+  if const_ty_contains_pack_param(ctx, sig.ret, pack) { return false; }
+  if sig.has_variadic && const_ty_contains_pack_param(ctx, sig.variadic_elem, pack) { return false; }
+
+  let mut bi: i32 = 0;
+  while bi < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(bi);
+    if const_type_name_is_pack_member(b.type_param, pack) { return false; }
+    bi = bi + 1;
+  }
+
+  let mut ci: i32 = 0;
+  while ci < sig.const_where_bounds.len() {
+    let b2: ConstWhereBoundSig = sig.const_where_bounds.get(ci);
+    if const_type_name_is_pack_member(b2.name, pack) { return false; }
+    ci = ci + 1;
+  }
+
+  return true;
+}
+
 fn const_local_from_value(name: String, mutable: bool, v: EvalConstExprResult) -> ConstLocal {
   return ConstLocal { name: name, mutable: mutable, kind: v.kind, ty: v.ty, iv: v.iv, bv: v.bv, sv: v.sv };
 }
@@ -2138,6 +2176,11 @@ fn eval_const_expr_in_mod_locals(
           let tp: String = const_explicit_type_arg_bind_name(fr_call.sig, ti);
           let cur_ty: i32 = subs_lookup(subs, tp);
           if cur_ty != -1 && cur_ty != tr.idx {
+            let is_pack_bind: bool = const_has_type_param_pack(fr_call.sig) && tp == fr_call.sig.type_param_packs.get(0);
+            if is_pack_bind && const_sig_allows_heterogeneous_pack_args(ctx, fr_call.sig, tp) {
+              ti = ti + 1;
+              continue;
+            }
             return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call type arg mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
           }
           if cur_ty == -1 {

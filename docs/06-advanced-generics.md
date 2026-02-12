@@ -121,10 +121,11 @@ where
 - `T...`（type param pack 声明）当前是“受限可用”语义：
   - 支持单个尾部 type parameter pack；
   - 显式类型实参允许超过固定前缀，超出的 trailing 类型实参会绑定到 pack 名称；
-  - 当前 pack 绑定仅支持同构（homogeneous）类型实参：
+  - 当 pack 真正参与类型约束（参数/返回/variadic 元素/type bounds/const-where 类型名）时，仍要求同构（homogeneous）绑定：
     - 例如 `f[i32, i32, 3](...)` 可通过；
     - 若同一 pack 位置出现异构类型，会报
       `heterogeneous explicit type arguments for type parameter pack are not supported yet`。
+  - 当 pack 仅作为“尾部占位”且未参与上述类型约束时，允许异构 trailing 类型实参（用于阶段性放开调用侧表达能力）。
   - 对无 pack 的普通泛型，仍保留 `expected at most N, got M` 的 arity 检查。
 
 后续（未做）：

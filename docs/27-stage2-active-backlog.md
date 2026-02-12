@@ -27,9 +27,11 @@ Governance from now on:
 ### P0
 
 - [ ] A01 Real generic pack expansion (type/value packs), not declaration-only.
-  - [x] A01-1 Trailing explicit type args can bind a single trailing type pack (homogeneous-only for now).
+  - [x] A01-1 Trailing explicit type args can bind a single trailing type pack.
     - Landed in `compiler/stage2/src/compiler/typecheck/tc_call.vox`, `compiler/stage2/src/compiler/irgen/gen_call_match.vox`, and `compiler/stage2/src/compiler/typecheck/consts.vox`, with compile/typecheck tests covering both runtime and const-call paths.
   - [ ] A01-2 Heterogeneous type pack binding + true per-position substitution model.
+    - [x] A01-2a Allow heterogeneous trailing explicit type args when pack is only a placeholder (not materialized in params/ret/variadic/bounds).
+    - [ ] A01-2b True per-position substitution model for materialized heterogeneous packs.
   - [ ] A01-3 Value pack expansion and call-site lowering coherence.
   - Source: `docs/06-advanced-generics.md`.
 
