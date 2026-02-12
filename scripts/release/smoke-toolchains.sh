@@ -26,17 +26,23 @@ bootstrap_cc_env() {
     echo "[smoke] CC is set but not found in PATH: $CC" >&2
   fi
 
-  local candidates=(cc gcc clang)
+  local candidates=()
+  if [[ "$GOOS" == "windows" ]]; then
+    candidates=(gcc clang cc)
+  else
+    candidates=(cc gcc clang)
+  fi
+
   local c
   for c in "${candidates[@]}"; do
     if command -v "$c" >/dev/null 2>&1; then
       export CC="$c"
-      echo "[smoke] auto-detected CC: $CC"
+      echo "[smoke] auto-detected CC: $CC ($(command -v "$c"))"
       return 0
     fi
   done
 
-  echo "[smoke] no C compiler found (checked: cc, gcc, clang)" >&2
+  echo "[smoke] no C compiler found (checked: ${candidates[*]})" >&2
   return 1
 }
 

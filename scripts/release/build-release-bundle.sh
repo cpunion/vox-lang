@@ -47,17 +47,23 @@ bootstrap_cc_env() {
     echo "[release] CC is set but not found in PATH: $CC" >&2
   fi
 
-  local candidates=(cc gcc clang)
+  local candidates=()
+  if [[ "$GOOS" == "windows" ]]; then
+    candidates=(gcc clang cc)
+  else
+    candidates=(cc gcc clang)
+  fi
+
   local c
   for c in "${candidates[@]}"; do
     if command -v "$c" >/dev/null 2>&1; then
       export CC="$c"
-      echo "[release] auto-detected CC: $CC"
+      echo "[release] auto-detected CC: $CC ($(command -v "$c"))"
       return 0
     fi
   done
 
-  echo "[release] no C compiler found (checked: cc, gcc, clang)" >&2
+  echo "[release] no C compiler found (checked: ${candidates[*]})" >&2
   return 1
 }
 
@@ -99,12 +105,26 @@ echo "[release] build stage0 (${PLATFORM})"
 echo "[release] build stage1 user binary via stage0"
 "$STAGE0_OUT" build "$ROOT/compiler/stage1"
 STAGE1_USER="$(resolve_bin "$ROOT/compiler/stage1/target/debug/vox_stage1")"
+echo "[release] stage1 user binary: $STAGE1_USER"
+
+set +e
+"$STAGE1_USER" >/dev/null 2>&1
+probe_code=$?
+set -e
+echo "[release] stage1 user probe exit: $probe_code"
 
 echo "[release] build stage1 tool binary"
 mkdir -p "$ROOT/compiler/stage1/target/release"
 (
   cd "$ROOT/compiler/stage1"
+  set +e
   "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    echo "[release] stage1 tool build failed: exit $rc" >&2
+    exit $rc
+  fi
 )
 STAGE1_TOOL="$(resolve_bin "$ROOT/compiler/stage1/target/release/vox_stage1")"
 
