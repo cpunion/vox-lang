@@ -168,7 +168,7 @@ set +e
   cd "$ROOT/compiler/stage1"
   if [[ "$GOOS" == "windows" ]]; then
     if "$STAGE1_USER" emit-pkg-c --driver=tool target/release/vox_stage1.c; then
-      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static
+      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static -Wl,--stack,8388608
     else
       "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
     fi
@@ -190,7 +190,7 @@ if [[ $stage1_tool_rc -ne 0 ]]; then
     cd "$ROOT/compiler/stage1"
     if [[ "$GOOS" == "windows" ]]; then
       if "$STAGE1_USER" emit-pkg-c --driver=tool target/release/vox_stage1.c; then
-        "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static
+        "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static -Wl,--stack,8388608
       else
         "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
       fi
@@ -263,7 +263,7 @@ set +e
   cd "$ROOT/compiler/stage2"
   if [[ "$GOOS" == "windows" ]]; then
     if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
-      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static
+      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static -Wl,--stack,8388608
     else
       "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
     fi
@@ -285,7 +285,7 @@ if [[ $stage2_tool_rc -ne 0 ]]; then
     cd "$ROOT/compiler/stage2"
     if [[ "$GOOS" == "windows" ]]; then
       if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
-        "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static
+        "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static -Wl,--stack,8388608
       else
         "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
       fi

@@ -1437,7 +1437,7 @@ func compileWithDriver(dir string, driver codegen.DriverMainKind) (string, error
 	}
 	ccArgs = append(ccArgs, cPath, "-o", binPath)
 	if runtime.GOOS == "windows" {
-		ccArgs = append(ccArgs, "-lws2_32", "-static")
+		ccArgs = append(ccArgs, "-lws2_32", "-static", "-Wl,--stack,8388608")
 	}
 	cmd := exec.Command(ccSpec.cmd, ccArgs...)
 	cmd.Stdout = os.Stdout
@@ -1634,7 +1634,7 @@ func compileTests(dir string, res *loader.BuildResult, testNames []string) (stri
 	}
 	ccArgs = append(ccArgs, cPath, "-o", binPath)
 	if runtime.GOOS == "windows" {
-		ccArgs = append(ccArgs, "-lws2_32", "-static")
+		ccArgs = append(ccArgs, "-lws2_32", "-static", "-Wl,--stack,8388608")
 	}
 	cmd := exec.Command(ccSpec.cmd, ccArgs...)
 	cmd.Stdout = os.Stdout
