@@ -145,6 +145,7 @@ echo "[release] stage1 user probe exit: $probe_code"
 
 echo "[release] build stage1 tool binary"
 mkdir -p "$ROOT/compiler/stage1/target/release"
+STAGE1_TOOL=""
 STAGE1_TOOL_LOG="$ROOT/compiler/stage1/target/release/stage1-tool-build.log"
 set +e
 (
@@ -164,6 +165,7 @@ if [[ $stage1_tool_rc -ne 0 ]]; then
     "$STAGE0_OUT" build-tool "$ROOT/compiler/stage1"
     STAGE1_TOOL_DEBUG="$(resolve_bin "$ROOT/compiler/stage1/target/debug/vox_stage1")"
     cp "$STAGE1_TOOL_DEBUG" "$ROOT/compiler/stage1/target/release/vox_stage1${EXE_SUFFIX}"
+    STAGE1_TOOL="$STAGE1_TOOL_DEBUG"
     stage1_tool_rc=0
   fi
 fi
@@ -173,7 +175,9 @@ if [[ $stage1_tool_rc -ne 0 ]]; then
   exit $stage1_tool_rc
 fi
 
-STAGE1_TOOL="$(resolve_bin "$ROOT/compiler/stage1/target/release/vox_stage1")"
+if [[ -z "$STAGE1_TOOL" ]]; then
+  STAGE1_TOOL="$(resolve_bin "$ROOT/compiler/stage1/target/release/vox_stage1")"
+fi
 
 BOOTSTRAP_MODE="stage1-fallback"
 STAGE2_BOOTSTRAP=""
@@ -210,17 +214,6 @@ if [[ $stage2_tool_rc -ne 0 ]]; then
   echo "[release] stage2 tool build log begin" >&2
   cat "$STAGE2_TOOL_LOG" >&2 || true
   echo "[release] stage2 tool build log end" >&2
-  if [[ "$GOOS" == "windows" ]]; then
-    echo "[release] windows fallback: stage0 build-tool for stage2" >&2
-    "$STAGE0_OUT" build-tool "$ROOT/compiler/stage2"
-    STAGE2_TOOL_DEBUG="$(resolve_bin "$ROOT/compiler/stage2/target/debug/vox_stage2")"
-    cp "$STAGE2_TOOL_DEBUG" "$ROOT/compiler/stage2/target/release/vox_stage2${EXE_SUFFIX}"
-    stage2_tool_rc=0
-  fi
-fi
-
-if [[ $stage2_tool_rc -ne 0 ]]; then
-  echo "[release] stage2 tool build failed" >&2
   exit $stage2_tool_rc
 fi
 
