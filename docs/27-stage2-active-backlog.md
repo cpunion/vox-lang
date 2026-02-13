@@ -102,7 +102,8 @@ Governance from now on:
   - Deferred by decision in this thread.
   - Source: `docs/16-platform-support.md`.
 
-- [ ] D02 Thread-safety model (`Send/Sync` auto-derivation policy).
+- [x] D02 Thread-safety model (`Send/Sync` auto-derivation policy).
+  - Stage2 baseline landed: marker traits in `std/prelude` + auto-derivation for scalars/String/Vec/Range/struct/enum; type params still require explicit bounds.
   - Source: `docs/08-thread-safety.md`.
 
 - [ ] D03 Async model.

@@ -4131,3 +4131,50 @@ fn test_compile_const_reflect_intrinsic_error_uses_call_span_and_code() -> () {
   t.assert(r.err_kind == c.compile_diag_kind_type());
   t.assert(r.err_code == "E_TYPE_0001");
 }
+
+fn test_compile_send_sync_auto_derive_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/traits.vox",
+    text: "pub trait Send {}\npub trait Sync {}",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      struct Point { x: i32, y: i32 }
+      enum Msg { Quit, Move(Point), Data(Vec[i32]) }
+
+      fn need_send[T: Send](x: T) -> i32 { return 1; }
+      fn need_sync[T: Sync](x: T) -> i32 { return 1; }
+
+      fn main() -> i32 {
+        let p: Point = Point { x: 1, y: 2 };
+        let m: Msg = Msg.Move(Point { x: 3, y: 4 });
+        let mut xs: Vec[i32] = Vec();
+        xs.push(7);
+        return need_send(p) + need_send(m) + need_sync(xs);
+      }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+}
+
+fn test_compile_send_bound_not_inferred_for_type_param_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/traits.vox",
+    text: "pub trait Send {}\npub trait Sync {}",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn need_send[T: Send](x: T) -> i32 { return 0; }
+      fn relay[T](x: T) -> i32 { return need_send[T](x); }
+      fn main() -> i32 { return 0; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(!r.ok, r.err);
+  t.assert_with(contains(r.err, "does not satisfy trait bound"), r.err);
+}
