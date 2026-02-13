@@ -47,6 +47,8 @@ Governance from now on:
     - Covered in `compiler/stage2/src/compiler/typecheck/tc_call.vox`, with regressions in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - [x] A02-3 Non-static `&T` call arguments now require place roots (identifier/member-chain rooted at local), across direct calls, generic calls, variadic paths, and method-sugar dispatch.
     - Covered in `compiler/stage2/src/compiler/typecheck/tc_call.vox`, with regressions in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
+  - [x] A02-4 `let` annotations with non-static borrow now validate initializer sources (`&T` requires place; `&mut T` requires mutable place).
+    - Covered in `compiler/stage2/src/compiler/typecheck/tc_fn.vox`, with regressions in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - Current gap: `&T`/`&str` are still transitional in type representation (borrow is tracked by signature metadata, not a first-class IR type).
   - Sources: `docs/13-standard-library.md`, `docs/21-stage1-compiler.md`, `docs/19-ir-spec.md`.
 

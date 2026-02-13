@@ -191,6 +191,48 @@ fn tc_stmt(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprP
   };
 }
 
+struct LetInitPlaceResult { ok: bool, mutable: bool }
+
+fn expr_let_init_place(exprs: ast.ExprPool, l0: Locals, expr_id: i32) -> LetInitPlaceResult {
+  let mut cur: i32 = expr_id;
+  while true {
+    let n: ast.ExprNode = ast.expr_pool_get(exprs, cur);
+    if match n { ast.ExprNode.Ident(_s) => true, _ => false } {
+      let name: String = match n { ast.ExprNode.Ident(s) => s, _ => "" };
+      let vr: LookupVarResult = locals_lookup(l0, name);
+      if !vr.found { return LetInitPlaceResult { ok: false, mutable: false }; }
+      return LetInitPlaceResult { ok: true, mutable: vr.mutable };
+    }
+    if match n { ast.ExprNode.Member(r, _name) => true, _ => false } {
+      cur = match n { ast.ExprNode.Member(r, _name) => r, _ => -1 };
+      continue;
+    }
+    return LetInitPlaceResult { ok: false, mutable: false };
+  }
+  return LetInitPlaceResult { ok: false, mutable: false };
+}
+
+fn check_let_borrow_init(exprs: ast.ExprPool, l0: Locals, ann: ast.TypeName, init: i32) -> TcError {
+  let bk: i32 = tn_param_borrow_kind(ann);
+  if bk == param_borrow_none() || bk == param_borrow_ref_static() { return TcError.None; }
+
+  let pr: LetInitPlaceResult = expr_let_init_place(exprs, l0, init);
+  let isp: ast.Span = ast.expr_pool_span(exprs, init);
+
+  if bk == param_borrow_ref() {
+    if !pr.ok { return type_error_at(isp, "let init for & annotation must be place"); }
+    return TcError.None;
+  }
+
+  if param_borrow_is_mut(bk) {
+    if !pr.ok { return type_error_at(isp, "let init for &mut annotation must be mutable place"); }
+    if !pr.mutable { return type_error_at(isp, "let init for &mut annotation is immutable"); }
+    return TcError.None;
+  }
+
+  return TcError.None;
+}
+
 fn tc_stmt_let(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, mutable: bool, name: String, has_ann: bool, ann: ast.TypeName, init: i32) -> TcStmtResult {
   let mut c: Ctx = ctx;
   let mut expected: i32 = -1;
@@ -205,6 +247,10 @@ fn tc_stmt_let(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
       return TcStmtResult { ok: false, err: type_error_at(sp, if msg != "" { msg } else { "bad let annotation" }), ctx: c, locals: l0 };
     }
     expected = rr.idx;
+  }
+  if has_ann {
+    let berr: TcError = check_let_borrow_init(exprs, l0, ann, init);
+    if berr != TcError.None { return TcStmtResult { ok: false, err: berr, ctx: c, locals: l0 }; }
   }
   let er: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l0, init, expected);
   if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: c, locals: l0 }; }
