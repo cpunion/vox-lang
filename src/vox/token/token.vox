@@ -1,4 +1,13 @@
+// Stability: Stable module API (vox/token).
+// Migration: Backward-compatible within minor releases; breaking changes require migration notes.
+
 // token positions and file sets (go/token style, simplified for Vox).
+
+pub struct Pos {
+  pub raw: i32,
+}
+
+pub type Off = u32
 
 pub struct File {
   pub name: String,
@@ -25,9 +34,32 @@ pub struct AddFileResult {
   pub file: File,
 }
 
+pub struct FileOffsetResult {
+  pub ok: bool,
+  pub off: Off,
+}
+
 struct LineCol { line: i32, col: i32 }
 
-pub fn no_pos() -> i32 { return 0; }
+pub fn no_pos() -> Pos { return Pos { raw: 0 }; }
+
+pub fn pos_from_raw(raw: i32) -> Pos {
+  if raw <= 0 { return no_pos(); }
+  return Pos { raw: raw };
+}
+
+pub fn pos_raw(p: Pos) -> i32 { return p.raw; }
+
+pub fn pos_is_valid(p: Pos) -> bool { return p.raw > 0; }
+
+pub fn off_zero() -> Off { return 0 as Off; }
+
+pub fn off_from_raw(raw: i32) -> Off {
+  if raw <= 0 { return off_zero(); }
+  return raw as Off;
+}
+
+pub fn off_raw(off: Off) -> i32 { return off as i32; }
 
 pub fn file_set() -> FileSet {
   return FileSet { files: Vec(), next_base: 1 };
@@ -55,9 +87,9 @@ pub fn file_set_add_file(fs: FileSet, name: String, size0: i32) -> AddFileResult
   return AddFileResult { fset: q, file_idx: idx, file: f };
 }
 
-fn file_add_line(f0: File, off0: i32) -> File {
+fn file_add_line(f0: File, off0: Off) -> File {
   let mut f: File = f0;
-  let off: i32 = clamp_i32(off0, 0, f.size);
+  let off: i32 = clamp_i32(off_raw(off0), 0, f.size);
   if off <= 0 { return f; }
   let n: i32 = f.line_starts.len();
   let last: i32 = f.line_starts.get(n - 1);
@@ -66,13 +98,17 @@ fn file_add_line(f0: File, off0: i32) -> File {
   return f;
 }
 
-pub fn file_set_add_line(fs0: FileSet, file_idx: i32, off: i32) -> FileSet {
+pub fn file_set_add_line(fs0: FileSet, file_idx: i32, off: Off) -> FileSet {
   let mut fs: FileSet = fs0;
   if file_idx < 0 || file_idx >= fs.files.len() { return fs; }
   let f0: File = fs.files.get(file_idx);
   let f1: File = file_add_line(f0, off);
   fs.files.set(file_idx, f1);
   return fs;
+}
+
+pub fn file_set_add_line_raw(fs0: FileSet, file_idx: i32, off: i32) -> FileSet {
+  return file_set_add_line(fs0, file_idx, off_from_raw(off));
 }
 
 pub fn file_set_add_file_from_text(fs0: FileSet, name: String, text: String) -> AddFileResult {
@@ -82,7 +118,7 @@ pub fn file_set_add_file_from_text(fs0: FileSet, name: String, text: String) -> 
   let mut i: i32 = 0;
   while i < text.len() {
     if text.byte_at(i) == 10 { // '\n'
-      f = file_add_line(f, i + 1);
+      f = file_add_line(f, off_from_raw(i + 1));
     }
     i = i + 1;
   }
@@ -97,20 +133,45 @@ pub fn file_set_file(fs: FileSet, file_idx: i32) -> File {
   return fs.files.get(file_idx);
 }
 
-pub fn file_set_pos(fs: FileSet, file_idx: i32, off0: i32) -> i32 {
+pub fn file_pos(f: File, off0: Off) -> Pos {
+  if f.base <= 0 { return no_pos(); }
+  let off: i32 = clamp_i32(off_raw(off0), 0, f.size);
+  return Pos { raw: f.base + off };
+}
+
+pub fn file_pos_raw(f: File, off0: i32) -> Pos {
+  return file_pos(f, off_from_raw(off0));
+}
+
+pub fn file_offset(f: File, pos: Pos) -> FileOffsetResult {
+  if !file_has_pos(f, pos) {
+    return FileOffsetResult { ok: false, off: off_zero() };
+  }
+  return FileOffsetResult { ok: true, off: off_from_raw(pos.raw - f.base) };
+}
+
+pub fn file_offset_raw(f: File, pos: Pos) -> i32 {
+  let r: FileOffsetResult = file_offset(f, pos);
+  if !r.ok { return -1; }
+  return off_raw(r.off);
+}
+
+pub fn file_set_pos(fs: FileSet, file_idx: i32, off0: Off) -> Pos {
   let f: File = file_set_file(fs, file_idx);
-  if f.base == 0 { return no_pos(); }
-  let off: i32 = clamp_i32(off0, 0, f.size);
-  return f.base + off;
+  return file_pos(f, off0);
 }
 
-fn file_has_pos(f: File, pos: i32) -> bool {
-  if pos == no_pos() { return false; }
+pub fn file_set_pos_raw(fs: FileSet, file_idx: i32, off0: i32) -> Pos {
+  return file_set_pos(fs, file_idx, off_from_raw(off0));
+}
+
+fn file_has_pos(f: File, pos: Pos) -> bool {
+  if !pos_is_valid(pos) { return false; }
   if f.base <= 0 { return false; }
-  return pos >= f.base && pos <= (f.base + f.size);
+  return pos.raw >= f.base && pos.raw <= (f.base + f.size);
 }
 
-fn find_file_idx(fs: FileSet, pos: i32) -> i32 {
+fn find_file_idx(fs: FileSet, pos: Pos) -> i32 {
   let mut i: i32 = 0;
   while i < fs.files.len() {
     if file_has_pos(fs.files.get(i), pos) { return i; }
@@ -132,8 +193,8 @@ fn line_col_for_off(f: File, off0: i32) -> LineCol {
   return LineCol { line: lo + 1, col: (off - line_start) + 1 };
 }
 
-pub fn file_set_position(fs: FileSet, pos: i32) -> Position {
-  if pos == no_pos() {
+pub fn file_set_position(fs: FileSet, pos: Pos) -> Position {
+  if !pos_is_valid(pos) {
     return Position { filename: "", offset: 0, line: 0, col: 0 };
   }
 
@@ -143,7 +204,7 @@ pub fn file_set_position(fs: FileSet, pos: i32) -> Position {
   }
 
   let f: File = fs.files.get(fi);
-  let off: i32 = pos - f.base;
+  let off: i32 = pos.raw - f.base;
   let lc: LineCol = line_col_for_off(f, off);
   return Position { filename: f.name, offset: off, line: lc.line, col: lc.col };
 }

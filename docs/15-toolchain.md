@@ -7,6 +7,7 @@ vox emit-c    [--driver=user|tool] <out.c>   <src...>
 vox build     [--driver=user|tool] <out.bin> <src...>
 vox build-pkg [--driver=user|tool] <out.bin>
 vox test-pkg  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] <out.bin>
+vox list-pkg  [--json]
 vox toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
 ```
 

@@ -331,10 +331,25 @@ fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exp
 }
 
 struct ReleaseMoveSourceResult { found: bool, name: String }
+struct ExprPlaceRootResult { found: bool, name: String, from_member: bool }
 
-fn expr_ident_name(exprs: ast.ExprPool, eid: i32) -> String {
-  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
-  return match n { ast.ExprNode.Ident(name) => name, _ => "" };
+fn expr_place_root(exprs: ast.ExprPool, eid: i32) -> ExprPlaceRootResult {
+  let mut cur: i32 = eid;
+  let mut from_member: bool = false;
+  while true {
+    let n: ast.ExprNode = ast.expr_pool_get(exprs, cur);
+    if match n { ast.ExprNode.Ident(_name) => true, _ => false } {
+      let name: String = match n { ast.ExprNode.Ident(s) => s, _ => "" };
+      return ExprPlaceRootResult { found: true, name: name, from_member: from_member };
+    }
+    if match n { ast.ExprNode.Member(recv, _field) => true, _ => false } {
+      cur = match n { ast.ExprNode.Member(recv, _field) => recv, _ => -1 };
+      from_member = true;
+      continue;
+    }
+    return ExprPlaceRootResult { found: false, name: "", from_member: false };
+  }
+  return ExprPlaceRootResult { found: false, name: "", from_member: false };
 }
 
 fn is_release_track_ty(ctx: Ctx, ty0: i32) -> bool {
@@ -357,10 +372,12 @@ fn release_move_source(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool,
 
   if match cn { ast.ExprNode.Ident(name) => name == "release" || name == "release_vec", _ => false } {
     if args.len() == 1 {
-      let src: String = expr_ident_name(exprs, args.get(0));
-      if src != "" {
-        let vr: LookupVarResult = locals_lookup(l0, src);
-        if vr.found && is_release_track_ty(ctx, vr.ty) { return ReleaseMoveSourceResult { found: true, name: src }; }
+      let pr: ExprPlaceRootResult = expr_place_root(exprs, args.get(0));
+      if pr.found {
+        let vr: LookupVarResult = locals_lookup(l0, pr.name);
+        if vr.found {
+          if pr.from_member || is_release_track_ty(ctx, vr.ty) { return ReleaseMoveSourceResult { found: true, name: pr.name }; }
+        }
       }
     }
     return ReleaseMoveSourceResult { found: false, name: "" };
@@ -371,10 +388,14 @@ fn release_move_source(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool,
     let mname: String = match cn { ast.ExprNode.Member(_r, name) => name, _ => "" };
     let rn: ast.ExprNode = ast.expr_pool_get(exprs, recv);
 
-    if mname == "release" && args.len() == 0 && match rn { ast.ExprNode.Ident(_s) => true, _ => false } {
-      let src0: String = match rn { ast.ExprNode.Ident(s) => s, _ => "" };
-      let vr0: LookupVarResult = locals_lookup(l0, src0);
-      if vr0.found && is_release_track_ty(ctx, vr0.ty) { return ReleaseMoveSourceResult { found: true, name: src0 }; }
+    if mname == "release" && args.len() == 0 {
+      let pr0: ExprPlaceRootResult = expr_place_root(exprs, recv);
+      if pr0.found {
+        let vr0: LookupVarResult = locals_lookup(l0, pr0.name);
+        if vr0.found {
+          if pr0.from_member || is_release_track_ty(ctx, vr0.ty) { return ReleaseMoveSourceResult { found: true, name: pr0.name }; }
+        }
+      }
     }
 
     if match rn { ast.ExprNode.Ident(alias) => true, _ => false } {
@@ -384,10 +405,12 @@ fn release_move_source(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool,
         (p == "std/string" && mname == "release") ||
         (p == "std/collections" && (mname == "release" || mname == "release_vec"));
       if ok_mod_fn && args.len() == 1 {
-        let src1: String = expr_ident_name(exprs, args.get(0));
-        if src1 != "" {
-          let vr1: LookupVarResult = locals_lookup(l0, src1);
-          if vr1.found && is_release_track_ty(ctx, vr1.ty) { return ReleaseMoveSourceResult { found: true, name: src1 }; }
+        let pr1: ExprPlaceRootResult = expr_place_root(exprs, args.get(0));
+        if pr1.found {
+          let vr1: LookupVarResult = locals_lookup(l0, pr1.name);
+          if vr1.found {
+            if pr1.from_member || is_release_track_ty(ctx, vr1.ty) { return ReleaseMoveSourceResult { found: true, name: pr1.name }; }
+          }
         }
       }
     }

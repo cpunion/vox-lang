@@ -1,0 +1,319 @@
+// Stability: Experimental module API (vox/list).
+// Migration: API may change between minor releases; output schema remains versioned.
+
+import "vox/loader" as ld
+import "vox/typecheck" as tc
+
+pub struct Edge {
+  pub from_mod: String,
+  pub to_mod: String,
+}
+
+pub struct ModuleNode {
+  pub path: String,
+  pub files: Vec[String],
+  pub imports: Vec[String],
+}
+
+pub struct Graph {
+  pub modules: Vec[ModuleNode],
+  pub edges: Vec[Edge],
+}
+
+pub struct BuildResult {
+  pub ok: bool,
+  pub err_kind: i32,
+  pub err_code: String,
+  pub err_message: String,
+  pub err: String,
+  pub graph: Graph,
+}
+
+pub fn list_diag_kind_none() -> i32 { return 0; }
+pub fn list_diag_kind_loader() -> i32 { return 1; }
+pub fn list_diag_kind_import() -> i32 { return 2; }
+pub fn list_diag_kind_type() -> i32 { return 3; }
+
+fn empty_graph() -> Graph { return Graph { modules: Vec(), edges: Vec() }; }
+
+fn ok(g: Graph) -> BuildResult {
+  return BuildResult { ok: true, err_kind: list_diag_kind_none(), err_code: "", err_message: "", err: "", graph: g };
+}
+
+fn err0(kind: i32, code: String, msg: String, rendered: String) -> BuildResult {
+  return BuildResult { ok: false, err_kind: kind, err_code: code, err_message: msg, err: rendered, graph: empty_graph() };
+}
+
+fn kind_from_loader(_k: i32) -> i32 { return list_diag_kind_loader(); }
+
+fn kind_from_tc(k: i32) -> i32 {
+  if k == tc.diag_kind_import() { return list_diag_kind_import(); }
+  return list_diag_kind_type();
+}
+
+fn has_str(vs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < vs.len() {
+    if vs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn string_insert_sorted(xs0: Vec[String], x: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut inserted: bool = false;
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    let cur: String = xs0.get(i);
+    if !inserted && x < cur {
+      out.push(x);
+      inserted = true;
+    }
+    out.push(cur);
+    i = i + 1;
+  }
+  if !inserted { out.push(x); }
+  return out;
+}
+
+fn sort_strings(xs0: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    out = string_insert_sorted(out, xs0.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn push_unique_sorted(xs0: Vec[String], x: String) -> Vec[String] {
+  if has_str(xs0, x) { return sort_strings(xs0); }
+  let mut xs: Vec[String] = xs0;
+  xs.push(x);
+  return sort_strings(xs);
+}
+
+fn add_import_targets(xs0: Vec[String], imps: tc.Imports) -> Vec[String] {
+  let mut xs: Vec[String] = xs0;
+  let mut i: i32 = 0;
+  while i < imps.aliases.len() {
+    xs = push_unique_sorted(xs, imps.aliases.get(i).path);
+    i = i + 1;
+  }
+  i = 0;
+  while i < imps.named_funcs.len() {
+    xs = push_unique_sorted(xs, imps.named_funcs.get(i).mod_path);
+    i = i + 1;
+  }
+  i = 0;
+  while i < imps.named_consts.len() {
+    xs = push_unique_sorted(xs, imps.named_consts.get(i).mod_path);
+    i = i + 1;
+  }
+  i = 0;
+  while i < imps.named_types.len() {
+    xs = push_unique_sorted(xs, imps.named_types.get(i).mod_path);
+    i = i + 1;
+  }
+  return xs;
+}
+
+fn module_import_files(m: tc.WorldModule) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < m.prog.imports.len() {
+    let file: String = m.prog.imports.get(i).file;
+    if file != "" {
+      out = push_unique_sorted(out, file);
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn edge_exists(edges: Vec[Edge], from_path: String, to_path: String) -> bool {
+  let mut i: i32 = 0;
+  while i < edges.len() {
+    let e: Edge = edges.get(i);
+    if e.from_mod == from_path && e.to_mod == to_path { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn edge_insert_sorted(edges0: Vec[Edge], e0: Edge) -> Vec[Edge] {
+  if edge_exists(edges0, e0.from_mod, e0.to_mod) { return edges0; }
+  let mut out: Vec[Edge] = Vec();
+  let mut inserted: bool = false;
+  let mut i: i32 = 0;
+  while i < edges0.len() {
+    let cur: Edge = edges0.get(i);
+    let less: bool = if e0.from_mod < cur.from_mod { true } else { e0.from_mod == cur.from_mod && e0.to_mod < cur.to_mod };
+    if !inserted && less {
+      out.push(e0);
+      inserted = true;
+    }
+    out.push(cur);
+    i = i + 1;
+  }
+  if !inserted { out.push(e0); }
+  return out;
+}
+
+fn module_insert_sorted(xs0: Vec[ModuleNode], x0: ModuleNode) -> Vec[ModuleNode] {
+  let mut out: Vec[ModuleNode] = Vec();
+  let mut inserted: bool = false;
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    let cur: ModuleNode = xs0.get(i);
+    if !inserted && x0.path < cur.path {
+      out.push(x0);
+      inserted = true;
+    }
+    out.push(cur);
+    i = i + 1;
+  }
+  if !inserted { out.push(x0); }
+  return out;
+}
+
+pub fn graph_from_world(w: tc.World) -> BuildResult {
+  let mut mods: Vec[ModuleNode] = Vec();
+  let mut edges: Vec[Edge] = Vec();
+
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(i);
+    let files: Vec[String] = module_import_files(m);
+    let mut imports: Vec[String] = Vec();
+
+    let mut fi: i32 = 0;
+    while fi < files.len() {
+      let ir: tc.ImportsResult = tc.build_imports(w, m.path, m.prog.imports, files.get(fi));
+      if !ir.ok {
+        return err0(kind_from_tc(tc.tc_error_kind(ir.err)), tc.tc_error_code(ir.err), tc.tc_error_message(ir.err), tc.tc_error_to_string(ir.err));
+      }
+      imports = add_import_targets(imports, ir.imps);
+      fi = fi + 1;
+    }
+
+    let imports_sorted: Vec[String] = sort_strings(imports);
+    let node: ModuleNode = ModuleNode { path: m.path, files: files, imports: imports_sorted };
+    mods = module_insert_sorted(mods, node);
+
+    let mut ei: i32 = 0;
+    while ei < imports_sorted.len() {
+      edges = edge_insert_sorted(edges, Edge { from_mod: m.path, to_mod: imports_sorted.get(ei) });
+      ei = ei + 1;
+    }
+
+    i = i + 1;
+  }
+
+  return ok(Graph { modules: mods, edges: edges });
+}
+
+pub fn graph_from_files(files: Vec[ld.SourceFile]) -> BuildResult {
+  let lr: ld.LoadWorldResult = ld.world_from_files(files);
+  if !lr.ok {
+    return err0(kind_from_loader(lr.err_kind), lr.err_code, lr.err_message, lr.err);
+  }
+  return graph_from_world(lr.world);
+}
+
+fn json_quote(s: String) -> String {
+  let mut out: String = "\"";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    if ch == 34 { out = out.concat("\\\""); i = i + 1; continue; }
+    if ch == 92 { out = out.concat("\\\\"); i = i + 1; continue; }
+    if ch == 10 { out = out.concat("\\n"); i = i + 1; continue; }
+    if ch == 13 { out = out.concat("\\r"); i = i + 1; continue; }
+    if ch == 9 { out = out.concat("\\t"); i = i + 1; continue; }
+    out = out.concat(s.slice(i, i + 1));
+    i = i + 1;
+  }
+  return out.concat("\"");
+}
+
+fn json_array_str(xs: Vec[String]) -> String {
+  let mut out: String = "[";
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if i > 0 { out = out.concat(","); }
+    out = out.concat(json_quote(xs.get(i)));
+    i = i + 1;
+  }
+  return out.concat("]");
+}
+
+pub fn graph_to_json(g: Graph) -> String {
+  let mut out: String = "{";
+  out = out.concat("\"version\":1");
+
+  out = out.concat(",\"modules\":[");
+  let mut i: i32 = 0;
+  while i < g.modules.len() {
+    if i > 0 { out = out.concat(","); }
+    let m: ModuleNode = g.modules.get(i);
+    out = out
+      .concat("{\"path\":").concat(json_quote(m.path))
+      .concat(",\"files\":").concat(json_array_str(m.files))
+      .concat(",\"imports\":").concat(json_array_str(m.imports))
+      .concat("}");
+    i = i + 1;
+  }
+  out = out.concat("]");
+
+  out = out.concat(",\"edges\":[");
+  i = 0;
+  while i < g.edges.len() {
+    if i > 0 { out = out.concat(","); }
+    let e: Edge = g.edges.get(i);
+    out = out
+      .concat("{\"from\":").concat(json_quote(e.from_mod))
+      .concat(",\"to\":").concat(json_quote(e.to_mod))
+      .concat("}");
+    i = i + 1;
+  }
+  out = out.concat("]");
+
+  return out.concat("}");
+}
+
+fn join_with_sep(xs: Vec[String], sep: String) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if i > 0 { out = out.concat(sep); }
+    out = out.concat(xs.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn graph_to_text(g: Graph) -> String {
+  let mut out: String = "";
+
+  out = out.concat("[modules] ").concat(g.modules.len().to_string()).concat("\n");
+  let mut i: i32 = 0;
+  while i < g.modules.len() {
+    let m: ModuleNode = g.modules.get(i);
+    out = out.concat("[module] ").concat(m.path).concat("\n");
+    out = out.concat("  files: ").concat(join_with_sep(m.files, ",")).concat("\n");
+    out = out.concat("  imports: ").concat(join_with_sep(m.imports, ",")).concat("\n");
+    i = i + 1;
+  }
+
+  out = out.concat("[edges] ").concat(g.edges.len().to_string()).concat("\n");
+  i = 0;
+  while i < g.edges.len() {
+    let e: Edge = g.edges.get(i);
+    out = out.concat("[edge] ").concat(e.from_mod).concat(" -> ").concat(e.to_mod).concat("\n");
+    i = i + 1;
+  }
+
+  return out;
+}

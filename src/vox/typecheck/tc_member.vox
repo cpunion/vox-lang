@@ -22,6 +22,16 @@ fn member_type_mismatch_error(ctx: Ctx, sp: ast.Span, expected: i32, got: i32) -
   return type_error_at(sp, msg);
 }
 
+fn recv_is_local_symbol(exprs: ast.ExprPool, l0: Locals, recv: i32) -> bool {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, recv);
+  if !match n { ast.ExprNode.Ident(_name) => true, _ => false } { return false; }
+  let name: String = match n { ast.ExprNode.Ident(s) => s, _ => "" };
+  if name == "" { return false; }
+  if locals_lookup(l0, name).found { return true; }
+  if locals_lookup_const(l0, name).found { return true; }
+  return false;
+}
+
 fn tc_expr_member(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv: i32, name: String, expected: i32) -> ExprTyResult {
   let recv_sp: ast.Span = ast.expr_pool_span(exprs, recv);
 
@@ -59,8 +69,10 @@ fn tc_expr_member(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   // Keep chained type-path member forms alive (e.g. `p.ParseError.None`):
   // if receiver can still be interpreted as a type path, prefer that route.
   let pr: ExprTypePathResult = expr_type_path(exprs, recv);
-  if !rr.ok && rr.err != TcError.None && !pr.ok {
-    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: rr.err };
+  if !rr.ok && rr.err != TcError.None {
+    if recv_is_local_symbol(exprs, l0, recv) || !pr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: rr.err };
+    }
   }
 
   // 2) Unit enum variant value: `Enum.None` / `alias.Enum.None` / `Enum[T].None`

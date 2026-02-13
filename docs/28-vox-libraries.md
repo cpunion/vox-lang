@@ -24,12 +24,14 @@
 
 ### 2.2 Experimental（可用但不承诺稳定）
 
+- `vox/types`
 - `vox/typecheck`
 - `vox/macroexpand`
 - `vox/irgen`
 - `vox/codegen`
 - `vox/compile`
 - `vox/loader`
+- `vox/list`
 
 适用场景：自定义编译流程、实验性后端、高级静态分析。
 
@@ -45,8 +47,9 @@
 - `vox/lex` 对应 `go/scanner`
 - `vox/ast` 对应 `go/ast`
 - `vox/parse` 对应 `go/parser`
-- `vox/typecheck` 对应 `go/types`（当前为 Experimental）
-- `vox/manifest` + 计划中的 `vox/list` 对应 `go/build` + `go list`
+- `vox/types` 对应 `go/types`（当前为 Experimental）
+- `vox/typecheck` 为 `vox/types` 的后端实现细节（Experimental）
+- `vox/manifest` + `vox/list` 对应 `go/build` + `go list`
 
 ## 4. API 稳定性约定
 
@@ -65,7 +68,9 @@ import "vox/token" as tok
 
 fn pos_text() -> String {
   let ar: tok.AddFileResult = tok.file_set_add_file_from_text(tok.file_set(), "src/main.vox", "a\nb");
-  let p: tok.Position = tok.file_set_position(ar.fset, tok.file_set_pos(ar.fset, ar.file_idx, 2));
+  let ps: tok.Pos = tok.file_set_pos(ar.fset, ar.file_idx, tok.off_from_raw(2));
+  if !tok.pos_is_valid(ps) { return "<invalid>"; }
+  let p: tok.Position = tok.file_set_position(ar.fset, ps);
   return tok.position_string(p); // src/main.vox:2:1
 }
 ```
@@ -129,11 +134,46 @@ fn default_span_line() -> i32 {
 }
 ```
 
+### 5.7 `vox/types`
+
+```vox
+import "vox/parse" as p
+import "vox/typecheck" as tc
+import "vox/types" as tys
+
+fn types_smoke() -> bool {
+  let pr: p.ParseResult = p.parse_text_with_path("src/main.vox", "fn main() -> i32 { return 0; }");
+  if match pr.err { p.ParseError.None => false, _ => true } { return false; }
+
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "main", pr.prog);
+
+  let r: tys.CheckResult = tys.check_world(w);
+  return r.ok;
+}
+```
+
+### 5.8 `vox/list`
+
+```vox
+import "vox/list" as lst
+import "vox/loader" as ld
+
+fn list_smoke() -> String {
+  let mut files: Vec[ld.SourceFile] = Vec();
+  files.push(ld.SourceFile { path: "src/main.vox", text: "fn main() -> i32 { return 0; }" });
+  let r: lst.BuildResult = lst.graph_from_files(files);
+  if !r.ok { return r.err; }
+  return lst.graph_to_json(r.graph);
+}
+```
+
 ## 6. 当前落地状态
 
 1. [x] Stable 层最小示例：见本章第 5 节。
 2. [x] `vox/*` 库级回归测试：`src/vox/public_api_contract_test.vox`。
-3. [x] `vox/token` 初版（`Pos + File + FileSet + Position`）。
-4. [x] `vox/internal/*` 首批下沉：`vox/internal/text`，并在 `vox/manifest` 中复用。
-5. [ ] Stable/Experimental 模块统一头注释（稳定性级别 + 迁移策略）。
-6. [ ] `vox/list`（go list 对标）：输出完整包依赖图（模块、导入边、可选 JSON）。
+3. [x] `vox/token` 初版（显式 `Pos` + `Off` + `File` + `FileSet` + `Position`）。
+4. [x] `vox/types` façade 初版（`Config + CheckResult + Info`，后端复用 `vox/typecheck`）。
+5. [x] `vox/internal/*` 首批下沉：`vox/internal/text`，并在 `vox/manifest` 中复用。
+6. [x] Stable/Experimental 模块统一头注释（稳定性级别 + 迁移策略）。
+7. [x] `vox/list`（go list 对标）：输出完整包依赖图（模块、导入边、可选 JSON）。

@@ -13,6 +13,7 @@ import "vox/manifest" as mf
 import "vox/codegen" as cg
 import "vox/parse" as p
 import "vox/ast" as ast
+import "vox/list" as lst
 
 fn is_path_sep(ch: i32) -> bool {
   if ch == 47 { return true; } // '/'
@@ -99,6 +100,7 @@ fn usage() -> () {
   print("  ".concat(bin).concat(" build  <out.bin> <src...>\n"));
   print("  ".concat(bin).concat(" build-pkg <out.bin>   # build from ./src\n"));
   print("  ".concat(bin).concat(" test-pkg <out.bin>    # build+run tests from ./src and ./tests\n"));
+  print("  ".concat(bin).concat(" list-pkg              # print package module dependency graph\n"));
   print("  ".concat(bin).concat(" toolchain <subcmd>    # install/use/pin/current/list\n"));
   print("\n");
   print("flags:\n");
@@ -110,7 +112,7 @@ fn usage() -> () {
   print("  --fail-fast         test-pkg: stop scheduling new tests after first failure\n");
   print("  --list              test-pkg: list selected tests and exit\n");
   print("  --rerun-failed      test-pkg: run only previously failed tests\n");
-  print("  --json              test-pkg: print JSON report\n");
+  print("  --json              test-pkg/list-pkg: print JSON report\n");
 }
 
 fn print_invalid_lock_error(msg: String) -> () {
@@ -1658,7 +1660,7 @@ fn main() -> i32 {
   let args: Vec[String] = proc.args();
   let routed: ToolchainRouteResult = maybe_handle_toolchain_or_reroute(args);
   if routed.handled { return routed.code; }
-  if args.len() < 2 {
+  if args.len() < 1 {
     usage();
     print("invalid args\n");
     return 1;
@@ -1829,7 +1831,7 @@ fn main() -> i32 {
       continue;
     }
     if a == "--json" {
-      if cmd != "test-pkg" {
+      if cmd != "test-pkg" && cmd != "list-pkg" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -1853,17 +1855,50 @@ fn main() -> i32 {
       i = i + 1;
       continue;
     }
+    if cmd == "list-pkg" {
+      usage();
+      print("unexpected positional arg for list-pkg: ".concat(a).concat("\n"));
+      return 1;
+    }
     out = a;
     src_start = i + 1;
     i = args.len();
     continue;
   }
-  if out == "" {
+  if cmd != "list-pkg" && out == "" {
     usage();
     print("missing out path\n");
     return 1;
   }
   let srcs: Vec[String] = if src_start >= 0 { slice_vec(args, src_start) } else { Vec() };
+
+  if cmd == "list-pkg" {
+    let all: Vec[String] = fs.walk_vox_files(".");
+    let paths: Vec[String] = filter_pkg_sources(all);
+    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths) { Vec() } else { load_stage1_std() };
+    let dr: DepsResult = load_deps_from_manifest();
+    if !dr.ok {
+      print("invalid vox.toml: ".concat(dr.err).concat("\n"));
+      return 1;
+    }
+    let mut di: i32 = 0;
+    while di < dr.files.len() { files.push(dr.files.get(di)); di = di + 1; }
+    let user: Vec[ld.SourceFile] = load_files(paths);
+    let mut ui: i32 = 0;
+    while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
+
+    let lr: lst.BuildResult = lst.graph_from_files(files);
+    if !lr.ok {
+      print("list failed: ".concat(lr.err).concat("\n"));
+      return 1;
+    }
+    if test_json {
+      print(lst.graph_to_json(lr.graph).concat("\n"));
+    } else {
+      print(lst.graph_to_text(lr.graph));
+    }
+    return 0;
+  }
 
   if cmd == "emit-c" {
     if srcs.len() == 0 { usage(); print("missing sources\n"); return 1; }
