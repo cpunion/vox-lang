@@ -1,7 +1,7 @@
 # Stage2 Backlog Next (P0/P1, no async/effect)
 
 Status: **archived (closed)**.
-Canonical closure + gate: `docs/archive/25-stage2-p0p1-closure.md`, `make test-stage2-p0p1`.
+Canonical closure + gate: `docs/archive/25-p0p1-closure.md`, `make test-p0p1`.
 
 Rule (historical): complete one item end-to-end (code + tests + docs + commit), then move to next item without leaving unresolved leftovers in the same scope.
 

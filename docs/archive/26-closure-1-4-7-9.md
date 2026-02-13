@@ -35,7 +35,7 @@ Canonical gate for each item:
 8. [x] Stage2 runtime memory convergence pass: remove known temporary runtime ownership inconsistencies and pin behavior with tests.
    - Acceptance:
      - Add runtime/codegen tests for the fixed ownership/reallocation behavior.
-9. [x] Release/rolling bootstrap operational closure: make locked-stage2 rolling path the default verified release lane.
+9. [x] Release/rolling bootstrap operational closure: make locked-bootstrap rolling path the default verified release lane.
    - Acceptance:
      - CI/release scripts + docs aligned.
      - Local dry-run command documented and passing.

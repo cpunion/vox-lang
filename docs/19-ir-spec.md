@@ -43,7 +43,7 @@ IR v0 只定义 stage0 必需类型：
 Stage2（编译器内部类型池）补充说明：
 
 - typecheck 层新增 `TyKind.Ref` 表达借用形状（`&T/&mut T/&'static T/&'static mut T`）。
-- stage2 现已将 `Ref` 非擦除地保留到 IR（函数签名、slot/temp/call 类型索引可见借用形状）；`Range` 仍按 v0 设计在 irgen 侧降到基类型并通过 `range_check` 表达约束。
+- 当前编译器已将 `Ref` 非擦除地保留到 IR（函数签名、slot/temp/call 类型索引可见借用形状）；`Range` 仍按 v0 设计在 irgen 侧降到基类型并通过 `range_check` 表达约束。
 - C 后端把 `Ref` 作为透明包装映射到底层 C 类型，并在比较/名义等值路径中按底层类型语义处理。
 
 说明（Stage0 实现策略）：

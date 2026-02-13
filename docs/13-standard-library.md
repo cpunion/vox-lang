@@ -6,14 +6,14 @@
 
 - `std::prelude`：基础 trait 与常用类型导出
 - `std::string`：`String`、`str`、`StrView`
-- `std::fs`：最小文件系统能力（读写文件、枚举源文件；用于 stage1 工具链自举）
-- `std::process`：最小进程能力（args/exec/exe_path/getenv；用于 stage1 工具链自举）
+- `std::fs`：最小文件系统能力（读写文件、枚举源文件；用于 编译器工具链自举）
+- `std::process`：最小进程能力（args/exec/exe_path/getenv；用于 编译器工具链自举）
 - `std::time`：最小时钟能力（`now_ns`；用于测试与工具链计时）
 - `std::sync`：并发原语（`Mutex[T]/Atomic[T]` 泛型 API）
 - `std::collections`：`Vec`、`Map` 等
 - `std::io`：输出 + 最小文件抽象 + 最小 TCP 抽象
 
-当前 stage2 落地：
+当前实现落地：
 
 - `std::prelude` 已提供默认 trait：`Eq`、`Ord`、`Show`、`Clone`、`Release`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
 - 未显式 import 时，函数名会回退到 `std/prelude`；trait 静态调用与 `impl Trait for ...` 也支持回退到 `std/prelude` 的公开 trait。

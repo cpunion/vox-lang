@@ -1,9 +1,9 @@
 # Stage2 Backlog (1-12)
 
 Status: **archived (closed)**.
-Canonical closure + gate: `docs/archive/25-stage2-p0p1-closure.md`, `make test-stage2-p0p1`.
+Canonical closure + gate: `docs/archive/25-p0p1-closure.md`, `make test-p0p1`.
 
-This file was the active burn-down list for stage2.  
+This file was the active burn-down list for compiler.  
 Rule: complete one item end-to-end (code + tests + commit), then move to the next.
 
 ## Items
@@ -22,7 +22,7 @@ Rule: complete one item end-to-end (code + tests + commit), then move to the nex
    Done scope: const block stmt executor now reports stmt-anchored spans (`let/assign/assign field/if/while/break/continue`), and macroexpand max-round overflow now reports first macro callsite span instead of fallback `1:1`.
 9. [x] Testing framework upgrade: richer `--json` payload and stable rerun metadata pipeline.  
    Done scope: `test-pkg --json` now emits `report_version` + rerun-cache metadata fields, failed result entries include `error/log_file`, and rerun cache is versioned JSON (`version/updated_unix_us/tests`) with backward-compatible read + normalized load.
-10. [x] Stdlib `std/sync`: generic `Mutex[T]` / `Atomic[T]` runtime-backed semantics on stage2.  
+10. [x] Stdlib `std/sync`: generic `Mutex[T]` / `Atomic[T]` runtime-backed semantics on compiler.  
     Done scope: `std/sync` provides `Mutex[T: SyncScalar]` / `Atomic[T: SyncScalar]` generic handles (with `i32/i64` impls), runtime-backed intrinsics for load/store/fetch_add/swap, plus concrete compatibility wrappers.
 11. [x] Stdlib `std/io`: file + network minimal abstractions aligned with current runtime APIs.  
     Done scope: `std/io` includes `out/out_ln/fail`, file APIs (`file/file_exists/file_read_all/file_write_all/mkdir_p`) and minimal TCP APIs (`net_addr/net_connect/net_send/net_recv/net_close`) with interpreter/C backend parity.

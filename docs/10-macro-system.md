@@ -40,7 +40,7 @@ fn mk_stmt(x: AstExpr) -> AstStmt {
 - `$(expr)` 插入任意表达式计算得到的 AST
 - 展开多轮迭代直到无宏调用或达到上限
 
-Stage2 MVP（当前已实现）：
+MVP（当前已实现）：
 
 - 使用 `quote!(expr)` / `unquote!(expr)` 的函数式形式，覆盖表达式位点。
 - 已支持表面语法糖：
@@ -62,9 +62,9 @@ fn make_add1(x: AstExpr) -> AstExpr { return x + 1; }
 fn main() -> i32 { return compile!(make_add1(41)); }
 ```
 
-## Stage2 现状（2026-02）
+## 当前现状（2026-02）
 
-- `name!(...)` 语法在 stage2 进入 AST（独立于普通函数调用）。
+- `name!(...)` 语法在 进入 AST（独立于普通函数调用）。
 - `name[T]!(...)` 也支持（与普通泛型调用语法保持一致）。
 - 编译流水线已接入 `macroexpand` 阶段（`parse/load -> macroexpand -> typecheck`），展开按轮次执行直到固定点或到达轮次上限。
 - `macroexpand` 默认轮次上限为 `512`（`ExpandConfig.max_rounds`），避免“宏数量较多但可收敛”场景被过早截断；仍可通过配置收紧。

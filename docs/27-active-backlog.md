@@ -3,12 +3,12 @@
 Status: active.
 
 Purpose:
-- This is the only active task list for stage2 language/tooling evolution.
+- This is the only active task list for compiler language/tooling evolution.
 - Closed batches must not be re-listed here.
 
 Do-not-relist batches:
-- `docs/archive/25-stage2-p0p1-closure.md` (items 1-12 closed)
-- `docs/archive/26-stage2-closure-1-4-7-9.md` (items 1-4/7-9 closed)
+- `docs/archive/25-p0p1-closure.md` (items 1-12 closed)
+- `docs/archive/26-closure-1-4-7-9.md` (items 1-4/7-9 closed)
 
 ## Why Tasks Repeated Before
 
@@ -40,7 +40,7 @@ Governance from now on:
     - Verified by pack-call/vec-call dual-mode tests in `src/compiler/typecheck/typecheck_test.vox` and `src/compiler/compile/compile_test.vox`.
   - Source: `docs/06-advanced-generics.md`.
 
-- [x] A02 String/borrow model convergence from transitional `String/str` aliasing to stage2-stable borrow constraints and diagnostics.
+- [x] A02 String/borrow model convergence from transitional `String/str` aliasing to compiler-stable borrow constraints and diagnostics.
   - [x] A02-1 Bare `str` is now rejected; use `String` for owned text and `&str`/`&'static str` for borrow-position text.
     - Covered in `src/compiler/typecheck/ctx.vox`, with compile/typecheck regressions in `src/compiler/typecheck/typecheck_test.vox` and `src/compiler/compile/compile_test.vox`.
   - [x] A02-2 `&mut`/`&'static mut` call arguments now require mutable place roots (local mutable var or member-chain rooted at one), across direct calls, variadic paths, generic calls, and method-sugar dispatch.
@@ -51,10 +51,10 @@ Governance from now on:
     - Covered in `src/compiler/typecheck/tc_fn.vox`, with regressions in `src/compiler/typecheck/typecheck_test.vox` and `src/compiler/compile/compile_test.vox`.
   - [x] A02-5 Call-arg mismatch diagnostics are now borrow-aware: expected type text preserves borrow form (`&T`/`&mut T`/`&'static T`/`&'static mut T`) instead of showing erased base type.
     - Covered in `src/compiler/typecheck/tc_call.vox`, `src/compiler/typecheck/typecheck_test.vox`, and `src/compiler/compile/compile_test.vox`.
-  - [x] A02-6 Stage2 closure note: borrow remains signature-metadata based in this stage; first-class borrow IR/type representation is deferred to `D06`.
+  - [x] A02-6 closure note: borrow remains signature-metadata based in this stage; first-class borrow IR/type representation is deferred to `D06`.
   - Sources: `docs/13-standard-library.md`, `docs/archive/21-stage1-compiler.md`, `docs/19-ir-spec.md`.
 
-- [x] A03 Runtime memory model convergence (stage2 scope).
+- [x] A03 Runtime memory model convergence (compiler scope).
   - [x] A03-1 Runtime tracked allocations now support early release via `vox_rt_free`; non-escaping temp path buffers in `mkdir_p`/`walk_vox_files` are released eagerly instead of waiting for process exit.
     - Covered in `src/compiler/codegen/c_runtime.vox` and `src/compiler/codegen/c_emit_test.vox`.
   - [x] A03-2 `std/sync` handles now support explicit release (`mutex_drop`/`atomic_drop`) via new low-level drop intrinsics, reducing long-running tool memory retention without changing value semantics.
@@ -65,7 +65,7 @@ Governance from now on:
     - Covered in `src/compiler/codegen/c_runtime.vox` and `src/compiler/codegen/c_emit_test.vox`.
   - [x] A03-5 Sync-handle registry nodes now use tracked runtime allocation (`vox_rt_malloc/vox_rt_free`), so undisposed-handle paths do not leave untracked registry memory behind.
     - Covered in `src/compiler/codegen/c_runtime.vox` and `src/compiler/codegen/c_emit_test.vox`.
-  - [x] A03-6 Stage2 closure note: full ownership/move/drop for general values/containers is deferred to `D07` to keep stage2 rolling-bootstrap stable.
+  - [x] A03-6 closure note: full ownership/move/drop for general values/containers is deferred to `D07` to keep rolling-bootstrap stable.
   - Source: `docs/archive/21-stage1-compiler.md`.
 
 - [x] A04 Package registry remoteization.
@@ -119,11 +119,11 @@ Governance from now on:
   - [x] D06-1 Type-pool level borrow representation landed: `ir::TyKind.Ref` + `resolve_type` preserves `&T/&mut T/&'static T/&'static mut T` and reflection (`@type_name/@type`) can observe borrow shape.
   - [x] D06-2 Stage2 bootstrap boundary updated: irgen now preserves `Ref` in IR signatures/slots/calls, while `Range` continues to lower to base + `range_check` for v0 stability.
   - [x] D06-3 Borrow-aware IR/codegen landed: codegen `Ref` transparent type mapping + compare/nominal-eq borrow-aware unwrapping, with regression tests for IR signature preservation and `&str` compare codegen.
-  - Extracted from A02 stage2 closure note.
+  - Extracted from A02 closure note.
   - Source: `docs/19-ir-spec.md`, `docs/13-standard-library.md`.
 
 - [ ] D07 Full ownership/move/drop semantics for general values/containers.
-  - [x] D07-1 Remove bootstrap-safe `std/collections/map` fallback: switch to direct `Vec.set/remove/clear` implementation and keep `stage1 -> stage2` gate green.
+  - [x] D07-1 Remove bootstrap-safe `std/collections/map` fallback: switch to direct `Vec.set/remove/clear` implementation and keep `stage1 -> compiler` gate green.
   - [x] D07-2 Container-level deterministic release model (Vec/String/Map) that is alias-safe under current value-copy semantics.
     - [x] D07-2a Deep-clone baseline landed: `Clone` trait + `impl[T: Clone] Clone for Vec[T]` + `impl[K: Eq + Clone, V: Clone] Clone for Map[K,V]` for explicit non-aliasing copy paths.
     - [x] D07-2b Add deterministic release semantics compatible with the current value-copy model (no UAF on alias copies).
@@ -132,5 +132,5 @@ Governance from now on:
     - [x] D07-3a Release API rebind enforcement: expression-statement `release` calls are rejected (`release call result must be assigned back`) to avoid silent non-rebinding misuse.
     - [x] D07-3b Minimal move-after-release diagnostics: values consumed by `release` are marked moved; later reads error as `use of moved value: <name>`, while `x = release(x)` remains a valid self-rebind path.
     - [x] D07-3c Move-state propagation baseline in control flow: `block/if/while` now conservatively propagate moved flags for outer locals, so branch/loop release paths are visible to later reads.
-  - Extracted from A03 stage2 closure note.
+  - Extracted from A03 closure note.
   - Source: `docs/archive/21-stage1-compiler.md`.

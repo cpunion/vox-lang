@@ -1,13 +1,13 @@
-# 工具链（stage2-only）
+# 工具链
 
-主命令：`vox_stage2`（默认构建输出名）
+主命令：`vox`（默认构建输出名）
 
 ```bash
-vox_stage2 emit-c    [--driver=user|tool] <out.c>   <src...>
-vox_stage2 build     [--driver=user|tool] <out.bin> <src...>
-vox_stage2 build-pkg [--driver=user|tool] <out.bin>
-vox_stage2 test-pkg  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] <out.bin>
-vox_stage2 toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
+vox emit-c    [--driver=user|tool] <out.c>   <src...>
+vox build     [--driver=user|tool] <out.bin> <src...>
+vox build-pkg [--driver=user|tool] <out.bin>
+vox test-pkg  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] <out.bin>
+vox toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
 ```
 
 ## 仓库布局
@@ -20,24 +20,24 @@ vox_stage2 toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
 ## 仓库门禁
 
 ```bash
-make test-active   # stage2 rolling selfhost + stage2 test smoke
+make test-active   # rolling selfhost + test smoke
 make test          # test-active + examples smoke
 ```
 
 关键脚本：
 
-- `scripts/ci/stage2-rolling-selfhost.sh`
-- `scripts/ci/verify-stage2-p0p1.sh`
+- `scripts/ci/rolling-selfhost.sh`
+- `scripts/ci/verify-p0p1.sh`
 
 ## 发布与滚动自举
 
-- 唯一链路：`stage2(locked release) -> stage2(new)`
-- 锁文件：`scripts/release/bootstrap-stage2.lock`
+- 唯一链路：`locked release compiler -> new compiler`
+- 锁文件：`scripts/release/bootstrap.lock`（将来会去掉历史命名）
 - 本地演练：
 
 ```bash
-make release-dry-run VERSION=v0.1.0-rc1
-make release-verify VERSION=v0.1.0-rc1
+make release-dry-run VERSION=v0.2.0-rc1
+make release-verify VERSION=v0.2.0-rc1
 ```
 
 详见：`docs/24-release-process.md`。

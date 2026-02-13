@@ -1,6 +1,6 @@
 # Vox Language
 
-This repository now keeps a single active compiler line (stage2-only).
+This repository keeps a single active compiler line.
 
 - Active compiler source: `src/`
 - Active package manifest: `vox.toml`
@@ -27,5 +27,5 @@ make test
 Quick selfhost smoke:
 
 ```bash
-./scripts/ci/stage2-rolling-selfhost.sh test
+./scripts/ci/rolling-selfhost.sh test
 ```

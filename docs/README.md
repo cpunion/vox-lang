@@ -30,23 +30,17 @@ Documents:
 - `docs/19-ir-spec.md`
 - `docs/20-bootstrap.md`
 - `docs/24-release-process.md`
-- `docs/27-stage2-active-backlog.md`
+- `docs/27-active-backlog.md`
 
 Archive:
 
 - `docs/archive/21-stage1-compiler.md`
-- `docs/archive/22-stage2-backlog.md`
-- `docs/archive/23-stage2-backlog-next.md`
-- `docs/archive/25-stage2-p0p1-closure.md`
-- `docs/archive/26-stage2-closure-1-4-7-9.md`
+- `docs/archive/22-backlog.md`
+- `docs/archive/23-backlog-next.md`
+- `docs/archive/25-p0p1-closure.md`
+- `docs/archive/26-closure-1-4-7-9.md`
 
 Current policy:
 
-- Mainline: stage2-only rolling selfhost.
+- Mainline uses a single compiler implementation with rolling selfhost.
 - Historical bootstrap (`stage0/stage1`) is archived in branch `archive/stage0-stage1`.
-
-Deferred for now:
-
-- `docs/08-thread-safety.md`
-- `docs/09-async-model.md`
-- `docs/16-platform-support.md`

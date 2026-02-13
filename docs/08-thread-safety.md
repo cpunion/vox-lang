@@ -1,6 +1,6 @@
-# 线程安全（Stage2 基线）
+# 线程安全（当前基线）
 
-Stage2 采用 `Send`/`Sync` marker trait 作为线程安全约束入口：
+当前编译器采用 `Send`/`Sync` marker trait 作为线程安全约束入口：
 
 - 位置：`std/prelude`。
 - 形态：marker trait（无方法）。
@@ -17,4 +17,4 @@ Stage2 采用 `Send`/`Sync` marker trait 作为线程安全约束入口：
 当前边界：
 
 - 还不支持 negative impl（如 `!Send`）与 unsafe 手工承诺模型。
-- 更深层的借用/所有权收敛与并发内存模型仍在后续阶段推进（见 `docs/27-stage2-active-backlog.md` 的 `D06/D07`）。
+- 更深层的借用/所有权收敛与并发内存模型仍在后续阶段推进（见 `docs/27-active-backlog.md` 的 `D06/D07`）。

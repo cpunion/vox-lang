@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LOCK_FILE="$ROOT/scripts/release/bootstrap-stage2.lock"
+LOCK_FILE="$ROOT/scripts/release/bootstrap.lock"
 
 usage() {
   cat >&2 <<USAGE
@@ -27,9 +27,9 @@ fi
 # shellcheck disable=SC1090
 source "$LOCK_FILE"
 
-TAG="${STAGE2_BOOTSTRAP_TAG:-}"
+TAG="${BOOTSTRAP_TAG:-}"
 if [[ -z "$TAG" ]]; then
-  echo "[bootstrap] STAGE2_BOOTSTRAP_TAG is empty in $LOCK_FILE" >&2
+  echo "[bootstrap] BOOTSTRAP_TAG is empty in $LOCK_FILE" >&2
   exit 1
 fi
 
