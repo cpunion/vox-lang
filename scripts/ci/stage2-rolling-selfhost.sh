@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-STAGE2_DIR="$ROOT/compiler/stage2"
+WORK_DIR="$ROOT"
 OUT_REL="${VOX_STAGE2_SELFHOST_OUT:-target/debug/vox_stage2_rolling}"
 
 usage() {
@@ -36,11 +36,11 @@ pick_bootstrap_stage2() {
   fi
 
   local candidates=(
-    "$STAGE2_DIR/target/bootstrap/vox_stage2_prev"
-    "$STAGE2_DIR/target/debug/vox_stage2_b_tool"
-    "$STAGE2_DIR/target/debug/vox_stage2_rolling"
-    "$STAGE2_DIR/target/debug/vox_stage2"
-    "$STAGE2_DIR/target/release/vox_stage2"
+    "$WORK_DIR/target/bootstrap/vox_stage2_prev"
+    "$WORK_DIR/target/debug/vox_stage2_b_tool"
+    "$WORK_DIR/target/debug/vox_stage2_rolling"
+    "$WORK_DIR/target/debug/vox_stage2"
+    "$WORK_DIR/target/release/vox_stage2"
   )
 
   local c
@@ -58,7 +58,7 @@ pick_bootstrap_stage2() {
 build_stage2_from_bootstrap() {
   local bootstrap_bin="$1"
   (
-    cd "$STAGE2_DIR"
+    cd "$WORK_DIR"
     "$bootstrap_bin" build-pkg --driver=tool "$OUT_REL"
   )
 }
@@ -76,14 +76,14 @@ esac
 BOOTSTRAP_BIN=""
 if ! BOOTSTRAP_BIN="$(pick_bootstrap_stage2)"; then
   echo "[stage2-selfhost] no rolling bootstrap stage2 binary found" >&2
-  echo "[stage2-selfhost] set VOX_BOOTSTRAP_STAGE2 or prepare compiler/stage2/target/bootstrap/vox_stage2_prev" >&2
+  echo "[stage2-selfhost] set VOX_BOOTSTRAP_STAGE2 or prepare target/bootstrap/vox_stage2_prev" >&2
   exit 1
 fi
 
 echo "[stage2-selfhost] bootstrap: $BOOTSTRAP_BIN"
 build_stage2_from_bootstrap "$BOOTSTRAP_BIN"
 
-SELF_BIN="$(resolve_bin "$STAGE2_DIR/$OUT_REL")"
+SELF_BIN="$(resolve_bin "$WORK_DIR/$OUT_REL")"
 echo "[stage2-selfhost] built: $SELF_BIN"
 
 if [[ "$MODE" == "print-bin" ]]; then
@@ -101,7 +101,7 @@ TEST_OUT_REL="${VOX_STAGE2_TEST_OUT:-target/debug/vox_stage2.test}"
 
 echo "[stage2-selfhost] test-pkg: run=$RUN_GLOB jobs=$JOBS"
 (
-  cd "$STAGE2_DIR"
+  cd "$WORK_DIR"
   "$SELF_BIN" test-pkg "--jobs=$JOBS" "--run=$RUN_GLOB" "$TEST_OUT_REL"
 )
 

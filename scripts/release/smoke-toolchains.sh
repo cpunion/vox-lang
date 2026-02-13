@@ -91,7 +91,7 @@ resolve_bin() {
 
 bootstrap_cc_env
 
-STAGE2_BIN="$(resolve_bin "$ROOT/compiler/stage2/target/release/vox_stage2")"
+STAGE2_BIN="$(resolve_bin "$ROOT/target/release/vox_stage2")"
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vox-release-smoke.XXXXXX")"
 cleanup() {

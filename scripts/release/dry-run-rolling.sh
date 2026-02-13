@@ -36,9 +36,9 @@ pick_bootstrap_stage2() {
   fi
 
   local candidates=(
-    "$ROOT/compiler/stage2/target/release/vox_stage2"
-    "$ROOT/compiler/stage2/target/debug/vox_stage2"
-    "$ROOT/compiler/stage2/target/bootstrap/vox_stage2_prev"
+    "$ROOT/target/release/vox_stage2"
+    "$ROOT/target/debug/vox_stage2"
+    "$ROOT/target/bootstrap/vox_stage2_prev"
   )
 
   local c
@@ -56,7 +56,7 @@ pick_bootstrap_stage2() {
 BOOTSTRAP_BIN=""
 if ! BOOTSTRAP_BIN="$(pick_bootstrap_stage2)"; then
   echo "[dry-run] no rolling bootstrap stage2 binary found" >&2
-  echo "[dry-run] set VOX_BOOTSTRAP_STAGE2 or prepare compiler/stage2/target/bootstrap/vox_stage2_prev" >&2
+  echo "[dry-run] set VOX_BOOTSTRAP_STAGE2 or prepare target/bootstrap/vox_stage2_prev" >&2
   exit 1
 fi
 

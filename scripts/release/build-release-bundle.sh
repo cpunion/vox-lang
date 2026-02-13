@@ -117,10 +117,10 @@ pick_bootstrap_stage2() {
   fi
 
   local candidates=(
-    "$ROOT/compiler/stage2/target/bootstrap/vox_stage2_prev"
-    "$ROOT/compiler/stage2/target/release/vox_stage2"
-    "$ROOT/compiler/stage2/target/debug/vox_stage2"
-    "$ROOT/compiler/stage2/target/debug/vox_stage2_b_tool"
+    "$ROOT/target/bootstrap/vox_stage2_prev"
+    "$ROOT/target/release/vox_stage2"
+    "$ROOT/target/debug/vox_stage2"
+    "$ROOT/target/debug/vox_stage2_b_tool"
   )
 
   local c
@@ -155,7 +155,7 @@ fi
 STAGE2_BOOTSTRAP=""
 if ! STAGE2_BOOTSTRAP="$(pick_bootstrap_stage2)"; then
   echo "[release] rolling bootstrap stage2 binary is required" >&2
-  echo "[release] set VOX_BOOTSTRAP_STAGE2 or prepare compiler/stage2/target/bootstrap/vox_stage2_prev" >&2
+  echo "[release] set VOX_BOOTSTRAP_STAGE2 or prepare target/bootstrap/vox_stage2_prev" >&2
   exit 1
 fi
 
@@ -167,11 +167,11 @@ stage2_bootstrap_probe=$?
 set -e
 echo "[release] stage2 bootstrap probe exit: $stage2_bootstrap_probe"
 
-mkdir -p "$ROOT/compiler/stage2/target/release"
-STAGE2_TOOL_LOG="$ROOT/compiler/stage2/target/release/stage2-tool-build.log"
+mkdir -p "$ROOT/target/release"
+STAGE2_TOOL_LOG="$ROOT/target/release/stage2-tool-build.log"
 set +e
 (
-  cd "$ROOT/compiler/stage2"
+  cd "$ROOT"
   if [[ "$GOOS" == "windows" && -n "$CC_BASH" ]]; then
     if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
       "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static -Wl,--stack,8388608
@@ -193,7 +193,7 @@ if [[ $stage2_tool_rc -ne 0 ]]; then
   exit $stage2_tool_rc
 fi
 
-STAGE2_TOOL="$(resolve_bin "$ROOT/compiler/stage2/target/release/vox_stage2")"
+STAGE2_TOOL="$(resolve_bin "$ROOT/target/release/vox_stage2")"
 
 BUNDLE_NAME="vox-lang-${VERSION}-${PLATFORM}"
 BUNDLE_DIR="$DIST_DIR/$BUNDLE_NAME"

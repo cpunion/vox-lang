@@ -38,8 +38,8 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$ROOT/compiler/stage2/target/bootstrap"
-rm -f "$ROOT/compiler/stage2/target/bootstrap/vox_stage2_prev" "$ROOT/compiler/stage2/target/bootstrap/vox_stage2_prev.exe"
+mkdir -p "$ROOT/target/bootstrap"
+rm -f "$ROOT/target/bootstrap/vox_stage2_prev" "$ROOT/target/bootstrap/vox_stage2_prev.exe"
 
 TMP_DIR="$ROOT/.tmp_prev_locked"
 rm -rf "$TMP_DIR"
@@ -64,9 +64,9 @@ if [[ -z "$PREV_BIN" ]]; then
   exit 1
 fi
 
-cp "$PREV_BIN" "$ROOT/compiler/stage2/target/bootstrap/vox_stage2_prev"
+cp "$PREV_BIN" "$ROOT/target/bootstrap/vox_stage2_prev"
 if [[ "$PREV_BIN" == *.exe ]]; then
-  cp "$PREV_BIN" "$ROOT/compiler/stage2/target/bootstrap/vox_stage2_prev.exe"
+  cp "$PREV_BIN" "$ROOT/target/bootstrap/vox_stage2_prev.exe"
 fi
 
 echo "[bootstrap] using locked stage2 bootstrap: $PREV_BIN"

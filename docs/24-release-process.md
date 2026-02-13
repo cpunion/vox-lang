@@ -33,7 +33,7 @@
 
 要求：
 
-- 必须提供 rolling bootstrap 二进制（`VOX_BOOTSTRAP_STAGE2` 或 `compiler/stage2/target/bootstrap/vox_stage2_prev`）。
+- 必须提供 rolling bootstrap 二进制（`VOX_BOOTSTRAP_STAGE2` 或 `target/bootstrap/vox_stage2_prev`）。
 - 缺失 bootstrap 二进制时构建直接失败，不允许回退到 `stage1`。
 
 ## 3. 锁文件
@@ -48,7 +48,7 @@ CI 步骤：
 
 - `scripts/release/prepare-locked-bootstrap.sh <repo> <platform>`
 - 下载锁定资产：`vox-lang-${STAGE2_BOOTSTRAP_TAG}-${platform}.tar.gz`
-- 提取 `bin/vox-stage2[.exe]` 到 `compiler/stage2/target/bootstrap/vox_stage2_prev[.exe]`
+- 提取 `bin/vox-stage2[.exe]` 到 `target/bootstrap/vox_stage2_prev[.exe]`
 - 下载/提取失败直接失败
 
 ## 4. 触发规则

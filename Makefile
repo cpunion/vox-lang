@@ -1,17 +1,14 @@
-.PHONY: fmt test test-go test-stage2 test-stage2-selfhost test-stage2-tests test-stage2-p0p1 \
+.PHONY: fmt test test-stage2 test-stage2-selfhost test-stage2-tests test-stage2-p0p1 \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run
 
 fmt:
-	cd compiler/stage0 && gofmt -w $$(find . -name '*.go' -type f)
+	@echo "[fmt] no formatter configured for .vox yet"
 
-# Run core repo tests: stage0 Go unit tests + stage2 rolling selfhost gates + example package smoke.
-test: test-go test-stage2 test-examples
+# Run core repo tests: stage2 rolling selfhost gates + example package smoke.
+test: test-stage2 test-examples
 
-# Active development gate: keep stage0/unit stable, validate rolling stage2 bootstrap and stage2 suite.
-test-active: test-go test-stage2
-
-test-go:
-	cd compiler/stage0 && go test ./...
+# Active development gate.
+test-active: test-stage2
 
 # Stage2 rolling bootstrap gate (stage2(prev) -> stage2(new)).
 test-stage2: test-stage2-selfhost test-stage2-tests
@@ -40,7 +37,7 @@ test-examples:
 audit-vox-lines:
 	@set -e; \
 	max=$${MAX:-140}; \
-	files=$$(find compiler/stage2/src examples -name '*.vox' -type f 2>/dev/null); \
+	files=$$(find src examples -name '*.vox' -type f 2>/dev/null); \
 	if [ -z "$$files" ]; then \
 		echo "[audit] no .vox files found"; \
 		exit 0; \

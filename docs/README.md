@@ -3,10 +3,10 @@
 Vox is a Rust-like systems language with strong compile-time execution and a simplified memory model:
 
 - Rust naming (`T`, `&T`, `Box[T]`, `Arc[T]`, `Weak[T]`)
-- **No user lifetimes** (except `&'static T`)
-- Borrowed references are **ephemeral** (cannot be stored/returned/captured long-term)
+- No user lifetimes (except `&'static T`)
+- Borrowed references are ephemeral (cannot be stored/returned/captured long-term)
 
-Note: Vox uses **square brackets** for generics: `Vec[T]`, `Result[T, E]`, and explicit type args at call site: `f[T](...)`.
+Note: Vox uses square brackets for generics: `Vec[T]`, `Result[T, E]`, and explicit type args at call site: `f[T](...)`.
 
 Documents:
 
@@ -29,22 +29,21 @@ Documents:
 - `docs/18-diagnostics.md`
 - `docs/19-ir-spec.md`
 - `docs/20-bootstrap.md`
-- `docs/21-stage1-compiler.md`
 - `docs/24-release-process.md`
 - `docs/27-stage2-active-backlog.md`
 
-Archive (closed historical checklists):
+Archive:
 
+- `docs/archive/21-stage1-compiler.md`
 - `docs/archive/22-stage2-backlog.md`
 - `docs/archive/23-stage2-backlog-next.md`
 - `docs/archive/25-stage2-p0p1-closure.md`
 - `docs/archive/26-stage2-closure-1-4-7-9.md`
 
-Current stage policy:
+Current policy:
 
-- `stage0`: frozen maintenance
-- `stage1`: frozen bootstrap line
-- `stage2`: active evolution line
+- Mainline: stage2-only rolling selfhost.
+- Historical bootstrap (`stage0/stage1`) is archived in branch `archive/stage0-stage1`.
 
 Deferred for now:
 
