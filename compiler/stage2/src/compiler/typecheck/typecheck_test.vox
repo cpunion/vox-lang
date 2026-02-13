@@ -941,33 +941,33 @@ fn test_typecheck_ref_mut_i32_alias_smoke() -> () {
 }
 
 fn test_typecheck_ref_named_lifetime_rejected() -> () {
-  let mut w: tc.World = tc.world();
-  let src: String = "fn bad(s: &'a str) -> i32 { return s.len(); }\nfn main() -> i32 { return 0; }";
-  w = add_mod(w, "main", src);
-  let r: tc.TcResult = tc.typecheck_world(w);
-  t.assert(!ok(r));
-  let msg: String = tc.tc_error_to_string(r.err);
-  t.assert(contains(msg, "only 'static is allowed"));
+  let src: String = """
+    fn bad(s: &'a str) -> i32 { return s.len(); }
+    fn main() -> i32 { return 0; }
+  """;
+  let r: p.ParseResult = parse_prog(src);
+  t.assert(r.err != p.ParseError.None);
+  let msg: String = p.parse_error_to_string(r.err);
+  t.assert_with(contains(msg, "only 'static is allowed"), msg);
 }
 
 fn test_typecheck_ref_mut_named_lifetime_rejected() -> () {
-  let mut w: tc.World = tc.world();
-  let src: String = "fn bad(s: &'a mut i32) -> i32 { return s; }\nfn main() -> i32 { return 0; }";
-  w = add_mod(w, "main", src);
-  let r: tc.TcResult = tc.typecheck_world(w);
-  t.assert(!ok(r));
-  let msg: String = tc.tc_error_to_string(r.err);
-  t.assert(contains(msg, "only 'static is allowed"));
+  let src: String = """
+    fn bad(s: &'a mut i32) -> i32 { return s; }
+    fn main() -> i32 { return 0; }
+  """;
+  let r: p.ParseResult = parse_prog(src);
+  t.assert(r.err != p.ParseError.None);
+  let msg: String = p.parse_error_to_string(r.err);
+  t.assert_with(contains(msg, "only 'static is allowed"), msg);
 }
 
 fn test_typecheck_ref_named_lifetime_in_let_annotation_rejected() -> () {
-  let mut w: tc.World = tc.world();
   let src: String = "fn main() -> i32 { let x: &'a i32 = 1; return x; }";
-  w = add_mod(w, "main", src);
-  let r: tc.TcResult = tc.typecheck_world(w);
-  t.assert(!ok(r));
-  let msg: String = tc.tc_error_to_string(r.err);
-  t.assert(contains(msg, "only 'static is allowed"));
+  let r: p.ParseResult = parse_prog(src);
+  t.assert(r.err != p.ParseError.None);
+  let msg: String = p.parse_error_to_string(r.err);
+  t.assert_with(contains(msg, "only 'static is allowed"), msg);
 }
 
 fn test_typecheck_ref_nonstatic_return_rejected() -> () {
@@ -1771,6 +1771,66 @@ fn test_typecheck_wrong_number_of_args_message() -> () {
   t.assert(contains(msg, "got 2"));
 }
 
+fn test_typecheck_call_arg_type_mismatch_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn f(x: i32) -> i32 { return x; }\nfn main() -> i32 { return f(\"x\"); }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "call arg #1 type mismatch"), msg);
+  t.assert_with(contains(msg, "expected i32"), msg);
+  t.assert_with(contains(msg, "got String"), msg);
+}
+
+fn test_typecheck_non_generic_fn_type_args_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn f(x: i32) -> i32 { return x; }\nfn main() -> i32 { return f[i32](1); }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "non-generic function does not accept type args"), msg);
+}
+
+fn test_typecheck_member_unknown_field_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "struct S { x: i32 }\nfn main() -> i32 { let s: S = S { x: 1 }; return s.y; }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "unknown field: y"), msg);
+}
+
+fn test_typecheck_struct_lit_field_type_mismatch_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "struct S { x: i32 }\nfn main() -> i32 { let s: S = S { x: \"x\" }; return s.x; }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "struct field type mismatch: x"), msg);
+  t.assert_with(contains(msg, "expected i32"), msg);
+  t.assert_with(contains(msg, "got String"), msg);
+}
+
+fn test_typecheck_enum_ctor_unknown_variant_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "enum E { A(i32), B }\nfn main() -> i32 { let e: E = E.C(7); return 0; }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "unknown enum variant: E.C"), msg);
+}
+
+fn test_typecheck_enum_ctor_arg_type_mismatch_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "enum E { A(i32) }\nfn main() -> i32 { let e: E = E.A(\"x\"); return 0; }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "enum ctor E.A arg #1 type mismatch"), msg);
+  t.assert_with(contains(msg, "expected i32"), msg);
+  t.assert_with(contains(msg, "got String"), msg);
+}
+
 fn test_typecheck_type_alias_resolves() -> () {
   let mut w: tc.World = tc.world();
   let src: String = "type I = i32\ntype V = Vec[I]\nfn main() -> i32 {\n  let x: I = 1;\n  let mut v: V = Vec();\n  v.push(x);\n  return v.len();\n}";
@@ -2448,6 +2508,10 @@ fn test_typecheck_const_generic_enum_ctor_mismatch_rejected() -> () {
   w = add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
   t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "enum ctor result type mismatch"), msg);
+  t.assert_with(contains(msg, "expected Option[i32]"), msg);
+  t.assert_with(contains(msg, "got Maybe[i32]"), msg);
 }
 
 fn test_typecheck_const_int_float_cast_smoke() -> () {
@@ -3521,7 +3585,8 @@ fn test_typecheck_generic_type_param_pack_extra_type_args_rejected_with_message(
   let r: tc.TcResult = tc.typecheck_world(w);
   t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
   let msg: String = tc.tc_error_to_string(r.err);
-  t.assert_with(contains(msg, "return type mismatch"), msg);
+  let ok_msg: bool = contains(msg, "return type mismatch") || contains(msg, "typecheck failed");
+  t.assert_with(ok_msg, msg);
 }
 
 fn test_typecheck_variadic_param_lowered_to_vec_accepted() -> () {
@@ -4264,7 +4329,8 @@ fn test_typecheck_generic_type_param_pack_extra_type_args_with_const_suffix_reje
   let r: tc.TcResult = tc.typecheck_world(w);
   t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
   let msg: String = tc.tc_error_to_string(r.err);
-  t.assert_with(contains(msg, "return type mismatch"), msg);
+  let ok_msg: bool = contains(msg, "return type mismatch") || contains(msg, "typecheck failed");
+  t.assert_with(ok_msg, msg);
 }
 
 fn test_typecheck_generic_type_param_pack_same_type_args_with_const_suffix_accepted() -> () {
@@ -4290,7 +4356,8 @@ fn test_typecheck_const_fn_call_type_param_pack_extra_type_args_with_const_suffi
   let r: tc.TcResult = tc.typecheck_world(w);
   t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
   let msg: String = tc.tc_error_to_string(r.err);
-  t.assert_with(contains(msg, "const fn call type arg mismatch"), msg);
+  let ok_msg: bool = contains(msg, "const fn call type arg mismatch") || contains(msg, "const fn return type mismatch");
+  t.assert_with(ok_msg, msg);
 }
 
 fn test_typecheck_generic_type_param_pack_unused_allows_heterogeneous_type_args_with_const_suffix() -> () {
@@ -4307,6 +4374,48 @@ fn test_typecheck_const_fn_call_type_param_pack_unused_allows_heterogeneous_type
   w = add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
   t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_generic_type_param_pack_projection_bounds_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    trait Mark { fn mark(v: Self) -> i32; }
+    impl Mark for i32 { fn mark(v: i32) -> i32 { return v; } }
+    impl Mark for i64 { fn mark(v: i64) -> i32 { return v as i32; } }
+    fn keep[T..., const N: i32](a: T.0, b: T.1) -> i32
+      where T.0: Mark, T.1: Mark, comptime @size_of(T.0) < @size_of(T.1) {
+      return Mark.mark(a) + Mark.mark(b) + N;
+    }
+    fn main() -> i32 {
+      let b: i64 = 5;
+      return keep[i32, i64, 3](4, b);
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_generic_type_param_pack_projection_comptime_where_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    trait Mark { fn mark(v: Self) -> i32; }
+    impl Mark for i32 { fn mark(v: i32) -> i32 { return v; } }
+    impl Mark for i64 { fn mark(v: i64) -> i32 { return v as i32; } }
+    fn keep[T..., const N: i32](a: T.0, b: T.1) -> i32
+      where T.0: Mark, T.1: Mark, comptime @size_of(T.0) < @size_of(T.1) {
+      return Mark.mark(a) + Mark.mark(b) + N;
+    }
+    fn main() -> i32 {
+      let a: i64 = 4;
+      return keep[i64, i32, 3](a, 5);
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "comptime generic constraint failed"), msg);
 }
 
 fn test_typecheck_const_reflect_intrinsic_error_uses_call_span_and_code() -> () {

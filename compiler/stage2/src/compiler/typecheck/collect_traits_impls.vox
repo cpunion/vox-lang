@@ -488,6 +488,55 @@ pub fn impl_sig_more_specific(ctx: Ctx, a: ImplSig, b: ImplSig) -> bool {
   );
 }
 
+
+fn type_param_name_or_projection(name: String, tp: String) -> bool {
+  if name == tp { return true; }
+  let pfx: String = tp.concat(".");
+  if name.len() <= pfx.len() { return false; }
+  return name.slice(0, pfx.len()) == pfx;
+}
+
+fn ty_uses_impl_type_param(ctx: Ctx, ty: i32, tp: String) -> bool {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param { return type_param_name_or_projection(t.name, tp); }
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range { return ty_uses_impl_type_param(ctx, t.elem, tp); }
+  if t.kind == ir.TyKind.Struct {
+    let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+    if !fs.found { return false; }
+    let mut i: i32 = 0;
+    while i < fs.sig.fields.len() {
+      if ty_uses_impl_type_param(ctx, fs.sig.fields.get(i).ty, tp) { return true; }
+      i = i + 1;
+    }
+    return false;
+  }
+  if t.kind == ir.TyKind.Enum {
+    let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+    if !fe.found { return false; }
+    let mut vi: i32 = 0;
+    while vi < fe.sig.vars.len() {
+      let ev: EnumVariantSig = fe.sig.vars.get(vi);
+      let mut fi: i32 = 0;
+      while fi < ev.fields.len() {
+        if ty_uses_impl_type_param(ctx, ev.fields.get(fi), tp) { return true; }
+        fi = fi + 1;
+      }
+      vi = vi + 1;
+    }
+    return false;
+  }
+  return false;
+}
+
+fn first_unconstrained_impl_type_param(ctx: Ctx, for_ty: i32, tps: Vec[String]) -> String {
+  let mut i: i32 = 0;
+  while i < tps.len() {
+    let tp: String = tps.get(i);
+    if !ty_uses_impl_type_param(ctx, for_ty, tp) { return tp; }
+    i = i + 1;
+  }
+  return "";
+}
 fn impl_decl_span(w: World, mod_path: String, decl_idx: i32) -> ast.Span {
   let fm: FindModResult = find_mod(w, mod_path);
   if !fm.found { return ast.span0(); }
@@ -746,7 +795,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         let mut bi: i32 = 0;
         while bi < md.type_param_bounds.len() {
           let bdecl: ast.TypeParamBoundsDecl = md.type_param_bounds.get(bi);
-          if !contains_str_local(md.type_params, bdecl.name) {
+          if !type_param_ref_exists(md.type_params, bdecl.name) {
             return TcCtxResult { ok: false, err: type_error_at(td.sp, "unknown type param in trait method bound: ".concat(bdecl.name)), ctx: c };
           }
           let mut bj: i32 = 0;
@@ -851,7 +900,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let mut bi0_inh: i32 = 0;
         while bi0_inh < id.type_param_bounds.len() {
           let bdecl0_inh: ast.TypeParamBoundsDecl = id.type_param_bounds.get(bi0_inh);
-          if !contains_str_local(id.type_params, bdecl0_inh.name) {
+          if !type_param_ref_exists(id.type_params, bdecl0_inh.name) {
             return TcCtxResult { ok: false, err: type_error_at(id.sp, "unknown type param in impl bound: ".concat(bdecl0_inh.name)), ctx: c };
           }
           let mut bj0_inh: i32 = 0;
@@ -877,6 +926,11 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           return TcCtxResult { ok: false, err: type_error_at(id.sp, "bad impl target type"), ctx: c };
         }
         let for_ty_inh: i32 = strip_range(c, fr_inh.idx);
+        let unconstrained_inh: String = first_unconstrained_impl_type_param(c, for_ty_inh, id.type_params);
+        if unconstrained_inh != "" {
+          let msg_u_inh: String = "impl type param is unconstrained by impl target type: ".concat(unconstrained_inh);
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, msg_u_inh), ctx: c };
+        }
 
         if id.assoc_types.len() != 0 {
           return TcCtxResult { ok: false, err: type_error_at(id.sp, "inherent impl does not support associated types"), ctx: c };
@@ -961,7 +1015,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           let mut bi_inh: i32 = 0;
           while bi_inh < md_inh.type_param_bounds.len() {
             let bdecl_inh: ast.TypeParamBoundsDecl = md_inh.type_param_bounds.get(bi_inh);
-            if !contains_str_local(md_inh.type_params, bdecl_inh.name) {
+            if !type_param_ref_exists(md_inh.type_params, bdecl_inh.name) {
               return TcCtxResult { ok: false, err: type_error_at(md_inh.sp, "unknown type param in inherent impl method bound: ".concat(bdecl_inh.name)), ctx: c };
             }
             let mut bj_inh: i32 = 0;
@@ -1080,7 +1134,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
       let mut bi0: i32 = 0;
       while bi0 < id.type_param_bounds.len() {
         let bdecl0: ast.TypeParamBoundsDecl = id.type_param_bounds.get(bi0);
-        if !contains_str_local(id.type_params, bdecl0.name) {
+        if !type_param_ref_exists(id.type_params, bdecl0.name) {
           return TcCtxResult { ok: false, err: type_error_at(id.sp, "unknown type param in impl bound: ".concat(bdecl0.name)), ctx: c };
         }
         let mut bj0: i32 = 0;
@@ -1106,6 +1160,11 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         return TcCtxResult { ok: false, err: type_error_at(id.sp, "bad impl target type"), ctx: c };
       }
       let for_ty: i32 = strip_range(c, fr.idx);
+      let unconstrained_tp: String = first_unconstrained_impl_type_param(c, for_ty, id.type_params);
+      if unconstrained_tp != "" {
+        let msg_u: String = "impl type param is unconstrained by impl target type: ".concat(unconstrained_tp);
+        return TcCtxResult { ok: false, err: type_error_at(id.sp, msg_u), ctx: c };
+      }
       let for_t: ir.Ty = ir.ty_pool_get(c.pool, for_ty);
       let trait_local: bool = trr.mod_path == m.path;
       let type_local: bool = ty_mod(for_t) == m.path;
@@ -1303,12 +1362,15 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let mut bi2: i32 = 0;
         while bi2 < md.type_param_bounds.len() {
           let bdecl2: ast.TypeParamBoundsDecl = md.type_param_bounds.get(bi2);
-          if !contains_str_local(md.type_params, bdecl2.name) {
+          if !type_param_ref_exists(md.type_params, bdecl2.name) {
             return TcCtxResult { ok: false, err: type_error_at(md.sp, "unknown type param in impl method bound: ".concat(bdecl2.name)), ctx: c };
           }
-          let bpos: i32 = type_param_pos(md.type_params, bdecl2.name);
+          let bbase: String = type_param_ref_base_name(bdecl2.name);
+          let bsuf: String = type_param_ref_projection_suffix(bdecl2.name);
+          let bpos: i32 = type_param_pos(md.type_params, bbase);
           if bpos < 0 { return TcCtxResult { ok: false, err: type_error_at(md.sp, "unknown type param in impl method bound: ".concat(bdecl2.name)), ctx: c }; }
-          let btp: String = want.type_params.get(bpos);
+          let mut btp: String = want.type_params.get(bpos);
+          if bsuf != "" { btp = btp.concat(".").concat(bsuf); }
           let mut bj2: i32 = 0;
           while bj2 < bdecl2.bounds.len() {
             let rtr2: ResolveTraitRefResult = resolve_trait_ref(c, w, m.path, imps, bdecl2.bounds.get(bj2));

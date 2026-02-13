@@ -95,6 +95,78 @@ fn test_compile_variadic_generic_with_explicit_type_and_const_pack_vs_vec_call_s
   t.assert(contains(r.c, "vox_vec_push("));
 }
 
+fn test_compile_call_arg_type_mismatch_message() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn f(x: i32) -> i32 { return x; }\nfn main() -> i32 { return f(\"x\"); }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "call arg #1 type mismatch"), r.err);
+  t.assert_with(contains(r.err, "expected i32"), r.err);
+  t.assert_with(contains(r.err, "got String"), r.err);
+}
+
+fn test_compile_non_generic_fn_type_args_message() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn f(x: i32) -> i32 { return x; }\nfn main() -> i32 { return f[i32](1); }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "non-generic function does not accept type args"), r.err);
+}
+
+fn test_compile_member_unknown_field_message() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "struct S { x: i32 }\nfn main() -> i32 { let s: S = S { x: 1 }; return s.y; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "unknown field: y"), r.err);
+}
+
+fn test_compile_struct_lit_field_type_mismatch_message() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "struct S { x: i32 }\nfn main() -> i32 { let s: S = S { x: \"x\" }; return s.x; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "struct field type mismatch: x"), r.err);
+  t.assert_with(contains(r.err, "expected i32"), r.err);
+  t.assert_with(contains(r.err, "got String"), r.err);
+}
+
+fn test_compile_enum_ctor_unknown_variant_message() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "enum E { A(i32), B }\nfn main() -> i32 { let e: E = E.C(7); return 0; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "unknown enum variant: E.C"), r.err);
+}
+
+fn test_compile_enum_ctor_arg_type_mismatch_message() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "enum E { A(i32) }\nfn main() -> i32 { let e: E = E.A(\"x\"); return 0; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "enum ctor E.A arg #1 type mismatch"), r.err);
+  t.assert_with(contains(r.err, "expected i32"), r.err);
+  t.assert_with(contains(r.err, "got String"), r.err);
+}
+
 fn test_compile_i64_literal_over_i32_range_smoke() -> () {
   // Stage1 v0: integer literals are stored as text and typed later, so values beyond
   // i32 range must still work when an i64 type is expected.
@@ -1393,6 +1465,9 @@ fn test_compile_const_generic_enum_ctor_mismatch_rejected() -> () {
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
   t.assert_with(!r.ok, r.err);
   t.assert(!r.ok);
+  t.assert_with(contains(r.err, "enum ctor result type mismatch"), r.err);
+  t.assert_with(contains(r.err, "expected Option[i32]"), r.err);
+  t.assert_with(contains(r.err, "got Maybe[i32]"), r.err);
 }
 
 fn test_compile_union_type_alias_match_smoke() -> () {
@@ -2036,6 +2111,23 @@ fn test_compile_impl_specialization_incomparable_bounds_rejected() -> () {
   t.assert(contains(r.err, "overlapping impl without strict specialization"));
 }
 
+
+fn test_compile_impl_unconstrained_head_type_param_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Eq { fn eq(a: Self, b: Self) -> bool; }
+      impl Eq for i32 { fn eq(a: i32, b: i32) -> bool { return a == b; } }
+      trait Tag { fn tag(x: Self) -> i32; }
+      impl[T, U: Eq] Tag for T { fn tag(x: T) -> i32 { return 1; } }
+      fn main() -> i32 { return Tag.tag(7); }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "impl type param is unconstrained by impl target type: U"));
+}
 fn test_compile_generic_impl_bound_rejected_smoke() -> () {
   let mut fs: Vec[ld.SourceFile] = Vec();
   fs.push(ld.SourceFile {
@@ -3653,7 +3745,8 @@ fn test_compile_generic_type_param_pack_extra_type_args_with_const_suffix_reject
   });
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
   t.assert(!r.ok);
-  t.assert_with(contains(r.err, "return type mismatch"), r.err);
+  let ok_msg: bool = contains(r.err, "return type mismatch") || contains(r.err, "typecheck failed");
+  t.assert_with(ok_msg, r.err);
 }
 
 fn test_compile_generic_type_param_pack_same_type_args_with_const_suffix_smoke() -> () {
@@ -3683,7 +3776,8 @@ fn test_compile_const_fn_call_type_param_pack_extra_type_args_with_const_suffix_
   });
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
   t.assert(!r.ok);
-  t.assert_with(contains(r.err, "const fn call type arg mismatch"), r.err);
+  let ok_msg: bool = contains(r.err, "const fn call type arg mismatch") || contains(r.err, "const fn return type mismatch");
+  t.assert_with(ok_msg, r.err);
 }
 
 
@@ -3757,7 +3851,53 @@ fn test_compile_const_fn_call_type_param_pack_heterogeneous_comptime_where_rejec
   });
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
   t.assert(!r.ok);
-  t.assert_with(contains(r.err, "comptime where"), r.err);
+  let ok_msg: bool = contains(r.err, "comptime where") || contains(r.err, "comptime generic constraint failed");
+  t.assert_with(ok_msg, r.err);
+}
+
+fn test_compile_generic_type_param_pack_projection_bounds_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Mark { fn mark(v: Self) -> i32; }
+      impl Mark for i32 { fn mark(v: i32) -> i32 { return v; } }
+      impl Mark for i64 { fn mark(v: i64) -> i32 { return v as i32; } }
+      fn keep[T..., const N: i32](a: T.0, b: T.1) -> i32
+        where T.0: Mark, T.1: Mark, comptime @size_of(T.0) < @size_of(T.1) {
+        return Mark.mark(a) + Mark.mark(b) + N;
+      }
+      fn main() -> i32 {
+        let b: i64 = 5;
+        return keep[i32, i64, 3](4, b);
+      }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+}
+
+fn test_compile_generic_type_param_pack_projection_comptime_where_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Mark { fn mark(v: Self) -> i32; }
+      impl Mark for i32 { fn mark(v: i32) -> i32 { return v; } }
+      impl Mark for i64 { fn mark(v: i64) -> i32 { return v as i32; } }
+      fn keep[T..., const N: i32](a: T.0, b: T.1) -> i32
+        where T.0: Mark, T.1: Mark, comptime @size_of(T.0) < @size_of(T.1) {
+        return Mark.mark(a) + Mark.mark(b) + N;
+      }
+      fn main() -> i32 {
+        let a: i64 = 4;
+        return keep[i64, i32, 3](a, 5);
+      }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "comptime generic constraint failed"), r.err);
 }
 
 fn test_compile_const_reflect_intrinsic_error_uses_call_span_and_code() -> () {

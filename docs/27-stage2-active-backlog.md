@@ -26,16 +26,16 @@ Governance from now on:
 
 ### P0
 
-- [ ] A01 Real generic pack expansion (type/value packs), not declaration-only.
+- [x] A01 Real generic pack expansion (type/value packs), not declaration-only.
   - [x] A01-1 Trailing explicit type args can bind a single trailing type pack.
     - Landed in `compiler/stage2/src/compiler/typecheck/tc_call.vox`, `compiler/stage2/src/compiler/irgen/gen_call_match.vox`, and `compiler/stage2/src/compiler/typecheck/consts.vox`, with compile/typecheck tests covering both runtime and const-call paths.
-  - [ ] A01-2 Heterogeneous type pack binding + true per-position substitution model.
+  - [x] A01-2 Heterogeneous type pack binding + true per-position substitution model.
     - [x] A01-2a Allow heterogeneous trailing explicit type args when pack is only a placeholder (not materialized in params/ret/variadic/bounds).
-    - [ ] A01-2b True per-position substitution model for materialized heterogeneous packs.
+    - [x] A01-2b True per-position substitution model for materialized heterogeneous packs.
       - [x] Runtime call, const-eval call, and IRGen all support per-position materialization for params/ret/variadic type slots.
       - [x] Heterogeneous pack instantiation names are disambiguated (`pack`, `pack__1`, ...), avoiding monomorph collisions.
-      - [ ] Pack projection members (`Pack.N`) in materialization are still unsupported.
-      - [ ] Heterogeneous pack participation in bounds/where clauses is still unsupported.
+      - [x] Pack projection members (`Pack.N`) in materialization are supported across parse/typecheck/compile paths.
+      - [x] Heterogeneous pack participation in bounds/where clauses is supported (trait bounds + comptime where reflect).
   - [x] A01-3 Value pack expansion and call-site lowering coherence.
     - Verified by pack-call/vec-call dual-mode tests in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - Source: `docs/06-advanced-generics.md`.
@@ -57,10 +57,19 @@ Governance from now on:
 - [ ] A05 Macro system closure from MVP to stable full execution model (while keeping deterministic diagnostics).
   - Source: `docs/10-macro-system.md`.
 
-- [ ] A06 Diagnostics span coverage completion (remaining weak paths in typecheck/irgen).
+- [x] A06 Diagnostics span coverage completion (remaining weak paths in typecheck/irgen).
+  - [x] A06-1 Call-site diagnostics now emit concrete reasons for argument/type-arg failures instead of generic `typecheck failed` in common paths.
+    - Covered in `compiler/stage2/src/compiler/typecheck/tc_call.vox`, `compiler/stage2/src/compiler/typecheck/typecheck_test.vox`, `compiler/stage2/src/compiler/compile/compile_test.vox`.
+  - [x] A06-2 Reserved intrinsic/private prelude function call paths now report explicit type errors.
+  - [x] A06-3 Member/struct-literal diagnostics upgraded from generic fallback to explicit unknown/private/type-mismatch messages.
+    - Covered in `compiler/stage2/src/compiler/typecheck/tc_member.vox`, `compiler/stage2/src/compiler/typecheck/tc_struct_lit.vox`, `compiler/stage2/src/compiler/typecheck/tc_expr.vox` with paired tests in typecheck/compile suites.
+  - [x] A06-4 Enum constructor diagnostics (`.Variant(...)` and `Enum.Variant(...)`) now emit explicit unknown-variant/arity/arg-mismatch/result-mismatch errors.
+    - Covered in `compiler/stage2/src/compiler/typecheck/tc_call.vox` with paired tests in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - Source: `docs/18-diagnostics.md`.
 
-- [ ] A07 Specialization rule strengthening (where-strength/ordering edge cases).
+- [x] A07 Specialization rule strengthening (where-strength/ordering edge cases).
+  - [x] A07-1 Reject impl head type params that are unconstrained by `for` target type; this removes ambiguous overlap that can be introduced only via extra impl-head params/bounds.
+    - Covered in `compiler/stage2/src/compiler/typecheck/collect_traits_impls.vox` with paired tests in `compiler/stage2/src/compiler/typecheck/generics_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - Source: `docs/06-advanced-generics.md`.
 
 ## Deferred Scope

@@ -727,6 +727,49 @@ fn find_type_param_name(tps: Vec[String], name: String) -> i32 {
   return -1;
 }
 
+fn is_decimal_text_collect(s: String) -> bool {
+  if s.len() == 0 { return false; }
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let b: i32 = s.byte_at(i);
+    if b < 48 || b > 57 { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn type_param_ref_exists(tps: Vec[String], name: String) -> bool {
+  if find_type_param_name(tps, name) != -1 { return true; }
+  let mut cut: i32 = -1;
+  let mut i: i32 = 0;
+  while i < name.len() {
+    if name.byte_at(i) == 46 { cut = i; i = name.len(); } else { i = i + 1; }
+  }
+  if cut <= 0 || cut + 1 >= name.len() { return false; }
+  let base: String = name.slice(0, cut);
+  let suf: String = name.slice(cut + 1, name.len());
+  if find_type_param_name(tps, base) == -1 { return false; }
+  return is_decimal_text_collect(suf);
+}
+
+fn type_param_ref_projection_suffix(name: String) -> String {
+  let mut cut: i32 = -1;
+  let mut i: i32 = 0;
+  while i < name.len() {
+    if name.byte_at(i) == 46 { cut = i; i = name.len(); } else { i = i + 1; }
+  }
+  if cut <= 0 || cut + 1 >= name.len() { return ""; }
+  let suf: String = name.slice(cut + 1, name.len());
+  if !is_decimal_text_collect(suf) { return ""; }
+  return suf;
+}
+
+fn type_param_ref_base_name(name: String) -> String {
+  let suf: String = type_param_ref_projection_suffix(name);
+  if suf == "" { return name; }
+  return name.slice(0, name.len() - (suf.len() + 1));
+}
+
 fn const_where_op_supported(op: ast.BinaryOp) -> bool {
   return
     match op {
@@ -825,7 +868,7 @@ fn collect_const_where_bounds(sp: ast.Span, tps: Vec[String], cps: Vec[ConstPara
       if d.rhs_is_param {
         let rr: CollectRhsReflectDecode = collect_rhs_reflect_decode(d.rhs_param);
         if rr.ok {
-          if find_type_param_name(tps, rr.name) == -1 {
+          if type_param_ref_exists(tps, rr.name) == false {
             return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown type param in comptime where rhs: ".concat(rr.name)), bounds: out };
           }
         } else if find_const_param_sig(cps, d.rhs_param) == -1 {
@@ -861,13 +904,13 @@ fn collect_const_where_bounds(sp: ast.Span, tps: Vec[String], cps: Vec[ConstPara
       d.lhs_kind == ast.comptime_where_lhs_field_count() ||
       d.lhs_kind == ast.comptime_where_lhs_type()
     {
-      if find_type_param_name(tps, d.name) == -1 {
+      if type_param_ref_exists(tps, d.name) == false {
         return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown type param in comptime where: ".concat(d.name)), bounds: out };
       }
       if d.rhs_is_param {
         let rr2: CollectRhsReflectDecode = collect_rhs_reflect_decode(d.rhs_param);
         if rr2.ok {
-          if find_type_param_name(tps, rr2.name) == -1 {
+          if type_param_ref_exists(tps, rr2.name) == false {
             return CollectConstWhereResult { ok: false, err: type_error_at(sp, "unknown type param in comptime where rhs: ".concat(rr2.name)), bounds: out };
           }
         } else if find_const_param_sig(cps, d.rhs_param) == -1 {
@@ -1252,7 +1295,7 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       let mut bi: i32 = 0;
       while bi < fd.type_param_bounds.len() {
         let bdecl: ast.TypeParamBoundsDecl = fd.type_param_bounds.get(bi);
-        if !contains_str_local(fd.type_params, bdecl.name) {
+        if !type_param_ref_exists(fd.type_params, bdecl.name) {
           return TcCtxResult { ok: false, err: type_error_at(fd.sp, "unknown type param in bound: ".concat(bdecl.name)), ctx: c };
         }
         let mut bj: i32 = 0;
