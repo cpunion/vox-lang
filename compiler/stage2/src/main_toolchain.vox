@@ -1,0 +1,397 @@
+import "std/process" as proc
+import "std/fs" as fs
+import "std/time" as tm
+
+struct ToolchainRouteResult { handled: bool, code: i32 }
+
+fn tc_route_no() -> ToolchainRouteResult { return ToolchainRouteResult { handled: false, code: 0 }; }
+fn tc_route_yes(code: i32) -> ToolchainRouteResult { return ToolchainRouteResult { handled: true, code: code }; }
+
+fn usage_toolchain() -> () {
+  let bin: String = path_base_name(proc.exe_path());
+  print(bin.concat(" toolchain usage:\n"));
+  print("  ".concat(bin).concat(" toolchain current\n"));
+  print("  ".concat(bin).concat(" toolchain list\n"));
+  print("  ".concat(bin).concat(" toolchain install <version>\n"));
+  print("  ".concat(bin).concat(" toolchain use <version>\n"));
+  print("  ".concat(bin).concat(" toolchain pin <version>\n"));
+  print("\n");
+  print("files:\n");
+  print("  vox-toolchain.toml         # repo lock (shared)\n");
+  print("  .vox/toolchain.override    # local override (ignored by VCS)\n");
+}
+
+fn tc_ascii_lower(s: String) -> String {
+  let mut out: String = "";
+  let lowers: String = "abcdefghijklmnopqrstuvwxyz";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    if ch >= 65 && ch <= 90 {
+      let idx: i32 = ch - 65;
+      out = out.concat(lowers.slice(idx, idx + 1));
+    } else {
+      out = out.concat(s.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn tc_has_prefix(s: String, pre: String) -> bool {
+  if s.len() < pre.len() { return false; }
+  return s.slice(0, pre.len()) == pre;
+}
+
+fn tc_unquote(v0: String) -> String {
+  let v: String = trim_space_main(v0);
+  if v.len() >= 2 && v.byte_at(0) == 34 && v.byte_at(v.len() - 1) == 34 {
+    return v.slice(1, v.len() - 1);
+  }
+  return v;
+}
+
+fn tc_find_char(s: String, ch: i32) -> i32 {
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == ch { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn tc_split_lines(s: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut start: i32 = 0;
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == 10 {
+      out.push(s.slice(start, i));
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  if start <= s.len() {
+    out.push(s.slice(start, s.len()));
+  }
+  return out;
+}
+
+fn tc_normalize_version_tag(v0: String) -> String {
+  let v: String = trim_space_main(v0);
+  if v == "" { return ""; }
+  if tc_has_prefix(v, "v") { return v; }
+  return "v".concat(v);
+}
+
+fn tc_home_dir() -> String {
+  let h: String = proc.getenv("HOME");
+  if h != "" { return h; }
+  let up: String = proc.getenv("USERPROFILE");
+  if up != "" { return up; }
+  let d: String = proc.getenv("HOMEDRIVE");
+  let p: String = proc.getenv("HOMEPATH");
+  if d != "" && p != "" { return d.concat(p); }
+  return ".";
+}
+
+fn tc_toolchains_root() -> String {
+  return path_join(path_join(tc_home_dir(), ".vox"), "toolchains");
+}
+
+fn tc_bin_name() -> String {
+  return if host_is_windows() { "vox-stage2.exe" } else { "vox-stage2" };
+}
+
+fn tc_install_root(version: String) -> String {
+  return path_join(tc_toolchains_root(), version);
+}
+
+fn tc_install_bin(version: String) -> String {
+  return path_join(path_join(tc_install_root(version), "bin"), tc_bin_name());
+}
+
+fn tc_override_file() -> String {
+  return path_join(".vox", "toolchain.override");
+}
+
+fn tc_lock_file() -> String { return "vox-toolchain.toml"; }
+
+fn tc_read_override_version() -> String {
+  let p: String = tc_override_file();
+  if !fs.exists(p) { return ""; }
+  let txt: String = trim_space_main(fs.read_to_string(p));
+  return tc_normalize_version_tag(txt);
+}
+
+fn tc_parse_lock_version_text(txt: String) -> String {
+  let lines: Vec[String] = tc_split_lines(txt);
+  let mut section: String = "";
+  let mut i: i32 = 0;
+  while i < lines.len() {
+    let line: String = trim_space_main(lines.get(i));
+    if line == "" || tc_has_prefix(line, "#") {
+      i = i + 1;
+      continue;
+    }
+    if line.len() >= 2 && line.byte_at(0) == 91 && line.byte_at(line.len() - 1) == 93 {
+      section = trim_space_main(line.slice(1, line.len() - 1));
+      i = i + 1;
+      continue;
+    }
+    if section == "toolchain" {
+      let eq: i32 = tc_find_char(line, 61); // '='
+      if eq > 0 {
+        let key: String = trim_space_main(line.slice(0, eq));
+        let val: String = trim_space_main(line.slice(eq + 1, line.len()));
+        if key == "vox" {
+          return tc_normalize_version_tag(tc_unquote(val));
+        }
+      }
+    }
+    i = i + 1;
+  }
+  return "";
+}
+
+fn tc_read_lock_version() -> String {
+  let p: String = tc_lock_file();
+  if !fs.exists(p) { return ""; }
+  return tc_parse_lock_version_text(fs.read_to_string(p));
+}
+
+fn tc_selected_version() -> String {
+  let env_v: String = tc_normalize_version_tag(proc.getenv("VOX_TOOLCHAIN"));
+  if env_v != "" { return env_v; }
+  let ov: String = tc_read_override_version();
+  if ov != "" { return ov; }
+  return tc_read_lock_version();
+}
+
+fn tc_detect_uname_value(flag: String) -> String {
+  fs.mkdir_p("target/debug");
+  let out: String = path_join("target/debug", ".vox_tc_".concat(flag).concat("_").concat(tm.now_ns().to_string()));
+  let cmd: String = "uname ".concat(flag).concat(" > ").concat(shell_quote(shell_exec_path(out))).concat(" 2>/dev/null");
+  if proc.exec(cmd) != 0 { return ""; }
+  if !fs.exists(out) { return ""; }
+  return trim_space_main(fs.read_to_string(out));
+}
+
+fn tc_detect_platform() -> String {
+  let os: String =
+    if host_is_windows() {
+      "windows"
+    } else {
+      let us: String = tc_ascii_lower(tc_detect_uname_value("-s"));
+      if us == "darwin" { "darwin" } else { "linux" }
+    };
+
+  let arch: String =
+    if host_is_windows() {
+      let pa: String = tc_ascii_lower(proc.getenv("PROCESSOR_ARCHITECTURE"));
+      if text_contains(pa, "arm64") || text_contains(pa, "aarch64") { "arm64" } else { "amd64" }
+    } else {
+      let ua: String = tc_ascii_lower(tc_detect_uname_value("-m"));
+      if text_contains(ua, "arm64") || text_contains(ua, "aarch64") { "arm64" } else { "amd64" }
+    };
+
+  return os.concat("-").concat(arch);
+}
+
+fn tc_repo() -> String {
+  let r: String = trim_space_main(proc.getenv("VOX_TOOLCHAIN_REPO"));
+  if r != "" { return r; }
+  return "cpunion/vox-lang";
+}
+
+fn tc_build_exec_cmd(bin: String, args: Vec[String]) -> String {
+  let mut cmd: String = shell_quote(shell_exec_path(bin));
+  let mut i: i32 = 0;
+  while i < args.len() {
+    cmd = cmd.concat(" ").concat(shell_quote(args.get(i)));
+    i = i + 1;
+  }
+  return cmd;
+}
+
+fn tc_install(version0: String) -> i32 {
+  let version: String = tc_normalize_version_tag(version0);
+  if version == "" {
+    print("toolchain install: missing version\n");
+    return 1;
+  }
+
+  let dest_bin: String = tc_install_bin(version);
+  if fs.exists(dest_bin) {
+    print("toolchain installed: ".concat(version).concat(" -> ").concat(dest_bin).concat("\n"));
+    return 0;
+  }
+
+  let platform: String = tc_detect_platform();
+  let repo: String = tc_repo();
+  let asset: String = "vox-lang-".concat(version).concat("-").concat(platform).concat(".tar.gz");
+  let url: String = "https://github.com/".concat(repo).concat("/releases/download/").concat(version).concat("/").concat(asset);
+
+  fs.mkdir_p("target/debug");
+  let tmp: String = path_join("target/debug", ".vox_tc_install_".concat(sanitize_path_part(version)).concat("_").concat(tm.now_ns().to_string()));
+  fs.mkdir_p(tmp);
+
+  let archive: String = path_join(tmp, "bundle.tar.gz");
+  let dl: String = "curl -fL ".concat(shell_quote(url)).concat(" -o ").concat(shell_quote(shell_exec_path(archive)));
+  print("[toolchain] download: ".concat(url).concat("\n"));
+  if proc.exec(dl) != 0 {
+    print("toolchain install failed: download error\n");
+    return 1;
+  }
+
+  let ex: String = "tar -xzf ".concat(shell_quote(shell_exec_path(archive))).concat(" -C ").concat(shell_quote(shell_exec_path(tmp)));
+  if proc.exec(ex) != 0 {
+    print("toolchain install failed: extract error\n");
+    return 1;
+  }
+
+  let bundle_dir: String = path_join(tmp, "vox-lang-".concat(version).concat("-").concat(platform));
+  let src_bin: String = path_join(path_join(bundle_dir, "bin"), tc_bin_name());
+  if !fs.exists(src_bin) {
+    print("toolchain install failed: bundle missing ".concat(src_bin).concat("\n"));
+    return 1;
+  }
+
+  let dst_dir: String = path_join(tc_install_root(version), "bin");
+  fs.mkdir_p(dst_dir);
+  let cp_cmd: String =
+    if host_is_windows() {
+      "copy /Y ".concat(shell_quote(shell_exec_path(src_bin))).concat(" ").concat(shell_quote(shell_exec_path(dest_bin)))
+    } else {
+      "cp ".concat(shell_quote(shell_exec_path(src_bin))).concat(" ").concat(shell_quote(shell_exec_path(dest_bin)))
+    };
+  if proc.exec(cp_cmd) != 0 {
+    print("toolchain install failed: copy error\n");
+    return 1;
+  }
+
+  fs.write_string(path_join(tc_install_root(version), "VERSION"), version.concat("\n"));
+  print("toolchain installed: ".concat(version).concat(" -> ").concat(dest_bin).concat("\n"));
+  return 0;
+}
+
+fn tc_use(version0: String) -> i32 {
+  let version: String = tc_normalize_version_tag(version0);
+  if version == "" {
+    print("toolchain use: missing version\n");
+    return 1;
+  }
+  fs.mkdir_p(".vox");
+  fs.write_string(tc_override_file(), version.concat("\n"));
+  print("toolchain override set: ".concat(version).concat("\n"));
+  return 0;
+}
+
+fn tc_pin(version0: String) -> i32 {
+  let version: String = tc_normalize_version_tag(version0);
+  if version == "" {
+    print("toolchain pin: missing version\n");
+    return 1;
+  }
+  let txt: String = "[toolchain]\nvox = \"".concat(version).concat("\"\n");
+  fs.write_string(tc_lock_file(), txt);
+  print("toolchain lock updated: ".concat(version).concat("\n"));
+  return 0;
+}
+
+fn tc_current() -> i32 {
+  let v: String = tc_selected_version();
+  if v == "" {
+    print("toolchain current: default (self)\n");
+    print("binary: ".concat(normalize_host_fs_path(proc.exe_path())).concat("\n"));
+    return 0;
+  }
+  let bin: String = tc_install_bin(v);
+  print("toolchain current: ".concat(v).concat("\n"));
+  print("binary: ".concat(bin).concat("\n"));
+  if fs.exists(bin) {
+    print("installed: true\n");
+  } else {
+    print("installed: false\n");
+  }
+  return 0;
+}
+
+fn tc_list() -> i32 {
+  let root: String = tc_toolchains_root();
+  print("toolchain root: ".concat(root).concat("\n"));
+  if !fs.exists(root) {
+    print("(none)\n");
+    return 0;
+  }
+  let cmd: String =
+    if host_is_windows() {
+      "dir /b ".concat(shell_quote(shell_exec_path(root)))
+    } else {
+      "ls -1 ".concat(shell_quote(shell_exec_path(root)))
+    };
+  return proc.exec(cmd);
+}
+
+fn tc_handle_toolchain_cmd(args: Vec[String]) -> ToolchainRouteResult {
+  if args.len() < 2 {
+    usage_toolchain();
+    return tc_route_yes(1);
+  }
+  let sub: String = args.get(1);
+  if sub == "current" {
+    return tc_route_yes(tc_current());
+  }
+  if sub == "list" {
+    return tc_route_yes(tc_list());
+  }
+  if sub == "install" {
+    if args.len() < 3 { usage_toolchain(); return tc_route_yes(1); }
+    return tc_route_yes(tc_install(args.get(2)));
+  }
+  if sub == "use" {
+    if args.len() < 3 { usage_toolchain(); return tc_route_yes(1); }
+    return tc_route_yes(tc_use(args.get(2)));
+  }
+  if sub == "pin" {
+    if args.len() < 3 { usage_toolchain(); return tc_route_yes(1); }
+    return tc_route_yes(tc_pin(args.get(2)));
+  }
+
+  usage_toolchain();
+  print("unknown toolchain subcommand: ".concat(sub).concat("\n"));
+  return tc_route_yes(1);
+}
+
+fn tc_should_route_cmd(cmd: String) -> bool {
+  return cmd == "emit-c" || cmd == "emit-pkg-c" || cmd == "build" || cmd == "build-pkg" || cmd == "test-pkg";
+}
+
+fn maybe_handle_toolchain_or_reroute(args: Vec[String]) -> ToolchainRouteResult {
+  if args.len() == 0 { return tc_route_no(); }
+  let cmd: String = args.get(0);
+
+  if cmd == "toolchain" {
+    return tc_handle_toolchain_cmd(args);
+  }
+
+  if !tc_should_route_cmd(cmd) { return tc_route_no(); }
+  if proc.getenv("VOX_TOOLCHAIN_DISABLE") == "1" { return tc_route_no(); }
+
+  let version: String = tc_selected_version();
+  if version == "" { return tc_route_no(); }
+
+  let selected_bin: String = tc_install_bin(version);
+  let self_bin: String = normalize_host_fs_path(proc.exe_path());
+  if normalize_host_fs_path(selected_bin) == self_bin { return tc_route_no(); }
+
+  if !fs.exists(selected_bin) {
+    print("toolchain ".concat(version).concat(" is not installed\n"));
+    print("run: ".concat(path_base_name(proc.exe_path())).concat(" toolchain install ").concat(version).concat("\n"));
+    return tc_route_yes(1);
+  }
+
+  let cmdline: String = tc_build_exec_cmd(selected_bin, args);
+  let rc: i32 = proc.exec(cmdline);
+  return tc_route_yes(rc);
+}

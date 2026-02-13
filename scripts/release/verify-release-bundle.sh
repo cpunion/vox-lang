@@ -81,8 +81,6 @@ require_file() {
   fi
 }
 
-require_file "$BUNDLE_DIR/bootstrap/vox-stage0${EXE_SUFFIX}"
-require_file "$BUNDLE_DIR/bootstrap/vox-stage1${EXE_SUFFIX}"
 require_file "$BUNDLE_DIR/bin/vox-stage2${EXE_SUFFIX}"
 require_file "$BUNDLE_DIR/VERSION"
 require_file "$BUNDLE_DIR/BOOTSTRAP_MODE"

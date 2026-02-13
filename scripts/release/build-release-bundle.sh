@@ -58,19 +58,12 @@ bootstrap_cc_env() {
   if [[ -n "${CC:-}" ]]; then
     local cc_bin="${CC%% *}"
     if command -v "$cc_bin" >/dev/null 2>&1; then
+      local resolved="$(command -v "$cc_bin")"
       if [[ "$GOOS" == "windows" ]]; then
-        # stage1/stage2 invoke CC through shell command text; keep bare command
-        # name on Windows to avoid backslash path escaping issues.
-        export CC="$cc_bin"
-        export CC_ABS="$(command -v "$cc_bin")"
-      else
-        local cc_resolved="$(command -v "$cc_bin")"
-        export CC="$cc_resolved"
+        resolved="$(normalize_windows_exe_path "$resolved")"
       fi
+      export CC="$resolved"
       echo "[release] using CC from env: $CC"
-      if [[ -n "${CC_ABS:-}" ]]; then
-        echo "[release] using CC (resolved): $CC_ABS"
-      fi
       return 0
     fi
     if [[ "$GOOS" == "windows" && "$cc_bin" =~ ^[A-Za-z]:\\ ]]; then
@@ -90,18 +83,12 @@ bootstrap_cc_env() {
   local c
   for c in "${candidates[@]}"; do
     if command -v "$c" >/dev/null 2>&1; then
+      local resolved="$(command -v "$c")"
       if [[ "$GOOS" == "windows" ]]; then
-        local resolved="$(command -v "$c")"
-        export CC="$c"
-        export CC_ABS="$resolved"
-      else
-        local resolved="$(command -v "$c")"
-        export CC="$resolved"
+        resolved="$(normalize_windows_exe_path "$resolved")"
       fi
+      export CC="$resolved"
       echo "[release] auto-detected CC: $CC"
-      if [[ -n "${CC_ABS:-}" ]]; then
-        echo "[release] auto-detected CC (resolved): $CC_ABS"
-      fi
       return 0
     fi
   done
@@ -123,6 +110,31 @@ resolve_bin() {
   return 1
 }
 
+pick_bootstrap_stage2() {
+  if [[ -n "${VOX_BOOTSTRAP_STAGE2:-}" && -f "${VOX_BOOTSTRAP_STAGE2}" ]]; then
+    printf '%s\n' "$VOX_BOOTSTRAP_STAGE2"
+    return 0
+  fi
+
+  local candidates=(
+    "$ROOT/compiler/stage2/target/bootstrap/vox_stage2_prev"
+    "$ROOT/compiler/stage2/target/release/vox_stage2"
+    "$ROOT/compiler/stage2/target/debug/vox_stage2"
+    "$ROOT/compiler/stage2/target/debug/vox_stage2_b_tool"
+  )
+
+  local c
+  local p
+  for c in "${candidates[@]}"; do
+    if p="$(resolve_bin "$c" 2>/dev/null)"; then
+      printf '%s\n' "$p"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 sha256_file() {
   local src="$1"
   local out="$2"
@@ -135,126 +147,20 @@ sha256_file() {
 
 mkdir -p "$DIST_DIR"
 bootstrap_cc_env
-CC_BASH="${CC_ABS:-${CC:-}}"
+CC_BASH="${CC:-}"
 if [[ -n "$CC_BASH" ]]; then
   echo "[release] bash CC command: $CC_BASH"
 fi
-STAGE0_OUT="$ROOT/compiler/stage0/target/release/vox-stage0${EXE_SUFFIX}"
-mkdir -p "$(dirname "$STAGE0_OUT")"
 
-echo "[release] build stage0 (${PLATFORM})"
-(
-  cd "$ROOT/compiler/stage0"
-  go build -o "$STAGE0_OUT" ./cmd/vox
-)
-
-echo "[release] build stage1 user binary via stage0"
-"$STAGE0_OUT" build "$ROOT/compiler/stage1"
-STAGE1_USER="$(resolve_bin "$ROOT/compiler/stage1/target/debug/vox_stage1")"
-echo "[release] stage1 user binary: $STAGE1_USER"
-
-set +e
-"$STAGE1_USER" >/dev/null 2>&1
-probe_code=$?
-set -e
-echo "[release] stage1 user probe exit: $probe_code"
-
-echo "[release] build stage1 tool binary"
-mkdir -p "$ROOT/compiler/stage1/target/release"
-STAGE1_TOOL=""
-STAGE1_TOOL_LOG="$ROOT/compiler/stage1/target/release/stage1-tool-build.log"
-set +e
-(
-  cd "$ROOT/compiler/stage1"
-  if [[ "$GOOS" == "windows" ]]; then
-    if "$STAGE1_USER" emit-pkg-c --driver=tool target/release/vox_stage1.c; then
-      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static -Wl,--stack,8388608
-    else
-      "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
-    fi
-  else
-    "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
-  fi
-) >"$STAGE1_TOOL_LOG" 2>&1
-stage1_tool_rc=$?
-set -e
-
-if [[ $stage1_tool_rc -ne 0 ]]; then
-  echo "[release] stage1 tool self-build failed: exit $stage1_tool_rc" >&2
-  echo "[release] stage1 tool build log begin" >&2
-  cat "$STAGE1_TOOL_LOG" >&2 || true
-  echo "[release] stage1 tool build log end" >&2
-  echo "[release] stage1 tool retry (unredirected) begin" >&2
-  set +e
-  (
-    cd "$ROOT/compiler/stage1"
-    if [[ "$GOOS" == "windows" ]]; then
-      if "$STAGE1_USER" emit-pkg-c --driver=tool target/release/vox_stage1.c; then
-        "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage1.c -o target/release/vox_stage1 -lws2_32 -static -Wl,--stack,8388608
-      else
-        "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
-      fi
-    else
-      "$STAGE1_USER" build-pkg --driver=tool target/release/vox_stage1
-    fi
-  )
-  stage1_retry_rc=$?
-  set -e
-  echo "[release] stage1 tool retry exit: $stage1_retry_rc" >&2
-  if [[ "$GOOS" == "windows" ]]; then
-    echo "[release] windows fallback: stage0 build-tool for stage1" >&2
-    "$STAGE0_OUT" build-tool "$ROOT/compiler/stage1"
-    STAGE1_TOOL_DEBUG="$(resolve_bin "$ROOT/compiler/stage1/target/debug/vox_stage1")"
-    cp "$STAGE1_TOOL_DEBUG" "$ROOT/compiler/stage1/target/release/vox_stage1${EXE_SUFFIX}"
-    STAGE1_TOOL="$STAGE1_TOOL_DEBUG"
-    stage1_tool_rc=0
-  fi
-fi
-
-if [[ $stage1_tool_rc -ne 0 ]]; then
-  echo "[release] stage1 tool build failed" >&2
-  exit $stage1_tool_rc
-fi
-
-if [[ -z "$STAGE1_TOOL" ]]; then
-  STAGE1_TOOL="$(resolve_bin "$ROOT/compiler/stage1/target/release/vox_stage1")"
-fi
-
-set +e
-"$STAGE1_TOOL" >/dev/null 2>&1
-stage1_tool_probe=$?
-set -e
-echo "[release] stage1 tool probe exit: $stage1_tool_probe"
-
-BOOTSTRAP_MODE="stage1-fallback"
 STAGE2_BOOTSTRAP=""
-if [[ -n "${VOX_BOOTSTRAP_STAGE2:-}" ]]; then
-  if [[ -f "$VOX_BOOTSTRAP_STAGE2" ]]; then
-    STAGE2_BOOTSTRAP="$VOX_BOOTSTRAP_STAGE2"
-  fi
-fi
-if [[ -z "$STAGE2_BOOTSTRAP" ]]; then
-  if p="$(resolve_bin "$ROOT/compiler/stage2/target/bootstrap/vox_stage2_prev" 2>/dev/null)"; then
-    STAGE2_BOOTSTRAP="$p"
-  fi
-fi
-if [[ -n "$STAGE2_BOOTSTRAP" ]]; then
-  BOOTSTRAP_MODE="rolling-stage2"
-  echo "[release] build stage2 tool via previous stage2 binary: $STAGE2_BOOTSTRAP"
-else
-  STAGE2_BOOTSTRAP="$STAGE1_TOOL"
-  echo "[release] build stage2 tool via stage1 fallback"
-fi
-
-if [[ "${VOX_REQUIRE_ROLLING_BOOTSTRAP:-0}" == "1" && "$BOOTSTRAP_MODE" != "rolling-stage2" ]]; then
-  echo "[release] rolling bootstrap is required but not satisfied (mode=$BOOTSTRAP_MODE)" >&2
+if ! STAGE2_BOOTSTRAP="$(pick_bootstrap_stage2)"; then
+  echo "[release] rolling bootstrap stage2 binary is required" >&2
+  echo "[release] set VOX_BOOTSTRAP_STAGE2 or prepare compiler/stage2/target/bootstrap/vox_stage2_prev" >&2
   exit 1
 fi
 
+BOOTSTRAP_MODE="rolling-stage2"
 echo "[release] stage2 bootstrap binary: $STAGE2_BOOTSTRAP"
-if [[ -f "$STAGE2_BOOTSTRAP" ]]; then
-  ls -l "$STAGE2_BOOTSTRAP"
-fi
 set +e
 "$STAGE2_BOOTSTRAP" >/dev/null 2>&1
 stage2_bootstrap_probe=$?
@@ -266,7 +172,7 @@ STAGE2_TOOL_LOG="$ROOT/compiler/stage2/target/release/stage2-tool-build.log"
 set +e
 (
   cd "$ROOT/compiler/stage2"
-  if [[ "$GOOS" == "windows" ]]; then
+  if [[ "$GOOS" == "windows" && -n "$CC_BASH" ]]; then
     if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
       "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static -Wl,--stack,8388608
     else
@@ -284,23 +190,6 @@ if [[ $stage2_tool_rc -ne 0 ]]; then
   echo "[release] stage2 tool build log begin" >&2
   cat "$STAGE2_TOOL_LOG" >&2 || true
   echo "[release] stage2 tool build log end" >&2
-  echo "[release] stage2 tool retry (unredirected) begin" >&2
-  set +e
-  (
-    cd "$ROOT/compiler/stage2"
-    if [[ "$GOOS" == "windows" ]]; then
-      if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
-        "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static -Wl,--stack,8388608
-      else
-        "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
-      fi
-    else
-      "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
-    fi
-  )
-  stage2_retry_rc=$?
-  set -e
-  echo "[release] stage2 tool retry exit: $stage2_retry_rc" >&2
   exit $stage2_tool_rc
 fi
 
@@ -313,9 +202,6 @@ CHECKSUM_PATH="${ARCHIVE_PATH}.sha256"
 
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/bin"
-mkdir -p "$BUNDLE_DIR/bootstrap"
-cp "$STAGE0_OUT" "$BUNDLE_DIR/bootstrap/vox-stage0${EXE_SUFFIX}"
-cp "$STAGE1_TOOL" "$BUNDLE_DIR/bootstrap/vox-stage1${EXE_SUFFIX}"
 cp "$STAGE2_TOOL" "$BUNDLE_DIR/bin/vox-stage2${EXE_SUFFIX}"
 printf '%s\n' "$VERSION" > "$BUNDLE_DIR/VERSION"
 printf '%s\n' "$BOOTSTRAP_MODE" > "$BUNDLE_DIR/BOOTSTRAP_MODE"

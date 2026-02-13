@@ -55,25 +55,14 @@ pick_bootstrap_stage2() {
 
 BOOTSTRAP_BIN=""
 if ! BOOTSTRAP_BIN="$(pick_bootstrap_stage2)"; then
-  echo "[dry-run] no existing stage2 bootstrap binary found; build one via stage1"
-  (
-    cd "$ROOT/compiler/stage0"
-    go run ./cmd/vox build-tool ../stage1
-  )
-
-  STAGE1_TOOL="$(resolve_bin "$ROOT/compiler/stage1/target/debug/vox_stage1")"
-  mkdir -p "$ROOT/compiler/stage2/target/bootstrap"
-  (
-    cd "$ROOT/compiler/stage2"
-    "$STAGE1_TOOL" build-pkg --driver=tool target/bootstrap/vox_stage2_prev
-  )
-  BOOTSTRAP_BIN="$(resolve_bin "$ROOT/compiler/stage2/target/bootstrap/vox_stage2_prev")"
+  echo "[dry-run] no rolling bootstrap stage2 binary found" >&2
+  echo "[dry-run] set VOX_BOOTSTRAP_STAGE2 or prepare compiler/stage2/target/bootstrap/vox_stage2_prev" >&2
+  exit 1
 fi
 
 echo "[dry-run] using rolling bootstrap binary: $BOOTSTRAP_BIN"
 
 export VOX_BOOTSTRAP_STAGE2="$BOOTSTRAP_BIN"
-export VOX_REQUIRE_ROLLING_BOOTSTRAP=1
 
 "$ROOT/scripts/release/build-release-bundle.sh" "$VERSION"
 "$ROOT/scripts/release/smoke-toolchains.sh"
