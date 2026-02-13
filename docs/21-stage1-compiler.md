@@ -92,6 +92,7 @@ Stage2 补充（在不引入语言级 drop 的前提下）：
 - `std/string` 与 `std/collections`（含 `Map`）增加显式 `Release` 基线：`release(String)`/`release_vec(Vec[T])`/`Map.release()` 返回空值并断开当前值；在当前浅拷贝模型下不做共享 backing storage 的物理回收，以保证别名路径无 UAF（幂等、安全）。
 - typecheck 已补充最小误用防护：`release` 相关调用若作为裸表达式语句会报错（`release call result must be assigned back`），要求调用方显式重绑定返回值。
 - typecheck 进一步补充最小 moved 诊断：被 `release` 消耗的局部变量后续读取会报错（`use of moved value: <name>`）；`x = release(x)` 作为自重绑定路径保持可用。
+- moved 状态已做最小控制流传播：`if/while` 与普通语句块会把 release 产生的 moved 标记同步到外层作用域（当前为保守策略，优先 no-UAF）。
 
 当前补充：
 
