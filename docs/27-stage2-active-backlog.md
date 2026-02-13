@@ -124,9 +124,10 @@ Governance from now on:
 
 - [ ] D07 Full ownership/move/drop semantics for general values/containers.
   - [x] D07-1 Remove bootstrap-safe `std/collections/map` fallback: switch to direct `Vec.set/remove/clear` implementation and keep `stage1 -> stage2` gate green.
-  - [ ] D07-2 Container-level deterministic release model (Vec/String/Map) that is alias-safe under current value-copy semantics.
+  - [x] D07-2 Container-level deterministic release model (Vec/String/Map) that is alias-safe under current value-copy semantics.
     - [x] D07-2a Deep-clone baseline landed: `Clone` trait + `impl[T: Clone] Clone for Vec[T]` + `impl[K: Eq + Clone, V: Clone] Clone for Map[K,V]` for explicit non-aliasing copy paths.
-    - [ ] D07-2b Add deterministic release semantics compatible with the current value-copy model (no UAF on alias copies).
+    - [x] D07-2b Add deterministic release semantics compatible with the current value-copy model (no UAF on alias copies).
+      - Landed baseline: prelude `Release` trait + `release(String)`/`release_vec(Vec[T])`/`Map.release()` reset APIs; release is alias-safe and idempotent, while physical shared-storage reclaim remains deferred to D07-3 ownership/move/drop model.
   - [ ] D07-3 Language-level ownership/move/drop rules and diagnostics (no-UAF contract) across function boundaries and aggregates.
   - Extracted from A03 stage2 closure note.
   - Source: `docs/21-stage1-compiler.md`.
