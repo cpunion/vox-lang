@@ -86,6 +86,7 @@ Stage2 补充（在不引入语言级 drop 的前提下）：
 - 目录遍历/路径辅助运行时（`mkdir_p`、`walk_vox_files`、`path_join2`）已统一使用 `vox_rt_malloc` 跟踪分配，不再混用裸 `malloc/free`。
 - 运行时新增 `vox_rt_free`（配合跟踪表移除）用于“可提前释放”的临时分配；`mkdir_p` 与目录遍历中不逃逸的路径缓冲已在使用后立即释放，降低长流程工具命令的峰值内存。
 - 该机制只解决“进程生命周期内累计泄漏”问题，不改变值语义；容器共享 backing storage、浅拷贝行为与当前 type system 约束保持不变。
+- `std/sync` 新增显式释放路径：`mutex_drop/atomic_drop`（对应低层 `__mutex_*_drop/__atomic_*_drop`），可在长流程工具中提前释放句柄分配；不改变当前值语义与浅拷贝语义。
 
 当前补充：
 

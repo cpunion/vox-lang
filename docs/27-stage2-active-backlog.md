@@ -55,6 +55,8 @@ Governance from now on:
 - [ ] A03 Runtime memory model convergence.
   - [x] A03-1 Runtime tracked allocations now support early release via `vox_rt_free`; non-escaping temp path buffers in `mkdir_p`/`walk_vox_files` are released eagerly instead of waiting for process exit.
     - Covered in `compiler/stage2/src/compiler/codegen/c_runtime.vox` and `compiler/stage2/src/compiler/codegen/c_emit_test.vox`.
+  - [x] A03-2 `std/sync` handles now support explicit release (`mutex_drop`/`atomic_drop`) via new low-level drop intrinsics, reducing long-running tool memory retention without changing value semantics.
+    - Covered in `compiler/stage2/src/compiler/typecheck/collect.vox`, `compiler/stage2/src/compiler/codegen/c_func.vox`, `compiler/stage2/src/compiler/codegen/c_runtime.vox`, `compiler/stage2/src/std/sync/sync.vox`, `compiler/stage2/src/compiler/codegen/c_emit_test.vox`, and `compiler/stage2/src/compiler/smoke_test.vox`.
   - Current gap: full ownership/drop semantics for general values/containers are still not finalized.
   - Source: `docs/21-stage1-compiler.md`.
 
