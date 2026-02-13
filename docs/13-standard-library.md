@@ -15,7 +15,7 @@
 
 当前 stage2 落地：
 
-- `std::prelude` 已提供默认 trait：`Eq`、`Ord`、`Show`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
+- `std::prelude` 已提供默认 trait：`Eq`、`Ord`、`Show`、`Clone`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
 - 未显式 import 时，函数名会回退到 `std/prelude`；trait 静态调用与 `impl Trait for ...` 也支持回退到 `std/prelude` 的公开 trait。
 - `std::string` 已提供 `StrView`（拥有型字符串视图）。
   - 基础 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`byte_at`、`to_string`。
@@ -37,6 +37,7 @@
     - `keys`、`values`（按当前存储顺序返回拷贝）
     - `set`（存在则覆盖，不存在则插入）、`remove`、`clear`
   - 其中键比较相关 API 需要 `K: Eq`。
+  - 另外提供 `impl[K: Eq + Clone, V: Clone] Clone for Map[K,V]`（深拷贝 keys/vals，不共享底层 Vec 存储）。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取、环境变量读取）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`，以及 `File`/`file_read_all`/`file_write_all`/`file_exists`/`mkdir_p`。网络部分提供 `NetAddr` + `NetConn` 与最小 TCP API：`net_connect` / `net_send` / `net_recv` / `net_close`（解释器与 C 后端一致可用；失败时统一 panic）。
