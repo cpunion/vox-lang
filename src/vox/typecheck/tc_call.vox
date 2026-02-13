@@ -1,0 +1,2124 @@
+import "vox/ast" as ast
+import "vox/ir" as ir
+
+fn trait_is_or_extends(ctx: Ctx, mod_path: String, name: String, want_mod: String, want_name: String) -> bool {
+  if mod_path == want_mod && name == want_name { return true; }
+  let tf: FindTraitResult = find_trait(ctx, mod_path, name);
+  if !tf.found { return false; }
+  let mut i: i32 = 0;
+  while i < tf.sig.supers.len() {
+    let s: TraitSuperSig = tf.sig.supers.get(i);
+    if trait_is_or_extends(ctx, s.mod_path, s.name, want_mod, want_name) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+struct BoundMethodCand {
+  trait_mod_path: String,
+  trait_name: String,
+  sig: FuncSig,
+}
+
+struct BoundMethodSearch {
+  seen_traits: Vec[String],
+  cands: Vec[BoundMethodCand],
+}
+
+fn contains_str_tc_call(xs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if xs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn compile_error_arg_text(exprs: ast.ExprPool, id: i32) -> String {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
+  return match n { ast.ExprNode.Str(s) => s, _ => "compile_error triggered" };
+}
+
+fn pack_arity_error_msg(sig: FuncSig, got: i32) -> String {
+  return "wrong number of type args: expected at most "
+    .concat(sig.type_params.len().to_string())
+    .concat(", got ")
+    .concat(got.to_string());
+}
+
+fn call_child_error_or(ctx: Ctx, ar: ExprTyResult, sp: ast.Span, fallback: String) -> TcError {
+  let _ctx: Ctx = ctx;
+  if ar.err != TcError.None { return ar.err; }
+  return type_error_at(sp, fallback);
+}
+
+fn borrow_expected_type_text(ctx: Ctx, want: i32, borrow_kind: i32) -> String {
+  let wt: ir.Ty = ir.ty_pool_get(ctx.pool, want);
+  if wt.kind == ir.TyKind.Ref { return ty_inst_str(ctx, want); }
+  let base: String = ty_inst_str(ctx, want);
+  if borrow_kind == param_borrow_ref() { return "&".concat(base); }
+  if borrow_kind == param_borrow_ref_mut() { return "&mut ".concat(base); }
+  if borrow_kind == param_borrow_ref_static() { return "&'static ".concat(base); }
+  if borrow_kind == param_borrow_ref_static_mut() { return "&'static mut ".concat(base); }
+  return base;
+}
+
+fn call_arg_type_mismatch(ctx: Ctx, sp: ast.Span, arg_idx0: i32, want: i32, got: i32, variadic: bool, borrow_kind: i32) -> TcError {
+  let where0: String = if variadic { "variadic arg #" } else { "arg #" };
+  let msg: String = "call ".concat(where0)
+    .concat((arg_idx0 + 1).to_string())
+    .concat(" type mismatch: expected ")
+    .concat(borrow_expected_type_text(ctx, want, borrow_kind))
+    .concat(", got ")
+    .concat(ty_inst_str(ctx, got));
+  return type_error_at(sp, msg);
+}
+
+fn enum_sig_display_name(es: EnumSig) -> String {
+  if es.base_name != "" { return es.base_name; }
+  return es.name;
+}
+
+fn enum_ctor_target_name(enum_name: String, var_name: String) -> String {
+  return enum_name.concat(".").concat(var_name);
+}
+
+fn enum_ctor_arity_error(sp: ast.Span, enum_name: String, var_name: String, want: i32, got: i32) -> TcError {
+  let msg: String = "enum ctor "
+    .concat(enum_ctor_target_name(enum_name, var_name))
+    .concat(" expects ")
+    .concat(want.to_string())
+    .concat(" arg(s), got ")
+    .concat(got.to_string());
+  return type_error_at(sp, msg);
+}
+
+fn enum_ctor_arg_type_mismatch(ctx: Ctx, sp: ast.Span, enum_name: String, var_name: String, arg_idx0: i32, want: i32, got: i32) -> TcError {
+  let msg: String = "enum ctor "
+    .concat(enum_ctor_target_name(enum_name, var_name))
+    .concat(" arg #")
+    .concat((arg_idx0 + 1).to_string())
+    .concat(" type mismatch: expected ")
+    .concat(ty_inst_str(ctx, want))
+    .concat(", got ")
+    .concat(ty_inst_str(ctx, got));
+  return type_error_at(sp, msg);
+}
+
+fn enum_ctor_result_mismatch(ctx: Ctx, sp: ast.Span, want: i32, got: i32) -> TcError {
+  let msg: String = "enum ctor result type mismatch: expected "
+    .concat(ty_inst_str(ctx, want))
+    .concat(", got ")
+    .concat(ty_inst_str(ctx, got));
+  return type_error_at(sp, msg);
+}
+
+fn has_type_param_pack(sig: FuncSig) -> bool {
+  return sig.type_param_packs.len() == 1;
+}
+
+fn type_param_fixed_prefix_len(sig: FuncSig) -> i32 {
+  if has_type_param_pack(sig) { return sig.type_params.len() - 1; }
+  return sig.type_params.len();
+}
+
+fn explicit_type_arg_arity_ok(sig: FuncSig, explicit_targ_n: i32) -> bool {
+  if !has_type_param_pack(sig) { return explicit_targ_n <= sig.type_params.len(); }
+  // With one trailing type-parameter pack, explicit type args can extend past
+  // the fixed prefix; extra args are absorbed by the pack binder.
+  return explicit_targ_n >= 0;
+}
+
+fn explicit_type_arg_bind_name(sig: FuncSig, idx: i32) -> String {
+  if !has_type_param_pack(sig) { return sig.type_params.get(idx); }
+  let fixed_n: i32 = type_param_fixed_prefix_len(sig);
+  if idx < fixed_n { return sig.type_params.get(idx); }
+  return sig.type_param_packs.get(0);
+}
+
+fn type_name_is_pack_member(name: String, pack: String) -> bool {
+  if name == pack { return true; }
+  return starts_with(name, pack.concat("."));
+}
+
+fn ty_contains_pack_param(ctx: Ctx, ty: i32, pack: String) -> bool {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param { return type_name_is_pack_member(t.name, pack); }
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range { return ty_contains_pack_param(ctx, t.elem, pack); }
+  return false;
+}
+
+fn sig_allows_heterogeneous_pack_args(ctx: Ctx, sig: FuncSig, pack: String) -> bool {
+  let mut i: i32 = 0;
+  while i < sig.params.len() {
+    if ty_contains_pack_param(ctx, sig.params.get(i), pack) { return false; }
+    i = i + 1;
+  }
+  if ty_contains_pack_param(ctx, sig.ret, pack) { return false; }
+  if sig.has_variadic && ty_contains_pack_param(ctx, sig.variadic_elem, pack) { return false; }
+
+  let mut bi: i32 = 0;
+  while bi < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(bi);
+    if type_name_is_pack_member(b.type_param, pack) { return false; }
+    bi = bi + 1;
+  }
+
+  let mut ci: i32 = 0;
+  while ci < sig.const_where_bounds.len() {
+    let b2: ConstWhereBoundSig = sig.const_where_bounds.get(ci);
+    if type_name_is_pack_member(b2.name, pack) { return false; }
+    ci = ci + 1;
+  }
+
+  return true;
+}
+
+
+fn ty_contains_pack_projection(ctx: Ctx, ty: i32, pack: String) -> bool {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param {
+    let dr: PackMemberDecodeResult = decode_pack_member(t.name, pack);
+    if !dr.ok { return false; }
+    return dr.matched && !dr.is_all;
+  }
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range {
+    return ty_contains_pack_projection(ctx, t.elem, pack);
+  }
+  return false;
+}
+
+fn sig_contains_pack_projection(ctx: Ctx, sig: FuncSig, pack: String) -> bool {
+  let mut i: i32 = 0;
+  while i < sig.params.len() {
+    if ty_contains_pack_projection(ctx, sig.params.get(i), pack) { return true; }
+    i = i + 1;
+  }
+  if ty_contains_pack_projection(ctx, sig.ret, pack) { return true; }
+  if sig.has_variadic && ty_contains_pack_projection(ctx, sig.variadic_elem, pack) { return true; }
+
+  let mut bi: i32 = 0;
+  while bi < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(bi);
+    let drb: PackMemberDecodeResult = decode_pack_member(b.type_param, pack);
+    if drb.ok && drb.matched { return true; }
+    bi = bi + 1;
+  }
+
+  let mut ci: i32 = 0;
+  while ci < sig.const_where_bounds.len() {
+    let b2: ConstWhereBoundSig = sig.const_where_bounds.get(ci);
+    let drn: PackMemberDecodeResult = decode_pack_member(b2.name, pack);
+    if drn.ok && drn.matched { return true; }
+    if b2.rhs_is_param {
+      let rr: DecodeCwReflectRhsResult = decode_cw_reflect_rhs(b2.rhs_param);
+      if rr.ok && rr.is_reflect {
+        let drr: PackMemberDecodeResult = decode_pack_member(rr.name, pack);
+        if drr.ok && drr.matched { return true; }
+      }
+    }
+    ci = ci + 1;
+  }
+
+  return false;
+}
+
+struct MaterializePackTyResult {
+  ok: bool,
+  err: String,
+  ty: i32,
+  next: i32,
+}
+
+pub struct MaterializePackSigResult {
+  pub ok: bool,
+  pub err: String,
+  pub sig: FuncSig,
+}
+
+struct ParsePackIndexResult {
+  ok: bool,
+  err: String,
+  idx: i32,
+}
+
+struct PackMemberDecodeResult {
+  ok: bool,
+  err: String,
+  matched: bool,
+  is_all: bool,
+  idx: i32,
+}
+
+struct ExpandPackMemberNamesResult {
+  ok: bool,
+  err: String,
+  matched: bool,
+  is_all: bool,
+  names: Vec[String],
+}
+
+struct DecodeCwReflectRhsResult {
+  ok: bool,
+  err: String,
+  is_reflect: bool,
+  tag: String,
+  name: String,
+}
+
+struct RemapCwReflectRhsResult {
+  ok: bool,
+  err: String,
+  rhs_param: String,
+}
+
+struct MaterializeTypeParamBoundsResult {
+  ok: bool,
+  err: String,
+  bounds: Vec[TypeParamBoundSig],
+}
+
+struct MaterializeConstWhereBoundsResult {
+  ok: bool,
+  err: String,
+  bounds: Vec[ConstWhereBoundSig],
+}
+
+fn pack_elem_alias_name(pack: String, idx: i32) -> String {
+  if idx == 0 { return pack; }
+  return pack.concat("__").concat(idx.to_string());
+}
+
+fn parse_pack_index_text(s: String) -> ParsePackIndexResult {
+  if s.len() == 0 {
+    return ParsePackIndexResult { ok: false, err: "pack projection index is empty", idx: 0 };
+  }
+  let mut i: i32 = 0;
+  let mut v: i32 = 0;
+  while i < s.len() {
+    let b: i32 = s.byte_at(i);
+    if b < 48 || b > 57 {
+      return ParsePackIndexResult { ok: false, err: "pack projection index must be a decimal integer", idx: 0 };
+    }
+    let d: i32 = b - 48;
+    if v > 214748364 {
+      return ParsePackIndexResult { ok: false, err: "pack projection index overflows i32", idx: 0 };
+    }
+    v = v * 10 + d;
+    if v < 0 {
+      return ParsePackIndexResult { ok: false, err: "pack projection index overflows i32", idx: 0 };
+    }
+    i = i + 1;
+  }
+  return ParsePackIndexResult { ok: true, err: "", idx: v };
+}
+
+fn decode_pack_member(name: String, pack: String) -> PackMemberDecodeResult {
+  if name == pack {
+    return PackMemberDecodeResult { ok: true, err: "", matched: true, is_all: true, idx: -1 };
+  }
+  let pfx: String = pack.concat(".");
+  if name.len() <= pfx.len() || name.slice(0, pfx.len()) != pfx {
+    return PackMemberDecodeResult { ok: true, err: "", matched: false, is_all: false, idx: -1 };
+  }
+  let suf: String = name.slice(pfx.len(), name.len());
+  let pr: ParsePackIndexResult = parse_pack_index_text(suf);
+  if !pr.ok {
+    return PackMemberDecodeResult { ok: false, err: pr.err, matched: true, is_all: false, idx: -1 };
+  }
+  return PackMemberDecodeResult { ok: true, err: "", matched: true, is_all: false, idx: pr.idx };
+}
+
+fn expand_pack_member_names(name: String, pack: String, pack_tys: Vec[i32], idx_for_all: i32) -> ExpandPackMemberNamesResult {
+  let dr: PackMemberDecodeResult = decode_pack_member(name, pack);
+  if !dr.ok {
+    return ExpandPackMemberNamesResult { ok: false, err: dr.err, matched: true, is_all: false, names: Vec() };
+  }
+  let mut out: Vec[String] = Vec();
+  if !dr.matched {
+    out.push(name);
+    return ExpandPackMemberNamesResult { ok: true, err: "", matched: false, is_all: false, names: out };
+  }
+
+  if dr.is_all {
+    if idx_for_all >= 0 {
+      if idx_for_all >= pack_tys.len() {
+        return ExpandPackMemberNamesResult { ok: false, err: "pack projection index out of range", matched: true, is_all: true, names: out };
+      }
+      out.push(pack_elem_alias_name(pack, idx_for_all));
+      return ExpandPackMemberNamesResult { ok: true, err: "", matched: true, is_all: true, names: out };
+    }
+    let mut i: i32 = 0;
+    while i < pack_tys.len() {
+      out.push(pack_elem_alias_name(pack, i));
+      i = i + 1;
+    }
+    return ExpandPackMemberNamesResult { ok: true, err: "", matched: true, is_all: true, names: out };
+  }
+
+  if dr.idx < 0 || dr.idx >= pack_tys.len() {
+    return ExpandPackMemberNamesResult { ok: false, err: "pack projection index out of range", matched: true, is_all: false, names: out };
+  }
+  out.push(pack_elem_alias_name(pack, dr.idx));
+  return ExpandPackMemberNamesResult { ok: true, err: "", matched: true, is_all: false, names: out };
+}
+
+fn decode_cw_reflect_rhs(rhs_param: String) -> DecodeCwReflectRhsResult {
+  let pfx: String = "__cwref__:";
+  if rhs_param.len() <= pfx.len() || rhs_param.slice(0, pfx.len()) != pfx {
+    return DecodeCwReflectRhsResult { ok: true, err: "", is_reflect: false, tag: "", name: "" };
+  }
+  let rest: String = rhs_param.slice(pfx.len(), rhs_param.len());
+  let mut cut: i32 = -1;
+  let mut i: i32 = 0;
+  while i < rest.len() {
+    if rest.byte_at(i) == 58 {
+      cut = i;
+      i = rest.len();
+    } else {
+      i = i + 1;
+    }
+  }
+  if cut <= 0 || cut + 1 >= rest.len() {
+    return DecodeCwReflectRhsResult { ok: false, err: "invalid comptime where rhs reflect encoding", is_reflect: true, tag: "", name: "" };
+  }
+  let tag: String = rest.slice(0, cut);
+  let name: String = rest.slice(cut + 1, rest.len());
+  return DecodeCwReflectRhsResult { ok: true, err: "", is_reflect: true, tag: tag, name: name };
+}
+
+fn remap_cw_reflect_rhs(rhs_param: String, pack: String, pack_tys: Vec[i32], idx_for_all: i32) -> RemapCwReflectRhsResult {
+  let dr: DecodeCwReflectRhsResult = decode_cw_reflect_rhs(rhs_param);
+  if !dr.ok {
+    return RemapCwReflectRhsResult { ok: false, err: dr.err, rhs_param: "" };
+  }
+  if !dr.is_reflect {
+    return RemapCwReflectRhsResult { ok: true, err: "", rhs_param: rhs_param };
+  }
+
+  let er: ExpandPackMemberNamesResult = expand_pack_member_names(dr.name, pack, pack_tys, idx_for_all);
+  if !er.ok {
+    return RemapCwReflectRhsResult { ok: false, err: er.err, rhs_param: "" };
+  }
+  if er.names.len() != 1 {
+    return RemapCwReflectRhsResult { ok: false, err: "comptime where rhs pack projection requires a concrete index context", rhs_param: "" };
+  }
+  let out: String = "__cwref__:".concat(dr.tag).concat(":").concat(er.names.get(0));
+  return RemapCwReflectRhsResult { ok: true, err: "", rhs_param: out };
+}
+
+fn materialize_type_param_bounds(sig: FuncSig, pack: String, pack_tys: Vec[i32]) -> MaterializeTypeParamBoundsResult {
+  let mut out: Vec[TypeParamBoundSig] = Vec();
+  let mut i: i32 = 0;
+  while i < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(i);
+    let er: ExpandPackMemberNamesResult = expand_pack_member_names(b.type_param, pack, pack_tys, -1);
+    if !er.ok {
+      return MaterializeTypeParamBoundsResult { ok: false, err: er.err, bounds: out };
+    }
+    let mut j: i32 = 0;
+    while j < er.names.len() {
+      out.push(TypeParamBoundSig {
+        type_param: er.names.get(j),
+        trait_mod_path: b.trait_mod_path,
+        trait_name: b.trait_name,
+      });
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return MaterializeTypeParamBoundsResult { ok: true, err: "", bounds: out };
+}
+
+fn materialize_const_where_bounds(sig: FuncSig, pack: String, pack_tys: Vec[i32]) -> MaterializeConstWhereBoundsResult {
+  let mut out: Vec[ConstWhereBoundSig] = Vec();
+  let mut i: i32 = 0;
+  while i < sig.const_where_bounds.len() {
+    let b: ConstWhereBoundSig = sig.const_where_bounds.get(i);
+    let lhs_is_type: bool =
+      b.lhs_kind == ast.comptime_where_lhs_size_of() ||
+      b.lhs_kind == ast.comptime_where_lhs_align_of() ||
+      b.lhs_kind == ast.comptime_where_lhs_field_count() ||
+      b.lhs_kind == ast.comptime_where_lhs_type();
+
+    let lhs_dr: PackMemberDecodeResult =
+      if lhs_is_type {
+        decode_pack_member(b.name, pack)
+      } else {
+        PackMemberDecodeResult { ok: true, err: "", matched: false, is_all: false, idx: -1 }
+      };
+    if !lhs_dr.ok {
+      return MaterializeConstWhereBoundsResult { ok: false, err: lhs_dr.err, bounds: out };
+    }
+
+    let rhs_ref: DecodeCwReflectRhsResult =
+      if b.rhs_is_param {
+        decode_cw_reflect_rhs(b.rhs_param)
+      } else {
+        DecodeCwReflectRhsResult { ok: true, err: "", is_reflect: false, tag: "", name: "" }
+      };
+    if !rhs_ref.ok {
+      return MaterializeConstWhereBoundsResult { ok: false, err: rhs_ref.err, bounds: out };
+    }
+    let rhs_dr: PackMemberDecodeResult =
+      if rhs_ref.is_reflect {
+        decode_pack_member(rhs_ref.name, pack)
+      } else {
+        PackMemberDecodeResult { ok: true, err: "", matched: false, is_all: false, idx: -1 }
+      };
+    if !rhs_dr.ok {
+      return MaterializeConstWhereBoundsResult { ok: false, err: rhs_dr.err, bounds: out };
+    }
+
+    let mut indices: Vec[i32] = Vec();
+    if lhs_is_type && lhs_dr.matched {
+      if lhs_dr.is_all {
+        let mut pi: i32 = 0;
+        while pi < pack_tys.len() {
+          indices.push(pi);
+          pi = pi + 1;
+        }
+      } else {
+        if lhs_dr.idx < 0 || lhs_dr.idx >= pack_tys.len() {
+          return MaterializeConstWhereBoundsResult { ok: false, err: "pack projection index out of range", bounds: out };
+        }
+        indices.push(lhs_dr.idx);
+      }
+    } else if rhs_dr.matched && rhs_dr.is_all {
+      let mut ri: i32 = 0;
+      while ri < pack_tys.len() {
+        indices.push(ri);
+        ri = ri + 1;
+      }
+    } else {
+      indices.push(-1);
+    }
+
+    let mut k: i32 = 0;
+    while k < indices.len() {
+      let idx_sel: i32 = indices.get(k);
+      let lhs_name: String =
+        if lhs_is_type && lhs_dr.matched {
+          if idx_sel < 0 {
+            return MaterializeConstWhereBoundsResult { ok: false, err: "comptime where lhs pack projection requires a concrete index context", bounds: out };
+          }
+          pack_elem_alias_name(pack, idx_sel)
+        } else {
+          b.name
+        };
+      let mut rhs_param2: String = b.rhs_param;
+      if b.rhs_is_param {
+        let rr: RemapCwReflectRhsResult = remap_cw_reflect_rhs(b.rhs_param, pack, pack_tys, idx_sel);
+        if !rr.ok {
+          return MaterializeConstWhereBoundsResult { ok: false, err: rr.err, bounds: out };
+        }
+        rhs_param2 = rr.rhs_param;
+      }
+      out.push(ConstWhereBoundSig {
+        lhs_kind: b.lhs_kind,
+        name: lhs_name,
+        op: b.op,
+        rhs_is_param: b.rhs_is_param,
+        rhs_param: rhs_param2,
+        rhs_iv: b.rhs_iv,
+        rhs_text: b.rhs_text,
+      });
+      k = k + 1;
+    }
+    i = i + 1;
+  }
+  return MaterializeConstWhereBoundsResult { ok: true, err: "", bounds: out };
+}
+
+pub fn append_pack_alias_subs(subs0: Vec[TySub], pack: String, pack_tys: Vec[i32]) -> Vec[TySub] {
+  let mut subs: Vec[TySub] = subs0;
+  let mut i: i32 = 0;
+  while i < pack_tys.len() {
+    let nm: String = pack_elem_alias_name(pack, i);
+    let cur: i32 = subs_lookup(subs, nm);
+    if cur == -1 {
+      subs.push(TySub { name: nm, ty: pack_tys.get(i) });
+    }
+    i = i + 1;
+  }
+  return subs;
+}
+fn find_vec_ty_idx_tc_call(ctx: Ctx, elem: i32) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Vec && t.elem == elem { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn find_range_ty_idx_tc_call(ctx: Ctx, elem: i32, lo: i64, hi: i64) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Range && t.elem == elem && t.lo == lo && t.hi == hi { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn materialize_pack_ty(
+  ctx: Ctx,
+  ty: i32,
+  pack: String,
+  pack_tys: Vec[i32],
+  occ0: i32
+) -> MaterializePackTyResult {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param {
+    let er: ExpandPackMemberNamesResult = expand_pack_member_names(t.name, pack, pack_tys, occ0);
+    if !er.ok {
+      return MaterializePackTyResult { ok: false, err: er.err, ty: ctx.ty_bad, next: occ0 };
+    }
+    if er.matched {
+      if er.is_all {
+        if er.names.len() != 1 {
+          return MaterializePackTyResult { ok: false, err: "pack arity mismatch: materialized type slot needs a concrete pack element", ty: ctx.ty_bad, next: occ0 };
+        }
+        if occ0 >= pack_tys.len() {
+          return MaterializePackTyResult { ok: false, err: "pack arity mismatch: too many materialized pack positions in signature", ty: ctx.ty_bad, next: occ0 };
+        }
+        return MaterializePackTyResult { ok: true, err: "", ty: pack_tys.get(occ0), next: occ0 + 1 };
+      }
+      if er.names.len() != 1 {
+        return MaterializePackTyResult { ok: false, err: "pack projection materialization must resolve to one type", ty: ctx.ty_bad, next: occ0 };
+      }
+      let dr: PackMemberDecodeResult = decode_pack_member(t.name, pack);
+      if !dr.ok || !dr.matched || dr.is_all {
+        return MaterializePackTyResult { ok: false, err: "invalid pack projection materialization", ty: ctx.ty_bad, next: occ0 };
+      }
+      return MaterializePackTyResult { ok: true, err: "", ty: pack_tys.get(dr.idx), next: occ0 };
+    }
+    return MaterializePackTyResult { ok: true, err: "", ty: ty, next: occ0 };
+  }
+
+  if t.kind == ir.TyKind.Vec {
+    let er: MaterializePackTyResult = materialize_pack_ty(ctx, t.elem, pack, pack_tys, occ0);
+    if !er.ok { return er; }
+    if er.ty == t.elem {
+      return MaterializePackTyResult { ok: true, err: "", ty: ty, next: er.next };
+    }
+    let vidx: i32 = find_vec_ty_idx_tc_call(ctx, er.ty);
+    if vidx == -1 {
+      return MaterializePackTyResult { ok: false, err: "pack materialization produced unknown Vec element type", ty: ctx.ty_bad, next: er.next };
+    }
+    return MaterializePackTyResult { ok: true, err: "", ty: vidx, next: er.next };
+  }
+
+  if t.kind == ir.TyKind.Range {
+    let br: MaterializePackTyResult = materialize_pack_ty(ctx, t.elem, pack, pack_tys, occ0);
+    if !br.ok { return br; }
+    if br.ty == t.elem {
+      return MaterializePackTyResult { ok: true, err: "", ty: ty, next: br.next };
+    }
+    let ridx: i32 = find_range_ty_idx_tc_call(ctx, br.ty, t.lo, t.hi);
+    if ridx == -1 {
+      return MaterializePackTyResult { ok: false, err: "pack materialization produced unknown range base type", ty: ctx.ty_bad, next: br.next };
+    }
+    return MaterializePackTyResult { ok: true, err: "", ty: ridx, next: br.next };
+  }
+
+  return MaterializePackTyResult { ok: true, err: "", ty: ty, next: occ0 };
+}
+
+pub fn materialize_pack_sig_types(
+  ctx: Ctx,
+  sig: FuncSig,
+  pack: String,
+  pack_tys: Vec[i32]
+) -> MaterializePackSigResult {
+  let mut occ: i32 = 0;
+  let mut ps: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < sig.params.len() {
+    let pr: MaterializePackTyResult = materialize_pack_ty(ctx, sig.params.get(i), pack, pack_tys, occ);
+    if !pr.ok {
+      return MaterializePackSigResult { ok: false, err: pr.err, sig: sig };
+    }
+    ps.push(pr.ty);
+    occ = pr.next;
+    i = i + 1;
+  }
+
+  let rr: MaterializePackTyResult = materialize_pack_ty(ctx, sig.ret, pack, pack_tys, occ);
+  if !rr.ok {
+    return MaterializePackSigResult { ok: false, err: rr.err, sig: sig };
+  }
+  let ret: i32 = rr.ty;
+  occ = rr.next;
+
+  let mut variadic_elem: i32 = sig.variadic_elem;
+  if sig.has_variadic {
+    let vr: MaterializePackTyResult = materialize_pack_ty(ctx, sig.variadic_elem, pack, pack_tys, occ);
+    if !vr.ok {
+      return MaterializePackSigResult { ok: false, err: vr.err, sig: sig };
+    }
+    variadic_elem = vr.ty;
+    occ = vr.next;
+  }
+
+  if occ != pack_tys.len() {
+    let has_proj: bool = sig_contains_pack_projection(ctx, sig, pack);
+    if !has_proj {
+      let msg: String = "pack arity mismatch: materialized signature positions = "
+        .concat(occ.to_string())
+        .concat(", explicit pack args = ")
+        .concat(pack_tys.len().to_string());
+      return MaterializePackSigResult { ok: false, err: msg, sig: sig };
+    }
+  }
+  let tbr: MaterializeTypeParamBoundsResult = materialize_type_param_bounds(sig, pack, pack_tys);
+  if !tbr.ok {
+    return MaterializePackSigResult { ok: false, err: tbr.err, sig: sig };
+  }
+  let cwr: MaterializeConstWhereBoundsResult = materialize_const_where_bounds(sig, pack, pack_tys);
+  if !cwr.ok {
+    return MaterializePackSigResult { ok: false, err: cwr.err, sig: sig };
+  }
+
+  let out: FuncSig = FuncSig {
+    params: ps,
+    param_borrow_kinds: sig.param_borrow_kinds,
+    ret: ret,
+    has_variadic: sig.has_variadic,
+    variadic_elem: variadic_elem,
+    vis: sig.vis,
+    is_pub: sig.is_pub,
+    type_params: sig.type_params,
+    type_param_packs: sig.type_param_packs,
+    const_params: sig.const_params,
+    type_param_bounds: tbr.bounds,
+    const_where_bounds: cwr.bounds,
+  };
+  return MaterializePackSigResult { ok: true, err: "", sig: out };
+}
+
+fn method_cand_key(mod_path: String, trait_name: String) -> String {
+  return mod_path.concat("::").concat(trait_name);
+}
+
+fn has_method_cand(xs: Vec[BoundMethodCand], mod_path: String, trait_name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let c: BoundMethodCand = xs.get(i);
+    if c.trait_mod_path == mod_path && c.trait_name == trait_name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn search_bound_method_in_trait(ctx: Ctx, mod_path: String, trait_name: String, method: String, s0: BoundMethodSearch) -> BoundMethodSearch {
+  let mut s: BoundMethodSearch = s0;
+  let key: String = method_cand_key(mod_path, trait_name);
+  if contains_str_tc_call(s.seen_traits, key) { return s; }
+  s.seen_traits.push(key);
+
+  let tf: FindTraitResult = find_trait(ctx, mod_path, trait_name);
+  if !tf.found { return s; }
+  let tm: FindTraitMethodResult = find_trait_method(tf.sig, method);
+  if tm.found && !has_method_cand(s.cands, mod_path, trait_name) {
+    s.cands.push(BoundMethodCand { trait_mod_path: mod_path, trait_name: trait_name, sig: tm.m.sig });
+  }
+
+  let mut i: i32 = 0;
+  while i < tf.sig.supers.len() {
+    let sup: TraitSuperSig = tf.sig.supers.get(i);
+    s = search_bound_method_in_trait(ctx, sup.mod_path, sup.name, method, s);
+    i = i + 1;
+  }
+  return s;
+}
+
+fn find_bound_trait_methods(ctx: Ctx, l0: Locals, type_param: String, method: String) -> BoundMethodSearch {
+  let mut s: BoundMethodSearch = BoundMethodSearch { seen_traits: Vec(), cands: Vec() };
+  let mut i: i32 = 0;
+  while i < l0.type_param_bounds.len() {
+    let b: TypeParamBoundSig = l0.type_param_bounds.get(i);
+    if b.type_param == type_param {
+      s = search_bound_method_in_trait(ctx, b.trait_mod_path, b.trait_name, method, s);
+    }
+    i = i + 1;
+  }
+  return s;
+}
+
+fn method_cands_text(xs: Vec[BoundMethodCand], method: String) -> String {
+  if xs.len() == 0 { return "<none>"; }
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if i > 0 { out = out.concat(", "); }
+    let c: BoundMethodCand = xs.get(i);
+    out = out.concat(c.trait_name).concat(".").concat(method);
+    if i >= 7 { return out.concat(", ..."); }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn bounds_text(l0: Locals, type_param: String) -> String {
+  let mut out: String = "";
+  let mut seen: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < l0.type_param_bounds.len() {
+    let b: TypeParamBoundSig = l0.type_param_bounds.get(i);
+    if b.type_param == type_param && !contains_str_tc_call(seen, b.trait_name) {
+      if out.len() > 0 { out = out.concat(" + "); }
+      out = out.concat(b.trait_name);
+      seen.push(b.trait_name);
+    }
+    i = i + 1;
+  }
+  if out.len() == 0 { return "<none>"; }
+  return out;
+}
+
+fn is_vec_builtin_method(name: String) -> bool {
+  return name == "push" || name == "insert" || name == "set" || name == "clear" || name == "extend" || name == "pop" || name == "remove" || name == "len" || name == "is_empty" || name == "get" || name == "join";
+}
+
+fn is_string_builtin_method(name: String) -> bool {
+  return name == "len" ||
+    name == "is_empty" ||
+    name == "byte_at" ||
+    name == "slice" ||
+    name == "concat" ||
+    name == "escape_c" ||
+    name == "to_string" ||
+    name == "starts_with" ||
+    name == "ends_with" ||
+    name == "contains" ||
+    name == "index_of" ||
+    name == "last_index_of";
+}
+
+struct MutPlaceResult { ok: bool, mutable: bool }
+
+fn expr_mut_place(exprs: ast.ExprPool, l0: Locals, expr_id: i32) -> MutPlaceResult {
+  let mut cur: i32 = expr_id;
+  while true {
+    let n: ast.ExprNode = ast.expr_pool_get(exprs, cur);
+    if match n { ast.ExprNode.Ident(_s) => true, _ => false } {
+      let name: String = match n { ast.ExprNode.Ident(s) => s, _ => "" };
+      let vr: LookupVarResult = locals_lookup(l0, name);
+      if !vr.found { return MutPlaceResult { ok: false, mutable: false }; }
+      return MutPlaceResult { ok: true, mutable: vr.mutable };
+    }
+    if match n { ast.ExprNode.Member(r, _name) => true, _ => false } {
+      cur = match n { ast.ExprNode.Member(r, _name) => r, _ => -1 };
+      continue;
+    }
+    return MutPlaceResult { ok: false, mutable: false };
+  }
+  return MutPlaceResult { ok: false, mutable: false };
+}
+
+fn sig_param_borrow_kind(sig: FuncSig, idx: i32) -> i32 {
+  if idx < 0 || idx >= sig.param_borrow_kinds.len() { return param_borrow_none(); }
+  return sig.param_borrow_kinds.get(idx);
+}
+
+fn mut_borrow_arg_where(arg_idx0: i32, variadic: bool) -> String {
+  let where0: String = if variadic { "call variadic arg #" } else { "call arg #" };
+  return where0.concat((arg_idx0 + 1).to_string());
+}
+
+fn mut_borrow_arg_place_error(sp: ast.Span, arg_idx0: i32, variadic: bool) -> TcError {
+  let msg: String = mut_borrow_arg_where(arg_idx0, variadic)
+    .concat(" for &mut parameter must be mutable place");
+  return type_error_at(sp, msg);
+}
+
+fn mut_borrow_arg_immutable_error(sp: ast.Span, arg_idx0: i32, variadic: bool) -> TcError {
+  let msg: String = mut_borrow_arg_where(arg_idx0, variadic)
+    .concat(" for &mut parameter is immutable");
+  return type_error_at(sp, msg);
+}
+
+fn ensure_mut_borrow_arg_place(sp: ast.Span, exprs: ast.ExprPool, l0: Locals, arg_id: i32, arg_idx0: i32, variadic: bool) -> TcError {
+  let pr: MutPlaceResult = expr_mut_place(exprs, l0, arg_id);
+  if !pr.ok { return mut_borrow_arg_place_error(sp, arg_idx0, variadic); }
+  if !pr.mutable { return mut_borrow_arg_immutable_error(sp, arg_idx0, variadic); }
+  return TcError.None;
+}
+
+fn ref_borrow_arg_place_error(sp: ast.Span, arg_idx0: i32, variadic: bool) -> TcError {
+  let msg: String = mut_borrow_arg_where(arg_idx0, variadic)
+    .concat(" for & parameter must be place");
+  return type_error_at(sp, msg);
+}
+
+fn ensure_ref_borrow_arg_place(sp: ast.Span, exprs: ast.ExprPool, l0: Locals, arg_id: i32, arg_idx0: i32, variadic: bool) -> TcError {
+  let pr: MutPlaceResult = expr_mut_place(exprs, l0, arg_id);
+  if !pr.ok { return ref_borrow_arg_place_error(sp, arg_idx0, variadic); }
+  return TcError.None;
+}
+
+fn ensure_borrow_arg_requirements(
+  sp: ast.Span,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  arg_id: i32,
+  arg_idx0: i32,
+  variadic: bool,
+  borrow_kind: i32
+) -> TcError {
+  if param_borrow_is_mut(borrow_kind) {
+    return ensure_mut_borrow_arg_place(sp, exprs, l0, arg_id, arg_idx0, variadic);
+  }
+  if borrow_kind == param_borrow_ref() {
+    return ensure_ref_borrow_arg_place(sp, exprs, l0, arg_id, arg_idx0, variadic);
+  }
+  return TcError.None;
+}
+
+fn locals_has_type_param_bound(ctx: Ctx, l0: Locals, type_param: String, trait_mod: String, trait_name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < l0.type_param_bounds.len() {
+    let b: TypeParamBoundSig = l0.type_param_bounds.get(i);
+    if b.type_param == type_param && trait_is_or_extends(ctx, b.trait_mod_path, b.trait_name, trait_mod, trait_name) {
+      return true;
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn find_param_ty_idx(ctx: Ctx, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Param && t.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn find_vec_ty_idx_local(ctx: Ctx, elem: i32) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Vec && t.elem == elem { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn find_range_ty_idx_local(ctx: Ctx, elem: i32, lo: i64, hi: i64) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Range && t.elem == elem && t.lo == lo && t.hi == hi { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn has_self_assoc_prefix(name: String) -> bool {
+  return name.len() > 5 && name.slice(0, 5) == "Self.";
+}
+
+fn subst_self_ty(ctx: Ctx, ty: i32, recv_ty: i32) -> i32 {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param {
+    if t.name == "Self" { return recv_ty; }
+    if has_self_assoc_prefix(t.name) {
+      let rt: ir.Ty = ir.ty_pool_get(ctx.pool, recv_ty);
+      if rt.kind == ir.TyKind.Param {
+        let want: String = rt.name.concat(t.name.slice(4, t.name.len()));
+        let pty: i32 = find_param_ty_idx(ctx, want);
+        if pty != -1 { return pty; }
+      }
+    }
+    return ty;
+  }
+  if t.kind == ir.TyKind.Vec {
+    let e: i32 = subst_self_ty(ctx, t.elem, recv_ty);
+    if e == t.elem { return ty; }
+    let v: i32 = find_vec_ty_idx_local(ctx, e);
+    if v != -1 { return v; }
+    return ctx.ty_bad;
+  }
+  if t.kind == ir.TyKind.Range {
+    let e2: i32 = subst_self_ty(ctx, t.elem, recv_ty);
+    if e2 == t.elem { return ty; }
+    let r: i32 = find_range_ty_idx_local(ctx, e2, t.lo, t.hi);
+    if r != -1 { return r; }
+    return ctx.ty_bad;
+  }
+  return ty;
+}
+
+fn subst_self_in_sig(ctx: Ctx, sig: FuncSig, recv_ty: i32) -> FuncSig {
+  let mut ps: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < sig.params.len() {
+    ps.push(subst_self_ty(ctx, sig.params.get(i), recv_ty));
+    i = i + 1;
+  }
+  let rr: i32 = subst_self_ty(ctx, sig.ret, recv_ty);
+  let ve: i32 = if sig.has_variadic { subst_self_ty(ctx, sig.variadic_elem, recv_ty) } else { sig.variadic_elem };
+  return FuncSig {
+    params: ps,
+    param_borrow_kinds: sig.param_borrow_kinds,
+    ret: rr,
+    has_variadic: sig.has_variadic,
+    variadic_elem: ve,
+    vis: sig.vis,
+    is_pub: sig.is_pub,
+    type_params: sig.type_params,
+    type_param_packs: sig.type_param_packs,
+    const_params: sig.const_params,
+    type_param_bounds: sig.type_param_bounds,
+    const_where_bounds: sig.const_where_bounds,
+  };
+}
+
+struct AssocProjSubsResult { ok: bool, err: TcError, subs: Vec[TySub] }
+
+fn impl_assoc_ty(sig: ImplSig, assoc: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < sig.assoc_types.len() {
+    let a: ImplAssocTypeSig = sig.assoc_types.get(i);
+    if a.name == assoc { return a.ty; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn add_assoc_proj_subs(ctx: Ctx, l0: Locals, call_sp: ast.Span, sig: FuncSig, subs0: Vec[TySub]) -> AssocProjSubsResult {
+  let mut subs: Vec[TySub] = subs0;
+  let mut bi: i32 = 0;
+  while bi < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(bi);
+    let ty0: i32 = subs_lookup(subs, b.type_param);
+    if ty0 == -1 {
+      bi = bi + 1;
+      continue;
+    }
+    let ty1: i32 = strip_range(ctx, ty0);
+    let tt: ir.Ty = ir.ty_pool_get(ctx.pool, ty1);
+    if tt.kind == ir.TyKind.Param && locals_has_type_param_bound(ctx, l0, tt.name, b.trait_mod_path, b.trait_name) {
+      bi = bi + 1;
+      continue;
+    }
+    let fi: FindImplForTyResult = find_impl_for_ty(ctx, b.trait_mod_path, b.trait_name, ty1);
+    if fi.ambiguous || !fi.found {
+      bi = bi + 1;
+      continue;
+    }
+
+    let tf: FindTraitResult = find_trait(ctx, b.trait_mod_path, b.trait_name);
+    if !tf.found {
+      bi = bi + 1;
+      continue;
+    }
+    let mut ai: i32 = 0;
+    while ai < tf.sig.assoc_types.len() {
+      let an: String = tf.sig.assoc_types.get(ai).name;
+      let aty: i32 = impl_assoc_ty(fi.sig, an);
+      if aty != -1 {
+        let key: String = b.type_param.concat(".").concat(an);
+        let cur: i32 = subs_lookup(subs, key);
+        if cur == -1 {
+          subs.push(TySub { name: key, ty: aty });
+        } else {
+          if cur != aty {
+            let msg: String = "ambiguous associated type projection at call: ".concat(key);
+            return AssocProjSubsResult { ok: false, err: type_error_at(call_sp, msg), subs: subs };
+          }
+        }
+      }
+      ai = ai + 1;
+    }
+    bi = bi + 1;
+  }
+  return AssocProjSubsResult { ok: true, err: TcError.None, subs: subs };
+}
+
+fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, call_sp: ast.Span, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i32], expected: i32) -> ExprTyResult {
+  // Method calls: `recv.method(...)` for built-in types.
+  let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+  let is_member: bool = match cn { ast.ExprNode.Member(_, _) => true, _ => false };
+  if is_member {
+    let recv_id: i32 = match cn { ast.ExprNode.Member(r, _) => r, _ => -1 };
+    let mname: String = match cn { ast.ExprNode.Member(_, n) => n, _ => "" };
+
+    let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv_id, -1);
+    if rr.ok && is_vec_ty(ctx, rr.ty) && is_vec_builtin_method(mname) {
+      return tc_call_vec_method(ctx, w, mod_path, imps, exprs, l0, call_sp, recv_id, rr.ty, mname, args, expected);
+    }
+    if rr.ok && rr.ty == ctx.ty_string && is_string_builtin_method(mname) {
+      return tc_call_string_method(ctx, w, mod_path, imps, exprs, l0, recv_id, mname, args, expected);
+    }
+    if rr.ok && mname == "to_string" && (rr.ty == ctx.ty_bool || rr.ty == ctx.ty_string || is_int_like_ty(ctx, rr.ty) || is_float_ty(ctx, rr.ty)) {
+      return tc_call_prim_method(ctx, w, mod_path, imps, exprs, l0, recv_id, rr.ty, mname, args, expected);
+    }
+    if rr.ok {
+      let rty: i32 = strip_range(ctx, rr.ty);
+      let rt: ir.Ty = ir.ty_pool_get(ctx.pool, rty);
+      if rt.kind == ir.TyKind.Param {
+        let bm: BoundMethodSearch = find_bound_trait_methods(ctx, l0, rt.name, mname);
+        if bm.cands.len() > 1 {
+          let msg0: String = "ambiguous trait method call: ".concat(mname).concat(" (candidates: ").concat(method_cands_text(bm.cands, mname)).concat(")");
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg0) };
+        }
+        if bm.cands.len() == 1 {
+          let c0: BoundMethodCand = bm.cands.get(0);
+          let msig0: FuncSig = subst_self_in_sig(ctx, c0.sig, rty);
+          let mut all_args0: Vec[i32] = Vec();
+          all_args0.push(recv_id);
+          let mut aj: i32 = 0;
+          while aj < args.len() { all_args0.push(args.get(aj)); aj = aj + 1; }
+          return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, c0.trait_mod_path, msig0, type_args, all_args0, expected);
+        }
+        let msg1: String = "trait method not in bounds: ".concat(rt.name).concat(".").concat(mname).concat(" (bounds: ").concat(bounds_text(l0, rt.name)).concat(")");
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg1) };
+      }
+
+      let inh: FindInherentDispatchMethodResult = find_inherent_dispatch_method(ctx, strip_range(ctx, rr.ty), mname);
+      if inh.ambiguous {
+        let msgi: String = "ambiguous inherent method call: ".concat(mname).concat(" (candidates: ").concat(inh.candidates).concat(")");
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgi) };
+      }
+      if inh.found {
+        let mut all_args_inh: Vec[i32] = Vec();
+        all_args_inh.push(recv_id);
+        let mut ai_inh: i32 = 0;
+        while ai_inh < args.len() { all_args_inh.push(args.get(ai_inh)); ai_inh = ai_inh + 1; }
+        return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, inh.impl_mod_path, inh.m.sig, type_args, all_args_inh, expected);
+      }
+
+      let dm: FindTraitDispatchMethodResult = find_trait_dispatch_method(ctx, mod_path, strip_range(ctx, rr.ty), mname);
+      if dm.ambiguous {
+        let msg: String = "ambiguous trait method call: ".concat(mname).concat(" (candidates: ").concat(dm.candidates).concat(")");
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+      }
+      if dm.found {
+        let mut all_args: Vec[i32] = Vec();
+        all_args.push(recv_id);
+        let mut ai: i32 = 0;
+        while ai < args.len() { all_args.push(args.get(ai)); ai = ai + 1; }
+        return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, dm.impl_mod_path, dm.m.sig, type_args, all_args, expected);
+      }
+    }
+  }
+
+  // Enum variant shorthand: `.Variant(...)` (enum type must be known from context).
+  if match cn { ast.ExprNode.DotIdent(_x) => true, _ => false } {
+    if type_args.len() != 0 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "non-generic function does not accept type args") };
+    }
+    let var_name: String = match cn { ast.ExprNode.DotIdent(s) => s, _ => "" };
+    if expected == -1 {
+      let msg: String = "cannot infer enum type for shorthand constructor: .".concat(var_name);
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+    }
+    let et: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
+    if et.kind != ir.TyKind.Enum {
+      let msg: String = "enum variant shorthand requires expected enum type, got ".concat(ty_inst_str(ctx, expected));
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+    }
+    let fe: FindEnumResult = find_enum(ctx, ty_mod(et), ty_name(et));
+    if !fe.found {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "unknown enum: ".concat(ty_name(et))) };
+    }
+    let es: EnumSig = fe.sig;
+    let enum_name: String = enum_sig_display_name(es);
+
+    let mut vi: i32 = 0;
+    while vi < es.vars.len() {
+      let v: EnumVariantSig = es.vars.get(vi);
+      if v.name == var_name {
+        if v.fields.len() != args.len() {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: enum_ctor_arity_error(call_sp, enum_name, var_name, v.fields.len(), args.len()) };
+        }
+        let mut ai: i32 = 0;
+        while ai < args.len() {
+          let want: i32 = v.fields.get(ai);
+          let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(ai), want);
+          if !ar.ok {
+            return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, ar, call_sp, "enum ctor argument typecheck failed") };
+          }
+          if !assignable_to(ctx, want, ar.ty) {
+            return ExprTyResult { ok: false, ty: ctx.ty_bad, err: enum_ctor_arg_type_mismatch(ctx, call_sp, enum_name, var_name, ai, want, ar.ty) };
+          }
+          ai = ai + 1;
+        }
+        return ExprTyResult { ok: true, ty: expected, err: TcError.None };
+      }
+      vi = vi + 1;
+    }
+    let msg: String = "unknown enum variant: ".concat(enum_ctor_target_name(enum_name, var_name));
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+  }
+
+  // Path-based calls: `name(...)`, `alias.name(...)`, `Enum.Variant(...)`.
+  // Typed path support:
+  // - `Option[i32].Some(1)` => parts: ["Option","Some"], path_targs: [i32]
+  let pr: ExprTypePathResult = expr_type_path(exprs, callee);
+  if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  let parts: Vec[String] = pr.parts;
+  let path_targs: Vec[ast.TypeName] = pr.targs;
+
+  // Special: `Vec()` constructor requires expected type `Vec[T]`.
+  if parts.len() == 1 && parts.get(0) == "Vec" {
+    if path_targs.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if type_args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec() requires expected type Vec[T]") }; }
+    if !is_vec_ty(ctx, expected) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec() requires expected type Vec[T]") }; }
+    return ExprTyResult { ok: true, ty: expected, err: TcError.None };
+  }
+
+  // Resolve function call.
+  if parts.len() == 1 {
+    if path_targs.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return tc_call_func_unqualified(ctx, w, mod_path, imps, exprs, l0, call_sp, parts.get(0), type_args, args, expected);
+  }
+  if parts.len() == 2 {
+    // typed path + module alias cannot be a function call target.
+    if path_targs.len() != 0 {
+      let ntx: NamedTypeImport = find_named_type(imps.named_types, parts.get(0));
+      if ntx.local != "" && ntx.kind != named_type_kind_enum() { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      let mut enum_ty_parts: Vec[String] = Vec();
+      enum_ty_parts.push(parts.get(0));
+      let enum_mod0: String = if ntx.local != "" { ntx.mod_path } else { mod_path };
+      let enum_name0: String = if ntx.local != "" { ntx.name } else { parts.get(0) };
+      return tc_call_enum_ctor(ctx, w, mod_path, imps, exprs, l0, call_sp, enum_mod0, enum_name0, parts.get(1), enum_ty_parts, path_targs, args, expected);
+    }
+    let mp: String = find_alias(imps.aliases, parts.get(0));
+    if mp != "" {
+      return tc_call_func_qualified(ctx, w, mod_path, imps, exprs, l0, call_sp, mp, parts.get(1), type_args, args, expected);
+    }
+    // Otherwise: `Trait.method(...)` or `Enum.Variant(...)` in current module,
+    // or via a named imported type.
+    let nt: NamedTypeImport = find_named_type(imps.named_types, parts.get(0));
+    if nt.local != "" {
+      if nt.kind == named_type_kind_trait() {
+        if path_targs.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        return tc_call_trait_static(ctx, w, mod_path, imps, exprs, l0, call_sp, nt.mod_path, nt.name, parts.get(1), type_args, args, expected);
+      }
+      if nt.kind != named_type_kind_enum() { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      let mut enum_ty_parts0: Vec[String] = Vec();
+      enum_ty_parts0.push(parts.get(0));
+      return tc_call_enum_ctor(ctx, w, mod_path, imps, exprs, l0, call_sp, nt.mod_path, nt.name, parts.get(1), enum_ty_parts0, path_targs, args, expected);
+    }
+
+    let ft: FindTraitResult = find_trait(ctx, mod_path, parts.get(0));
+    let fe: FindEnumResult = find_enum(ctx, mod_path, parts.get(0));
+    if ft.found && fe.found && path_targs.len() == 0 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "ambiguous call target: ".concat(parts.get(0))) };
+    }
+    if ft.found && path_targs.len() == 0 {
+      return tc_call_trait_static(ctx, w, mod_path, imps, exprs, l0, call_sp, mod_path, parts.get(0), parts.get(1), type_args, args, expected);
+    }
+    if !fe.found && path_targs.len() == 0 {
+      let prelude: String = "std/prelude";
+      let fp: FindTraitResult = find_trait(ctx, prelude, parts.get(0));
+      if fp.found && vis_allows(fp.sig.vis, prelude, mod_path) {
+        return tc_call_trait_static(ctx, w, mod_path, imps, exprs, l0, call_sp, prelude, parts.get(0), parts.get(1), type_args, args, expected);
+      }
+    }
+    let mut enum_ty_parts1: Vec[String] = Vec();
+    enum_ty_parts1.push(parts.get(0));
+    return tc_call_enum_ctor(ctx, w, mod_path, imps, exprs, l0, call_sp, mod_path, parts.get(0), parts.get(1), enum_ty_parts1, path_targs, args, expected);
+  }
+  if parts.len() == 3 {
+    let mp: String = find_alias(imps.aliases, parts.get(0));
+    if mp == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if path_targs.len() != 0 {
+      let mut enum_ty_parts2: Vec[String] = Vec();
+      enum_ty_parts2.push(parts.get(0));
+      enum_ty_parts2.push(parts.get(1));
+      return tc_call_enum_ctor(ctx, w, mod_path, imps, exprs, l0, call_sp, mp, parts.get(1), parts.get(2), enum_ty_parts2, path_targs, args, expected);
+    }
+    let ft: FindTraitResult = find_trait(ctx, mp, parts.get(1));
+    let fe: FindEnumResult = find_enum(ctx, mp, parts.get(1));
+    if ft.found && fe.found {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "ambiguous call target: ".concat(parts.get(1))) };
+    }
+    if ft.found {
+      return tc_call_trait_static(ctx, w, mod_path, imps, exprs, l0, call_sp, mp, parts.get(1), parts.get(2), type_args, args, expected);
+    }
+    let mut enum_ty_parts3: Vec[String] = Vec();
+    enum_ty_parts3.push(parts.get(0));
+    enum_ty_parts3.push(parts.get(1));
+    return tc_call_enum_ctor(ctx, w, mod_path, imps, exprs, l0, call_sp, mp, parts.get(1), parts.get(2), enum_ty_parts3, path_targs, args, expected);
+  }
+
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+}
+
+fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, call_sp: ast.Span, recv_id: i32, recv_ty: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
+  let elem: i32 = vec_elem(ctx, recv_ty);
+
+  if mname == "push" {
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
+    if !pr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.push receiver must be mutable place") };
+    }
+    if !pr.mutable {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.push receiver is immutable") };
+    }
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), elem);
+    if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: ar.err }; }
+    if expected != -1 && expected != ctx.ty_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_unit, err: TcError.None };
+  }
+
+  if mname == "insert" {
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
+    if !pr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.insert receiver must be mutable place") };
+    }
+    if !pr.mutable {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.insert receiver is immutable") };
+    }
+    if args.len() != 2 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let idxr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_i32);
+    if !idxr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(1), elem);
+    if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: ar.err }; }
+    if expected != -1 && expected != ctx.ty_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_unit, err: TcError.None };
+  }
+
+  if mname == "set" {
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
+    if !pr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.set receiver must be mutable place") };
+    }
+    if !pr.mutable {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.set receiver is immutable") };
+    }
+    if args.len() != 2 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let idxr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_i32);
+    if !idxr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(1), elem);
+    if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: ar.err }; }
+    if expected != -1 && expected != ctx.ty_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_unit, err: TcError.None };
+  }
+
+  if mname == "clear" {
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
+    if !pr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.clear receiver must be mutable place") };
+    }
+    if !pr.mutable {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.clear receiver is immutable") };
+    }
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_unit, err: TcError.None };
+  }
+
+  if mname == "extend" {
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
+    if !pr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.extend receiver must be mutable place") };
+    }
+    if !pr.mutable {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.extend receiver is immutable") };
+    }
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let ar0: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), recv_ty);
+    if !ar0.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_unit, err: TcError.None };
+  }
+
+  if mname == "pop" {
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
+    if !pr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.pop receiver must be mutable place") };
+    }
+    if !pr.mutable {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.pop receiver is immutable") };
+    }
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != elem { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: elem, err: TcError.None };
+  }
+
+  if mname == "remove" {
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
+    if !pr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.remove receiver must be mutable place") };
+    }
+    if !pr.mutable {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.remove receiver is immutable") };
+    }
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let idxr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_i32);
+    if !idxr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != elem { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: elem, err: TcError.None };
+  }
+
+  if mname == "len" {
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_i32 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
+  }
+
+  if mname == "is_empty" {
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
+  }
+
+  if mname == "get" {
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let idxr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_i32);
+    if !idxr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != elem { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: elem, err: TcError.None };
+  }
+
+  if mname == "join" {
+    // Stage0 parity: only Vec[String].join(String) -> String.
+    if elem != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let sepr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_string);
+    if !sepr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
+  }
+
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+}
+
+fn tc_call_string_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv_id: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
+  let _rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv_id, ctx.ty_string);
+
+  if mname == "len" {
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_i32 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
+  }
+  if mname == "is_empty" {
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
+  }
+  if mname == "byte_at" {
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let idxr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_i32);
+    if !idxr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_i32 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
+  }
+  if mname == "slice" {
+    if args.len() != 2 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let sr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_i32);
+    if !sr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(1), ctx.ty_i32);
+    if !er.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
+  }
+  if mname == "concat" {
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let or: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_string);
+    if !or.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
+  }
+  if mname == "escape_c" {
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
+  }
+  if mname == "to_string" {
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
+  }
+  if mname == "starts_with" || mname == "ends_with" || mname == "contains" {
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let or2: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_string);
+    if !or2.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
+  }
+  if mname == "index_of" || mname == "last_index_of" {
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let or3: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_string);
+    if !or3.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_i32 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
+  }
+
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+}
+
+fn tc_call_prim_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv_id: i32, recv_ty: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
+  if mname != "to_string" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv_id, recv_ty);
+  if !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
+}
+
+fn tc_call_func_unqualified(
+  ctx: Ctx,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  name: String,
+  type_args: Vec[ast.TypeName],
+  args: Vec[i32],
+  expected: i32
+) -> ExprTyResult {
+  if name == "@compile_error" {
+    if type_args.len() != 0 || args.len() != 1 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@compile_error expects exactly one String argument") };
+    }
+    let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_string);
+    if !ar.ok { return ar; }
+    let msg: String = compile_error_arg_text(exprs, args.get(0));
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "compile_error: ".concat(msg)) };
+  }
+
+  let nf: NamedFuncImport = find_named_func(imps.named_funcs, name);
+  if nf.local != "" {
+    let frx: FindFuncResult = find_func(ctx, nf.mod_path, nf.name);
+    if !frx.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "unknown fn: ".concat(name)) }; }
+    return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, nf.mod_path, frx.sig, type_args, args, expected);
+  }
+  // Prefer local module, otherwise prelude fallback.
+  let fr0: FindFuncResult = find_func(ctx, mod_path, name);
+  if fr0.found {
+    return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, mod_path, fr0.sig, type_args, args, expected);
+  }
+  let prelude: String = "std/prelude";
+  let fr1: FindFuncResult = find_func(ctx, prelude, name);
+  if fr1.found {
+    if !vis_allows(fr1.sig.vis, prelude, mod_path) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "fn is private: ".concat(name)) };
+    }
+    return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, prelude, fr1.sig, type_args, args, expected);
+  }
+  // Builtins live in the root namespace.
+  let fr2: FindFuncResult = find_func(ctx, "", name);
+  if fr2.found {
+    if is_reserved_intrinsic_name(name) && !is_std_module(mod_path) {
+      let msg: String = "reserved intrinsic is only available in std modules: ".concat(name);
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+    }
+    return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, "", fr2.sig, type_args, args, expected);
+  }
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "unknown fn: ".concat(name)) };
+}
+
+fn tc_call_func_qualified(
+  ctx: Ctx,
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  target_mod: String,
+  name: String,
+  type_args: Vec[ast.TypeName],
+  args: Vec[i32],
+  expected: i32
+) -> ExprTyResult {
+  let fr: FindFuncResult = find_func(ctx, target_mod, name);
+  if !fr.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "unknown fn: ".concat(name)) }; }
+  if !vis_allows(fr.sig.vis, target_mod, cur_mod) {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "fn is private: ".concat(name)) };
+  }
+  return tc_call_func_sig(ctx, w, cur_mod, imps, exprs, l0, call_sp, target_mod, fr.sig, type_args, args, expected);
+}
+
+fn tc_call_func_sig(
+  ctx: Ctx,
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  target_mod: String,
+  sig: FuncSig,
+  type_args: Vec[ast.TypeName],
+  args: Vec[i32],
+  expected: i32
+) -> ExprTyResult {
+  let _tm: String = target_mod; // reserved for future: implicit receiver / UFCS.
+  let mut pack_mode: bool = false;
+  let mut fixed_n: i32 = sig.params.len();
+
+  if sig.has_variadic {
+    if sig.params.len() == 0 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "invalid variadic function signature") };
+    }
+    fixed_n = sig.params.len() - 1;
+    if args.len() < fixed_n {
+      let msgv0: String =
+        "wrong number of args: expected at least ".concat(fixed_n.to_string())
+          .concat(", got ").concat(args.len().to_string());
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgv0) };
+    }
+    if args.len() > sig.params.len() || args.len() == fixed_n {
+      pack_mode = true;
+    } else {
+      let variadic_vec_ty: i32 = sig.params.get(fixed_n);
+      // Generic `T...` lowers to `Vec[T]` in signature. Before type params are
+      // fully inferred, probing with a strict expected type may reject an
+      // otherwise valid explicit-Vec call. Probe raw type first, then use
+      // unify on `Vec[...]` shape to decide between vec-mode vs pack-mode.
+      let probe_last: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(fixed_n), -1);
+      if probe_last.ok {
+        let ur_probe: UnifyResult = unify_ty(ctx, variadic_vec_ty, probe_last.ty, Vec());
+        pack_mode = !ur_probe.ok;
+      } else {
+        pack_mode = true;
+      }
+    }
+  } else {
+    if args.len() != sig.params.len() {
+      let msg: String =
+        "wrong number of args: expected ".concat(sig.params.len().to_string())
+          .concat(", got ").concat(args.len().to_string());
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+    }
+  }
+
+  if sig.type_params.len() == 0 && sig.const_params.len() == 0 {
+    if type_args.len() != 0 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "non-generic function does not accept type args") };
+    }
+    if !pack_mode {
+      let mut i: i32 = 0;
+      while i < args.len() {
+        let want: i32 = sig.params.get(i);
+        let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want);
+        if !ar.ok {
+          if ar.err == TcError.None || tc_error_message(ar.err) == "typecheck failed" {
+            let ap: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
+            if ap.ok && !assignable_to(ctx, want, ap.ty) {
+              return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ap.ty, false, sig_param_borrow_kind(sig, i)) };
+            }
+          }
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, ar, call_sp, "call argument typecheck failed") };
+        }
+        if !assignable_to(ctx, want, ar.ty) {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ar.ty, false, sig_param_borrow_kind(sig, i)) };
+        }
+        let bk: i32 = sig_param_borrow_kind(sig, i);
+        let perr: TcError = ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(i), i, false, bk);
+        if perr != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr }; }
+        i = i + 1;
+      }
+    } else {
+      let mut i: i32 = 0;
+      while i < fixed_n {
+        let want_fixed: i32 = sig.params.get(i);
+        let arf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want_fixed);
+        if !arf.ok {
+          if arf.err == TcError.None || tc_error_message(arf.err) == "typecheck failed" {
+            let apf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
+            if apf.ok && !assignable_to(ctx, want_fixed, apf.ty) {
+              return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, apf.ty, false, sig_param_borrow_kind(sig, i)) };
+            }
+          }
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, arf, call_sp, "call argument typecheck failed") };
+        }
+        if !assignable_to(ctx, want_fixed, arf.ty) {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, arf.ty, false, sig_param_borrow_kind(sig, i)) };
+        }
+        let bk_fixed: i32 = sig_param_borrow_kind(sig, i);
+        let perr_fixed: TcError = ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(i), i, false, bk_fixed);
+        if perr_fixed != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr_fixed }; }
+        i = i + 1;
+      }
+      let mut j: i32 = fixed_n;
+      while j < args.len() {
+        let want_var: i32 = sig.variadic_elem;
+        let arv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), want_var);
+        if !arv.ok {
+          if arv.err == TcError.None || tc_error_message(arv.err) == "typecheck failed" {
+            let apv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), -1);
+            if apv.ok && !assignable_to(ctx, want_var, apv.ty) {
+              return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, apv.ty, true, sig_param_borrow_kind(sig, fixed_n)) };
+            }
+          }
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, arv, call_sp, "call variadic argument typecheck failed") };
+        }
+        if !assignable_to(ctx, want_var, arv.ty) {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, arv.ty, true, sig_param_borrow_kind(sig, fixed_n)) };
+        }
+        let bk_var0: i32 = sig_param_borrow_kind(sig, fixed_n);
+        let perr_var0: TcError = ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(j), j, true, bk_var0);
+        if perr_var0 != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr_var0 }; }
+        j = j + 1;
+      }
+    }
+    if expected != -1 && !assignable_to(ctx, expected, sig.ret) {
+      let msg_ret: String = "call return type mismatch: expected ".concat(ty_inst_str(ctx, expected)).concat(", got ").concat(ty_inst_str(ctx, sig.ret));
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg_ret) };
+    }
+    return ExprTyResult { ok: true, ty: sig.ret, err: TcError.None };
+  }
+
+  // Generic call args:
+  // - type args prefix: `T, U`
+  // - const args suffix: `3, -5`
+  // Missing const args are filled from const param defaults when available.
+  let mut explicit_targ_n: i32 = type_args.len();
+  let mut first_const: i32 = -1;
+  let mut xi: i32 = 0;
+  while xi < type_args.len() {
+    if is_const_generic_arg_tn_or_local(l0, type_args.get(xi)) {
+      first_const = xi;
+      xi = type_args.len();
+    } else {
+      xi = xi + 1;
+    }
+  }
+  if first_const != -1 {
+    explicit_targ_n = first_const;
+    let mut xj: i32 = first_const;
+    while xj < type_args.len() {
+      if !is_const_generic_arg_tn_or_local(l0, type_args.get(xj)) {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "generic arg order error: type args must come before const args") };
+      }
+      xj = xj + 1;
+    }
+  }
+  if !explicit_type_arg_arity_ok(sig, explicit_targ_n) {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, pack_arity_error_msg(sig, explicit_targ_n)) };
+  }
+  let explicit_const_n: i32 = type_args.len() - explicit_targ_n;
+  if explicit_const_n > sig.const_params.len() {
+    let msg: String = "wrong number of const args: expected at most "
+      .concat(sig.const_params.len().to_string())
+      .concat(", got ")
+      .concat(explicit_const_n.to_string());
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+  }
+
+  let mut explicit_targs: Vec[ast.TypeName] = Vec();
+  let mut ci0: i32 = 0;
+  while ci0 < explicit_targ_n {
+    let ta0: ast.TypeName = type_args.get(ci0);
+    if is_const_generic_arg_tn_or_local(l0, ta0) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "generic arg order error: type args must come before const args") }; }
+    explicit_targs.push(ta0);
+    ci0 = ci0 + 1;
+  }
+
+  let mut cidx: i32 = 0;
+  let mut csubs: Vec[ConstSub] = Vec();
+  let mut has_unresolved_const_arg: bool = false;
+  while cidx < sig.const_params.len() {
+    let cp: ConstParamSig = sig.const_params.get(cidx);
+    if cidx < explicit_const_n {
+      let ctn: ast.TypeName = type_args.get(explicit_targ_n + cidx);
+      let pr: ParseConstGenericArgWithLocalsResult = parse_const_generic_arg_with_locals(ctx, l0, ctn, cp.ty);
+      if !pr.ok {
+        let mut msgc: String = "invalid const generic arg for ".concat(cp.name);
+        if pr.text != "" { msgc = msgc.concat(": ").concat(pr.text); }
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgc) };
+      }
+      if pr.unresolved { has_unresolved_const_arg = true; }
+      csubs.push(ConstSub { name: cp.name, ty: cp.ty, iv: pr.iv, text: pr.text });
+    } else {
+      if !cp.has_default {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "missing const generic arg: ".concat(cp.name)) };
+      }
+      csubs.push(ConstSub { name: cp.name, ty: cp.ty, iv: cp.default_iv, text: cp.default_text });
+    }
+    cidx = cidx + 1;
+  }
+  let mut subs: Vec[TySub] = Vec();
+  // Use expected return type as a constraint when available.
+  if expected != -1 {
+    let ur0: UnifyResult = unify_ty(ctx, sig.ret, expected, subs);
+    if !ur0.ok {
+      let msgu0: String = "cannot unify call return type with expected type";
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgu0) };
+    }
+    subs = ur0.subs;
+  }
+
+  // Explicit type args win (when provided). For a trailing type-parameter
+  // pack, extra explicit type args bind to the pack name.
+  let has_pack: bool = has_type_param_pack(sig);
+  let pack_name: String = if has_pack { sig.type_param_packs.get(0) } else { "" };
+  let mut pack_explicit_tys: Vec[i32] = Vec();
+
+  let mut ti: i32 = 0;
+  while ti < explicit_targs.len() {
+    let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, l0.type_params, explicit_targs.get(ti));
+    if !tr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "cannot resolve explicit type argument") };
+    }
+    let tp: String = explicit_type_arg_bind_name(sig, ti);
+    let is_pack_bind: bool = has_pack && tp == pack_name;
+    if is_pack_bind {
+      pack_explicit_tys.push(tr.idx);
+      let cur_pack: i32 = subs_lookup(subs, tp);
+      if cur_pack == -1 { subs.push(TySub { name: tp, ty: tr.idx }); }
+      ti = ti + 1;
+      continue;
+    }
+
+    let cur: i32 = subs_lookup(subs, tp);
+    if cur != -1 && cur != tr.idx {
+      return ExprTyResult {
+        ok: false,
+        ty: ctx.ty_bad,
+        err: type_error_at(call_sp, "explicit type argument conflicts with inferred type parameter"),
+      };
+    }
+    if cur == -1 { subs.push(TySub { name: tp, ty: tr.idx }); }
+    ti = ti + 1;
+  }
+
+  let mut sig_use: FuncSig = sig;
+  if has_pack && pack_explicit_tys.len() > 0 {
+    let mut all_same: bool = true;
+    let mut pi: i32 = 1;
+    while pi < pack_explicit_tys.len() {
+      if pack_explicit_tys.get(pi) != pack_explicit_tys.get(0) {
+        all_same = false;
+        pi = pack_explicit_tys.len();
+      } else {
+        pi = pi + 1;
+      }
+    }
+
+    // Keep base pack binding for body-annotation substitution and the existing
+    // bound checks that rely on type-param names.
+    let cur_pack0: i32 = subs_lookup(subs, pack_name);
+    if cur_pack0 == -1 {
+      subs.push(TySub { name: pack_name, ty: pack_explicit_tys.get(0) });
+    } else if cur_pack0 != pack_explicit_tys.get(0) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "explicit pack head type conflicts with inferred return constraint") };
+    }
+    subs = append_pack_alias_subs(subs, pack_name, pack_explicit_tys);
+
+    if !all_same {
+      if sig_allows_heterogeneous_pack_args(ctx, sig, pack_name) {
+        // Placeholder-only pack usage (A01-2a): keep as-is.
+      } else {
+        let mr: MaterializePackSigResult = materialize_pack_sig_types(ctx, sig, pack_name, pack_explicit_tys);
+        if !mr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, mr.err) }; }
+        sig_use = mr.sig;
+      }
+    }
+  }
+
+  // Infer from arguments.
+  if !pack_mode {
+    let mut i: i32 = 0;
+    while i < args.len() {
+      let want0: i32 = subst_ty(ctx, sig_use.params.get(i), subs);
+      let want_t: ir.Ty = ir.ty_pool_get(ctx.pool, want0);
+      let want: i32 = if want_t.kind == ir.TyKind.Param || ty_has_param(ctx, want0) { -1 } else { want0 };
+      let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want);
+      if !ar.ok {
+        if want != -1 && (ar.err == TcError.None || tc_error_message(ar.err) == "typecheck failed") {
+          let ap: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
+          if ap.ok && !assignable_to(ctx, want, ap.ty) {
+            return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ap.ty, false, sig_param_borrow_kind(sig_use, i)) };
+          }
+        }
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, ar, call_sp, "call argument typecheck failed") };
+      }
+      let ur2: UnifyResult = unify_ty(ctx, sig_use.params.get(i), ar.ty, subs);
+      if !ur2.ok {
+        let msgu2: String = "cannot satisfy generic parameter constraints for arg #".concat((i + 1).to_string());
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgu2) };
+      }
+      subs = ur2.subs;
+      let bk2: i32 = sig_param_borrow_kind(sig_use, i);
+      let perr2: TcError = ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(i), i, false, bk2);
+      if perr2 != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr2 }; }
+      i = i + 1;
+    }
+  } else {
+    let mut i: i32 = 0;
+    while i < fixed_n {
+      let want0_fixed: i32 = subst_ty(ctx, sig_use.params.get(i), subs);
+      let want_t_fixed: ir.Ty = ir.ty_pool_get(ctx.pool, want0_fixed);
+      let want_fixed: i32 = if want_t_fixed.kind == ir.TyKind.Param || ty_has_param(ctx, want0_fixed) { -1 } else { want0_fixed };
+      let arf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), want_fixed);
+      if !arf.ok {
+        if want_fixed != -1 && (arf.err == TcError.None || tc_error_message(arf.err) == "typecheck failed") {
+          let apf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
+          if apf.ok && !assignable_to(ctx, want_fixed, apf.ty) {
+            return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, apf.ty, false, sig_param_borrow_kind(sig_use, i)) };
+          }
+        }
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, arf, call_sp, "call argument typecheck failed") };
+      }
+      let urf: UnifyResult = unify_ty(ctx, sig_use.params.get(i), arf.ty, subs);
+      if !urf.ok {
+        let msguf: String = "cannot satisfy generic parameter constraints for arg #".concat((i + 1).to_string());
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msguf) };
+      }
+      subs = urf.subs;
+      let bkf: i32 = sig_param_borrow_kind(sig_use, i);
+      let perrf: TcError = ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(i), i, false, bkf);
+      if perrf != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perrf }; }
+      i = i + 1;
+    }
+    let mut j: i32 = fixed_n;
+    while j < args.len() {
+      let want0_var: i32 = subst_ty(ctx, sig_use.variadic_elem, subs);
+      let want_t_var: ir.Ty = ir.ty_pool_get(ctx.pool, want0_var);
+      let want_var: i32 = if want_t_var.kind == ir.TyKind.Param || ty_has_param(ctx, want0_var) { -1 } else { want0_var };
+      let arv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), want_var);
+      if !arv.ok {
+        if want_var != -1 && (arv.err == TcError.None || tc_error_message(arv.err) == "typecheck failed") {
+          let apv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), -1);
+          if apv.ok && !assignable_to(ctx, want_var, apv.ty) {
+            return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, apv.ty, true, sig_param_borrow_kind(sig_use, fixed_n)) };
+          }
+        }
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, arv, call_sp, "call variadic argument typecheck failed") };
+      }
+      let urv: UnifyResult = unify_ty(ctx, sig_use.variadic_elem, arv.ty, subs);
+      if !urv.ok {
+        let msguv: String = "cannot satisfy generic parameter constraints for variadic arg #".concat((j + 1).to_string());
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msguv) };
+      }
+      subs = urv.subs;
+      let bkv: i32 = sig_param_borrow_kind(sig_use, fixed_n);
+      let perrv: TcError = ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(j), j, true, bkv);
+      if perrv != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perrv }; }
+      j = j + 1;
+    }
+  }
+
+  // Ensure all type params are bound.
+  let mut j: i32 = 0;
+  while j < sig_use.type_params.len() {
+    let tp: String = sig_use.type_params.get(j);
+    if subs_lookup(subs, tp) == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "cannot infer type argument: ".concat(tp)) }; }
+    j = j + 1;
+  }
+
+  if !has_unresolved_const_arg {
+    let cwr: ConstWhereCheckResult = check_const_where_bounds(ctx, sig_use.const_where_bounds, subs, csubs);
+    if !cwr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, cwr.err) }; }
+  }
+
+  // Check trait bounds for inferred/explicit type args.
+  let mut bi: i32 = 0;
+  while bi < sig_use.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig_use.type_param_bounds.get(bi);
+    let ty0: i32 = subs_lookup(subs, b.type_param);
+    if ty0 == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "internal: unresolved type parameter after call inference") }; }
+    let ty1: i32 = strip_range(ctx, ty0);
+    let fi: FindImplForTyResult = find_impl_for_ty(ctx, b.trait_mod_path, b.trait_name, ty1);
+    if fi.ambiguous {
+      let tname0: String = ty_inst_str(ctx, ty1);
+      let msg0: String = "type argument ".concat(tname0).concat(" has ambiguous impls for trait ").concat(b.trait_name).concat(" (candidates: ").concat(fi.candidates).concat(")");
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg0) };
+    }
+    if !fi.found {
+      let tt: ir.Ty = ir.ty_pool_get(ctx.pool, ty1);
+      if tt.kind == ir.TyKind.Param {
+        if locals_has_type_param_bound(ctx, l0, tt.name, b.trait_mod_path, b.trait_name) {
+          bi = bi + 1;
+          continue;
+        }
+      }
+      let tname: String = ty_inst_str(ctx, ty1);
+      let cands: String = trait_impl_candidates_text(ctx, b.trait_mod_path, b.trait_name);
+      let msg: String = "type argument ".concat(tname).concat(" does not satisfy trait bound ").concat(b.type_param).concat(": ").concat(b.trait_name).concat(" (available impls: ").concat(cands).concat(")");
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+    }
+    bi = bi + 1;
+  }
+
+  let asr: AssocProjSubsResult = add_assoc_proj_subs(ctx, l0, call_sp, sig_use, subs);
+  if !asr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: asr.err }; }
+  subs = asr.subs;
+
+  let mut out_ty: i32 = subst_ty(ctx, sig_use.ret, subs);
+  if out_ty == ctx.ty_bad { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "call return type substitution failed") }; }
+  if expected != -1 && !ty_has_param(ctx, expected) && ty_has_param(ctx, out_ty) {
+    // Call-site expected type can concretize unresolved generic nominal returns.
+    out_ty = expected;
+  }
+  if expected != -1 && !assignable_to(ctx, expected, out_ty) {
+    let msg_ret2: String = "call return type mismatch: expected ".concat(ty_inst_str(ctx, expected)).concat(", got ").concat(ty_inst_str(ctx, out_ty));
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg_ret2) };
+  }
+  return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
+}
+
+fn tc_call_trait_static(
+  ctx: Ctx,
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  trait_mod: String,
+  trait_name: String,
+  method: String,
+  type_args: Vec[ast.TypeName],
+  args: Vec[i32],
+  expected: i32
+) -> ExprTyResult {
+  let tf: FindTraitResult = find_trait(ctx, trait_mod, trait_name);
+  if !tf.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "unknown trait: ".concat(trait_name)) }; }
+  if !vis_allows(tf.sig.vis, trait_mod, cur_mod) {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "trait is private: ".concat(trait_name)) };
+  }
+
+  let tm: FindTraitMethodResult = find_trait_method(tf.sig, method);
+  if !tm.found {
+    let ms: String = trait_method_candidates_text(tf.sig);
+    let msg: String = "unknown trait method: ".concat(trait_name).concat(".").concat(method).concat(" (available methods: ").concat(ms).concat(")");
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+  }
+  if args.len() == 0 {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "trait static call requires receiver arg") };
+  }
+
+  let ar0: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(0), -1);
+  if !ar0.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: ar0.err }; }
+  let recv_ty: i32 = strip_range(ctx, ar0.ty);
+  let rt: ir.Ty = ir.ty_pool_get(ctx.pool, recv_ty);
+  if rt.kind == ir.TyKind.Param {
+    if !locals_has_type_param_bound(ctx, l0, rt.name, trait_mod, trait_name) {
+      let msg0: String = "type parameter ".concat(rt.name).concat(" does not satisfy trait bound: ").concat(trait_name);
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg0) };
+    }
+    let msig: FuncSig = subst_self_in_sig(ctx, tm.m.sig, recv_ty);
+    return tc_call_func_sig(ctx, w, cur_mod, imps, exprs, l0, call_sp, trait_mod, msig, type_args, args, expected);
+  }
+
+  let fi: FindImplForTyResult = find_impl_for_ty(ctx, trait_mod, trait_name, recv_ty);
+  if fi.ambiguous {
+    let recv0: String = ty_inst_str(ctx, recv_ty);
+    let msg0: String = "ambiguous impl for trait call: ".concat(trait_name).concat(" for ").concat(recv0).concat(" (candidates: ").concat(fi.candidates).concat(")");
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg0) };
+  }
+  if !fi.found {
+    let recv: String = ty_inst_str(ctx, recv_ty);
+    let cands2: String = trait_impl_candidates_text(ctx, trait_mod, trait_name);
+    let msg2: String = "no impl for trait call: ".concat(trait_name).concat(" for ").concat(recv).concat(" (available impls: ").concat(cands2).concat(")");
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg2) };
+  }
+  let im: FindImplMethodResult = find_impl_method(fi.sig, method);
+  if !im.found {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "impl missing trait method: ".concat(method)) };
+  }
+  return tc_call_func_sig(ctx, w, cur_mod, imps, exprs, l0, call_sp, fi.sig.mod_path, im.m.sig, type_args, args, expected);
+}
+
+fn find_enum_for_ctor(ctx: Ctx, enum_mod: String, enum_name: String, expected: i32) -> FindEnumResult {
+  let fe0: FindEnumResult = find_enum(ctx, enum_mod, enum_name);
+  if fe0.found { return fe0; }
+  if expected == -1 || !is_enum_ty(ctx, expected) { return fe0; }
+
+  let et: ir.Ty = ir.ty_pool_get(ctx.pool, expected);
+  if ty_mod(et) != enum_mod { return fe0; }
+  let fe1: FindEnumResult = find_enum(ctx, enum_mod, ty_name(et));
+  if !fe1.found { return fe0; }
+  if fe1.sig.base_name == enum_name || fe1.sig.name == enum_name { return fe1; }
+  return fe0;
+}
+
+fn tc_call_enum_ctor(
+  ctx: Ctx,
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  enum_mod: String,
+  enum_name: String,
+  var_name: String,
+  enum_type_parts: Vec[String],
+  enum_targs: Vec[ast.TypeName],
+  args: Vec[i32],
+  expected: i32
+) -> ExprTyResult {
+  let mut out_ty_hint: i32 = -1;
+  let mut fe: FindEnumResult = find_enum_for_ctor(ctx, enum_mod, enum_name, expected);
+  if enum_targs.len() != 0 {
+    let tn: ast.TypeName = ast.TypeName { parts: enum_type_parts, args: enum_targs };
+    let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, l0.type_params, tn);
+    if !tr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "invalid enum constructor type path: ".concat(enum_name)) };
+    }
+    if tr.idx < 0 || tr.idx >= ctx.pool.tys.len() {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "invalid enum constructor type: ".concat(enum_name)) };
+    }
+    if !is_enum_ty(ctx, tr.idx) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "enum ctor target is not enum: ".concat(enum_name)) };
+    }
+    out_ty_hint = tr.idx;
+    let et: ir.Ty = ir.ty_pool_get(ctx.pool, tr.idx);
+    fe = find_enum(ctx, ty_mod(et), ty_name(et));
+  }
+  if !fe.found {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "unknown enum: ".concat(enum_name)) };
+  }
+  let es: EnumSig = fe.sig;
+  let enum_disp: String = enum_sig_display_name(es);
+  if !vis_allows(es.vis, es.mod_path, cur_mod) {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "enum is private: ".concat(enum_disp)) };
+  }
+
+  let mut vi: i32 = 0;
+  while vi < es.vars.len() {
+    let v: EnumVariantSig = es.vars.get(vi);
+    if v.name == var_name {
+      if v.fields.len() != args.len() {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: enum_ctor_arity_error(call_sp, enum_disp, var_name, v.fields.len(), args.len()) };
+      }
+      let mut ai: i32 = 0;
+      while ai < args.len() {
+        let want: i32 = v.fields.get(ai);
+        let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(ai), want);
+        if !ar.ok {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, ar, call_sp, "enum ctor argument typecheck failed") };
+        }
+        if !assignable_to(ctx, want, ar.ty) {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: enum_ctor_arg_type_mismatch(ctx, call_sp, enum_disp, var_name, ai, want, ar.ty) };
+        }
+        ai = ai + 1;
+      }
+
+      let out_ty: i32 = if out_ty_hint != -1 { out_ty_hint } else { if expected != -1 { expected } else { find_enum_ty_idx(ctx, es.mod_path, es.name) } };
+      if out_ty == -1 {
+        let msg: String = "cannot resolve enum ctor output type: ".concat(enum_ctor_target_name(enum_disp, var_name));
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+      }
+      if expected != -1 && !assignable_to(ctx, expected, out_ty) {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: enum_ctor_result_mismatch(ctx, call_sp, expected, out_ty) };
+      }
+      return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
+    }
+    vi = vi + 1;
+  }
+
+  let msg: String = "unknown enum variant: ".concat(enum_ctor_target_name(enum_disp, var_name));
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+}

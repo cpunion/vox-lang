@@ -21,11 +21,7 @@ vox toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
 
 ```bash
 make test-active   # rolling selfhost + test smoke
-make test          # test-active + examples smoke
-# or
-just test-active
-just test
-```
+make test          # test-active + examples smoke```
 
 关键脚本：
 
@@ -40,9 +36,7 @@ just test
 
 ```bash
 make release-dry-run VERSION=v0.2.0-rc1
-just release-dry-run v0.2.0-rc1
 make release-verify VERSION=v0.2.0-rc1
-just release-verify v0.2.0-rc1
 ```
 
 详见：`docs/24-release-process.md`。

@@ -1,0 +1,107 @@
+import "std/testing" as t
+import "vox/typecheck" as tc
+import "vox/irgen" as g
+import "vox/ir" as ir
+import "vox/parse" as p
+
+fn eh_contains_ir(hay: String, needle: String) -> bool {
+  if needle.len() == 0 { return true; }
+  if hay.len() < needle.len() { return false; }
+  let mut i: i32 = 0;
+  while i <= hay.len() - needle.len() {
+    if hay.slice(i, i + needle.len()) == needle { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn eh_add_mod_ir(w: tc.World, path: String, src: String) -> tc.World {
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(r.err == p.ParseError.None);
+  return tc.world_add(w, path, r.prog);
+}
+
+fn test_irgen_try_block_question_branches_to_try_end() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get(flag: bool) -> Result[i32, String] { if flag { return .Ok(7); } return .Err(\"bad\"); }\n")
+      .concat("fn main(flag: bool) -> Result[i32, String] {\n")
+      .concat("  let r: Result[i32, String] = try { let v: i32 = get(flag)?; v + 1 };\n")
+      .concat("  return .Ok(match r { .Ok(v) => v, .Err(_e) => 0 });\n")
+      .concat("}");
+  w = eh_add_mod_ir(w, "main", src);
+
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(eh_contains_ir(s, "tryblk_end_"));
+  t.assert(eh_contains_ir(s, "br tryblk_end_"));
+}
+
+fn test_irgen_try_block_wraps_plain_tail_to_some_for_option() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String =
+    "enum Option[T] { Some(T), None }\n"
+      .concat("fn main() -> Option[i32] {\n")
+      .concat("  let r: Option[i32] = try { 1 };\n")
+      .concat("  return r;\n")
+      .concat("}");
+  w = eh_add_mod_ir(w, "main", src);
+
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(eh_contains_ir(s, "enum_init"));
+  t.assert(eh_contains_ir(s, "Some"));
+}
+
+fn test_irgen_question_result_err_into_conversion_calls_impl() -> () {
+  let mut w: tc.World = tc.world();
+  let prelude_src: String =
+    "pub trait Into { type Target; fn into(x: Self) -> Self.Target; }\n"
+      .concat("impl Into for i32 { type Target = String; fn into(x: i32) -> String { return x.to_string(); } }");
+  w = eh_add_mod_ir(w, "std/prelude", prelude_src);
+
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, i32] { return .Err(7); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let _v: i32 = get()?;\n")
+      .concat("  return .Ok(1);\n")
+      .concat("}");
+  w = eh_add_mod_ir(w, "main", src);
+
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(eh_contains_ir(s, "call"));
+  t.assert(eh_contains_ir(s, "into"));
+}
+
+fn test_irgen_question_result_err_generic_into_conversion_calls_impl() -> () {
+  let mut w: tc.World = tc.world();
+  let prelude_src: String =
+    "pub trait Into { type Target; fn into[T](x: Self) -> Self.Target; }\n"
+      .concat("impl Into for i32 { type Target = String; fn into[T](x: i32) -> String { return x.to_string(); } }");
+  w = eh_add_mod_ir(w, "std/prelude", prelude_src);
+
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, i32] { return .Err(7); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let _v: i32 = get()?;\n")
+      .concat("  return .Ok(1);\n")
+      .concat("}");
+  w = eh_add_mod_ir(w, "main", src);
+
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(eh_contains_ir(s, "call"));
+  t.assert(eh_contains_ir(s, "into"));
+}

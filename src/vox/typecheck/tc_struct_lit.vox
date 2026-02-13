@@ -1,0 +1,171 @@
+import "vox/ast" as ast
+import "vox/ir" as ir
+
+fn struct_path_matches_expected(ctx: Ctx, path_mod: String, path_name: String, expected: i32) -> bool {
+  if expected == -1 { return false; }
+  let eb: i32 = strip_range(ctx, expected);
+  if !is_struct_ty(ctx, eb) { return false; }
+
+  let et: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
+  if path_mod != ty_mod(et) { return false; }
+
+  let fs: FindStructResult = find_struct(ctx, ty_mod(et), ty_name(et));
+  if !fs.found { return false; }
+  return path_name == fs.sig.base_name || path_name == fs.sig.name;
+}
+
+fn struct_field_type_mismatch(ctx: Ctx, sp: ast.Span, field: String, want: i32, got: i32) -> TcError {
+  let msg: String = "struct field type mismatch: "
+    .concat(field)
+    .concat(", expected ")
+    .concat(ty_inst_str(ctx, want))
+    .concat(", got ")
+    .concat(ty_inst_str(ctx, got));
+  return type_error_at(sp, msg);
+}
+
+fn tc_expr_struct_lit(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ty_expr: i32, fields: Vec[ast.StructLitField], expected: i32) -> ExprTyResult {
+  let ty_sp: ast.Span = ast.expr_pool_span(exprs, ty_expr);
+  let mut struct_ty: i32 = -1;
+  let mut struct_mod: String = "";
+  let mut struct_name: String = "";
+  let mut has_named_path: bool = false;
+
+  let pr: ExprTypePathResult = expr_type_path(exprs, ty_expr);
+  if pr.ok {
+    has_named_path = true;
+    let ps: Vec[String] = pr.parts;
+    if ps.len() != 1 && ps.len() != 2 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ty_sp, "invalid struct literal path") };
+    }
+
+    if ps.len() == 1 {
+      struct_mod = mod_path;
+      struct_name = ps.get(0);
+      let nt: NamedTypeImport = find_named_type(imps.named_types, struct_name);
+      if nt.local != "" {
+        if nt.kind != named_type_kind_struct() {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ty_sp, "struct literal type must be struct: ".concat(struct_name)) };
+        }
+        struct_mod = nt.mod_path;
+        struct_name = nt.name;
+      }
+    } else {
+      struct_mod = find_alias(imps.aliases, ps.get(0));
+      if struct_mod == "" {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ty_sp, "unknown module alias: ".concat(ps.get(0))) };
+      }
+      struct_name = ps.get(1);
+    }
+
+    if pr.targs.len() != 0 {
+      let tn: ast.TypeName = ast.TypeName { parts: ps, args: pr.targs };
+      let tr: ResolveTyResult = resolve_type(ctx, w, mod_path, imps, l0.type_params, tn);
+      if !tr.ok {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ty_sp, "invalid struct type arguments") };
+      }
+      if tr.idx < 0 || tr.idx >= ctx.pool.tys.len() || !is_struct_ty(ctx, tr.idx) {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ty_sp, "struct literal type does not resolve to struct") };
+      }
+      struct_ty = tr.idx;
+      let t0: ir.Ty = ir.ty_pool_get(ctx.pool, tr.idx);
+      struct_mod = ty_mod(t0);
+      struct_name = ty_name(t0);
+    } else {
+      struct_ty = find_struct_ty_idx(ctx, struct_mod, struct_name);
+      if struct_ty == -1 && struct_path_matches_expected(ctx, struct_mod, struct_name, expected) {
+        let eb: i32 = strip_range(ctx, expected);
+        struct_ty = eb;
+        let et: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
+        struct_mod = ty_mod(et);
+        struct_name = ty_name(et);
+      }
+    }
+  }
+
+  if struct_ty == -1 {
+    if !has_named_path && expected != -1 && is_struct_ty(ctx, strip_range(ctx, expected)) {
+      let eb: i32 = strip_range(ctx, expected);
+      struct_ty = eb;
+      let t: ir.Ty = ir.ty_pool_get(ctx.pool, eb);
+      struct_mod = ty_mod(t);
+      struct_name = ty_name(t);
+    } else {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ty_sp, "struct literal requires concrete struct type") };
+    }
+  }
+
+  // Validate the struct exists and is visible.
+  let fs: FindStructResult = find_struct(ctx, struct_mod, struct_name);
+  if !fs.found {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ty_sp, "unknown struct: ".concat(struct_name)) };
+  }
+  let sig: StructSig = fs.sig;
+  if !vis_allows(sig.vis, struct_mod, mod_path) {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ty_sp, "struct is private: ".concat(sig.name)) };
+  }
+
+  // v0: require all fields are provided exactly once, and no extra fields.
+  if fields.len() != sig.fields.len() {
+    let msg: String = "wrong number of struct fields: expected "
+      .concat(sig.fields.len().to_string())
+      .concat(", got ")
+      .concat(fields.len().to_string());
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ty_sp, msg) };
+  }
+
+  let mut i: i32 = 0;
+  while i < fields.len() {
+    let f: ast.StructLitField = fields.get(i);
+    let f_sp: ast.Span = ast.expr_pool_span(exprs, f.expr);
+
+    // Find field declaration.
+    let mut found: bool = false;
+    let mut want: i32 = ctx.ty_bad;
+    let mut fvis: i32 = ast.vis_private();
+    let mut fi: i32 = 0;
+    while fi < sig.fields.len() {
+      let sf: StructFieldSig = sig.fields.get(fi);
+      if sf.name == f.name {
+        found = true;
+        want = sf.ty;
+        fvis = sf.vis;
+      }
+      fi = fi + 1;
+    }
+    if !found {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(f_sp, "unknown struct field: ".concat(f.name)) };
+    }
+    if !vis_allows(fvis, struct_mod, mod_path) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(f_sp, "struct field is private: ".concat(f.name)) };
+    }
+
+    let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, f.expr, want);
+    if !er.ok {
+      if er.err == TcError.None || tc_error_message(er.err) == "typecheck failed" {
+        let ep: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, f.expr, -1);
+        if ep.ok && !assignable_to(ctx, want, ep.ty) {
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: struct_field_type_mismatch(ctx, f_sp, f.name, want, ep.ty) };
+        }
+      }
+      if er.err != TcError.None {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: er.err };
+      }
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(f_sp, "struct field expression typecheck failed: ".concat(f.name)) };
+    }
+    if !assignable_to(ctx, want, er.ty) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: struct_field_type_mismatch(ctx, f_sp, f.name, want, er.ty) };
+    }
+
+    i = i + 1;
+  }
+
+  if expected != -1 && expected != struct_ty {
+    let msg2: String = "struct literal type mismatch: expected "
+      .concat(ty_inst_str(ctx, expected))
+      .concat(", got ")
+      .concat(ty_inst_str(ctx, struct_ty));
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ty_sp, msg2) };
+  }
+  return ExprTyResult { ok: true, ty: struct_ty, err: TcError.None };
+}

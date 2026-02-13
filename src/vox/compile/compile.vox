@@ -1,0 +1,148 @@
+import "vox/parse" as p
+import "vox/typecheck" as tc
+import "vox/macroexpand" as mx
+import "vox/irgen" as irgen
+import "vox/codegen" as cg
+import "vox/loader" as ld
+import "vox/ir" as ir
+
+pub struct CompileResult {
+  pub ok: bool,
+  pub err_kind: i32,
+  pub err_code: String,
+  pub err_message: String,
+  pub err: String,
+  pub c: String,
+}
+
+pub fn compile_diag_kind_none() -> i32 { return 0; }
+pub fn compile_diag_kind_parse() -> i32 { return 1; }
+pub fn compile_diag_kind_lex() -> i32 { return 2; }
+pub fn compile_diag_kind_type() -> i32 { return 3; }
+pub fn compile_diag_kind_import() -> i32 { return 4; }
+pub fn compile_diag_kind_irgen() -> i32 { return 5; }
+pub fn compile_diag_kind_ir_verify() -> i32 { return 6; }
+pub fn compile_diag_kind_loader() -> i32 { return 7; }
+pub fn compile_diag_kind_macroexpand() -> i32 { return 8; }
+
+fn compile_code_ir_verify() -> String { return "E_IR_VERIFY_0001"; }
+fn compile_code_macroexpand() -> String { return "E_MACROEXPAND_0001"; }
+
+fn compile_ok(csrc: String) -> CompileResult {
+  return CompileResult { ok: true, err_kind: compile_diag_kind_none(), err_code: "", err_message: "", err: "", c: csrc };
+}
+
+fn compile_err(kind: i32, code: String, msg: String, rendered: String) -> CompileResult {
+  return CompileResult { ok: false, err_kind: kind, err_code: code, err_message: msg, err: rendered, c: "" };
+}
+
+fn compile_kind_from_tc(k: i32) -> i32 {
+  if k == tc.diag_kind_type() { return compile_diag_kind_type(); }
+  if k == tc.diag_kind_import() { return compile_diag_kind_import(); }
+  return compile_diag_kind_none();
+}
+
+fn compile_kind_from_parse(k: i32) -> i32 {
+  if k == p.parse_diag_kind_parse() { return compile_diag_kind_parse(); }
+  if k == p.parse_diag_kind_lex() { return compile_diag_kind_lex(); }
+  return compile_diag_kind_none();
+}
+
+fn compile_kind_from_loader(k: i32) -> i32 {
+  if k == ld.load_diag_kind_parse() { return compile_diag_kind_parse(); }
+  if k == ld.load_diag_kind_lex() { return compile_diag_kind_lex(); }
+  if k == ld.load_diag_kind_loader() { return compile_diag_kind_loader(); }
+  return compile_diag_kind_none();
+}
+
+fn macroexpand_notes_render(notes: Vec[String]) -> String {
+  if notes.len() == 0 { return ""; }
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < notes.len() {
+    if i != 0 { out = out.concat("\n"); }
+    out = out.concat("[macroexpand] ").concat(notes.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn with_macroexpand_notes(rendered: String, notes: Vec[String]) -> String {
+  let ns: String = macroexpand_notes_render(notes);
+  if ns == "" { return rendered; }
+  return rendered.concat("\n").concat(ns);
+}
+
+pub fn compile_main_text_to_c(src: String, opts: cg.EmitOptions) -> CompileResult {
+  let pr: p.ParseResult = p.parse_text_with_path("src/main.vox", src);
+  if pr.err != p.ParseError.None {
+    let pd: p.ParseDiag = p.parse_error_diag("src/main.vox", src, pr.err);
+    return compile_err(compile_kind_from_parse(pd.kind), pd.code, pd.message, pd.rendered);
+  }
+
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "main", pr.prog);
+
+  let xr: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  if !xr.ok {
+    let code: String = compile_code_macroexpand();
+    let msg0: String = tc.tc_error_message(xr.err);
+    let msg: String = if msg0 != "" { msg0 } else { tc.tc_error_to_string(xr.err) };
+    let rendered: String = tc.tc_error_to_string(xr.err).concat(" [").concat(code).concat("]");
+    return compile_err(compile_diag_kind_macroexpand(), code, msg, rendered);
+  }
+
+  let tr: tc.TcResult = tc.typecheck_world(xr.world);
+  if !tr.ok {
+    let rendered: String = with_macroexpand_notes(tc.tc_error_to_string(tr.err), xr.notes);
+    return compile_err(compile_kind_from_tc(tc.tc_error_kind(tr.err)), tc.tc_error_code(tr.err), tc.tc_error_message(tr.err), rendered);
+  }
+
+  let gr: irgen.GenResult = irgen.generate_world(xr.world);
+  if !gr.ok {
+    return compile_err(compile_diag_kind_irgen(), tc.diag_code_irgen(), gr.err, gr.err);
+  }
+  let vr: ir.VerifyResult = ir.verify_program(gr.prog);
+  if !vr.ok {
+    let code: String = compile_code_ir_verify();
+    let msg: String = "ir verify failed: ".concat(vr.err);
+    let rendered: String = msg.concat(" [").concat(code).concat("]");
+    return compile_err(compile_diag_kind_ir_verify(), code, msg, rendered);
+  }
+
+  let c: String = cg.emit_c(gr.prog, opts);
+  return compile_ok(c);
+}
+
+pub fn compile_files_to_c(files: Vec[ld.SourceFile], opts: cg.EmitOptions) -> CompileResult {
+  let lr: ld.LoadWorldResult = ld.world_from_files(files);
+  if !lr.ok {
+    return compile_err(compile_kind_from_loader(lr.err_kind), lr.err_code, lr.err_message, lr.err);
+  }
+  let xr: mx.ExpandResult = mx.expand_world(lr.world, mx.default_config());
+  if !xr.ok {
+    let code: String = compile_code_macroexpand();
+    let msg0: String = tc.tc_error_message(xr.err);
+    let msg: String = if msg0 != "" { msg0 } else { tc.tc_error_to_string(xr.err) };
+    let rendered: String = tc.tc_error_to_string(xr.err).concat(" [").concat(code).concat("]");
+    return compile_err(compile_diag_kind_macroexpand(), code, msg, rendered);
+  }
+  let tr: tc.TcResult = tc.typecheck_world(xr.world);
+  if !tr.ok {
+    let rendered: String = with_macroexpand_notes(tc.tc_error_to_string(tr.err), xr.notes);
+    return compile_err(compile_kind_from_tc(tc.tc_error_kind(tr.err)), tc.tc_error_code(tr.err), tc.tc_error_message(tr.err), rendered);
+  }
+  let gr: irgen.GenResult = irgen.generate_world(xr.world);
+  if !gr.ok {
+    return compile_err(compile_diag_kind_irgen(), tc.diag_code_irgen(), gr.err, gr.err);
+  }
+  let vr: ir.VerifyResult = ir.verify_program(gr.prog);
+  if !vr.ok {
+    let code: String = compile_code_ir_verify();
+    let msg: String = "ir verify failed: ".concat(vr.err);
+    let rendered: String = msg.concat(" [").concat(code).concat("]");
+    return compile_err(compile_diag_kind_ir_verify(), code, msg, rendered);
+  }
+  let c: String = cg.emit_c(gr.prog, opts);
+  return compile_ok(c);
+}

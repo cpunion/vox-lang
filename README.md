@@ -21,11 +21,7 @@ Recommended gates:
 
 ```bash
 make test-active
-make test
-# or (Rust community style task runner)
-just test-active
-just test
-```
+make test```
 
 Quick selfhost smoke:
 

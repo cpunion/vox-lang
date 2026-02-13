@@ -1,0 +1,93 @@
+import "std/testing" as t
+import "vox/typecheck" as tc
+import "vox/irgen" as g
+import "vox/ir" as ir
+
+fn contains(hay: String, needle: String) -> bool {
+  if needle.len() == 0 { return true; }
+  if hay.len() < needle.len() { return false; }
+  let mut i: i32 = 0;
+  while i <= hay.len() - needle.len() {
+    if hay.slice(i, i + needle.len()) == needle { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn find_text(hay: String, needle: String) -> i32 {
+  if needle.len() == 0 { return 0; }
+  if hay.len() < needle.len() { return -1; }
+  let mut i: i32 = 0;
+  while i <= hay.len() - needle.len() {
+    if hay.slice(i, i + needle.len()) == needle { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn find_slot_for_range_init(ir_text: String) -> String {
+  let marker: String = " = slot range(i32,1..=3)";
+  let at: i32 = find_text(ir_text, marker);
+  if at == -1 { return ""; }
+  let mut i: i32 = at;
+  while i > 0 && ir_text.byte_at(i - 1) != 10 {
+    i = i - 1;
+  }
+  let mut j: i32 = i;
+  while j < at {
+    if ir_text.byte_at(j) == 36 {
+      let mut k: i32 = j;
+      while k < at && ir_text.byte_at(k) != 32 {
+        k = k + 1;
+      }
+      return ir_text.slice(j, k);
+    }
+    j = j + 1;
+  }
+  return "";
+}
+
+fn test_irgen_ifexpr_with_block_branches_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 {\n  let x: i32 = if true {\n    let y: i32 = 1;\n    y + 1\n  } else {\n    2\n  };\n  return x;\n}\n";
+  w = add_mod(w, "main", src);
+
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "condbr "));
+  t.assert(contains(s, "ifexpr_then_"));
+  t.assert(contains(s, "ifexpr_end_"));
+}
+
+fn test_irgen_ifexpr_both_branches_diverge_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main(flag: bool) -> i32 {\n  let _x: i32 = if flag {\n    return 7;\n  } else {\n    return 9;\n  };\n  return 0;\n}\n";
+  w = add_mod(w, "main", src);
+
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "condbr "));
+  t.assert(contains(s, "ifexpr_then_"));
+  t.assert(contains(s, "ifexpr_end_"));
+}
+
+fn test_irgen_ifexpr_range_result_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  // Repro: if-expression result slot uses a refined int type.
+  let src: String = "type Tiny = @range(1..=3) i32\nfn main(flag: bool) -> i32 {\n  let x: Tiny = if flag {\n    2 as Tiny\n  } else {\n    3 as Tiny\n  };\n  return x as i32;\n}\n";
+  w = add_mod(w, "main", src);
+
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "ifexpr_then_"));
+  t.assert(contains(s, "ifexpr_end_"));
+  // The if-expression result slot for `@range(1..=3) i32` should be initialized
+  // with the range lower bound, not with integer zero.
+  let slot: String = find_slot_for_range_init(s);
+  t.assert_with(slot.len() > 0, s);
+  t.assert_with(contains(s, "store ".concat(slot).concat(" 1")), s);
+}

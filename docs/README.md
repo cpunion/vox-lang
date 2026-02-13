@@ -31,6 +31,7 @@ Documents:
 - `docs/20-bootstrap.md`
 - `docs/24-release-process.md`
 - `docs/27-active-backlog.md`
+- `docs/28-vox-libraries.md`
 
 Archive:
 

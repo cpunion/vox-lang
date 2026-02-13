@@ -1,0 +1,192 @@
+import "vox/ast" as ast
+import "vox/ir" as ir
+import "vox/typecheck" as tc
+
+fn const_sub_lookup_gen(xs: Vec[tc.ConstSub], name: String) -> tc.ConstSub {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let cs: tc.ConstSub = xs.get(i);
+    if cs.name == name { return cs; }
+    i = i + 1;
+  }
+  return tc.ConstSub { name: "", ty: -1, iv: 0, text: "" };
+}
+
+fn gen_func_impl(
+  ctx: tc.Ctx,
+  w: tc.World,
+  mod_path: String,
+  name_mod_path: String,
+  imps: tc.Imports,
+  exprs: ast.ExprPool,
+  fd: ast.FuncDecl,
+  fn_name: String,
+  sig: tc.FuncSig,
+  type_subs: Vec[tc.TySub],
+  const_subs: Vec[tc.ConstSub]
+) -> GenFuncResult {
+  let mut g: Gen = Gen{
+    ctx: ctx,
+    w: w,
+    mod_path: mod_path,
+    imps: imps,
+    exprs: exprs,
+    tmp_id: 0,
+    slot_id: 0,
+    blocks: Vec(),
+    cur: -1,
+    slots: slots_new(),
+    locals: tc.locals_new(),
+    loops: Vec(),
+    tries: Vec(),
+    ret_ty: tc.strip_range_only(ctx, sig.ret),
+    pending: Vec(),
+    type_subs: type_subs,
+    const_subs: const_subs,
+  };
+  let mut l0: tc.Locals = g.locals;
+  l0.fn_ret_ty = tc.strip_range_only(g.ctx, sig.ret);
+  let mut ci: i32 = 0;
+  while ci < sig.const_params.len() {
+    let cp: tc.ConstParamSig = sig.const_params.get(ci);
+    let cs: tc.ConstSub = const_sub_lookup_gen(g.const_subs, cp.name);
+    if cs.name == "" {
+      l0 = tc.locals_decl_const(l0, cp.name, cp.ty);
+    } else {
+      l0 = tc.locals_decl_const_value(l0, cp.name, cp.ty, cs.iv);
+    }
+    ci = ci + 1;
+  }
+  g.locals = l0;
+
+  // Create entry block.
+  let r0: GenNewIdResult = gen_new_block(g, "entry");
+  g = r0.g;
+  g = gen_set_block(g, r0.id);
+
+  let mut f: ir.Func = ir.Func { name: qname(name_mod_path, fn_name), params: Vec(), ret: tc.strip_range_only(g.ctx, sig.ret), blocks: Vec() };
+
+  // Params: declare slots and store params.
+  let mut pi: i32 = 0;
+  while pi < fd.params.len() {
+    let p: ast.Param = fd.params.get(pi);
+    let pty: i32 = tc.strip_range_only(g.ctx, sig.params.get(pi));
+    f.params.push(ir.Param { name: p.name, ty: pty });
+
+    let rs: GenNewIdResult = gen_new_slot(g);
+    g = rs.g;
+    let sid: i32 = rs.id;
+    g = gen_emit(g, ir.Instr.SlotDecl(sid, pty));
+    g = gen_emit(g, ir.Instr.Store(sid, ir.v_param(pi)));
+    g.slots = slots_decl(g.slots, p.name, sid, pty, false);
+    g.locals = tc.locals_decl(g.locals, p.name, pty, false);
+    pi = pi + 1;
+  }
+
+  // Body.
+  let rb: GenStmtResult = gen_block(g, fd.body);
+  if !rb.ok {
+    return GenFuncResult { ok: false, err: rb.err, ctx: g.ctx, f: f, pending: Vec() };
+  }
+  g = rb.g;
+
+  // Ensure terminator.
+  let cur_blk: ir.Block = g.blocks.get(g.cur);
+  if !cur_blk.has_term {
+    if g.ret_ty == ctx.ty_unit {
+      g = gen_term(g, ir.Term.Ret(false, ir.v_int(0)));
+    } else {
+      return GenFuncResult { ok: false, err: tc.irgen_error_at(fd.sp, "missing return"), ctx: g.ctx, f: f, pending: Vec() };
+    }
+  }
+
+  f.blocks = g.blocks;
+  return GenFuncResult { ok: true, err: "", ctx: g.ctx, f: f, pending: g.pending };
+}
+
+fn gen_func(ctx: tc.Ctx, w: tc.World, mod_path: String, imps: tc.Imports, exprs: ast.ExprPool, fd: ast.FuncDecl) -> GenFuncResult {
+  let fr: tc.FindFuncResult = tc.find_func(ctx, mod_path, fd.name);
+  if !fr.found { return GenFuncResult { ok: false, err: "missing fn sig", ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, pending: Vec() }; }
+  return gen_func_impl(ctx, w, mod_path, mod_path, imps, exprs, fd, fd.name, fr.sig, Vec(), Vec());
+}
+
+fn gen_func_inst(ctx: tc.Ctx, w: tc.World, mod_path: String, imps: tc.Imports, exprs: ast.ExprPool, fd: ast.FuncDecl, inst_name: String, inst_sig: tc.FuncSig, subs: Vec[tc.TySub]) -> GenFuncResult {
+  return gen_func_impl(ctx, w, mod_path, mod_path, imps, exprs, fd, inst_name, inst_sig, subs, Vec());
+}
+
+struct GenStmtResult { ok: bool, err: String, g: Gen }
+
+fn is_diag_prefix(s: String) -> bool {
+  // Heuristic: `<file>:<line>:<col>:` where line/col are decimal digits.
+  // Stage1 v0 file paths are posix-like and do not contain ':'.
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == 58 { break; } // ':'
+    i = i + 1;
+  }
+  if i == 0 || i >= s.len() { return false; }
+  // parse line digits
+  i = i + 1;
+  let mut has_line: bool = false;
+  while i < s.len() {
+    let b: i32 = s.byte_at(i);
+    if b >= 48 && b <= 57 { has_line = true; i = i + 1; continue; }
+    break;
+  }
+  if !has_line { return false; }
+  if i >= s.len() { return false; }
+  if s.byte_at(i) != 58 { return false; }
+  // parse col digits
+  i = i + 1;
+  let mut has_col: bool = false;
+  while i < s.len() {
+    let b: i32 = s.byte_at(i);
+    if b >= 48 && b <= 57 { has_col = true; i = i + 1; continue; }
+    break;
+  }
+  if !has_col { return false; }
+  if i >= s.len() { return false; }
+  if s.byte_at(i) != 58 { return false; }
+  return true;
+}
+
+fn stmt_err_at(sp: ast.Span, r: GenStmtResult) -> GenStmtResult {
+  if r.ok { return r; }
+  // If the inner error already has a `file:line:col:` prefix (e.g. a type error),
+  // don't wrap it again as an irgen error.
+  if is_diag_prefix(r.err) { return r; }
+  return GenStmtResult { ok: false, err: tc.irgen_error_at(sp, r.err), g: r.g };
+}
+
+fn gen_block(g0: Gen, b: ast.Block) -> GenStmtResult {
+  let mut g: Gen = g0;
+  g.slots = slots_enter(g.slots);
+  g.locals = tc.locals_enter(g.locals);
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    let r: GenStmtResult = gen_stmt(g, b.stmts.get(i));
+    if !r.ok { return r; }
+    g = r.g;
+    let blk: ir.Block = g.blocks.get(g.cur);
+    if blk.has_term { break; }
+    i = i + 1;
+  }
+  g.locals = tc.locals_exit(g.locals);
+  g.slots = slots_exit(g.slots);
+  return GenStmtResult { ok: true, err: "", g: g };
+}
+
+fn gen_stmt(g0: Gen, st: ast.Stmt) -> GenStmtResult {
+  let mut g: Gen = g0;
+  return match st {
+    ast.Stmt.Let(sp, mutable, name, has_ann, ann, init) => stmt_err_at(sp, gen_stmt_let(g, mutable, name, has_ann, ann, init)),
+    ast.Stmt.Assign(sp, name, rhs) => stmt_err_at(sp, gen_stmt_assign(g, name, rhs)),
+    ast.Stmt.AssignField(sp, recv, field, rhs) => stmt_err_at(sp, gen_stmt_assign_field(g, recv, field, rhs)),
+    ast.Stmt.ExprStmt(sp, eid) => stmt_err_at(sp, gen_stmt_expr(g, eid)),
+    ast.Stmt.IfStmt(sp, cond, then_b, has_else, else_b) => stmt_err_at(sp, gen_stmt_if(g, cond, then_b, has_else, else_b)),
+    ast.Stmt.WhileStmt(sp, cond, body) => stmt_err_at(sp, gen_stmt_while(g, cond, body)),
+    ast.Stmt.Break(sp) => stmt_err_at(sp, gen_stmt_break(g)),
+    ast.Stmt.Continue(sp) => stmt_err_at(sp, gen_stmt_continue(g)),
+    ast.Stmt.ReturnStmt(sp, has, eid) => stmt_err_at(sp, gen_stmt_return(g, has, eid)),
+  };
+}

@@ -1,0 +1,72 @@
+import "std/testing" as t
+import "vox/parse" as p
+import "vox/ast" as ast
+
+fn parse_ok_eh(e: p.ParseError) -> bool {
+  return match e { p.ParseError.None => true, _ => false };
+}
+
+fn test_parse_question_as_try_node() -> () {
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, String] { return .Ok(1); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let v: i32 = get()?;\n")
+      .concat("  return .Ok(v);\n")
+      .concat("}");
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(parse_ok_eh(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(1);
+  let st0: ast.Stmt = f.body.stmts.get(0);
+  let exprs: ast.ExprPool = r.prog.exprs;
+  let is_try: bool = match st0 {
+    ast.Stmt.Let(_sp, _m, _n, _ha, _ty, id) =>
+      match ast.expr_pool_get(exprs, id) {
+        ast.ExprNode.Try(inner) =>
+          match ast.expr_pool_get(exprs, inner) { ast.ExprNode.Call(_c, _ta, _args) => true, _ => false },
+        _ => false,
+      },
+    _ => false,
+  };
+  t.assert(is_try);
+}
+
+fn test_parse_try_block_as_expr_block_smoke() -> () {
+  let src: String =
+    "enum Result[T, E] { Ok(T), Err(E) }\n"
+      .concat("fn get() -> Result[i32, String] { return .Ok(1); }\n")
+      .concat("fn main() -> Result[i32, String] {\n")
+      .concat("  let r: Result[i32, String] = try {\n")
+      .concat("    let v: i32 = get()?;\n")
+      .concat("    .Ok(v)\n")
+      .concat("  };\n")
+      .concat("  return r;\n")
+      .concat("}");
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(parse_ok_eh(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(1);
+  let st0: ast.Stmt = f.body.stmts.get(0);
+  let exprs: ast.ExprPool = r.prog.exprs;
+  let is_try_block: bool = match st0 {
+    ast.Stmt.Let(_sp, _m, _n, _ha, _ty, id) =>
+      match ast.expr_pool_get(exprs, id) {
+        ast.ExprNode.TryBlock(bid) =>
+          match ast.expr_pool_get(exprs, bid) {
+            ast.ExprNode.Block(b) =>
+              b.stmts.len() == 1 &&
+              b.has_tail &&
+              match b.stmts.get(0) {
+                ast.Stmt.Let(_lsp, _lm, _ln, _lha, _lty, lid) =>
+                  match ast.expr_pool_get(exprs, lid) { ast.ExprNode.Try(_x) => true, _ => false },
+                _ => false,
+              },
+            _ => false,
+          },
+        _ => false,
+      },
+    _ => false,
+  };
+  t.assert(is_try_block);
+}

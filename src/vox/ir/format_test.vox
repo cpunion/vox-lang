@@ -1,0 +1,240 @@
+import "std/testing" as t
+import "vox/ir" as ir
+
+fn contains(hay: String, needle: String) -> bool {
+  if needle.len() == 0 { return true; }
+  if hay.len() < needle.len() { return false; }
+  let mut i: i32 = 0;
+  while i <= hay.len() - needle.len() {
+    if hay.slice(i, i + needle.len()) == needle { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn test_ir_format_smoke() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r.pool;
+
+  let p: ir.Program = ir.program(pool);
+  let s: String = ir.format_program(p);
+  // Only check the header; the rest is intentionally elided in v0 format.
+  t.assert(s.len() >= 5);
+}
+
+fn test_ir_format_range_check_instr() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r.pool;
+  let ty_i32: i32 = r.idx;
+
+  let r2: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_u32());
+  pool = r2.pool;
+  let ty_u32: i32 = r2.idx;
+
+  let mut p: ir.Program = ir.program(pool);
+
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.RangeCheck(ty_i32, ir.v_int(1), 0, 3));
+  instrs.push(ir.Instr.RangeCheck(ty_u32, ir.v_int(1), 0, 3));
+  let b: ir.Block = ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(true, ir.v_int(0)) };
+
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(b);
+  let f: ir.Func = ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks };
+  p.funcs.push(f);
+
+  let s: String = ir.format_program(p);
+  t.assert(contains(s, "range_check i32 0 3 1"));
+  t.assert(contains(s, "range_check u32 0 3 1"));
+}
+
+fn test_ir_format_bit_ops_instr() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r.pool;
+  let ty_i32: i32 = r.idx;
+
+  let mut p: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.BinOp(0, ir.BinOpKind.BitAnd, ty_i32, ir.v_int(6), ir.v_int(3)));
+  instrs.push(ir.Instr.BinOp(1, ir.BinOpKind.Shl, ty_i32, ir.v_int(1), ir.v_int(4)));
+  let b: ir.Block = ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(true, ir.v_int(0)) };
+
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(b);
+  let f: ir.Func = ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks };
+  p.funcs.push(f);
+
+  let s: String = ir.format_program(p);
+  t.assert(contains(s, "bitand i32 6 3"));
+  t.assert(contains(s, "shl i32 1 4"));
+}
+
+fn test_ir_format_string_index_instr() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r.pool;
+  let ty_i32: i32 = r.idx;
+
+  let mut p: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.StrIndexOf(0, ir.v_str("abc"), ir.v_str("b")));
+  instrs.push(ir.Instr.StrLastIndexOf(1, ir.v_str("abca"), ir.v_str("a")));
+  let b: ir.Block = ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(true, ir.v_int(0)) };
+
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(b);
+  let f: ir.Func = ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks };
+  p.funcs.push(f);
+
+  let s: String = ir.format_program(p);
+  t.assert(contains(s, "str_index_of"));
+  t.assert(contains(s, "str_last_index_of"));
+}
+
+fn test_ir_format_vec_clear_instr() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r0: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r0.pool;
+  let ty_i32: i32 = r0.idx;
+  let r1: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_vec(ty_i32));
+  pool = r1.pool;
+  let ty_vi32: i32 = r1.idx;
+
+  let mut p: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.SlotDecl(0, ty_vi32));
+  instrs.push(ir.Instr.VecClear(0));
+  let b: ir.Block = ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(false, ir.v_int(0)) };
+
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(b);
+  let f: ir.Func = ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks };
+  p.funcs.push(f);
+
+  let s: String = ir.format_program(p);
+  t.assert(contains(s, "vec_clear $v0"));
+}
+
+fn test_ir_format_vec_insert_instr() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r0: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r0.pool;
+  let ty_i32: i32 = r0.idx;
+  let r1: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_vec(ty_i32));
+  pool = r1.pool;
+  let ty_vi32: i32 = r1.idx;
+
+  let mut p: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.SlotDecl(0, ty_vi32));
+  instrs.push(ir.Instr.VecInsert(0, ty_i32, ir.v_int(1), ir.v_int(9)));
+  let b: ir.Block = ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(false, ir.v_int(0)) };
+
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(b);
+  let f: ir.Func = ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks };
+  p.funcs.push(f);
+
+  let s: String = ir.format_program(p);
+  t.assert(contains(s, "vec_insert $v0 1 9"));
+}
+
+fn test_ir_format_vec_set_instr() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r0: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r0.pool;
+  let ty_i32: i32 = r0.idx;
+  let r1: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_vec(ty_i32));
+  pool = r1.pool;
+  let ty_vi32: i32 = r1.idx;
+
+  let mut p: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.SlotDecl(0, ty_vi32));
+  instrs.push(ir.Instr.VecSet(0, ty_i32, ir.v_int(1), ir.v_int(9)));
+  let b: ir.Block = ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(false, ir.v_int(0)) };
+
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(b);
+  let f: ir.Func = ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks };
+  p.funcs.push(f);
+
+  let s: String = ir.format_program(p);
+  t.assert(contains(s, "vec_set $v0 1 9"));
+}
+
+fn test_ir_format_vec_extend_instr() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r0: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r0.pool;
+  let ty_i32: i32 = r0.idx;
+  let r1: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_vec(ty_i32));
+  pool = r1.pool;
+  let ty_vi32: i32 = r1.idx;
+
+  let mut p: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.SlotDecl(0, ty_vi32));
+  instrs.push(ir.Instr.SlotDecl(1, ty_vi32));
+  instrs.push(ir.Instr.VecExtend(0, 1));
+  let b: ir.Block = ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(false, ir.v_int(0)) };
+
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(b);
+  let f: ir.Func = ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks };
+  p.funcs.push(f);
+
+  let s: String = ir.format_program(p);
+  t.assert(contains(s, "vec_extend $v0 $v1"));
+}
+
+fn test_ir_format_vec_pop_instr() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r0: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r0.pool;
+  let ty_i32: i32 = r0.idx;
+  let r1: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_vec(ty_i32));
+  pool = r1.pool;
+  let ty_vi32: i32 = r1.idx;
+
+  let mut p: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.SlotDecl(0, ty_vi32));
+  instrs.push(ir.Instr.VecPop(1, ty_i32, 0));
+  let b: ir.Block = ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(false, ir.v_int(0)) };
+
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(b);
+  let f: ir.Func = ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks };
+  p.funcs.push(f);
+
+  let s: String = ir.format_program(p);
+  t.assert(contains(s, "%t1 = vec_pop i32 $v0"));
+}
+
+fn test_ir_format_vec_remove_instr() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r0: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r0.pool;
+  let ty_i32: i32 = r0.idx;
+  let r1: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_vec(ty_i32));
+  pool = r1.pool;
+  let ty_vi32: i32 = r1.idx;
+
+  let mut p: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.SlotDecl(0, ty_vi32));
+  instrs.push(ir.Instr.VecRemove(1, ty_i32, 0, ir.v_int(2)));
+  let b: ir.Block = ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(false, ir.v_int(0)) };
+
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(b);
+  let f: ir.Func = ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks };
+  p.funcs.push(f);
+
+  let s: String = ir.format_program(p);
+  t.assert(contains(s, "%t1 = vec_remove i32 $v0 2"));
+}
