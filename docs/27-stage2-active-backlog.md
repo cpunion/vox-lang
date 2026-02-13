@@ -40,7 +40,7 @@ Governance from now on:
     - Verified by pack-call/vec-call dual-mode tests in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - Source: `docs/06-advanced-generics.md`.
 
-- [ ] A02 String/borrow model convergence from transitional `String/str` aliasing to true `&str`/slice semantics.
+- [x] A02 String/borrow model convergence from transitional `String/str` aliasing to stage2-stable borrow constraints and diagnostics.
   - [x] A02-1 Bare `str` is now rejected; use `String` for owned text and `&str`/`&'static str` for borrow-position text.
     - Covered in `compiler/stage2/src/compiler/typecheck/ctx.vox`, with compile/typecheck regressions in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - [x] A02-2 `&mut`/`&'static mut` call arguments now require mutable place roots (local mutable var or member-chain rooted at one), across direct calls, variadic paths, generic calls, and method-sugar dispatch.
@@ -51,10 +51,10 @@ Governance from now on:
     - Covered in `compiler/stage2/src/compiler/typecheck/tc_fn.vox`, with regressions in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - [x] A02-5 Call-arg mismatch diagnostics are now borrow-aware: expected type text preserves borrow form (`&T`/`&mut T`/`&'static T`/`&'static mut T`) instead of showing erased base type.
     - Covered in `compiler/stage2/src/compiler/typecheck/tc_call.vox`, `compiler/stage2/src/compiler/typecheck/typecheck_test.vox`, and `compiler/stage2/src/compiler/compile/compile_test.vox`.
-  - Current gap: `&T`/`&str` are still transitional in type representation (borrow is tracked by signature metadata, not a first-class IR type).
+  - [x] A02-6 Stage2 closure note: borrow remains signature-metadata based in this stage; first-class borrow IR/type representation is deferred to `D06`.
   - Sources: `docs/13-standard-library.md`, `docs/21-stage1-compiler.md`, `docs/19-ir-spec.md`.
 
-- [ ] A03 Runtime memory model convergence.
+- [x] A03 Runtime memory model convergence (stage2 scope).
   - [x] A03-1 Runtime tracked allocations now support early release via `vox_rt_free`; non-escaping temp path buffers in `mkdir_p`/`walk_vox_files` are released eagerly instead of waiting for process exit.
     - Covered in `compiler/stage2/src/compiler/codegen/c_runtime.vox` and `compiler/stage2/src/compiler/codegen/c_emit_test.vox`.
   - [x] A03-2 `std/sync` handles now support explicit release (`mutex_drop`/`atomic_drop`) via new low-level drop intrinsics, reducing long-running tool memory retention without changing value semantics.
@@ -65,7 +65,7 @@ Governance from now on:
     - Covered in `compiler/stage2/src/compiler/codegen/c_runtime.vox` and `compiler/stage2/src/compiler/codegen/c_emit_test.vox`.
   - [x] A03-5 Sync-handle registry nodes now use tracked runtime allocation (`vox_rt_malloc/vox_rt_free`), so undisposed-handle paths do not leave untracked registry memory behind.
     - Covered in `compiler/stage2/src/compiler/codegen/c_runtime.vox` and `compiler/stage2/src/compiler/codegen/c_emit_test.vox`.
-  - Current gap: full ownership/drop semantics for general values/containers are still not finalized.
+  - [x] A03-6 Stage2 closure note: full ownership/move/drop for general values/containers is deferred to `D07` to keep stage2 rolling-bootstrap stable.
   - Source: `docs/21-stage1-compiler.md`.
 
 - [x] A04 Package registry remoteization.
@@ -113,3 +113,11 @@ Governance from now on:
 
 - [ ] D05 FFI/WASM detailed ABI/attribute model.
   - Source: `docs/17-ffi-interop.md`.
+
+- [ ] D06 First-class borrow IR/type representation (`&T`/`&str` non-erased types, borrow-aware IR ops).
+  - Extracted from A02 stage2 closure note.
+  - Source: `docs/19-ir-spec.md`, `docs/13-standard-library.md`.
+
+- [ ] D07 Full ownership/move/drop semantics for general values/containers.
+  - Extracted from A03 stage2 closure note.
+  - Source: `docs/21-stage1-compiler.md`.
