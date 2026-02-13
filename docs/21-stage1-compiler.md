@@ -99,4 +99,4 @@ Stage2 补充（在不引入语言级 drop 的前提下）：
 3. 类型反射 intrinsic：已支持 `@size_of/@align_of/@type/@type_name/@field_count/@field_name/@field_type/@field_type_id/@same_type/@assignable_to/@castable_to/@eq_comparable_with/@ordered_with/@same_layout/@bitcastable` 以及 `@is_integer/@is_signed_int/@is_unsigned_int/@is_float/@is_bool/@is_string/@is_struct/@is_enum/@is_vec/@is_range/@is_eq_comparable/@is_ordered/@is_unit/@is_numeric/@is_zero_sized`，并在 const 与 IR lowering 阶段常量折叠。
 4. stdlib 基座：`std/sync` 已统一为泛型句柄 API（`Mutex[T]/Atomic[T]`，当前由 `SyncScalar` 约束覆盖 `i32/i64`）；`std/io` 网络最小 TCP API（`net_connect/net_send/net_recv/net_close`）在解释器与 C 后端可用。
 5. 诊断定位：AST 顶层声明已携带 `Span`，typecheck/irgen 的声明级错误与 `missing return` 已优先输出真实 `file:line:col`。
-6. 自举兼容约束（当前实例）：`std/collections/map.vox` 在 Stage2 源码中采用 bootstrap-safe 实现（避免 `Vec.set/remove/insert` 与局部 `Map[K,V]` let 注解），以保证 `stage1 -> stage2` 链路稳定。退出条件：Stage1 补齐对应语义后，切回更直接实现并删除兼容层，同时保持 `make test-stage2-tests` 绿灯。
+6. 自举兼容约束（已收敛）：`std/collections/map.vox` 已退出 bootstrap-safe 退化实现，改为直接使用 `Vec.set/remove/clear` 的常规路径；`stage1 -> stage2` 链路保持通过（见 `make test-stage2-tests` 门禁）。

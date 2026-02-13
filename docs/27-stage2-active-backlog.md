@@ -123,5 +123,8 @@ Governance from now on:
   - Source: `docs/19-ir-spec.md`, `docs/13-standard-library.md`.
 
 - [ ] D07 Full ownership/move/drop semantics for general values/containers.
+  - [x] D07-1 Remove bootstrap-safe `std/collections/map` fallback: switch to direct `Vec.set/remove/clear` implementation and keep `stage1 -> stage2` gate green.
+  - [ ] D07-2 Container-level deterministic release model (Vec/String/Map) that is alias-safe under current value-copy semantics.
+  - [ ] D07-3 Language-level ownership/move/drop rules and diagnostics (no-UAF contract) across function boundaries and aggregates.
   - Extracted from A03 stage2 closure note.
   - Source: `docs/21-stage1-compiler.md`.
