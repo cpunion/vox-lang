@@ -9,6 +9,7 @@ vox build-pkg [--driver=user|tool] <out.bin>
 vox test-pkg  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] <out.bin>
 vox list-pkg  [--json]
 vox toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
+vox version | --version | -V
 ```
 
 ## 仓库布局

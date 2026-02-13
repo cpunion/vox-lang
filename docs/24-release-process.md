@@ -71,6 +71,7 @@ CI 步骤：
 3. 每个平台产物均产出 `.sha256`。
 4. `scripts/release/verify-release-bundle.sh` 对每个平台产物验证通过。
 5. tag 发布时上传全量资产到 GitHub Release。
+6. 产物内 `bin/vox[.exe] version` 可输出内嵌版本号。
 
 ## 6. 锁版本维护流程
 

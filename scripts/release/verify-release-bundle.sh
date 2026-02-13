@@ -97,6 +97,15 @@ if [[ "$BOOTSTRAP_MODE" != "rolling" ]]; then
   exit 1
 fi
 
+BIN_VERSION_RAW="$($BUNDLE_DIR/bin/vox${EXE_SUFFIX} version | tr -d '\r\n')"
+EXPECTED_BIN_VERSION="vox $VERSION"
+EXPECTED_BIN_VERSION_NO_V="vox ${VERSION#v}"
+if [[ "$BIN_VERSION_RAW" != "$EXPECTED_BIN_VERSION" && "$BIN_VERSION_RAW" != "$EXPECTED_BIN_VERSION_NO_V" ]]; then
+  echo "[verify] embedded version mismatch: got=$BIN_VERSION_RAW expected=$EXPECTED_BIN_VERSION or $EXPECTED_BIN_VERSION_NO_V" >&2
+  exit 1
+fi
+
 echo "[verify] bundle OK: $ARCHIVE"
 echo "[verify] checksum OK: $CHECKSUM"
 echo "[verify] bootstrap mode: $BOOTSTRAP_MODE"
+echo "[verify] embedded version: $BIN_VERSION_RAW"
