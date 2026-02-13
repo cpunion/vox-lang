@@ -49,6 +49,8 @@ Governance from now on:
     - Covered in `compiler/stage2/src/compiler/typecheck/tc_call.vox`, with regressions in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - [x] A02-4 `let` annotations with non-static borrow now validate initializer sources (`&T` requires place; `&mut T` requires mutable place).
     - Covered in `compiler/stage2/src/compiler/typecheck/tc_fn.vox`, with regressions in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
+  - [x] A02-5 Call-arg mismatch diagnostics are now borrow-aware: expected type text preserves borrow form (`&T`/`&mut T`/`&'static T`/`&'static mut T`) instead of showing erased base type.
+    - Covered in `compiler/stage2/src/compiler/typecheck/tc_call.vox`, `compiler/stage2/src/compiler/typecheck/typecheck_test.vox`, and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - Current gap: `&T`/`&str` are still transitional in type representation (borrow is tracked by signature metadata, not a first-class IR type).
   - Sources: `docs/13-standard-library.md`, `docs/21-stage1-compiler.md`, `docs/19-ir-spec.md`.
 

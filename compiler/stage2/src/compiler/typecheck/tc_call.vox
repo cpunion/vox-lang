@@ -52,12 +52,21 @@ fn call_child_error_or(ctx: Ctx, ar: ExprTyResult, sp: ast.Span, fallback: Strin
   return type_error_at(sp, fallback);
 }
 
-fn call_arg_type_mismatch(ctx: Ctx, sp: ast.Span, arg_idx0: i32, want: i32, got: i32, variadic: bool) -> TcError {
+fn borrow_expected_type_text(ctx: Ctx, want: i32, borrow_kind: i32) -> String {
+  let base: String = ty_inst_str(ctx, want);
+  if borrow_kind == param_borrow_ref() { return "&".concat(base); }
+  if borrow_kind == param_borrow_ref_mut() { return "&mut ".concat(base); }
+  if borrow_kind == param_borrow_ref_static() { return "&'static ".concat(base); }
+  if borrow_kind == param_borrow_ref_static_mut() { return "&'static mut ".concat(base); }
+  return base;
+}
+
+fn call_arg_type_mismatch(ctx: Ctx, sp: ast.Span, arg_idx0: i32, want: i32, got: i32, variadic: bool, borrow_kind: i32) -> TcError {
   let where0: String = if variadic { "variadic arg #" } else { "arg #" };
   let msg: String = "call ".concat(where0)
     .concat((arg_idx0 + 1).to_string())
     .concat(" type mismatch: expected ")
-    .concat(ty_inst_str(ctx, want))
+    .concat(borrow_expected_type_text(ctx, want, borrow_kind))
     .concat(", got ")
     .concat(ty_inst_str(ctx, got));
   return type_error_at(sp, msg);
@@ -1602,13 +1611,13 @@ fn tc_call_func_sig(
           if ar.err == TcError.None || tc_error_message(ar.err) == "typecheck failed" {
             let ap: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
             if ap.ok && !assignable_to(ctx, want, ap.ty) {
-              return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ap.ty, false) };
+              return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ap.ty, false, sig_param_borrow_kind(sig, i)) };
             }
           }
           return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, ar, call_sp, "call argument typecheck failed") };
         }
         if !assignable_to(ctx, want, ar.ty) {
-          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ar.ty, false) };
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ar.ty, false, sig_param_borrow_kind(sig, i)) };
         }
         let bk: i32 = sig_param_borrow_kind(sig, i);
         let perr: TcError = ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(i), i, false, bk);
@@ -1624,13 +1633,13 @@ fn tc_call_func_sig(
           if arf.err == TcError.None || tc_error_message(arf.err) == "typecheck failed" {
             let apf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
             if apf.ok && !assignable_to(ctx, want_fixed, apf.ty) {
-              return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, apf.ty, false) };
+              return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, apf.ty, false, sig_param_borrow_kind(sig, i)) };
             }
           }
           return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, arf, call_sp, "call argument typecheck failed") };
         }
         if !assignable_to(ctx, want_fixed, arf.ty) {
-          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, arf.ty, false) };
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, arf.ty, false, sig_param_borrow_kind(sig, i)) };
         }
         let bk_fixed: i32 = sig_param_borrow_kind(sig, i);
         let perr_fixed: TcError = ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(i), i, false, bk_fixed);
@@ -1645,13 +1654,13 @@ fn tc_call_func_sig(
           if arv.err == TcError.None || tc_error_message(arv.err) == "typecheck failed" {
             let apv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), -1);
             if apv.ok && !assignable_to(ctx, want_var, apv.ty) {
-              return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, apv.ty, true) };
+              return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, apv.ty, true, sig_param_borrow_kind(sig, fixed_n)) };
             }
           }
           return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, arv, call_sp, "call variadic argument typecheck failed") };
         }
         if !assignable_to(ctx, want_var, arv.ty) {
-          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, arv.ty, true) };
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, arv.ty, true, sig_param_borrow_kind(sig, fixed_n)) };
         }
         let bk_var0: i32 = sig_param_borrow_kind(sig, fixed_n);
         let perr_var0: TcError = ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(j), j, true, bk_var0);
@@ -1826,7 +1835,7 @@ fn tc_call_func_sig(
         if want != -1 && (ar.err == TcError.None || tc_error_message(ar.err) == "typecheck failed") {
           let ap: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
           if ap.ok && !assignable_to(ctx, want, ap.ty) {
-            return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ap.ty, false) };
+            return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ap.ty, false, sig_param_borrow_kind(sig_use, i)) };
           }
         }
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, ar, call_sp, "call argument typecheck failed") };
@@ -1853,7 +1862,7 @@ fn tc_call_func_sig(
         if want_fixed != -1 && (arf.err == TcError.None || tc_error_message(arf.err) == "typecheck failed") {
           let apf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
           if apf.ok && !assignable_to(ctx, want_fixed, apf.ty) {
-            return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, apf.ty, false) };
+            return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, apf.ty, false, sig_param_borrow_kind(sig_use, i)) };
           }
         }
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, arf, call_sp, "call argument typecheck failed") };
@@ -1879,7 +1888,7 @@ fn tc_call_func_sig(
         if want_var != -1 && (arv.err == TcError.None || tc_error_message(arv.err) == "typecheck failed") {
           let apv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), -1);
           if apv.ok && !assignable_to(ctx, want_var, apv.ty) {
-            return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, apv.ty, true) };
+            return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, apv.ty, true, sig_param_borrow_kind(sig_use, fixed_n)) };
           }
         }
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, arv, call_sp, "call variadic argument typecheck failed") };
