@@ -90,6 +90,7 @@ Stage2 补充（在不引入语言级 drop 的前提下）：
 - `vox_rt_free` 改为“仅释放 tracked 指针”：若指针未被跟踪或已释放则直接忽略，避免在当前值拷贝/共享句柄语义下重复显式 drop 导致 double-free。
 - `std/sync` 句柄增加运行时活性表（`vox_sync_handle_add/live/remove`）：`load/store/fetch/swap` 对已 drop 或无效句柄会明确 panic，`drop` 走 remove 门控后再释放，实现幂等 drop；活性表节点也走 `vox_rt_malloc/vox_rt_free`，避免未 drop 句柄路径下的注册表泄漏。
 - `std/string` 与 `std/collections`（含 `Map`）增加显式 `Release` 基线：`release(String)`/`release_vec(Vec[T])`/`Map.release()` 返回空值并断开当前值；在当前浅拷贝模型下不做共享 backing storage 的物理回收，以保证别名路径无 UAF（幂等、安全）。
+- typecheck 已补充最小误用防护：`release` 相关调用若作为裸表达式语句会报错（`release call result must be assigned back`），要求调用方显式重绑定返回值。
 
 当前补充：
 

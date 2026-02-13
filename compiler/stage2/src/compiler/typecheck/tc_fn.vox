@@ -317,9 +317,48 @@ fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exp
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
 }
 
-fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, _sp: ast.Span, eid: i32) -> TcStmtResult {
+fn find_import_alias_path(imps: Imports, alias: String) -> String {
+  let mut i: i32 = 0;
+  while i < imps.aliases.len() {
+    let a: ImportAlias = imps.aliases.get(i);
+    if a.alias == alias { return a.path; }
+    i = i + 1;
+  }
+  return "";
+}
+
+fn is_std_release_module_call(imps: Imports, exprs: ast.ExprPool, callee: i32) -> bool {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+  return match n {
+    ast.ExprNode.Member(recv, name) => {
+      let rn: ast.ExprNode = ast.expr_pool_get(exprs, recv);
+      if match rn { ast.ExprNode.Ident(alias) => true, _ => false } {
+        let alias: String = match rn { ast.ExprNode.Ident(s) => s, _ => "" };
+        let p: String = find_import_alias_path(imps, alias);
+        if p == "std/string" && name == "release" { return true; }
+        if p == "std/collections" && (name == "release_vec" || name == "release") { return true; }
+      }
+      return false;
+    },
+    ast.ExprNode.Ident(name) => name == "release_vec",
+    _ => false,
+  };
+}
+
+fn is_release_call_expr(imps: Imports, exprs: ast.ExprPool, eid: i32) -> bool {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
+  return match n {
+    ast.ExprNode.Call(callee, _type_args, _args) => is_std_release_module_call(imps, exprs, callee),
+    _ => false,
+  };
+}
+
+fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, eid: i32) -> TcStmtResult {
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, eid, -1);
   if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
+  if er.ty != ctx.ty_unit && is_release_call_expr(imps, exprs, eid) {
+    return TcStmtResult { ok: false, err: type_error_at(sp, "release call result must be assigned back"), ctx: ctx, locals: l0 };
+  }
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
 }
 
