@@ -47,7 +47,9 @@ Governance from now on:
   - Sources: `docs/13-standard-library.md`, `docs/21-stage1-compiler.md`, `docs/19-ir-spec.md`.
 
 - [ ] A03 Runtime memory model convergence.
-  - Current gap: process-lifetime cleanup exists, but full ownership/drop/release semantics are not finalized.
+  - [x] A03-1 Runtime tracked allocations now support early release via `vox_rt_free`; non-escaping temp path buffers in `mkdir_p`/`walk_vox_files` are released eagerly instead of waiting for process exit.
+    - Covered in `compiler/stage2/src/compiler/codegen/c_runtime.vox` and `compiler/stage2/src/compiler/codegen/c_emit_test.vox`.
+  - Current gap: full ownership/drop semantics for general values/containers are still not finalized.
   - Source: `docs/21-stage1-compiler.md`.
 
 - [x] A04 Package registry remoteization.
