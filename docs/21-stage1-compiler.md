@@ -88,6 +88,7 @@ Stage2 补充（在不引入语言级 drop 的前提下）：
 - 该机制只解决“进程生命周期内累计泄漏”问题，不改变值语义；容器共享 backing storage、浅拷贝行为与当前 type system 约束保持不变。
 - `std/sync` 新增显式释放路径：`mutex_drop/atomic_drop`（对应低层 `__mutex_*_drop/__atomic_*_drop`），可在长流程工具中提前释放句柄分配；不改变当前值语义与浅拷贝语义。
 - `vox_rt_free` 改为“仅释放 tracked 指针”：若指针未被跟踪或已释放则直接忽略，避免在当前值拷贝/共享句柄语义下重复显式 drop 导致 double-free。
+- `std/sync` 句柄增加运行时活性表（`vox_sync_handle_add/live/remove`）：`load/store/fetch/swap` 对已 drop 或无效句柄会明确 panic，`drop` 走 remove 门控后再释放，实现幂等 drop。
 
 当前补充：
 

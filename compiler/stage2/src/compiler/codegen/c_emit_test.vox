@@ -97,8 +97,28 @@ fn test_codegen_windows_tcp_runtime_has_real_impl() -> () {
 }
 
 fn test_codegen_sync_drop_intrinsics_use_runtime_helpers() -> () {
-  let src: String = "fn main() -> i32 { let m: i64 = __mutex_i32_new(1); __mutex_i32_drop(m); let a: i64 = __atomic_i64_new(2 as i64); __atomic_i64_drop(a); return 0; }";
+  let src: String = """
+    fn main() -> i32 {
+      let m: i64 = __mutex_i32_new(1);
+      let v: i32 = __mutex_i32_load(m);
+      __mutex_i32_store(m, v + 1);
+      __mutex_i32_drop(m);
+      __mutex_i32_drop(m);
+      let a: i64 = __atomic_i64_new(2 as i64);
+      let x: i64 = __atomic_i64_load(a);
+      __atomic_i64_store(a, x + (1 as i64));
+      __atomic_i64_drop(a);
+      __atomic_i64_drop(a);
+      return 0;
+    }
+  """;
   let c: String = compile_to_c(src);
+  t.assert(contains(c, "static void vox_sync_handle_add(int64_t h)"));
+  t.assert(contains(c, "static bool vox_sync_handle_live(int64_t h)"));
+  t.assert(contains(c, "static bool vox_sync_handle_remove(int64_t h)"));
+  t.assert(contains(c, "if (!vox_sync_handle_live(h)) { vox_builtin_panic(\"invalid or dropped mutex handle\"); }"));
+  t.assert(contains(c, "if (!vox_sync_handle_live(h)) { vox_builtin_panic(\"invalid or dropped atomic handle\"); }"));
+  t.assert(contains(c, "if (!vox_sync_handle_remove(h)) return;"));
   t.assert(contains(c, "vox_builtin_mutex_i32_drop("));
   t.assert(contains(c, "vox_builtin_atomic_i64_drop("));
 }

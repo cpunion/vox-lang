@@ -61,6 +61,8 @@ Governance from now on:
     - Covered in `compiler/stage2/src/compiler/typecheck/collect.vox`, `compiler/stage2/src/compiler/codegen/c_func.vox`, `compiler/stage2/src/compiler/codegen/c_runtime.vox`, `compiler/stage2/src/std/sync/sync.vox`, `compiler/stage2/src/compiler/codegen/c_emit_test.vox`, and `compiler/stage2/src/compiler/smoke_test.vox`.
   - [x] A03-3 `vox_rt_free` now only frees tracked allocations (`vox_rt_forget` returns bool), so duplicate release on copied sync handles becomes idempotent instead of double-free.
     - Covered in `compiler/stage2/src/compiler/codegen/c_runtime.vox`, `compiler/stage2/src/compiler/codegen/c_emit_test.vox`, and `compiler/stage2/src/compiler/smoke_test.vox`.
+  - [x] A03-4 `std/sync` handles now use runtime liveness registry (`vox_sync_handle_add/live/remove`): sync ops panic on dropped/invalid handles, and drop is remove-gated for deterministic idempotence.
+    - Covered in `compiler/stage2/src/compiler/codegen/c_runtime.vox` and `compiler/stage2/src/compiler/codegen/c_emit_test.vox`.
   - Current gap: full ownership/drop semantics for general values/containers are still not finalized.
   - Source: `docs/21-stage1-compiler.md`.
 
