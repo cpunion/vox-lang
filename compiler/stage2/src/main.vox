@@ -1384,6 +1384,58 @@ fn dep_res_err(msg: String) -> ResolveDepResult {
   };
 }
 
+
+struct ResolveRegistryRootResult { ok: bool, err: String, root: String }
+
+fn reg_root_ok(root: String) -> ResolveRegistryRootResult {
+  return ResolveRegistryRootResult { ok: true, err: "", root: root };
+}
+
+fn reg_root_err(msg: String) -> ResolveRegistryRootResult {
+  return ResolveRegistryRootResult { ok: false, err: msg, root: "" };
+}
+
+fn is_git_like_remote_src(src: String) -> bool {
+  if has_prefix(src, "http://") || has_prefix(src, "https://") || has_prefix(src, "ssh://") || has_prefix(src, "git@") || has_prefix(src, "file://") {
+    return true;
+  }
+  return has_suffix(src, ".git");
+}
+
+fn strip_git_plus_prefix(src: String) -> String {
+  if has_prefix(src, "git+") && src.len() > 4 { return src.slice(4, src.len()); }
+  return src;
+}
+
+fn resolve_registry_root(base: String, d: mf.Dependency) -> ResolveRegistryRootResult {
+  if !d.has_registry {
+    return reg_root_ok(path_join(dep_cache_root(base), "registry"));
+  }
+
+  let raw: String = d.registry;
+  let mut git_src: String = strip_git_plus_prefix(raw);
+  let as_git: bool = has_prefix(raw, "git+") || is_git_like_remote_src(git_src);
+  if !as_git {
+    return reg_root_ok(resolve_dep_root(base, raw));
+  }
+
+  if !is_abs_path(git_src) && !is_git_like_remote_src(git_src) {
+    git_src = resolve_dep_root(base, git_src);
+  }
+
+  let cache_base: String = path_join(path_join(dep_cache_root(base), "registry_remote"), sanitize_path_part(git_src));
+  fs.mkdir_p(path_join(dep_cache_root(base), "registry_remote"));
+  if !fs.exists(path_join(cache_base, ".git")) {
+    let clone_cmd: String = "git clone ".concat(shell_quote(git_src)).concat(" ").concat(shell_quote(cache_base));
+    if proc.exec(clone_cmd) != 0 {
+      return reg_root_err("registry git clone failed: ".concat(raw));
+    }
+  } else {
+    let fetch_cmd: String = "git -C ".concat(shell_quote(cache_base)).concat(" fetch --all --tags --prune");
+    proc.exec(fetch_cmd);
+  }
+  return reg_root_ok(cache_base);
+}
 fn resolve_dep_source(base: String, d: mf.Dependency) -> ResolveDepResult {
   if d.has_path {
     let dep_root: String = resolve_dep_root(base, d.path);
@@ -1458,8 +1510,11 @@ fn resolve_dep_source(base: String, d: mf.Dependency) -> ResolveDepResult {
   if !d.has_version {
     return dep_res_err("dependency requires path/git/version: ".concat(d.name));
   }
-  let registry_root: String = if d.has_registry { resolve_dep_root(base, d.registry) } else { path_join(dep_cache_root(base), "registry") };
-  let dep_root: String = path_join(path_join(registry_root, d.name), d.version);
+  let reg_rr: ResolveRegistryRootResult = resolve_registry_root(base, d);
+  if !reg_rr.ok {
+    return dep_res_err(reg_rr.err);
+  }
+  let dep_root: String = path_join(path_join(reg_rr.root, d.name), d.version);
   if !fs.exists(path_join(dep_root, "vox.toml")) {
     return dep_res_err("registry dependency not found: ".concat(d.name).concat("@").concat(d.version));
   }

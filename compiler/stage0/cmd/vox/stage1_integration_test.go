@@ -1439,6 +1439,97 @@ edition = "2026"
 	}
 }
 
+func TestStage1BuildsStage2SupportsVersionDependencyFromRemoteRegistryGit(t *testing.T) {
+	requireSelfhostTests(t)
+
+	_, stage2BinB := stage2ToolBinBuiltByStage1(t)
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir root src: %v", err)
+	}
+
+	registryRepo := filepath.Join(root, "registry_repo.git")
+	if err := os.MkdirAll(filepath.Join(registryRepo, "dep", "1.2.3", "src"), 0o755); err != nil {
+		t.Fatalf("mkdir registry dep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(registryRepo, "dep", "1.2.3", "vox.toml"), []byte(`[package]
+name = "dep"
+version = "1.2.3"
+edition = "2026"
+`), 0o644); err != nil {
+		t.Fatalf("write registry dep vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(registryRepo, "dep", "1.2.3", "src", "dep.vox"), []byte("pub fn two() -> i32 { return 2; }\n"), 0o644); err != nil {
+		t.Fatalf("write registry dep source: %v", err)
+	}
+	init := exec.Command("git", "init")
+	init.Dir = registryRepo
+	if b, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("git init registry failed: %v\n%s", err, string(b))
+	}
+	add := exec.Command("git", "add", ".")
+	add.Dir = registryRepo
+	if b, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("git add registry failed: %v\n%s", err, string(b))
+	}
+	commit := exec.Command("git", "-c", "user.email=vox@example.com", "-c", "user.name=vox", "commit", "-m", "init")
+	commit.Dir = registryRepo
+	if b, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit registry failed: %v\n%s", err, string(b))
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "vox.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+dep = { registry = "git+registry_repo.git", version = "1.2.3" }
+`), 0o644); err != nil {
+		t.Fatalf("write root vox.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.vox"), []byte("import \"dep\" as dep\nfn main() -> i32 { return dep.two() + 1; }\n"), 0o644); err != nil {
+		t.Fatalf("write root source: %v", err)
+	}
+
+	outBin := filepath.Join(root, "out")
+	cmd := exec.Command(stage2BinB, "build-pkg", outBin)
+	cmd.Dir = root
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("stage2 build-pkg failed: %v\n%s", err, string(b))
+	}
+
+	run := exec.Command(outBin)
+	run.Dir = root
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run built program failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "3" {
+		t.Fatalf("unexpected output: %q", got)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(root, ".vox", "deps", "registry_remote"))
+	if err != nil {
+		t.Fatalf("read registry_remote cache: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("expected remote registry cache entries")
+	}
+
+	lockBytes, err := os.ReadFile(filepath.Join(root, "vox.lock"))
+	if err != nil {
+		t.Fatalf("read vox.lock: %v", err)
+	}
+	lock := string(lockBytes)
+	if !strings.Contains(lock, `source = "registry"`) {
+		t.Fatalf("expected registry source in lockfile, got:\n%s", lock)
+	}
+	if !strings.Contains(lock, `registry = "git+registry_repo.git"`) {
+		t.Fatalf("expected registry field in lockfile, got:\n%s", lock)
+	}
+}
 func TestStage1BuildsStage2LockMismatchDiagnosticsConsistentAcrossBuildAndTest(t *testing.T) {
 	requireSelfhostTests(t)
 

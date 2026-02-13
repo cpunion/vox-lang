@@ -48,8 +48,9 @@ Governance from now on:
   - Current gap: process-lifetime cleanup exists, but full ownership/drop/release semantics are not finalized.
   - Source: `docs/21-stage1-compiler.md`.
 
-- [ ] A04 Package registry remoteization.
-  - Current gap: registry dependency currently resolves from local cache only.
+- [x] A04 Package registry remoteization.
+  - [x] A04-1 Registry dependencies now support remote git-backed registry roots (`git+...`/URL/`.git`) with clone/fetch cache under `.vox/deps/registry_remote`, then resolve `name/version` from cached checkout.
+    - Covered in `compiler/stage2/src/main.vox` and selfhost integration `compiler/stage0/cmd/vox/stage1_integration_test.go` (`TestStage1BuildsStage2SupportsVersionDependencyFromRemoteRegistryGit`).
   - Source: `docs/11-package-management.md`.
 
 ### P1

@@ -65,7 +65,7 @@ test-selfhost:
 
 # Dedicated stage2 bootstrap gate: stage1 -> stage2 -> sample package.
 test-stage2-selfhost:
-	cd compiler/stage0 && VOX_RUN_SELFHOST_TESTS=1 go test ./cmd/vox -run 'TestStage1BuildsStage2AndBuildsPackage' -count=1
+	cd compiler/stage0 && VOX_RUN_SELFHOST_TESTS=1 go test ./cmd/vox -run 'TestStage1BuildsStage2AndBuildsPackage|TestStage1BuildsStage2SupportsVersionDependencyFromRemoteRegistryGit' -count=1
 
 # Dedicated stage2 suite gate: stage1 -> stage2 -> stage2 test-pkg.
 test-stage2-tests:
