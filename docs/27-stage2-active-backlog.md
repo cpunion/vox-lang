@@ -41,7 +41,9 @@ Governance from now on:
   - Source: `docs/06-advanced-generics.md`.
 
 - [ ] A02 String/borrow model convergence from transitional `String/str` aliasing to true `&str`/slice semantics.
-  - Current gap: `str` and `&T` are still transitional mappings in type layer.
+  - [x] A02-1 Bare `str` is now rejected; use `String` for owned text and `&str`/`&'static str` for borrow-position text.
+    - Covered in `compiler/stage2/src/compiler/typecheck/ctx.vox`, with compile/typecheck regressions in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
+  - Current gap: `&T` remains transitional mapping in type layer.
   - Sources: `docs/13-standard-library.md`, `docs/21-stage1-compiler.md`, `docs/19-ir-spec.md`.
 
 - [ ] A03 Runtime memory model convergence.
