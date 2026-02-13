@@ -134,5 +134,6 @@ Governance from now on:
     - [x] D07-3c Move-state propagation baseline in control flow: `block/if/while` now conservatively propagate moved flags for outer locals, so branch/loop release paths are visible to later reads.
     - [x] D07-3d Aggregate-root move propagation for release paths: `release(x.field)` / `x.field.release()` now mark root `x` as moved (conservative no-UAF baseline under current copy semantics).
     - [x] D07-3e Member-chain moved-value diagnostics propagation: receiver member/call paths now preserve upstream `use of moved value` diagnostics instead of degrading to enum/path fallback errors.
+    - [x] D07-3f Expression-shape move-source detection: `if`/block/match and nested call-expression trees now participate in release source discovery, so `let _ = if ... { release(x) } ...` and block-expression release paths mark `x` moved.
   - Extracted from A03 closure note.
   - Source: `docs/archive/21-stage1-compiler.md`.

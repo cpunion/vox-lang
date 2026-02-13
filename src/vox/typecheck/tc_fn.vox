@@ -360,14 +360,55 @@ fn is_release_track_ty(ctx: Ctx, ty0: i32) -> bool {
   return false;
 }
 
-fn release_move_source(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, eid: i32) -> ReleaseMoveSourceResult {
-  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
-  if !match n { ast.ExprNode.Call(_c, _t, _a) => true, _ => false } {
-    return ReleaseMoveSourceResult { found: false, name: "" };
-  }
+fn release_move_none() -> ReleaseMoveSourceResult {
+  return ReleaseMoveSourceResult { found: false, name: "" };
+}
 
-  let callee: i32 = match n { ast.ExprNode.Call(c, _t, _a) => c, _ => -1 };
-  let args: Vec[i32] = match n { ast.ExprNode.Call(_c, _t, a) => a, _ => Vec() };
+fn release_move_pick(a: ReleaseMoveSourceResult, b: ReleaseMoveSourceResult) -> ReleaseMoveSourceResult {
+  if a.found { return a; }
+  return b;
+}
+
+fn release_move_from_stmt(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, st: ast.Stmt) -> ReleaseMoveSourceResult {
+  return match st {
+    ast.Stmt.Let(_sp, _m, _name, _has_ann, _ann, init) => release_move_source(ctx, l0, imps, exprs, init),
+    ast.Stmt.Assign(_sp, _name, rhs) => release_move_source(ctx, l0, imps, exprs, rhs),
+    ast.Stmt.AssignField(_sp, _recv, _field, rhs) => release_move_source(ctx, l0, imps, exprs, rhs),
+    ast.Stmt.ExprStmt(_sp, eid) => release_move_source(ctx, l0, imps, exprs, eid),
+    ast.Stmt.IfStmt(_sp, cond, then_b, has_else, else_b) =>
+      {
+        let mut out: ReleaseMoveSourceResult = release_move_source(ctx, l0, imps, exprs, cond);
+        out = release_move_pick(out, release_move_from_block(ctx, l0, imps, exprs, then_b));
+        if has_else { out = release_move_pick(out, release_move_from_block(ctx, l0, imps, exprs, else_b)); }
+        out
+      },
+    ast.Stmt.WhileStmt(_sp, cond, body) =>
+      {
+        let mut out: ReleaseMoveSourceResult = release_move_source(ctx, l0, imps, exprs, cond);
+        out = release_move_pick(out, release_move_from_block(ctx, l0, imps, exprs, body));
+        out
+      },
+    ast.Stmt.ReturnStmt(_sp, has, eid) =>
+      if has {
+        release_move_source(ctx, l0, imps, exprs, eid)
+      } else {
+        release_move_none()
+      },
+    _ => release_move_none(),
+  };
+}
+
+fn release_move_from_block(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, b: ast.Block) -> ReleaseMoveSourceResult {
+  let mut i: i32 = 0;
+  let mut out: ReleaseMoveSourceResult = release_move_none();
+  while i < b.stmts.len() {
+    out = release_move_pick(out, release_move_from_stmt(ctx, l0, imps, exprs, b.stmts.get(i)));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn release_move_from_call(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, callee: i32, args: Vec[i32]) -> ReleaseMoveSourceResult {
   let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
 
   if match cn { ast.ExprNode.Ident(name) => name == "release" || name == "release_vec", _ => false } {
@@ -380,7 +421,7 @@ fn release_move_source(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool,
         }
       }
     }
-    return ReleaseMoveSourceResult { found: false, name: "" };
+    return release_move_none();
   }
 
   if match cn { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
@@ -398,7 +439,7 @@ fn release_move_source(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool,
       }
     }
 
-    if match rn { ast.ExprNode.Ident(alias) => true, _ => false } {
+    if match rn { ast.ExprNode.Ident(_alias) => true, _ => false } {
       let alias: String = match rn { ast.ExprNode.Ident(s) => s, _ => "" };
       let p: String = find_import_alias_path(imps, alias);
       let ok_mod_fn: bool =
@@ -416,7 +457,113 @@ fn release_move_source(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool,
     }
   }
 
-  return ReleaseMoveSourceResult { found: false, name: "" };
+  return release_move_none();
+}
+
+fn release_move_source(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, eid: i32) -> ReleaseMoveSourceResult {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
+
+  if match n { ast.ExprNode.Call(_c, _t, _a) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.Call(c, _t, _a) => c, _ => -1 };
+    let args: Vec[i32] = match n { ast.ExprNode.Call(_c, _t, a) => a, _ => Vec() };
+
+    let mut out: ReleaseMoveSourceResult = release_move_from_call(ctx, l0, imps, exprs, callee, args);
+    out = release_move_pick(out, release_move_source(ctx, l0, imps, exprs, callee));
+    let mut i: i32 = 0;
+    while i < args.len() {
+      out = release_move_pick(out, release_move_source(ctx, l0, imps, exprs, args.get(i)));
+      i = i + 1;
+    }
+    return out;
+  }
+
+  if match n { ast.ExprNode.MacroCall(_c, _t, _a) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.MacroCall(c, _t, _a) => c, _ => -1 };
+    let args: Vec[i32] = match n { ast.ExprNode.MacroCall(_c, _t, a) => a, _ => Vec() };
+    let mut out: ReleaseMoveSourceResult = release_move_source(ctx, l0, imps, exprs, callee);
+    let mut i: i32 = 0;
+    while i < args.len() {
+      out = release_move_pick(out, release_move_source(ctx, l0, imps, exprs, args.get(i)));
+      i = i + 1;
+    }
+    return out;
+  }
+
+  if match n { ast.ExprNode.Unary(_op, _a) => true, _ => false } {
+    let a: i32 = match n { ast.ExprNode.Unary(_op, a0) => a0, _ => -1 };
+    return release_move_source(ctx, l0, imps, exprs, a);
+  }
+
+  if match n { ast.ExprNode.As(_a, _ty) => true, _ => false } {
+    let a: i32 = match n { ast.ExprNode.As(a0, _ty) => a0, _ => -1 };
+    return release_move_source(ctx, l0, imps, exprs, a);
+  }
+
+  if match n { ast.ExprNode.Binary(_op, _a, _b) => true, _ => false } {
+    let a: i32 = match n { ast.ExprNode.Binary(_op, a0, _b) => a0, _ => -1 };
+    let b: i32 = match n { ast.ExprNode.Binary(_op, _a, b0) => b0, _ => -1 };
+    return release_move_pick(release_move_source(ctx, l0, imps, exprs, a), release_move_source(ctx, l0, imps, exprs, b));
+  }
+
+  if match n { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+    let recv: i32 = match n { ast.ExprNode.Member(r, _name) => r, _ => -1 };
+    return release_move_source(ctx, l0, imps, exprs, recv);
+  }
+
+  if match n { ast.ExprNode.If(_cond, _then, _else) => true, _ => false } {
+    let cond: i32 = match n { ast.ExprNode.If(c0, _t, _e) => c0, _ => -1 };
+    let then_id: i32 = match n { ast.ExprNode.If(_c, t0, _e) => t0, _ => -1 };
+    let else_id: i32 = match n { ast.ExprNode.If(_c, _t, e0) => e0, _ => -1 };
+    let mut out: ReleaseMoveSourceResult = release_move_source(ctx, l0, imps, exprs, cond);
+    out = release_move_pick(out, release_move_source(ctx, l0, imps, exprs, then_id));
+    out = release_move_pick(out, release_move_source(ctx, l0, imps, exprs, else_id));
+    return out;
+  }
+
+  if match n { ast.ExprNode.Block(_b) => true, _ => false } {
+    let eb: ast.ExprBlock = match n { ast.ExprNode.Block(eb0) => eb0, _ => ast.ExprBlock { stmts: Vec(), has_tail: false, tail: -1 } };
+    let mut out: ReleaseMoveSourceResult = release_move_from_block(ctx, l0, imps, exprs, ast.Block { stmts: eb.stmts });
+    if eb.has_tail {
+      out = release_move_pick(out, release_move_source(ctx, l0, imps, exprs, eb.tail));
+    }
+    return out;
+  }
+
+  if match n { ast.ExprNode.TryBlock(_bid) => true, _ => false } {
+    let bid: i32 = match n { ast.ExprNode.TryBlock(b0) => b0, _ => -1 };
+    return release_move_source(ctx, l0, imps, exprs, bid);
+  }
+
+  if match n { ast.ExprNode.Try(_a) => true, _ => false } {
+    let a: i32 = match n { ast.ExprNode.Try(a0) => a0, _ => -1 };
+    return release_move_source(ctx, l0, imps, exprs, a);
+  }
+
+  if match n { ast.ExprNode.StructLit(_tyexpr, _fields) => true, _ => false } {
+    let tyexpr: i32 = match n { ast.ExprNode.StructLit(t0, _fields) => t0, _ => -1 };
+    let fields: Vec[ast.StructLitField] = match n { ast.ExprNode.StructLit(_t, fs0) => fs0, _ => Vec() };
+    let mut out: ReleaseMoveSourceResult = release_move_source(ctx, l0, imps, exprs, tyexpr);
+    let mut i: i32 = 0;
+    while i < fields.len() {
+      out = release_move_pick(out, release_move_source(ctx, l0, imps, exprs, fields.get(i).expr));
+      i = i + 1;
+    }
+    return out;
+  }
+
+  if match n { ast.ExprNode.Match(_scrut, _arms) => true, _ => false } {
+    let scrut: i32 = match n { ast.ExprNode.Match(s0, _as) => s0, _ => -1 };
+    let arms: Vec[ast.MatchArm] = match n { ast.ExprNode.Match(_s, as0) => as0, _ => Vec() };
+    let mut out: ReleaseMoveSourceResult = release_move_source(ctx, l0, imps, exprs, scrut);
+    let mut i: i32 = 0;
+    while i < arms.len() {
+      out = release_move_pick(out, release_move_source(ctx, l0, imps, exprs, arms.get(i).expr));
+      i = i + 1;
+    }
+    return out;
+  }
+
+  return release_move_none();
 }
 
 fn find_import_alias_path(imps: Imports, alias: String) -> String {
