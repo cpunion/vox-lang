@@ -2346,3 +2346,44 @@ fn test_irgen_inherent_impl_method_call_lowers() -> () {
   let s: String = ir.format_program(r.prog);
   t.assert(contains(s, "impl$inherent$inc$"));
 }
+
+fn test_irgen_preserves_ref_types_in_func_signatures() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn id(s: &'static str) -> &'static str { return s; }\nfn bump(x: &mut i32) -> i32 { return x + 1; }\nfn main() -> i32 { let mut v: i32 = 1; let s: &'static str = id(\"x\"); return bump(v) + s.len(); }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+
+  let mut saw_id: bool = false;
+  let mut saw_bump: bool = false;
+  let mut i: i32 = 0;
+  while i < r.prog.funcs.len() {
+    let f: ir.Func = r.prog.funcs.get(i);
+    if f.name == "id" {
+      saw_id = true;
+      t.assert_eq(f.params.len(), 1);
+      let p0: ir.Ty = ir.ty_pool_get(r.prog.pool, f.params.get(0).ty);
+      let rt: ir.Ty = ir.ty_pool_get(r.prog.pool, f.ret);
+      t.assert(p0.kind == ir.TyKind.Ref);
+      t.assert(rt.kind == ir.TyKind.Ref);
+      t.assert(ir.ty_ref_is_static(p0));
+      t.assert(!ir.ty_ref_is_mut(p0));
+      t.assert(ir.ty_ref_is_static(rt));
+      t.assert(!ir.ty_ref_is_mut(rt));
+    }
+    if f.name == "bump" {
+      saw_bump = true;
+      t.assert_eq(f.params.len(), 1);
+      let p1: ir.Ty = ir.ty_pool_get(r.prog.pool, f.params.get(0).ty);
+      t.assert(p1.kind == ir.TyKind.Ref);
+      t.assert(ir.ty_ref_is_mut(p1));
+      t.assert(!ir.ty_ref_is_static(p1));
+    }
+    i = i + 1;
+  }
+
+  t.assert(saw_id);
+  t.assert(saw_bump);
+
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "fn id(...) -> ref(static,str)"));
+}

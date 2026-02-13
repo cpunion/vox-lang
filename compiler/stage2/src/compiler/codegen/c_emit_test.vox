@@ -96,6 +96,35 @@ fn test_codegen_windows_tcp_runtime_has_real_impl() -> () {
   t.assert(!contains(c, "tcp is not supported on windows in stage1 yet"));
 }
 
+fn test_codegen_sync_drop_intrinsics_use_runtime_helpers() -> () {
+  let src: String = """
+    fn main() -> i32 {
+      let m: i64 = __mutex_i32_new(1);
+      let v: i32 = __mutex_i32_load(m);
+      __mutex_i32_store(m, v + 1);
+      __mutex_i32_drop(m);
+      __mutex_i32_drop(m);
+      let a: i64 = __atomic_i64_new(2 as i64);
+      let x: i64 = __atomic_i64_load(a);
+      __atomic_i64_store(a, x + (1 as i64));
+      __atomic_i64_drop(a);
+      __atomic_i64_drop(a);
+      return 0;
+    }
+  """;
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "static void vox_sync_handle_add(int64_t h)"));
+  t.assert(contains(c, "static bool vox_sync_handle_live(int64_t h)"));
+  t.assert(contains(c, "static bool vox_sync_handle_remove(int64_t h)"));
+  t.assert(contains(c, "vox_sync_handle_node* n = (vox_sync_handle_node*)vox_rt_malloc(sizeof(vox_sync_handle_node));"));
+  t.assert(contains(c, "vox_rt_free(n);"));
+  t.assert(contains(c, "if (!vox_sync_handle_live(h)) { vox_builtin_panic(\"invalid or dropped mutex handle\"); }"));
+  t.assert(contains(c, "if (!vox_sync_handle_live(h)) { vox_builtin_panic(\"invalid or dropped atomic handle\"); }"));
+  t.assert(contains(c, "if (!vox_sync_handle_remove(h)) return;"));
+  t.assert(contains(c, "vox_builtin_mutex_i32_drop("));
+  t.assert(contains(c, "vox_builtin_atomic_i64_drop("));
+}
+
 fn test_codegen_to_string_u64_uses_u64_runtime() -> () {
   let src: String = "fn main() -> i32 { let x: u64 = 123; let s: String = x.to_string(); return s.len(); }";
   let c: String = compile_to_c(src);
@@ -254,6 +283,10 @@ fn test_codegen_runtime_has_exit_cleanup_for_tracked_allocations() -> () {
   t.assert(contains(c, "static void vox_rt_cleanup(void) {"));
   t.assert(contains(c, "atexit(vox_rt_cleanup)"));
   t.assert(contains(c, "vox_rt_malloc("));
+  t.assert(contains(c, "static bool vox_rt_forget(void* p) {"));
+  t.assert(contains(c, "static void vox_rt_free(void* p) {"));
+  t.assert(contains(c, "bool tracked = vox_rt_forget(p);"));
+  t.assert(contains(c, "if (!tracked) return;"));
 }
 
 fn test_codegen_enum_payload_equality_uses_helper() -> () {
@@ -431,4 +464,28 @@ fn test_codegen_bit_ops_and_shift_checks() -> () {
   t.assert(contains(c, "<<"));
   t.assert(contains(c, ">>"));
   t.assert(contains(c, "shift count out of range"));
+}
+
+fn test_codegen_runtime_walk_helpers_use_tracked_allocator() -> () {
+  let c: String = compile_to_c("fn main() -> i32 { return 0; }");
+  t.assert(contains(c, "char* tmp = (char*)vox_rt_malloc(n + 1);"));
+  t.assert(contains(c, "char* out = (char*)vox_rt_malloc(n + 1);"));
+  t.assert(contains(c, "if (!d) { vox_rt_free(full); return; }"));
+  t.assert(contains(c, "vox_rt_free(tmp);"));
+  t.assert(contains(c, "vox_rt_free(child_full);"));
+  t.assert(contains(c, "vox_rt_free(child_rel);"));
+  t.assert(contains(c, "vox_rt_free(full);"));
+  t.assert(!contains(c, "if (!d) { return; }"));
+  t.assert(!contains(c, "      free(child_full);"));
+}
+
+fn test_codegen_ref_str_cmp_uses_strcmp() -> () {
+  let src: String = "fn eq(a: &str, b: &str) -> bool { return a == b; }\nfn main() -> i32 { return if eq(\"x\", \"x\") { 1 } else { 0 }; }";
+  let c: String = compile_to_c(src);
+  t.assert(contains(c, "strcmp("));
+}
+
+fn test_codegen_driver_main_ref_static_str_return_smoke() -> () {
+  let c: String = compile_to_c("fn main() -> &'static str { return \"vox\"; }");
+  t.assert(contains(c, "const char* v = vox_fn_mmain();"));
 }

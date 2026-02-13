@@ -28,7 +28,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
     ast.ExprNode.Float(text) => tc_expr_float(ctx, ast.expr_pool_span(exprs, id), text, expected),
     ast.ExprNode.Str(_) => tc_expr_str(ctx, expected),
     ast.ExprNode.Bool(_) => tc_expr_bool(ctx, expected),
-    ast.ExprNode.Ident(name) => tc_expr_ident(ctx, mod_path, imps, l0, name, expected),
+    ast.ExprNode.Ident(name) => tc_expr_ident(ctx, ast.expr_pool_span(exprs, id), mod_path, imps, l0, name, expected),
     ast.ExprNode.DotIdent(name) => tc_expr_dot_ident(ctx, mod_path, name, expected),
     ast.ExprNode.Block(b) => tc_expr_block(ctx, w, mod_path, imps, exprs, l0, b, expected),
 
@@ -535,9 +535,10 @@ fn tc_expr_bool(ctx: Ctx, expected: i32) -> ExprTyResult {
   return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
 }
 
-fn tc_expr_ident(ctx: Ctx, mod_path: String, imps: Imports, l0: Locals, name: String, expected: i32) -> ExprTyResult {
+fn tc_expr_ident(ctx: Ctx, sp: ast.Span, mod_path: String, imps: Imports, l0: Locals, name: String, expected: i32) -> ExprTyResult {
   let vr: LookupVarResult = locals_lookup(l0, name);
   if vr.found {
+    if vr.moved { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "use of moved value: ".concat(name)) }; }
     if expected != -1 && !assignable_to(ctx, expected, vr.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     return ExprTyResult { ok: true, ty: vr.ty, err: TcError.None };
   }
@@ -765,9 +766,15 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   let r_expected0: i32 = if is_logic { ctx.ty_bool } else { want_numeric };
 
   let mut lr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, l, l_expected);
-  if !lr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if !lr.ok {
+    if lr.err != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: lr.err }; }
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ast.expr_pool_span(exprs, l), "binary lhs typecheck failed") };
+  }
   let mut rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, r, r_expected0);
-  if !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if !rr.ok {
+    if rr.err != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: rr.err }; }
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ast.expr_pool_span(exprs, r), "binary rhs typecheck failed") };
+  }
 
   // If one side is a numeric literal that defaulted to the wrong width, re-typecheck it
   // using the other side's scalar type.
@@ -808,7 +815,14 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
     } else if r_is_lit && (is_int_like_ty(ctx, lbase0) || is_float_ty(ctx, lbase0)) {
       rr = tc_expr(ctx, w, mod_path, imps, exprs, l0, r, lbase0);
     }
-    if !lr.ok || !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if !lr.ok {
+      if lr.err != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: lr.err }; }
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ast.expr_pool_span(exprs, l), "binary lhs typecheck failed") };
+    }
+    if !rr.ok {
+      if rr.err != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: rr.err }; }
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ast.expr_pool_span(exprs, r), "binary rhs typecheck failed") };
+    }
   }
 
   if is_logic {

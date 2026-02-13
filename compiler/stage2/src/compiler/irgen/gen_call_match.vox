@@ -2,6 +2,11 @@ import "compiler/ast" as ast
 import "compiler/ir" as ir
 import "compiler/typecheck" as tc
 
+fn starts_with(s: String, pre: String) -> bool {
+  if s.len() < pre.len() { return false; }
+  return s.slice(0, pre.len()) == pre;
+}
+
 struct VecRecvSlotResult { ok: bool, err: String, g: Gen, slot: i32 }
 
 struct GenPatResult { ok: bool, err: String, g: Gen }
@@ -1442,14 +1447,72 @@ fn pending_add(p0: Vec[PendingInst], pi: PendingInst) -> Vec[PendingInst] {
 }
 
 fn gen_pack_arity_error(sig: tc.FuncSig, got: i32) -> String {
-  if sig.type_param_packs.len() != 0 {
-    return "wrong number of type args: expected at most "
-      .concat(sig.type_params.len().to_string())
-      .concat(", got ")
-      .concat(got.to_string());
-  }
-  return "type arg arity mismatch";
+  return "wrong number of type args: expected at most "
+    .concat(sig.type_params.len().to_string())
+    .concat(", got ")
+    .concat(got.to_string());
 }
+
+fn gen_has_type_param_pack(sig: tc.FuncSig) -> bool {
+  return sig.type_param_packs.len() == 1;
+}
+
+fn gen_type_param_fixed_prefix_len(sig: tc.FuncSig) -> i32 {
+  if gen_has_type_param_pack(sig) { return sig.type_params.len() - 1; }
+  return sig.type_params.len();
+}
+
+fn gen_explicit_type_arg_arity_ok(sig: tc.FuncSig, explicit_targ_n: i32) -> bool {
+  if !gen_has_type_param_pack(sig) { return explicit_targ_n <= sig.type_params.len(); }
+  return explicit_targ_n >= 0;
+}
+
+fn gen_explicit_type_arg_bind_name(sig: tc.FuncSig, idx: i32) -> String {
+  if !gen_has_type_param_pack(sig) { return sig.type_params.get(idx); }
+  let fixed_n: i32 = gen_type_param_fixed_prefix_len(sig);
+  if idx < fixed_n { return sig.type_params.get(idx); }
+  return sig.type_param_packs.get(0);
+}
+
+fn gen_type_name_is_pack_member(name: String, pack: String) -> bool {
+  if name == pack { return true; }
+  return starts_with(name, pack.concat("."));
+}
+
+fn gen_ty_contains_pack_param(ctx: tc.Ctx, ty: i32, pack: String) -> bool {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param { return gen_type_name_is_pack_member(t.name, pack); }
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range { return gen_ty_contains_pack_param(ctx, t.elem, pack); }
+  return false;
+}
+
+fn gen_sig_allows_heterogeneous_pack_args(ctx: tc.Ctx, sig: tc.FuncSig, pack: String) -> bool {
+  let mut i: i32 = 0;
+  while i < sig.params.len() {
+    if gen_ty_contains_pack_param(ctx, sig.params.get(i), pack) { return false; }
+    i = i + 1;
+  }
+  if gen_ty_contains_pack_param(ctx, sig.ret, pack) { return false; }
+  if sig.has_variadic && gen_ty_contains_pack_param(ctx, sig.variadic_elem, pack) { return false; }
+
+  let mut bi: i32 = 0;
+  while bi < sig.type_param_bounds.len() {
+    let b: tc.TypeParamBoundSig = sig.type_param_bounds.get(bi);
+    if gen_type_name_is_pack_member(b.type_param, pack) { return false; }
+    bi = bi + 1;
+  }
+
+  let mut ci: i32 = 0;
+  while ci < sig.const_where_bounds.len() {
+    let b2: tc.ConstWhereBoundSig = sig.const_where_bounds.get(ci);
+    if gen_type_name_is_pack_member(b2.name, pack) { return false; }
+    ci = ci + 1;
+  }
+
+  return true;
+}
+
+
 
 struct GenVariadicPackResult { ok: bool, err: String, g: Gen, val: ir.Value }
 
@@ -1577,24 +1640,28 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
     let mut xj: i32 = first_const;
     while xj < type_args.len() {
       if !tc.is_const_generic_arg_tn_or_local(g.locals, type_args.get(xj)) {
-        return GenExprResult { ok: false, err: "type arg arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+        return GenExprResult { ok: false, err: "generic arg order error: type args must come before const args", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
       }
       xj = xj + 1;
     }
   }
-  if explicit_targ_n > sig.type_params.len() {
+  if !gen_explicit_type_arg_arity_ok(sig, explicit_targ_n) {
     return GenExprResult { ok: false, err: gen_pack_arity_error(sig, explicit_targ_n), g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
   }
   let explicit_const_n: i32 = type_args.len() - explicit_targ_n;
   if explicit_const_n > sig.const_params.len() {
-    return GenExprResult { ok: false, err: "type arg arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    let msgc: String = "wrong number of const args: expected at most "
+      .concat(sig.const_params.len().to_string())
+      .concat(", got ")
+      .concat(explicit_const_n.to_string());
+    return GenExprResult { ok: false, err: msgc, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
   }
   let mut explicit_targs: Vec[ast.TypeName] = Vec();
   let mut ti0: i32 = 0;
   while ti0 < explicit_targ_n {
     let ta0: ast.TypeName = type_args.get(ti0);
     if tc.is_const_generic_arg_tn_or_local(g.locals, ta0) {
-      return GenExprResult { ok: false, err: "const generic arg in type arg position", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+      return GenExprResult { ok: false, err: "generic arg order error: type args must come before const args", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
     }
     explicit_targs.push(ta0);
     ti0 = ti0 + 1;
@@ -1629,17 +1696,68 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   if !ur0.ok { return GenExprResult { ok: false, err: "cannot infer generic return", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
   subs = ur0.subs;
 
-  // Explicit type args.
+  // Explicit type args. For a trailing type-parameter pack, extra explicit
+  // type args bind to the pack name.
+  let has_pack: bool = gen_has_type_param_pack(sig);
+  let pack_name: String = if has_pack { sig.type_param_packs.get(0) } else { "" };
+  let mut pack_explicit_tys: Vec[i32] = Vec();
+
   let mut ti: i32 = 0;
   while ti < explicit_targs.len() {
     let tr: tc.ResolveTyResult = tc.resolve_type(g.ctx, g.w, g.mod_path, g.imps, Vec(), explicit_targs.get(ti));
     g.ctx = tr.ctx;
     if !tr.ok { return GenExprResult { ok: false, err: "bad type arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-    let tp: String = sig.type_params.get(ti);
+    let tp: String = gen_explicit_type_arg_bind_name(sig, ti);
+    let is_pack_bind: bool = has_pack && tp == pack_name;
+    if is_pack_bind {
+      pack_explicit_tys.push(tr.idx);
+      let cur_pack: i32 = subs_lookup(subs, tp);
+      if cur_pack == -1 { subs.push(tc.TySub { name: tp, ty: tr.idx }); }
+      ti = ti + 1;
+      continue;
+    }
+
     let cur: i32 = subs_lookup(subs, tp);
-    if cur != -1 && cur != tr.idx { return GenExprResult { ok: false, err: "type arg conflict", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+    if cur != -1 && cur != tr.idx {
+      return GenExprResult { ok: false, err: "explicit type argument conflicts with inferred type parameter", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
     if cur == -1 { subs.push(tc.TySub { name: tp, ty: tr.idx }); }
     ti = ti + 1;
+  }
+
+  let mut sig_use: tc.FuncSig = sig;
+  let mut materialized_pack_hetero: bool = false;
+  if has_pack && pack_explicit_tys.len() > 0 {
+    let mut all_same: bool = true;
+    let mut pi0: i32 = 1;
+    while pi0 < pack_explicit_tys.len() {
+      if pack_explicit_tys.get(pi0) != pack_explicit_tys.get(0) {
+        all_same = false;
+        pi0 = pack_explicit_tys.len();
+      } else {
+        pi0 = pi0 + 1;
+      }
+    }
+
+    let cur_pack0: i32 = subs_lookup(subs, pack_name);
+    if cur_pack0 == -1 {
+      subs.push(tc.TySub { name: pack_name, ty: pack_explicit_tys.get(0) });
+    } else if cur_pack0 != pack_explicit_tys.get(0) {
+      return GenExprResult { ok: false, err: "explicit pack head type conflicts with inferred return constraint", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+
+    subs = tc.append_pack_alias_subs(subs, pack_name, pack_explicit_tys);
+
+    if !all_same {
+      if gen_sig_allows_heterogeneous_pack_args(g.ctx, sig, pack_name) {
+        // Placeholder-only pack usage (A01-2a): keep as-is.
+      } else {
+        let mr: tc.MaterializePackSigResult = tc.materialize_pack_sig_types(g.ctx, sig, pack_name, pack_explicit_tys);
+        if !mr.ok { return GenExprResult { ok: false, err: mr.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+        sig_use = mr.sig;
+        materialized_pack_hetero = true;
+      }
+    }
   }
 
   // Infer from args while generating their IR values.
@@ -1648,7 +1766,7 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   if !pack_mode {
     let mut i2: i32 = 0;
     while i2 < args.len() {
-      let want0: i32 = tc.subst_ty(g.ctx, sig.params.get(i2), subs);
+      let want0: i32 = tc.subst_ty(g.ctx, sig_use.params.get(i2), subs);
       if want0 == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad generic arg type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
       let want_t: ir.Ty = ir.ty_pool_get(g.ctx.pool, want0);
       let want: i32 = if want_t.kind == ir.TyKind.Param || tc.ty_has_param(g.ctx, want0) { -1 } else { want0 };
@@ -1656,7 +1774,7 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
       if !er2.ok { return er2; }
       g = er2.g;
       vs2.push(er2.val);
-      let ur2: tc.UnifyResult = tc.unify_ty(g.ctx, sig.params.get(i2), er2.ty, subs);
+      let ur2: tc.UnifyResult = tc.unify_ty(g.ctx, sig_use.params.get(i2), er2.ty, subs);
       if !ur2.ok { return GenExprResult { ok: false, err: "cannot infer generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
       subs = ur2.subs;
       i2 = i2 + 1;
@@ -1664,7 +1782,7 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   } else {
     let mut i2: i32 = 0;
     while i2 < fixed_n {
-      let want0_fixed: i32 = tc.subst_ty(g.ctx, sig.params.get(i2), subs);
+      let want0_fixed: i32 = tc.subst_ty(g.ctx, sig_use.params.get(i2), subs);
       if want0_fixed == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad generic arg type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
       let want_t_fixed: ir.Ty = ir.ty_pool_get(g.ctx.pool, want0_fixed);
       let want_fixed: i32 = if want_t_fixed.kind == ir.TyKind.Param || tc.ty_has_param(g.ctx, want0_fixed) { -1 } else { want0_fixed };
@@ -1672,7 +1790,7 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
       if !erf.ok { return erf; }
       g = erf.g;
       vs2.push(erf.val);
-      let urf: tc.UnifyResult = tc.unify_ty(g.ctx, sig.params.get(i2), erf.ty, subs);
+      let urf: tc.UnifyResult = tc.unify_ty(g.ctx, sig_use.params.get(i2), erf.ty, subs);
       if !urf.ok { return GenExprResult { ok: false, err: "cannot infer generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
       subs = urf.subs;
       i2 = i2 + 1;
@@ -1680,7 +1798,7 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
 
     let mut j2: i32 = fixed_n;
     while j2 < args.len() {
-      let want0_var: i32 = tc.subst_ty(g.ctx, sig.variadic_elem, subs);
+      let want0_var: i32 = tc.subst_ty(g.ctx, sig_use.variadic_elem, subs);
       if want0_var == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad generic arg type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
       let want_t_var: ir.Ty = ir.ty_pool_get(g.ctx.pool, want0_var);
       let want_var: i32 = if want_t_var.kind == ir.TyKind.Param || tc.ty_has_param(g.ctx, want0_var) { -1 } else { want0_var };
@@ -1688,7 +1806,7 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
       if !erv.ok { return erv; }
       g = erv.g;
       variadic_tail_vals.push(erv.val);
-      let urv: tc.UnifyResult = tc.unify_ty(g.ctx, sig.variadic_elem, erv.ty, subs);
+      let urv: tc.UnifyResult = tc.unify_ty(g.ctx, sig_use.variadic_elem, erv.ty, subs);
       if !urv.ok { return GenExprResult { ok: false, err: "cannot infer generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
       subs = urv.subs;
       j2 = j2 + 1;
@@ -1697,20 +1815,20 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
 
   // Ensure all type params are bound.
   let mut j: i32 = 0;
-  while j < sig.type_params.len() {
-    let tp2: String = sig.type_params.get(j);
+  while j < sig_use.type_params.len() {
+    let tp2: String = sig_use.type_params.get(j);
     if subs_lookup(subs, tp2) == -1 { return GenExprResult { ok: false, err: "unbound type param", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
     j = j + 1;
   }
 
   // Const-generic constraints are checked after substitutions become concrete.
-  let cwr: tc.ConstWhereCheckResult = tc.check_const_where_bounds(g.ctx, sig.const_where_bounds, subs, csubs);
+  let cwr: tc.ConstWhereCheckResult = tc.check_const_where_bounds(g.ctx, sig_use.const_where_bounds, subs, csubs);
   if !cwr.ok { return GenExprResult { ok: false, err: cwr.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
 
   // Check trait bounds for inferred/explicit type args.
   let mut bi: i32 = 0;
-  while bi < sig.type_param_bounds.len() {
-    let b: tc.TypeParamBoundSig = sig.type_param_bounds.get(bi);
+  while bi < sig_use.type_param_bounds.len() {
+    let b: tc.TypeParamBoundSig = sig_use.type_param_bounds.get(bi);
     let ty0: i32 = subs_lookup(subs, b.type_param);
     if ty0 == -1 { return GenExprResult { ok: false, err: "unbound type param in trait bound", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
     let ty1: i32 = tc.strip_range(g.ctx, ty0);
@@ -1738,35 +1856,58 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   // Concrete signature.
   let mut ps: Vec[i32] = Vec();
   let mut pi: i32 = 0;
-  while pi < sig.params.len() {
-    let pty: i32 = tc.subst_ty(g.ctx, sig.params.get(pi), subs);
+  while pi < sig_use.params.len() {
+    let pty: i32 = tc.subst_ty(g.ctx, sig_use.params.get(pi), subs);
     if pty == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad substituted param type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-    ps.push(pty);
+    ps.push(tc.strip_range_only(g.ctx, pty));
     pi = pi + 1;
   }
-  let rty: i32 = tc.subst_ty(g.ctx, sig.ret, subs);
+  let rty: i32 = tc.strip_range_only(g.ctx, tc.subst_ty(g.ctx, sig_use.ret, subs));
   if rty == g.ctx.ty_bad { return GenExprResult { ok: false, err: "bad substituted ret type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
   let inst_sig: tc.FuncSig = tc.FuncSig {
     params: ps,
+    param_borrow_kinds: sig_use.param_borrow_kinds,
     ret: rty,
     has_variadic: false,
     variadic_elem: -1,
-    vis: sig.vis,
-    is_pub: sig.is_pub,
+    vis: sig_use.vis,
+    is_pub: sig_use.is_pub,
     type_params: Vec(),
     type_param_packs: Vec(),
-    const_params: sig.const_params,
+    const_params: sig_use.const_params,
     type_param_bounds: Vec(),
-    const_where_bounds: sig.const_where_bounds,
+    const_where_bounds: sig_use.const_where_bounds,
   };
 
-  let inst: String = tc.inst_name_ex(g.ctx, name, sig.type_params, sig.const_params, subs, csubs);
+  let mut inst_type_params: Vec[String] = sig_use.type_params;
+  let mut inst_subs: Vec[tc.TySub] = subs;
+  if materialized_pack_hetero {
+    let fixed_n2: i32 = gen_type_param_fixed_prefix_len(sig_use);
+    let mut tps2: Vec[String] = Vec();
+    let mut i3: i32 = 0;
+    while i3 < fixed_n2 {
+      tps2.push(sig_use.type_params.get(i3));
+      i3 = i3 + 1;
+    }
+    let mut pi2: i32 = 0;
+    while pi2 < pack_explicit_tys.len() {
+      let nm: String = if pi2 == 0 { pack_name } else { pack_name.concat("__").concat(pi2.to_string()) };
+      tps2.push(nm);
+      if subs_lookup(inst_subs, nm) == -1 {
+        inst_subs.push(tc.TySub { name: nm, ty: pack_explicit_tys.get(pi2) });
+      }
+      pi2 = pi2 + 1;
+    }
+    inst_type_params = tps2;
+  }
+
+  let inst: String = tc.inst_name_ex(g.ctx, name, inst_type_params, sig_use.const_params, inst_subs, csubs);
   let inst_qn: String = qname(target_mod, inst);
-  g.pending = pending_add(g.pending, PendingInst { qname: inst_qn, mod_path: target_mod, base_name: name, inst_name: inst, sig: inst_sig, subs: subs, const_subs: csubs });
+  g.pending = pending_add(g.pending, PendingInst { qname: inst_qn, mod_path: target_mod, base_name: name, inst_name: inst, sig: inst_sig, subs: inst_subs, const_subs: csubs });
 
   if pack_mode {
     let variadic_vec_ty3: i32 = ps.get(ps.len() - 1);
-    let variadic_elem_ty3: i32 = tc.subst_ty(g.ctx, sig.variadic_elem, subs);
+    let variadic_elem_ty3: i32 = tc.subst_ty(g.ctx, sig_use.variadic_elem, subs);
     if variadic_elem_ty3 == g.ctx.ty_bad {
       return GenExprResult { ok: false, err: "bad substituted variadic elem type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
     }

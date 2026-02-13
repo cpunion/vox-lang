@@ -103,21 +103,32 @@ where
 
 调用点（已实现双模式）：
 
+- 泛型参数列表顺序规则：
+  - 调用写作 `f[TypeArgs..., ConstArgs...]`，类型实参必须在前，const 实参必须在后；
+  - 若顺序混用（例如 `f[3, i32]`），报错：`generic arg order error: type args must come before const args`。
+
 - 打包调用（pack-call）：
   - `sum(1, 2, 3)` 会在调用侧自动构造 `Vec[T]` 作为最后一个实参；
   - `sum()`（无 variadic 实参）也合法，会传入空 `Vec[T]`。
 - 显式 `Vec` 调用（vec-call）：
   - `let xs: Vec[i32] = Vec(); sum(xs);` 直接把最后一个实参当作已构造好的 `Vec[T]`。
+- 双模式一致性：
+  - 对 `fn take[T, const N: i32](head: T, tail: T...) -> T`，`take[i32, 3](7, 8, 9)`（pack-call）与 `take[i32, 3](7, xs)`（vec-call）均可通过。
 - 固定参数 + variadic：
   - 对 `fn f(x: i32, ys: i32...)`，至少需要提供固定参数数量；不足时报
     `wrong number of args: expected at least N, got M`。
 
 类型参数 pack 的当前语义：
 
-- `T...`（type param pack 声明）当前仍是“最小可用”语义：
-  - 不做真实 pack 展开，仅用于语法与 arity 校验；
-  - 若显式类型实参超过声明上限，会报
-    `wrong number of type args: expected at most N, got M`。
+- `T...`（type param pack 声明）当前是“受限可用”语义：
+  - 支持单个尾部 type parameter pack；
+  - 显式类型实参允许超过固定前缀，超出的 trailing 类型实参会绑定到 pack 名称；
+  - 当 pack 真正参与类型约束（参数/返回/variadic 元素/type bounds/const-where 类型名）时，仍要求同构（homogeneous）绑定：
+    - 例如 `f[i32, i32, 3](...)` 可通过；
+    - 若同一 pack 位置出现异构类型，会报
+      `heterogeneous explicit type arguments for type parameter pack are not supported yet`。
+  - 当 pack 仅作为“尾部占位”且未参与上述类型约束时，允许异构 trailing 类型实参（用于阶段性放开调用侧表达能力）。
+  - 对无 pack 的普通泛型，仍保留 `expected at most N, got M` 的 arity 检查。
 
 后续（未做）：
 

@@ -183,6 +183,15 @@ fn test_parse_ref_type_names_smoke() -> () {
   t.assert(ty_is_ref1(f.params.get(4).ty, "@ref_static_mut", "i32"));
   t.assert(ty_is_ref1(f.ret, "@ref_mut", "i32"));
 }
+fn test_parse_ref_named_lifetime_rejected() -> () {
+  let src: String = "fn bad(s: &'a str) -> i32 { return s.len(); }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(!ok(r.err));
+  t.assert(match r.err { p.ParseError.InvalidType(_at, _why) => true, _ => false });
+  let msg: String = p.parse_error_to_string(r.err);
+  t.assert(contains(msg, "only 'static is allowed"));
+}
+
 
 fn test_parse_string_escapes_newline() -> () {
   let src: String = "fn main() -> i32 { print(\"a\\n\"); return 0; }";
@@ -260,6 +269,44 @@ fn test_parse_fn_type_param_pack_and_variadic_param() -> () {
   t.assert_eq(f.params.len(), 1);
   t.assert_eq(f.params.get(0).name, "xs");
   t.assert(ty_is_pack1(f.params.get(0).ty, "T"));
+}
+
+
+fn test_parse_fn_type_param_pack_projection_type_names() -> () {
+  let src: String = "fn pick[T...](a: T.0, b: T.1) -> T.0 { return a; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  t.assert_eq(f.type_param_packs.len(), 1);
+  t.assert_eq(f.type_param_packs.get(0), "T");
+  t.assert_eq(f.params.len(), 2);
+  t.assert_eq(f.params.get(0).ty.parts.len(), 2);
+  t.assert_eq(f.params.get(0).ty.parts.get(0), "T");
+  t.assert_eq(f.params.get(0).ty.parts.get(1), "0");
+  t.assert_eq(f.params.get(1).ty.parts.len(), 2);
+  t.assert_eq(f.params.get(1).ty.parts.get(0), "T");
+  t.assert_eq(f.params.get(1).ty.parts.get(1), "1");
+  t.assert_eq(f.ret.parts.len(), 2);
+  t.assert_eq(f.ret.parts.get(0), "T");
+  t.assert_eq(f.ret.parts.get(1), "0");
+}
+
+fn test_parse_fn_where_pack_projection_bounds() -> () {
+  let src: String = "fn keep[T..., const N: i32]() -> i32 where T.0: Eq + Show, comptime @size_of(T.0) <= @align_of(T.1) { return N; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  t.assert_eq(f.type_param_bounds.len(), 1);
+  let b0: ast.TypeParamBoundsDecl = f.type_param_bounds.get(0);
+  t.assert_eq(b0.name, "T.0");
+  t.assert_eq(b0.bounds.len(), 2);
+  t.assert_eq(b0.bounds.get(0).parts.get(0), "Eq");
+  t.assert_eq(b0.bounds.get(1).parts.get(0), "Show");
+  t.assert_eq(f.const_where_bounds.len(), 1);
+  let c0: ast.ConstWhereDecl = f.const_where_bounds.get(0);
+  t.assert_eq(c0.name, "T.0");
+  t.assert(c0.rhs_is_param);
+  t.assert(starts_with(c0.rhs_param, "__cwref__:align_of:T.1"));
 }
 
 fn test_parse_fn_const_params() -> () {

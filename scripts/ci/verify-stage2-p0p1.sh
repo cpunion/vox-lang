@@ -3,22 +3,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-echo "[verify] stage2 p0/p1: self-host stage2 suite (items 1-11 baseline)"
-(
-  cd "$ROOT/compiler/stage0"
-  VOX_RUN_SELFHOST_TESTS=1 go test ./cmd/vox -run 'TestStage1BuildsStage2AndRunsStage2Tests' -count=1
-)
+echo "[verify] stage2 p0/p1: rolling selfhost smoke"
+"$ROOT/scripts/ci/stage2-rolling-selfhost.sh" test
 
-echo "[verify] stage2 p0/p1: lock/dep integration (item 12 + lock UX)"
+echo "[verify] stage2 p0/p1: full stage2 test suite"
+STAGE2_BIN="$("$ROOT/scripts/ci/stage2-rolling-selfhost.sh" print-bin | tail -n 1)"
 (
-  cd "$ROOT/compiler/stage0"
-  VOX_RUN_SELFHOST_TESTS=1 go test ./cmd/vox -run 'TestStage1BuildPkgWritesLockfile|TestStage1BuildPkgFailsWhenLockDigestMismatch|TestStage1BuildPkgSupportsVersionDependencyFromRegistryCache|TestStage1BuildPkgSupportsGitDependency|TestStage1BuildsStage2LockMismatchDiagnosticsConsistentAcrossBuildAndTest' -count=1
-)
-
-echo "[verify] stage2 p0/p1: test framework metadata/rerun coverage (item 9)"
-(
-  cd "$ROOT/compiler/stage0"
-  go test ./cmd/vox -run 'TestParseTestOptionsAndDir_RunAndRerun|TestParseTestOptionsAndDir_Jobs|TestParseTestOptionsAndDir_JSON|TestWriteFailedTests_JSONCacheFormat|TestBuildJSONTestReport|TestBuildJSONTestReport_ListOnlyIncludesModuleDetails|TestInterpTestRerunFailed|TestPrintSelectionSummary|TestModuleTestWorkers' -count=1
+  cd "$ROOT/compiler/stage2"
+  "$STAGE2_BIN" test-pkg target/debug/vox_stage2.p0p1
 )
 
 echo "[verify] stage2 p0/p1 closure gate passed"

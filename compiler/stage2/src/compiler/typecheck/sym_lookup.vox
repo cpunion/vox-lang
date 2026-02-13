@@ -1,10 +1,12 @@
 import "compiler/ast" as ast
+import "compiler/ir" as ir
 
 pub struct FindFuncResult { pub found: bool, pub sig: FuncSig }
 
 fn empty_func_sig(ret: i32) -> FuncSig {
   return FuncSig {
     params: Vec(),
+    param_borrow_kinds: Vec(),
     ret: ret,
     has_variadic: false,
     variadic_elem: -1,
@@ -282,6 +284,100 @@ fn impl_req_key(trait_mod: String, trait_name: String, recv_ty: i32) -> String {
   return trait_mod.concat("::").concat(trait_name).concat("::").concat(recv_ty.to_string());
 }
 
+fn auto_thread_marker_trait(trait_mod: String, trait_name: String) -> bool {
+  if trait_mod != "std/prelude" { return false; }
+  return trait_name == "Send" || trait_name == "Sync";
+}
+
+fn auto_thread_trait_scalar_or_text(t: ir.Ty) -> bool {
+  return
+    t.kind == ir.TyKind.Unit ||
+    t.kind == ir.TyKind.Bool ||
+    t.kind == ir.TyKind.I8 ||
+    t.kind == ir.TyKind.U8 ||
+    t.kind == ir.TyKind.I16 ||
+    t.kind == ir.TyKind.U16 ||
+    t.kind == ir.TyKind.I32 ||
+    t.kind == ir.TyKind.U32 ||
+    t.kind == ir.TyKind.I64 ||
+    t.kind == ir.TyKind.U64 ||
+    t.kind == ir.TyKind.ISize ||
+    t.kind == ir.TyKind.USize ||
+    t.kind == ir.TyKind.F32 ||
+    t.kind == ir.TyKind.F64 ||
+    t.kind == ir.TyKind.String;
+}
+
+fn auto_thread_trait_holds_with_stack(ctx: Ctx, trait_mod: String, trait_name: String, recv_ty: i32, stack: Vec[String]) -> bool {
+  if !auto_thread_marker_trait(trait_mod, trait_name) { return false; }
+  let key: String = impl_req_key(trait_mod, trait_name, recv_ty);
+  if contains_str_sym_lookup(stack, key) { return true; }
+
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, recv_ty);
+  if auto_thread_trait_scalar_or_text(t) { return true; }
+  if t.kind == ir.TyKind.Bad || t.kind == ir.TyKind.Param { return false; }
+
+  let mut next: Vec[String] = stack;
+  next.push(key);
+
+  if t.kind == ir.TyKind.Range {
+    return auto_thread_trait_holds_with_stack(ctx, trait_mod, trait_name, strip_range(ctx, t.elem), next);
+  }
+  if t.kind == ir.TyKind.Vec {
+    return auto_thread_trait_holds_with_stack(ctx, trait_mod, trait_name, strip_range(ctx, t.elem), next);
+  }
+
+  if t.kind == ir.TyKind.Struct {
+    let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+    if !fs.found { return false; }
+    let mut i: i32 = 0;
+    while i < fs.sig.fields.len() {
+      let fty: i32 = strip_range(ctx, fs.sig.fields.get(i).ty);
+      if !auto_thread_trait_holds_with_stack(ctx, trait_mod, trait_name, fty, next) {
+        return false;
+      }
+      i = i + 1;
+    }
+    return true;
+  }
+
+  if t.kind == ir.TyKind.Enum {
+    let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+    if !fe.found { return false; }
+    let mut vi: i32 = 0;
+    while vi < fe.sig.vars.len() {
+      let v: EnumVariantSig = fe.sig.vars.get(vi);
+      let mut fi: i32 = 0;
+      while fi < v.fields.len() {
+        let fty: i32 = strip_range(ctx, v.fields.get(fi));
+        if !auto_thread_trait_holds_with_stack(ctx, trait_mod, trait_name, fty, next) {
+          return false;
+        }
+        fi = fi + 1;
+      }
+      vi = vi + 1;
+    }
+    return true;
+  }
+
+  return false;
+}
+
+fn auto_thread_impl_sig(trait_mod: String, trait_name: String, recv_ty: i32) -> ImplSig {
+  return ImplSig {
+    mod_path: trait_mod,
+    decl_idx: -1,
+    is_inherent: false,
+    trait_mod_path: trait_mod,
+    trait_name: trait_name,
+    for_ty: recv_ty,
+    head_type_params: Vec(),
+    head_type_param_bounds: Vec(),
+    assoc_types: Vec(),
+    methods: Vec(),
+  };
+}
+
 fn find_impl_for_ty_with_stack(ctx: Ctx, trait_mod: String, trait_name: String, recv_ty: i32, stack: Vec[String]) -> FindImplForTyResult {
   let mut found: bool = false;
   let mut out: ImplSig = ImplSig {
@@ -356,6 +452,9 @@ fn find_impl_for_ty_with_stack(ctx: Ctx, trait_mod: String, trait_name: String, 
       }
     }
     i = i + 1;
+  }
+  if !found && auto_thread_trait_holds_with_stack(ctx, trait_mod, trait_name, recv_ty, stack) {
+    return FindImplForTyResult { found: true, ambiguous: false, candidates: "", sig: auto_thread_impl_sig(trait_mod, trait_name, recv_ty) };
   }
   return FindImplForTyResult { found: found, ambiguous: false, candidates: "", sig: out };
 }

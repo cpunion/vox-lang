@@ -1,6 +1,11 @@
 import "compiler/ast" as ast
 import "compiler/ir" as ir
 
+fn starts_with(s: String, pre: String) -> bool {
+  if s.len() < pre.len() { return false; }
+  return s.slice(0, pre.len()) == pre;
+}
+
 struct ConstItem { mod_path: String, decl: ast.ConstDecl }
 
 fn const_qname(mod_path: String, name: String) -> String { return mod_path.concat("::").concat(name); }
@@ -476,6 +481,67 @@ fn parse_const_generic_arg_in_const_locals(
   }
   return ParseConstGenericArgResult { ok: true, iv: lv.iv, text: lv.iv.to_string() };
 }
+
+fn const_has_type_param_pack(sig: FuncSig) -> bool {
+  return sig.type_param_packs.len() == 1;
+}
+
+fn const_type_param_fixed_prefix_len(sig: FuncSig) -> i32 {
+  if const_has_type_param_pack(sig) { return sig.type_params.len() - 1; }
+  return sig.type_params.len();
+}
+
+fn const_explicit_type_arg_arity_ok(sig: FuncSig, explicit_targ_n: i32) -> bool {
+  if !const_has_type_param_pack(sig) { return explicit_targ_n <= sig.type_params.len(); }
+  return explicit_targ_n >= 0;
+}
+
+fn const_explicit_type_arg_bind_name(sig: FuncSig, idx: i32) -> String {
+  if !const_has_type_param_pack(sig) { return sig.type_params.get(idx); }
+  let fixed_n: i32 = const_type_param_fixed_prefix_len(sig);
+  if idx < fixed_n { return sig.type_params.get(idx); }
+  return sig.type_param_packs.get(0);
+}
+
+fn const_type_name_is_pack_member(name: String, pack: String) -> bool {
+  if name == pack { return true; }
+  return starts_with(name, pack.concat("."));
+}
+
+fn const_ty_contains_pack_param(ctx: Ctx, ty: i32, pack: String) -> bool {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param { return const_type_name_is_pack_member(t.name, pack); }
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range { return const_ty_contains_pack_param(ctx, t.elem, pack); }
+  return false;
+}
+
+fn const_sig_allows_heterogeneous_pack_args(ctx: Ctx, sig: FuncSig, pack: String) -> bool {
+  let mut i: i32 = 0;
+  while i < sig.params.len() {
+    if const_ty_contains_pack_param(ctx, sig.params.get(i), pack) { return false; }
+    i = i + 1;
+  }
+  if const_ty_contains_pack_param(ctx, sig.ret, pack) { return false; }
+  if sig.has_variadic && const_ty_contains_pack_param(ctx, sig.variadic_elem, pack) { return false; }
+
+  let mut bi: i32 = 0;
+  while bi < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(bi);
+    if const_type_name_is_pack_member(b.type_param, pack) { return false; }
+    bi = bi + 1;
+  }
+
+  let mut ci: i32 = 0;
+  while ci < sig.const_where_bounds.len() {
+    let b2: ConstWhereBoundSig = sig.const_where_bounds.get(ci);
+    if const_type_name_is_pack_member(b2.name, pack) { return false; }
+    ci = ci + 1;
+  }
+
+  return true;
+}
+
+
 
 fn const_local_from_value(name: String, mutable: bool, v: EvalConstExprResult) -> ConstLocal {
   return ConstLocal { name: name, mutable: mutable, kind: v.kind, ty: v.ty, iv: v.iv, bv: v.bv, sv: v.sv };
@@ -1441,15 +1507,15 @@ fn eval_const_reflect_intrinsic(
   }
   if name == "@same_type" || name == "@assignable_to" || name == "@castable_to" || name == "@eq_comparable_with" || name == "@ordered_with" || name == "@same_layout" || name == "@bitcastable" {
     if type_args.len() != 2 {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic requires two type args"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic requires two type args"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     let tra: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), type_args.get(0));
     if !tra.ok {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type arg resolve failed"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type arg resolve failed"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     let trb: ResolveTyResult = resolve_type(tra.ctx, w, cur_mod, imps, Vec(), type_args.get(1));
     if !trb.ok {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type arg resolve failed"), kind: 0, ty: tra.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type arg resolve failed"), kind: 0, ty: tra.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     let brt: ReflectBoolResult =
       if name == "@same_type" {
@@ -1467,183 +1533,183 @@ fn eval_const_reflect_intrinsic(
       } else {
         intrinsic_ordered_with_of(trb.ctx, tra.idx, trb.idx)
       };
-    if !brt.ok { return EvalConstExprResult { ok: false, err: type_error(file, brt.err), kind: 0, ty: trb.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !brt.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, brt.err), kind: 0, ty: trb.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(trb.ctx, expected, trb.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: trb.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: trb.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: trb.ctx.ty_bool, iv: 0, bv: brt.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if type_args.len() != 1 {
-    return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic requires one type arg"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic requires one type arg"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
   }
 
   let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), type_args.get(0));
   if !tr.ok {
-    return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type arg resolve failed"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+    return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type arg resolve failed"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
   }
 
   if name == "@size_of" {
     let sr: ReflectIntResult = intrinsic_size_of(tr.ctx, tr.idx);
-    if !sr.ok { return EvalConstExprResult { ok: false, err: type_error(file, sr.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !sr.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, sr.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_usize) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: tr.ctx.ty_usize, iv: sr.iv, bv: false, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@align_of" {
     let ar: ReflectIntResult = intrinsic_align_of(tr.ctx, tr.idx);
-    if !ar.ok { return EvalConstExprResult { ok: false, err: type_error(file, ar.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !ar.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, ar.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_usize) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: tr.ctx.ty_usize, iv: ar.iv, bv: false, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@field_count" {
     let fr: ReflectIntResult = intrinsic_field_count_of(tr.ctx, tr.idx);
-    if !fr.ok { return EvalConstExprResult { ok: false, err: type_error(file, fr.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !fr.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, fr.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_usize) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: tr.ctx.ty_usize, iv: fr.iv, bv: false, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@type" {
     let trr: ReflectIntResult = intrinsic_type_id_of(tr.ctx, tr.idx);
-    if !trr.ok { return EvalConstExprResult { ok: false, err: type_error(file, trr.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !trr.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, trr.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_usize) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: tr.ctx.ty_usize, iv: trr.iv, bv: false, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@type_name" {
     let nr: ReflectTextResult = intrinsic_type_name_of(tr.ctx, tr.idx);
-    if !nr.ok { return EvalConstExprResult { ok: false, err: type_error(file, nr.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !nr.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, nr.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_string) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_str(), ty: tr.ctx.ty_string, iv: 0, bv: false, sv: nr.text, sigs: sigs0, states: states0 };
   }
   if name == "@is_integer" {
     let br0: ReflectBoolResult = intrinsic_is_integer_of(tr.ctx, tr.idx);
-    if !br0.ok { return EvalConstExprResult { ok: false, err: type_error(file, br0.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !br0.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, br0.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: br0.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_signed_int" {
     let brs: ReflectBoolResult = intrinsic_is_signed_int_of(tr.ctx, tr.idx);
-    if !brs.ok { return EvalConstExprResult { ok: false, err: type_error(file, brs.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !brs.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, brs.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: brs.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_unsigned_int" {
     let bru: ReflectBoolResult = intrinsic_is_unsigned_int_of(tr.ctx, tr.idx);
-    if !bru.ok { return EvalConstExprResult { ok: false, err: type_error(file, bru.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !bru.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, bru.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: bru.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_float" {
     let br1: ReflectBoolResult = intrinsic_is_float_of(tr.ctx, tr.idx);
-    if !br1.ok { return EvalConstExprResult { ok: false, err: type_error(file, br1.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !br1.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, br1.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: br1.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_bool" {
     let brb: ReflectBoolResult = intrinsic_is_bool_of(tr.ctx, tr.idx);
-    if !brb.ok { return EvalConstExprResult { ok: false, err: type_error(file, brb.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !brb.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, brb.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: brb.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_string" {
     let brs0: ReflectBoolResult = intrinsic_is_string_of(tr.ctx, tr.idx);
-    if !brs0.ok { return EvalConstExprResult { ok: false, err: type_error(file, brs0.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !brs0.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, brs0.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: brs0.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_struct" {
     let br2: ReflectBoolResult = intrinsic_is_struct_of(tr.ctx, tr.idx);
-    if !br2.ok { return EvalConstExprResult { ok: false, err: type_error(file, br2.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !br2.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, br2.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: br2.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_enum" {
     let br3: ReflectBoolResult = intrinsic_is_enum_of(tr.ctx, tr.idx);
-    if !br3.ok { return EvalConstExprResult { ok: false, err: type_error(file, br3.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !br3.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, br3.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: br3.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_vec" {
     let br4: ReflectBoolResult = intrinsic_is_vec_of(tr.ctx, tr.idx);
-    if !br4.ok { return EvalConstExprResult { ok: false, err: type_error(file, br4.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !br4.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, br4.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: br4.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_range" {
     let br5: ReflectBoolResult = intrinsic_is_range_of(tr.ctx, tr.idx);
-    if !br5.ok { return EvalConstExprResult { ok: false, err: type_error(file, br5.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !br5.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, br5.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: br5.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_eq_comparable" {
     let breq: ReflectBoolResult = intrinsic_is_eq_comparable_of(tr.ctx, tr.idx);
-    if !breq.ok { return EvalConstExprResult { ok: false, err: type_error(file, breq.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !breq.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, breq.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: breq.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_ordered" {
     let brord: ReflectBoolResult = intrinsic_is_ordered_of(tr.ctx, tr.idx);
-    if !brord.ok { return EvalConstExprResult { ok: false, err: type_error(file, brord.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !brord.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, brord.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: brord.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_unit" {
     let brunit: ReflectBoolResult = intrinsic_is_unit_of(tr.ctx, tr.idx);
-    if !brunit.ok { return EvalConstExprResult { ok: false, err: type_error(file, brunit.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !brunit.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, brunit.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: brunit.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_numeric" {
     let brnum: ReflectBoolResult = intrinsic_is_numeric_of(tr.ctx, tr.idx);
-    if !brnum.ok { return EvalConstExprResult { ok: false, err: type_error(file, brnum.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !brnum.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, brnum.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: brnum.bv, sv: "", sigs: sigs0, states: states0 };
   }
   if name == "@is_zero_sized" {
     let brz: ReflectBoolResult = intrinsic_is_zero_sized_of(tr.ctx, tr.idx);
-    if !brz.ok { return EvalConstExprResult { ok: false, err: type_error(file, brz.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
+    if !brz.ok { return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, brz.err), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 }; }
     if expected != -1 && !assignable_to(tr.ctx, expected, tr.ctx.ty_bool) {
-      return EvalConstExprResult { ok: false, err: type_error(file, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "const intrinsic type mismatch"), kind: 0, ty: tr.ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_bool(), ty: tr.ctx.ty_bool, iv: 0, bv: brz.bv, sv: "", sigs: sigs0, states: states0 };
   }
 
-  return EvalConstExprResult { ok: false, err: type_error(file, "unknown const intrinsic"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+  return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, call_id, "unknown const intrinsic"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
 }
 
 // Prefer expression span for const-eval diagnostics; fall back to file:1:1.
@@ -2062,7 +2128,7 @@ fn eval_const_expr_in_mod_locals(
             xj = xj + 1;
           }
         }
-        if explicit_targ_n > fr_call.sig.type_params.len() {
+        if !const_explicit_type_arg_arity_ok(fr_call.sig, explicit_targ_n) {
           return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call generic args mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
         }
         let explicit_const_n: i32 = type_args.len() - explicit_targ_n;
@@ -2108,13 +2174,28 @@ fn eval_const_expr_in_mod_locals(
           subs = ur0.subs;
         }
 
+        let has_pack: bool = const_has_type_param_pack(fr_call.sig);
+        let pack_name: String = if has_pack { fr_call.sig.type_param_packs.get(0) } else { "" };
+        let mut pack_explicit_tys: Vec[i32] = Vec();
+
         let mut ti: i32 = 0;
         while ti < explicit_targs.len() {
           let tr: ResolveTyResult = resolve_type(ctx, w, cur_mod, imps, Vec(), explicit_targs.get(ti));
           if !tr.ok {
             return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call type arg resolve failed"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
           }
-          let tp: String = fr_call.sig.type_params.get(ti);
+          let tp: String = const_explicit_type_arg_bind_name(fr_call.sig, ti);
+          let is_pack_bind: bool = has_pack && tp == pack_name;
+          if is_pack_bind {
+            pack_explicit_tys.push(tr.idx);
+            let cur_pack: i32 = subs_lookup(subs, tp);
+            if cur_pack == -1 {
+              subs.push(TySub { name: tp, ty: tr.idx });
+            }
+            ti = ti + 1;
+            continue;
+          }
+
           let cur_ty: i32 = subs_lookup(subs, tp);
           if cur_ty != -1 && cur_ty != tr.idx {
             return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call type arg mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
@@ -2125,16 +2206,50 @@ fn eval_const_expr_in_mod_locals(
           ti = ti + 1;
         }
 
+        let mut sig_use: FuncSig = fr_call.sig;
+        if has_pack && pack_explicit_tys.len() > 0 {
+          let mut all_same: bool = true;
+          let mut pi: i32 = 1;
+          while pi < pack_explicit_tys.len() {
+            if pack_explicit_tys.get(pi) != pack_explicit_tys.get(0) {
+              all_same = false;
+              pi = pack_explicit_tys.len();
+            } else {
+              pi = pi + 1;
+            }
+          }
+
+          let cur_pack0: i32 = subs_lookup(subs, pack_name);
+          if cur_pack0 == -1 {
+            subs.push(TySub { name: pack_name, ty: pack_explicit_tys.get(0) });
+          } else if cur_pack0 != pack_explicit_tys.get(0) {
+            return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call explicit pack head type conflicts with inferred return constraint"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+          }
+          subs = append_pack_alias_subs(subs, pack_name, pack_explicit_tys);
+
+          if !all_same {
+            if const_sig_allows_heterogeneous_pack_args(ctx, fr_call.sig, pack_name) {
+              // Placeholder-only pack usage (A01-2a): keep as-is.
+            } else {
+              let mr: MaterializePackSigResult = materialize_pack_sig_types(ctx, fr_call.sig, pack_name, pack_explicit_tys);
+              if !mr.ok {
+                return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, mr.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+              }
+              sig_use = mr.sig;
+            }
+          }
+        }
+
         let mut ai_gen: i32 = 0;
         while ai_gen < args.len() {
-          let want0: i32 = subst_ty(ctx, fr_call.sig.params.get(ai_gen), subs);
+          let want0: i32 = subst_ty(ctx, sig_use.params.get(ai_gen), subs);
           let want_t: ir.Ty = ir.ty_pool_get(ctx.pool, want0);
           let want: i32 = if want_t.kind == ir.TyKind.Param || ty_has_param(ctx, want0) { -1 } else { want0 };
           let ar_gen: EvalConstExprResult = eval_const_expr_in_mod_locals(ctx, w, items, sigs2, states2, cur_mod, imps, exprs, file, args.get(ai_gen), want, locals);
           if !ar_gen.ok { return ar_gen; }
           sigs2 = ar_gen.sigs;
           states2 = ar_gen.states;
-          let ur2: UnifyResult = unify_ty(ctx, fr_call.sig.params.get(ai_gen), ar_gen.ty, subs);
+          let ur2: UnifyResult = unify_ty(ctx, sig_use.params.get(ai_gen), ar_gen.ty, subs);
           if !ur2.ok {
             return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call generic arg type mismatch"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
           }
@@ -2144,22 +2259,22 @@ fn eval_const_expr_in_mod_locals(
         }
 
         let mut j: i32 = 0;
-        while j < fr_call.sig.type_params.len() {
-          let tpj: String = fr_call.sig.type_params.get(j);
+        while j < sig_use.type_params.len() {
+          let tpj: String = sig_use.type_params.get(j);
           if subs_lookup(subs, tpj) == -1 {
             return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call cannot infer generic args"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
           }
           j = j + 1;
         }
 
-        let cwr: ConstWhereCheckResult = check_const_where_bounds(ctx, fr_call.sig.const_where_bounds, subs, csubs);
+        let cwr: ConstWhereCheckResult = check_const_where_bounds(ctx, sig_use.const_where_bounds, subs, csubs);
         if !cwr.ok {
           return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, cwr.err), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
         }
 
         let mut bi: i32 = 0;
-        while bi < fr_call.sig.type_param_bounds.len() {
-          let b: TypeParamBoundSig = fr_call.sig.type_param_bounds.get(bi);
+        while bi < sig_use.type_param_bounds.len() {
+          let b: TypeParamBoundSig = sig_use.type_param_bounds.get(bi);
           let ty0: i32 = subs_lookup(subs, b.type_param);
           if ty0 == -1 {
             return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call cannot infer generic args"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
@@ -2176,8 +2291,8 @@ fn eval_const_expr_in_mod_locals(
         }
 
         let mut pi_gen: i32 = 0;
-        while pi_gen < fr_call.sig.params.len() {
-          let pt: i32 = subst_ty(ctx, fr_call.sig.params.get(pi_gen), subs);
+        while pi_gen < sig_use.params.len() {
+          let pt: i32 = subst_ty(ctx, sig_use.params.get(pi_gen), subs);
           if pt == ctx.ty_bad || ty_has_param(ctx, pt) {
             return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call has unresolved generic param type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
           }
@@ -2185,7 +2300,7 @@ fn eval_const_expr_in_mod_locals(
           pi_gen = pi_gen + 1;
         }
 
-        call_ret_ty = subst_ty(ctx, fr_call.sig.ret, subs);
+        call_ret_ty = subst_ty(ctx, sig_use.ret, subs);
         if call_ret_ty == ctx.ty_bad || ty_has_param(ctx, call_ret_ty) {
           return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const fn call has unresolved generic return type"), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs2, states: states2 };
         }
@@ -2925,6 +3040,9 @@ fn collect_consts(ctx: Ctx, w: World) -> TcCtxResult {
       let cd: ast.ConstDecl = m.prog.consts.get(ci);
       if is_reserved_intrinsic_name(cd.name) {
         return TcCtxResult { ok: false, err: type_error(cd.file, "reserved name: ".concat(cd.name)), ctx: c };
+      }
+      if tn_has_nonstatic_borrow(cd.ty) {
+        return TcCtxResult { ok: false, err: type_error_at(cd.sp, "non-static borrowed type is not allowed in const type"), ctx: c };
       }
       let qn: String = const_qname(m.path, cd.name);
       if const_contains_str(seen, qn) {

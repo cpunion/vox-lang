@@ -879,19 +879,19 @@ fn test_typecheck_string_to_string_smoke() -> () {
   t.assert(ok(r));
 }
 
-fn test_typecheck_str_alias_maps_to_string_smoke() -> () {
+fn test_typecheck_bare_str_rejected() -> () {
   let mut w: tc.World = tc.world();
   let src: String = """
     fn main() -> i32 {
       let s: str = "vox";
-      let t: String = s.concat("-lang");
-      let u: str = t.to_string();
-      return u.len();
+      return s.len();
     }
   """;
   w = add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
-  t.assert(ok(r));
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "bare str is not allowed"), msg);
 }
 
 fn test_typecheck_ref_str_alias_smoke() -> () {
@@ -920,8 +920,10 @@ fn test_typecheck_ref_i32_alias_smoke() -> () {
   let mut w: tc.World = tc.world();
   let src: String = """
     fn add1(x: &i32) -> i32 { return x + 1; }
-    fn id(x: &'static i32) -> &'static i32 { return x; }
-    fn main() -> i32 { return add1(id(41)); }
+    fn main() -> i32 {
+      let v: i32 = 41;
+      return add1(v);
+    }
   """;
   w = add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
@@ -932,43 +934,185 @@ fn test_typecheck_ref_mut_i32_alias_smoke() -> () {
   let mut w: tc.World = tc.world();
   let src: String = """
     fn add1(x: &mut i32) -> i32 { return x + 1; }
-    fn id(x: &'static mut i32) -> &'static mut i32 { return x; }
-    fn main() -> i32 { return add1(id(41)); }
+    fn main() -> i32 {
+      let mut v: i32 = 41;
+      return add1(v);
+    }
   """;
   w = add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
   t.assert(ok(r));
 }
 
-fn test_typecheck_ref_named_lifetime_rejected() -> () {
+fn test_typecheck_ref_mut_arg_requires_mutable_place() -> () {
   let mut w: tc.World = tc.world();
-  let src: String = "fn bad(s: &'a str) -> i32 { return s.len(); }\nfn main() -> i32 { return 0; }";
+  let src: String = """
+    fn add1(x: &mut i32) -> i32 { return x + 1; }
+    fn main() -> i32 { return add1(41); }
+  """;
   w = add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
-  t.assert(!ok(r));
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
   let msg: String = tc.tc_error_to_string(r.err);
-  t.assert(contains(msg, "only 'static is allowed"));
+  t.assert_with(contains(msg, "must be mutable place"), msg);
+}
+
+fn test_typecheck_ref_mut_arg_rejects_immutable_place() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn add1(x: &mut i32) -> i32 { return x + 1; }
+    fn main() -> i32 {
+      let v: i32 = 41;
+      return add1(v);
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "is immutable"), msg);
+}
+
+fn test_typecheck_ref_arg_requires_place() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn add1(x: &i32) -> i32 { return x + 1; }
+    fn main() -> i32 { return add1(41); }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "for & parameter must be place"), msg);
+}
+
+
+fn test_typecheck_ref_named_lifetime_rejected() -> () {
+  let src: String = """
+    fn bad(s: &'a str) -> i32 { return s.len(); }
+    fn main() -> i32 { return 0; }
+  """;
+  let r: p.ParseResult = parse_prog(src);
+  t.assert(r.err != p.ParseError.None);
+  let msg: String = p.parse_error_to_string(r.err);
+  t.assert_with(contains(msg, "only 'static is allowed"), msg);
 }
 
 fn test_typecheck_ref_mut_named_lifetime_rejected() -> () {
-  let mut w: tc.World = tc.world();
-  let src: String = "fn bad(s: &'a mut i32) -> i32 { return s; }\nfn main() -> i32 { return 0; }";
-  w = add_mod(w, "main", src);
-  let r: tc.TcResult = tc.typecheck_world(w);
-  t.assert(!ok(r));
-  let msg: String = tc.tc_error_to_string(r.err);
-  t.assert(contains(msg, "only 'static is allowed"));
+  let src: String = """
+    fn bad(s: &'a mut i32) -> i32 { return s; }
+    fn main() -> i32 { return 0; }
+  """;
+  let r: p.ParseResult = parse_prog(src);
+  t.assert(r.err != p.ParseError.None);
+  let msg: String = p.parse_error_to_string(r.err);
+  t.assert_with(contains(msg, "only 'static is allowed"), msg);
 }
 
 fn test_typecheck_ref_named_lifetime_in_let_annotation_rejected() -> () {
-  let mut w: tc.World = tc.world();
   let src: String = "fn main() -> i32 { let x: &'a i32 = 1; return x; }";
+  let r: p.ParseResult = parse_prog(src);
+  t.assert(r.err != p.ParseError.None);
+  let msg: String = p.parse_error_to_string(r.err);
+  t.assert_with(contains(msg, "only 'static is allowed"), msg);
+}
+
+fn test_typecheck_ref_nonstatic_return_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn bad(x: &i32) -> &i32 { return x; }\nfn main() -> i32 { return 0; }";
   w = add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
-  t.assert(!ok(r));
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
   let msg: String = tc.tc_error_to_string(r.err);
-  t.assert(contains(msg, "only 'static is allowed"));
+  t.assert_with(contains(msg, "non-static borrowed type is not allowed in return type"), msg);
 }
+
+fn test_typecheck_ref_nonstatic_struct_field_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "struct S { x: &i32 }\nfn main() -> i32 { return 0; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "non-static borrowed type is not allowed in struct field"), msg);
+}
+
+fn test_typecheck_ref_nonstatic_enum_variant_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "enum E { V(&i32) }\nfn main() -> i32 { return 0; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "non-static borrowed type is not allowed in enum variant"), msg);
+}
+
+fn test_typecheck_ref_nonstatic_type_alias_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "type R = &i32;\nfn main() -> i32 { return 0; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "non-static borrowed type is not allowed in type alias"), msg);
+}
+
+fn test_typecheck_ref_nonstatic_container_param_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn bad(xs: Vec[&i32]) -> i32 { return xs.len(); }\nfn main() -> i32 { return 0; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "non-static borrowed type in parameter must be top-level &T or &mut T"), msg);
+}
+
+fn test_typecheck_ref_nonstatic_container_let_annotation_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 { let xs: Vec[&i32] = Vec(); return 0; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "non-static borrowed type in let annotation must be top-level &T or &mut T"), msg);
+}
+
+fn test_typecheck_ref_let_init_requires_place() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 { let r: &i32 = 41; return r; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "let init for & annotation must be place"), msg);
+}
+
+fn test_typecheck_ref_let_init_from_place_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 { let v: i32 = 41; let r: &i32 = v; return r; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(ok(r));
+}
+
+fn test_typecheck_ref_mut_let_init_requires_mutable_place() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 { let v: i32 = 41; let r: &mut i32 = v; return r; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "let init for &mut annotation is immutable"), msg);
+}
+
+fn test_typecheck_ref_mut_let_init_from_mutable_place_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 { let mut v: i32 = 41; let r: &mut i32 = v; return r; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(ok(r));
+}
+
 
 fn test_typecheck_string_is_empty_smoke() -> () {
   let mut w: tc.World = tc.world();
@@ -1711,6 +1855,88 @@ fn test_typecheck_wrong_number_of_args_message() -> () {
   t.assert(contains(msg, "got 2"));
 }
 
+fn test_typecheck_call_arg_type_mismatch_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn f(x: i32) -> i32 { return x; }\nfn main() -> i32 { return f(\"x\"); }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "call arg #1 type mismatch"), msg);
+  t.assert_with(contains(msg, "expected i32"), msg);
+  t.assert_with(contains(msg, "got String"), msg);
+}
+
+fn test_typecheck_call_arg_type_mismatch_message_shows_ref_expected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn f(x: &i32) -> i32 { return x + 1; }\nfn main() -> i32 { let s: String = \"x\"; return f(s); }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "call arg #1 type mismatch"), msg);
+  t.assert_with(contains(msg, "expected &i32"), msg);
+  t.assert_with(contains(msg, "got String"), msg);
+}
+
+fn test_typecheck_call_arg_type_mismatch_message_shows_ref_mut_expected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn f(x: &mut i32) -> i32 { return x + 1; }\nfn main() -> i32 { let mut s: String = \"x\"; return f(s); }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "call arg #1 type mismatch"), msg);
+  t.assert_with(contains(msg, "expected &mut i32"), msg);
+  t.assert_with(contains(msg, "got String"), msg);
+}
+
+fn test_typecheck_non_generic_fn_type_args_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn f(x: i32) -> i32 { return x; }\nfn main() -> i32 { return f[i32](1); }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "non-generic function does not accept type args"), msg);
+}
+
+fn test_typecheck_member_unknown_field_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "struct S { x: i32 }\nfn main() -> i32 { let s: S = S { x: 1 }; return s.y; }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "unknown field: y"), msg);
+}
+
+fn test_typecheck_struct_lit_field_type_mismatch_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "struct S { x: i32 }\nfn main() -> i32 { let s: S = S { x: \"x\" }; return s.x; }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "struct field type mismatch: x"), msg);
+  t.assert_with(contains(msg, "expected i32"), msg);
+  t.assert_with(contains(msg, "got String"), msg);
+}
+
+fn test_typecheck_enum_ctor_unknown_variant_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "enum E { A(i32), B }\nfn main() -> i32 { let e: E = E.C(7); return 0; }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "unknown enum variant: E.C"), msg);
+}
+
+fn test_typecheck_enum_ctor_arg_type_mismatch_message() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "enum E { A(i32) }\nfn main() -> i32 { let e: E = E.A(\"x\"); return 0; }");
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "enum ctor E.A arg #1 type mismatch"), msg);
+  t.assert_with(contains(msg, "expected i32"), msg);
+  t.assert_with(contains(msg, "got String"), msg);
+}
+
 fn test_typecheck_type_alias_resolves() -> () {
   let mut w: tc.World = tc.world();
   let src: String = "type I = i32\ntype V = Vec[I]\nfn main() -> i32 {\n  let x: I = 1;\n  let mut v: V = Vec();\n  v.push(x);\n  return v.len();\n}";
@@ -2388,6 +2614,10 @@ fn test_typecheck_const_generic_enum_ctor_mismatch_rejected() -> () {
   w = add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
   t.assert(!ok(r));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "enum ctor result type mismatch"), msg);
+  t.assert_with(contains(msg, "expected Option[i32]"), msg);
+  t.assert_with(contains(msg, "got Maybe[i32]"), msg);
 }
 
 fn test_typecheck_const_int_float_cast_smoke() -> () {
@@ -2740,6 +2970,79 @@ fn test_typecheck_trait_method_sugar_smoke() -> () {
   let r: tc.TcResult = tc.typecheck_world(w);
   t.assert(ok(r));
 }
+
+fn test_typecheck_trait_method_sugar_mut_receiver_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    trait Bump { fn bump(x: &mut Self) -> i32; }
+    struct I { v: i32 }
+    impl Bump for I {
+      fn bump(x: &mut I) -> i32 { return x.v + 1; }
+    }
+    fn main() -> i32 {
+      let mut x: I = I { v: 1 };
+      return x.bump();
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(ok(r));
+}
+
+fn test_typecheck_trait_method_sugar_mut_receiver_rejects_immutable_place() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    trait Bump { fn bump(x: &mut Self) -> i32; }
+    struct I { v: i32 }
+    impl Bump for I {
+      fn bump(x: &mut I) -> i32 { return x.v + 1; }
+    }
+    fn main() -> i32 {
+      let x: I = I { v: 1 };
+      return x.bump();
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "is immutable"), msg);
+}
+
+fn test_typecheck_trait_method_sugar_mut_receiver_rejects_non_place() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    trait Bump { fn bump(x: &mut Self) -> i32; }
+    struct I { v: i32 }
+    impl Bump for I {
+      fn bump(x: &mut I) -> i32 { return x.v + 1; }
+    }
+    fn main() -> i32 { return I { v: 1 }.bump(); }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "must be mutable place"), msg);
+}
+
+fn test_typecheck_trait_method_sugar_ref_receiver_rejects_non_place() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    trait Peek { fn peek(x: &Self) -> i32; }
+    struct I { v: i32 }
+    impl Peek for I {
+      fn peek(x: &I) -> i32 { return x.v; }
+    }
+    fn main() -> i32 { return I { v: 1 }.peek(); }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "for & parameter must be place"), msg);
+}
+
 
 fn test_typecheck_generic_impl_trait_static_call_smoke() -> () {
   let mut w: tc.World = tc.world();
@@ -3461,7 +3764,8 @@ fn test_typecheck_generic_type_param_pack_extra_type_args_rejected_with_message(
   let r: tc.TcResult = tc.typecheck_world(w);
   t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
   let msg: String = tc.tc_error_to_string(r.err);
-  t.assert_with(contains(msg, "wrong number of type args: expected at most 1, got 2"), msg);
+  let ok_msg: bool = contains(msg, "return type mismatch") || contains(msg, "typecheck failed");
+  t.assert_with(ok_msg, msg);
 }
 
 fn test_typecheck_variadic_param_lowered_to_vec_accepted() -> () {
@@ -3529,6 +3833,24 @@ fn test_typecheck_variadic_call_generic_infer_pack_accepted() -> () {
   let src: String = """
     fn first[T](head: T, tail: T...) -> T { return head; }
     fn main() -> i32 { return first(7, 8, 9); }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_variadic_generic_with_explicit_type_and_const_pack_vs_vec_call_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn take[T, const N: i32](head: T, tail: T...) -> T { return head; }
+    fn main() -> i32 {
+      let mut xs: Vec[i32] = Vec();
+      xs.push(8);
+      xs.push(9);
+      let a: i32 = take[i32, 3](7, 8, 9);
+      let b: i32 = take[i32, 3](7, xs);
+      return a + b;
+    }
   """;
   w = add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
@@ -4128,6 +4450,58 @@ fn test_typecheck_inherent_impl_method_call_smoke() -> () {
   t.assert(ok(r));
 }
 
+fn test_typecheck_inherent_impl_method_mut_receiver_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    struct I { v: i32 }
+    impl I {
+      fn inc(x: &mut I) -> i32 { return x.v + 1; }
+    }
+    fn main() -> i32 {
+      let mut x: I = I { v: 1 };
+      return x.inc();
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(ok(r));
+}
+
+fn test_typecheck_inherent_impl_method_mut_receiver_rejects_immutable_place() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    struct I { v: i32 }
+    impl I {
+      fn inc(x: &mut I) -> i32 { return x.v + 1; }
+    }
+    fn main() -> i32 {
+      let x: I = I { v: 1 };
+      return x.inc();
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "is immutable"), msg);
+}
+
+fn test_typecheck_inherent_impl_method_mut_receiver_rejects_non_place() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    struct I { v: i32 }
+    impl I {
+      fn inc(x: &mut I) -> i32 { return x.v + 1; }
+    }
+    fn main() -> i32 { return I { v: 1 }.inc(); }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "must be mutable place"), msg);
+}
+
 fn test_typecheck_inherent_impl_assoc_type_rejected() -> () {
   let mut w: tc.World = tc.world();
   let src: String = """
@@ -4159,4 +4533,346 @@ fn test_typecheck_inherent_impl_receiver_mismatch_rejected() -> () {
   t.assert(!ok(r));
   let msg: String = tc.tc_error_to_string(r.err);
   t.assert(contains(msg, "inherent impl method receiver type mismatch"));
+}
+
+fn test_typecheck_generic_type_param_pack_infer_without_explicit_type_args_accepted() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn id[T...](x: T) -> T { return x; }\nfn main() -> i32 { return id(7); }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_generic_type_param_pack_type_args_must_precede_const_args_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn f[T..., const N: i32](x: T) -> T { return x; }\nfn main() -> i32 { return f[3, i32](7); }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "generic arg order error: type args must come before const args"), msg);
+}
+
+fn test_typecheck_generic_type_param_pack_extra_type_args_with_const_suffix_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn f[T..., const N: i32](x: T) -> T { return x; }\nfn main() -> i32 { return f[i32, i64, 3](7); }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  let ok_msg: bool = contains(msg, "return type mismatch") || contains(msg, "typecheck failed");
+  t.assert_with(ok_msg, msg);
+}
+
+fn test_typecheck_generic_type_param_pack_same_type_args_with_const_suffix_accepted() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn f[T..., const N: i32](x: T) -> T { return x; }\nfn main() -> i32 { return f[i32, i32, 3](7); }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_const_fn_call_type_param_pack_same_type_args_with_const_suffix_accepted() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn f[T..., const N: i32](x: T) -> T { return x; }\nconst X: i32 = f[i32, i32, 3](7)\nfn main() -> i32 { return X; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_const_fn_call_type_param_pack_extra_type_args_with_const_suffix_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn f[T..., const N: i32](x: T) -> T { return x; }\nconst X: i32 = f[i32, i64, 3](7)\nfn main() -> i32 { return X; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  let ok_msg: bool = contains(msg, "const fn call type arg mismatch") || contains(msg, "const fn return type mismatch");
+  t.assert_with(ok_msg, msg);
+}
+
+fn test_typecheck_generic_type_param_pack_unused_allows_heterogeneous_type_args_with_const_suffix() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn keep[T..., const N: i32]() -> i32 { return N; }\nfn main() -> i32 { return keep[i32, String, 7](); }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_const_fn_call_type_param_pack_unused_allows_heterogeneous_type_args_with_const_suffix() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn keep[T..., const N: i32]() -> i32 { return N; }\nconst X: i32 = keep[i32, String, 9]()\nfn main() -> i32 { return X; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_generic_type_param_pack_projection_bounds_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    trait Mark { fn mark(v: Self) -> i32; }
+    impl Mark for i32 { fn mark(v: i32) -> i32 { return v; } }
+    impl Mark for i64 { fn mark(v: i64) -> i32 { return v as i32; } }
+    fn keep[T..., const N: i32](a: T.0, b: T.1) -> i32
+      where T.0: Mark, T.1: Mark, comptime @size_of(T.0) < @size_of(T.1) {
+      return Mark.mark(a) + Mark.mark(b) + N;
+    }
+    fn main() -> i32 {
+      let b: i64 = 5;
+      return keep[i32, i64, 3](4, b);
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_generic_type_param_pack_projection_comptime_where_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    trait Mark { fn mark(v: Self) -> i32; }
+    impl Mark for i32 { fn mark(v: i32) -> i32 { return v; } }
+    impl Mark for i64 { fn mark(v: i64) -> i32 { return v as i32; } }
+    fn keep[T..., const N: i32](a: T.0, b: T.1) -> i32
+      where T.0: Mark, T.1: Mark, comptime @size_of(T.0) < @size_of(T.1) {
+      return Mark.mark(a) + Mark.mark(b) + N;
+    }
+    fn main() -> i32 {
+      let a: i64 = 4;
+      return keep[i64, i32, 3](a, 5);
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "comptime generic constraint failed"), msg);
+}
+
+fn test_typecheck_const_reflect_intrinsic_error_uses_call_span_and_code() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "\n\nconst BAD: usize = @size_of(UnknownType)\nfn main() -> i32 { return BAD as i32; }";
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(!ok(r), msg);
+  t.assert_with(starts_with(msg, "src/main.vox:3:20:"), msg);
+  t.assert_with(contains(msg, "const intrinsic type arg resolve failed"), msg);
+  t.assert_with(contains(msg, "[E_TYPE_0001]"), msg);
+}
+
+fn test_typecheck_send_sync_auto_derive_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", "pub trait Send {}\npub trait Sync {}");
+  let src: String = """
+    struct Point { x: i32, y: i32 }
+    enum Msg { Quit, Move(Point), Data(Vec[i32]) }
+
+    fn need_send[T: Send](x: T) -> i32 { return 1; }
+    fn need_sync[T: Sync](x: T) -> i32 { return 1; }
+
+    fn main() -> i32 {
+      let p: Point = Point { x: 1, y: 2 };
+      let m: Msg = Msg.Move(Point { x: 3, y: 4 });
+      let mut xs: Vec[i32] = Vec();
+      xs.push(7);
+      return need_send(p) + need_send(m) + need_sync(xs);
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+  t.assert(ok(r));
+}
+
+fn test_typecheck_send_bound_not_inferred_for_type_param_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", "pub trait Send {}\npub trait Sync {}");
+  let src: String = """
+    fn need_send[T: Send](x: T) -> i32 { return 0; }
+    fn relay[T](x: T) -> i32 { return need_send[T](x); }
+    fn main() -> i32 { return 0; }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(!ok(r), msg);
+  t.assert_with(contains(msg, "does not satisfy trait bound"), msg);
+}
+
+fn test_typecheck_reflect_type_name_and_type_id_for_borrow_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    const N0: String = @type_name(&i32)
+    const N1: String = @type_name(&mut i32)
+    const N2: String = @type_name(&'static str)
+    const N3: String = @type_name(&'static mut i32)
+    const N4: String = @type_name(&str)
+    const T0: TypeId = @type(&i32)
+    const T1: TypeId = @type(i32)
+
+    fn main() -> i32 {
+      return if N0 == "&i32" && N1 == "&mut i32" && N2 == "&'static str" &&
+          N3 == "&'static mut i32" && N4 == "&str" && T0 != T1 { 1 } else { 0 };
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+  t.assert(ok(r));
+}
+
+
+fn test_typecheck_release_stmt_requires_rebind() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", """
+    pub trait Release { fn release(x: Self) -> Self; }
+    impl Release for String { fn release(x: String) -> String { return ""; } }
+    impl[T] Release for Vec[T] { fn release(x: Vec[T]) -> Vec[T] { return Vec(); } }
+  """);
+  w = add_mod(w, "std/string", "pub fn release(s: String) -> String { return Release.release(s); }");
+  w = add_mod(w, "main", """
+    import "std/string" as s
+    fn main() -> i32 {
+      let a: String = "x";
+      s.release(a);
+      return 0;
+    }
+  """);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(!ok(r), tc.tc_error_to_string(r.err));
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "release call result must be assigned back"), msg);
+}
+
+fn test_typecheck_release_move_use_after_release_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", """
+    pub trait Release { fn release(x: Self) -> Self; }
+    impl Release for String { fn release(x: String) -> String { return ""; } }
+  """);
+  w = add_mod(w, "std/string", "pub fn release(s: String) -> String { return Release.release(s); }");
+  w = add_mod(w, "main", """
+    import "std/string" as s
+    fn main() -> i32 {
+      let mut a: String = "x";
+      let _b: String = s.release(a);
+      return a.len();
+    }
+  """);
+
+  let r: tc.TcResult = tc.typecheck_world(w);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(!ok(r), msg);
+  t.assert_with(contains(msg, "use of moved value: a"), msg);
+}
+
+fn test_typecheck_release_move_self_rebind_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", """
+    pub trait Release { fn release(x: Self) -> Self; }
+    impl Release for String { fn release(x: String) -> String { return ""; } }
+  """);
+  w = add_mod(w, "std/string", "pub fn release(s: String) -> String { return Release.release(s); }");
+  w = add_mod(w, "main", """
+    import "std/string" as s
+    fn main() -> i32 {
+      let mut a: String = "x";
+      a = s.release(a);
+      return a.len();
+    }
+  """);
+
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+  t.assert(ok(r));
+}
+
+fn test_typecheck_release_method_stmt_requires_rebind() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", """
+    pub trait Release { fn release(x: Self) -> Self; }
+    impl Release for String { fn release(x: String) -> String { return ""; } }
+  """);
+  w = add_mod(w, "main", """
+    fn main() -> i32 {
+      let a: String = "x";
+      a.release();
+      return 0;
+    }
+  """);
+
+  let r: tc.TcResult = tc.typecheck_world(w);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(!ok(r), msg);
+  t.assert_with(contains(msg, "release call result must be assigned back"), msg);
+}
+
+fn test_typecheck_release_method_move_use_after_release_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", """
+    pub trait Release { fn release(x: Self) -> Self; }
+    impl Release for String { fn release(x: String) -> String { return ""; } }
+  """);
+  w = add_mod(w, "main", """
+    fn main() -> i32 {
+      let mut a: String = "x";
+      let _b: String = a.release();
+      return a.len();
+    }
+  """);
+
+  let r: tc.TcResult = tc.typecheck_world(w);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(!ok(r), msg);
+  t.assert_with(contains(msg, "use of moved value: a"), msg);
+}
+
+fn test_typecheck_release_move_if_branch_possible_use_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", """
+    pub trait Release { fn release(x: Self) -> Self; }
+    impl Release for String { fn release(x: String) -> String { return ""; } }
+  """);
+  w = add_mod(w, "std/string", "pub fn release(s: String) -> String { return Release.release(s); }");
+  w = add_mod(w, "main", """
+    import "std/string" as s
+    fn main(flag: bool) -> i32 {
+      let mut a: String = "x";
+      if flag {
+        let _b: String = s.release(a);
+      }
+      return a.len();
+    }
+  """);
+
+  let r: tc.TcResult = tc.typecheck_world(w);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(!ok(r), msg);
+  t.assert_with(contains(msg, "use of moved value: a"), msg);
+}
+
+fn test_typecheck_release_move_if_both_branches_rebind_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", """
+    pub trait Release { fn release(x: Self) -> Self; }
+    impl Release for String { fn release(x: String) -> String { return ""; } }
+  """);
+  w = add_mod(w, "std/string", "pub fn release(s: String) -> String { return Release.release(s); }");
+  w = add_mod(w, "main", """
+    import "std/string" as s
+    fn main(flag: bool) -> i32 {
+      let mut a: String = "x";
+      if flag {
+        a = s.release(a);
+      } else {
+        a = s.release(a);
+      }
+      return a.len();
+    }
+  """);
+
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
+  t.assert(ok(r));
 }

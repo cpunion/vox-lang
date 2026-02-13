@@ -113,6 +113,7 @@ fn test_macroexpand_user_macro_sugar_lowers_to_call() -> () {
   t.assert(er.notes.len() >= 2);
   t.assert(me_notes_contains(er.notes, "inline skipped"));
   t.assert(me_notes_contains(er.notes, "callee function not found"));
+  t.assert(me_notes_contains(er.notes, "decision=fallback-call"));
   t.assert(me_notes_contains(er.notes, "lowered to call sugar"));
   let tr: tc.TcResult = tc.typecheck_world(er.world);
   t.assert(!tr.ok);
@@ -167,6 +168,7 @@ fn test_macroexpand_user_macro_inline_local_template_smoke() -> () {
       .concat("fn main() -> i32 { return add1!(41); }"));
   let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
   t.assert(er.ok);
+  t.assert(me_notes_contains(er.notes, "decision=inline-template"));
   let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
   t.assert(match n { ast.ExprNode.Binary(ast.BinaryOp.Add, _l, _r) => true, _ => false });
   let tr: tc.TcResult = tc.typecheck_world(er.world);
@@ -184,6 +186,70 @@ fn test_macroexpand_ast_expr_macro_fn_exec_and_strip_smoke() -> () {
   t.assert_with(me_func_count(er.world, "main") == 1, "AstExpr macro fn should be stripped before typecheck");
   let tr: tc.TcResult = tc.typecheck_world(er.world);
   t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_ast_block_macro_fn_exec_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: AstExpr) -> AstBlock { return { let y: i32 = x + 1; y }; }\n"
+      .concat("fn main() -> i32 { return add1!(41); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Block(_b) => true, _ => false }, "expected AstBlock macro fn to expand into block expression");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_ast_block_fn_call_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn add1(x: AstExpr) -> AstBlock { return { let y: i32 = x + 1; y }; }\n"
+      .concat("fn main() -> i32 { return compile!(add1(41)); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(match n { ast.ExprNode.Block(_b) => true, _ => false }, "expected compile!(AstBlock fn call) to splice block expression");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_ast_stmt_macro_fn_stmt_position_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn tick(x: AstExpr) -> AstStmt { return x + 1; }\n"
+      .concat("fn main() -> i32 { tick!(1); return 0; }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_compile_bang_ast_stmt_fn_stmt_position_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn tick(x: AstExpr) -> AstStmt { return x + 1; }\n"
+      .concat("fn main() -> i32 { compile!(tick(1)); return 0; }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_ast_stmt_macro_fn_call_rejected() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn mk(x: AstExpr) -> AstStmt { return x; }\n"
+      .concat("fn main() -> i32 { return mk!(1); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(!er.ok);
+  let msg: String = tc.tc_error_to_string(er.err);
+  t.assert(me_contains(msg, "macro call requires AstExpr or AstBlock return type; got AstStmt"));
+}
+
+fn test_macroexpand_compile_bang_ast_stmt_fn_call_rejected() -> () {
+  let w: tc.World = me_world_from("main",
+    "fn mk(x: AstExpr) -> AstStmt { return x; }\n"
+      .concat("fn main() -> i32 { return compile!(mk(1)); }"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert(!er.ok);
+  let msg: String = tc.tc_error_to_string(er.err);
+  t.assert(me_contains(msg, "macro call requires AstExpr or AstBlock return type; got AstStmt"));
 }
 
 fn test_macroexpand_user_macro_inline_block_template_smoke() -> () {
@@ -218,6 +284,7 @@ fn test_macroexpand_user_macro_inline_multi_stmt_with_early_return_fallback_smok
   t.assert_with(er.ok, tc.tc_error_to_string(er.err));
   let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
   t.assert_with(match n { ast.ExprNode.Call(_c, _ta, _args) => true, _ => false }, "expected fallback to call sugar when prefix contains return");
+  t.assert_with(me_notes_contains(er.notes, "decision=fallback-call"), "expected deterministic fallback decision note");
   let tr: tc.TcResult = tc.typecheck_world(er.world);
   t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
 }

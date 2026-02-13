@@ -19,19 +19,26 @@ Documents:
 - `docs/06-advanced-generics.md`
 - `docs/07-memory-management.md`
 - `docs/10-macro-system.md`
-- `docs/14-syntax-details.md`
-- `docs/15-toolchain.md`
-- `docs/17-ffi-interop.md`
-- `docs/16-platform-support.md`
-- `docs/18-diagnostics.md`
 - `docs/11-package-management.md`
 - `docs/12-testing-framework.md`
 - `docs/13-standard-library.md`
+- `docs/14-syntax-details.md`
+- `docs/15-toolchain.md`
+- `docs/16-platform-support.md`
+- `docs/17-ffi-interop.md`
+- `docs/18-diagnostics.md`
 - `docs/19-ir-spec.md`
 - `docs/20-bootstrap.md`
 - `docs/21-stage1-compiler.md`
-- `docs/22-stage2-backlog.md`
 - `docs/24-release-process.md`
+- `docs/27-stage2-active-backlog.md`
+
+Archive (closed historical checklists):
+
+- `docs/archive/22-stage2-backlog.md`
+- `docs/archive/23-stage2-backlog-next.md`
+- `docs/archive/25-stage2-p0p1-closure.md`
+- `docs/archive/26-stage2-closure-1-4-7-9.md`
 
 Current stage policy:
 
@@ -43,3 +50,4 @@ Deferred for now:
 
 - `docs/08-thread-safety.md`
 - `docs/09-async-model.md`
+- `docs/16-platform-support.md`

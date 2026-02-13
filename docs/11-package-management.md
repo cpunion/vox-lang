@@ -39,7 +39,7 @@ Stage1 当前能力：
 
 - `path`：支持，且支持递归加载传递依赖
 - `git`：支持 clone/fetch/checkout（支持本地路径与远程 URL）
-- `registry`：支持从本地 cache 目录解析 `name/version`（默认 `.vox/deps/registry`，可通过 `registry` 字段覆盖根目录）
+- `registry`：支持从本地 cache 目录解析 `name/version`（默认 `.vox/deps/registry`，可通过 `registry` 字段覆盖根目录）；Stage2 额外支持 `registry = "git+..."`（或 URL/`.git` 形式）自动 clone/fetch 到 `.vox/deps/registry_remote` 后再解析 `name/version`。
 
 ## 锁文件：`vox.lock`
 

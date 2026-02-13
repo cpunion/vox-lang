@@ -5,6 +5,7 @@ pub enum ParseError {
   None,
   Lex(lex.LexError),
   InvalidString(i32, String), // byte offset, reason
+  InvalidType(i32, String), // byte offset, reason
   UnexpectedToken(lex.TokenKind, lex.TokenKind, i32), // expected, got, byte offset
 }
 
@@ -25,6 +26,8 @@ pub fn parse_error_to_string(e: ParseError) -> String {
     ParseError.Lex(le) => "lex error: ".concat(lex.lex_error_to_string(le)),
     ParseError.InvalidString(at, why) =>
       "invalid string literal at ".concat(at.to_string()).concat(": ").concat(why),
+    ParseError.InvalidType(at, why) =>
+      "invalid type syntax at ".concat(at.to_string()).concat(": ").concat(why),
     ParseError.UnexpectedToken(exp, got, at) =>
       "unexpected token at ".concat(at.to_string())
         .concat(": expected ").concat(lex.token_kind_name(exp))
@@ -40,6 +43,7 @@ pub fn parse_error_kind(e: ParseError) -> i32 {
     ParseError.None => parse_diag_kind_none(),
     ParseError.Lex(_le) => parse_diag_kind_lex(),
     ParseError.InvalidString(_at, _why) => parse_diag_kind_parse(),
+    ParseError.InvalidType(_at, _why) => parse_diag_kind_parse(),
     ParseError.UnexpectedToken(_exp, _got, _at) => parse_diag_kind_parse(),
   };
 }
@@ -49,6 +53,7 @@ pub fn parse_error_code(e: ParseError) -> String {
     ParseError.None => "",
     ParseError.Lex(_le) => parse_code_lex(),
     ParseError.InvalidString(_at, _why) => parse_code_parse(),
+    ParseError.InvalidType(_at, _why) => parse_code_parse(),
     ParseError.UnexpectedToken(_exp, _got, _at) => parse_code_parse(),
   };
 }
@@ -58,6 +63,7 @@ pub fn parse_error_message(e: ParseError) -> String {
     ParseError.None => "parse error: none",
     ParseError.Lex(le) => "lex error: ".concat(lex.lex_error_to_string(le)),
     ParseError.InvalidString(_at, why) => "parse error: invalid string literal: ".concat(why),
+    ParseError.InvalidType(_at, why) => "parse error: invalid type syntax: ".concat(why),
     ParseError.UnexpectedToken(exp, got, _at) =>
       "parse error: unexpected token: expected ".concat(lex.token_kind_name(exp))
         .concat(", got ").concat(lex.token_kind_name(got)),
@@ -140,6 +146,12 @@ pub fn parse_error_diag(file: String, text: String, e: ParseError) -> ParseDiag 
       message: parse_error_message(e),
       rendered: format_unexpected_token(file, text, exp, got, at),
     },
+    ParseError.InvalidType(at, why) => ParseDiag {
+      kind: parse_diag_kind_parse(),
+      code: parse_code_parse(),
+      message: parse_error_message(e),
+      rendered: format_invalid_type(file, text, at, why),
+    },
     ParseError.InvalidString(at, why) => ParseDiag {
       kind: parse_diag_kind_parse(),
       code: parse_code_parse(),
@@ -191,6 +203,14 @@ fn format_invalid_string(file: String, text: String, at: i32, why: String) -> St
   let lc: LineCol = pos_to_line_col(text, build_line_starts(text), at);
   return file.concat(":").concat(lc.line.to_string()).concat(":").concat(lc.col.to_string())
     .concat(": parse error: invalid string literal: ").concat(why)
+    .concat(" [").concat(code).concat("]");
+}
+
+fn format_invalid_type(file: String, text: String, at: i32, why: String) -> String {
+  let code: String = parse_code_parse();
+  let lc: LineCol = pos_to_line_col(text, build_line_starts(text), at);
+  return file.concat(":").concat(lc.line.to_string()).concat(":").concat(lc.col.to_string())
+    .concat(": parse error: invalid type syntax: ").concat(why)
     .concat(" [").concat(code).concat("]");
 }
 
@@ -399,6 +419,30 @@ fn parse_ident(p: Parser) -> ParseIdentResult {
   return ParseIdentResult { p: ar.p, name: name, at: ar.tok.start };
 }
 
+struct ParseNameRefResult { p: Parser, name: String, at: i32 }
+
+fn parse_name_ref_segment(p: Parser) -> ParseIdentResult {
+  if kind_is(peek_kind(p), lex.TokenKind.Ident) {
+    return parse_ident(p);
+  }
+  let ar: AdvanceResult = expect(p, lex.TokenKind.Int);
+  let name: String = lexeme(ar.p, ar.tok);
+  return ParseIdentResult { p: ar.p, name: name, at: ar.tok.start };
+}
+
+fn parse_name_ref(p: Parser) -> ParseNameRefResult {
+  let r0: ParseIdentResult = parse_ident(p);
+  let mut q: Parser = r0.p;
+  let mut out: String = r0.name;
+  while kind_is(peek_kind(q), lex.TokenKind.Dot) && !q.has_err {
+    let ar1: AdvanceResult = advance(q);
+    let r1: ParseIdentResult = parse_name_ref_segment(ar1.p);
+    q = r1.p;
+    out = out.concat(".").concat(r1.name);
+  }
+  return ParseNameRefResult { p: q, name: out, at: r0.at };
+}
+
 fn parse_type_name(p: Parser) -> ParseTypeResult {
   // Unit type: `()`
   if kind_is(peek_kind(p), lex.TokenKind.LParen) && kind_is(peek2_kind(p), lex.TokenKind.RParen) {
@@ -423,7 +467,16 @@ fn parse_type_name(p: Parser) -> ParseTypeResult {
       let ar1: AdvanceResult = advance(q); // '
       let rl: ParseIdentResult = parse_ident(ar1.p);
       q = rl.p;
-      marker = if rl.name == "static" { "@ref_static" } else { "@ref_lt" };
+      if q.has_err {
+        return ParseTypeResult { p: q, ty: ast.TypeName { parts: Vec(), args: Vec() } };
+      }
+      if rl.name == "static" {
+        marker = "@ref_static";
+      } else {
+        q.has_err = true;
+        q.err = ParseError.InvalidType(rl.at, "named lifetime is not supported; only 'static is allowed");
+        return ParseTypeResult { p: q, ty: ast.TypeName { parts: Vec(), args: Vec() } };
+      }
     }
     if kind_is(peek_kind(q), lex.TokenKind.KwMut) {
       let ar2: AdvanceResult = advance(q); // mut
@@ -506,7 +559,7 @@ fn parse_type_name(p: Parser) -> ParseTypeResult {
   parts.push(r0.name);
   while kind_is(peek_kind(q), lex.TokenKind.Dot) && !q.has_err {
     let ar1: AdvanceResult = advance(q);
-    let r2: ParseIdentResult = parse_ident(ar1.p);
+    let r2: ParseIdentResult = parse_name_ref_segment(ar1.p);
     q = r2.p;
     parts.push(r2.name);
   }
@@ -2069,12 +2122,12 @@ fn parse_where_bounds(p: Parser) -> ParseWhereBoundsResult {
           return ParseWhereBoundsResult { p: qerr_name, tpbs: out, cwbs: cwbs };
         }
         let ar_l: AdvanceResult = expect(qlhs, lex.TokenKind.LParen);
-        let rtp: ParseIdentResult = parse_ident(ar_l.p);
+        let rtp: ParseNameRefResult = parse_name_ref(ar_l.p);
         let ar_r: AdvanceResult = expect(rtp.p, lex.TokenKind.RParen);
         qlhs = ar_r.p;
         lhs_name = rtp.name;
       } else {
-        let r1: ParseIdentResult = parse_ident(qlhs);
+        let r1: ParseNameRefResult = parse_name_ref(qlhs);
         qlhs = r1.p;
         lhs_name = r1.name;
       }
@@ -2130,7 +2183,7 @@ fn parse_where_bounds(p: Parser) -> ParseWhereBoundsResult {
           return ParseWhereBoundsResult { p: qerr_name0, tpbs: out, cwbs: cwbs };
         }
         let ar_rhs_l: AdvanceResult = expect(qrhs0, lex.TokenKind.LParen);
-        let rr_tp: ParseIdentResult = parse_ident(ar_rhs_l.p);
+        let rr_tp: ParseNameRefResult = parse_name_ref(ar_rhs_l.p);
         let ar_rhs_r: AdvanceResult = expect(rr_tp.p, lex.TokenKind.RParen);
         qrhs = ar_rhs_r.p;
         let rhs_text: String = cw_reflect_text(rhs_kind, rr_tp.name);
@@ -2173,7 +2226,7 @@ fn parse_where_bounds(p: Parser) -> ParseWhereBoundsResult {
       }
       q = qrhs;
     } else {
-      let r1: ParseIdentResult = parse_ident(q);
+      let r1: ParseNameRefResult = parse_name_ref(q);
       q = r1.p;
       let ar2: AdvanceResult = expect(q, lex.TokenKind.Colon);
       q = ar2.p;

@@ -24,7 +24,7 @@
 说明：
 
 - Stage1 lexer 的 `Token` 不直接携带 `lexeme`，而是携带 `[start,end)` 的 byte offset。解析器需要通过 `source.slice(start, end)` 拉取 token 文本。
-- Stage0/Stage1/Stage2 当前仍使用 `String.slice(start, end) -> String` 作为子串基础操作；切片方向通过标准库 `std/string::StrView`（`owner + lo/hi`）补齐。Stage2 已支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法，但当前在类型层仍按 `T` 过渡语义处理。
+- Stage0/Stage1/Stage2 当前仍使用 `String.slice(start, end) -> String` 作为子串基础操作；切片方向通过标准库 `std/string::StrView`（`owner + lo/hi`）补齐。Stage2 已支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法，但当前在类型层仍按 `T` 过渡语义处理；命名 lifetime（`&'a T`）由 parser 直接拒绝；另外裸 `str` 已禁用，需使用 `String` 或 `&str`/`&'static str`。
 
 当前进度（实现状态以代码为准）：
 
@@ -83,7 +83,16 @@ Stage1/Stage2 的 C runtime 已从“扩容链式泄漏”收敛到共享存储�
 Stage2 补充（在不引入语言级 drop 的前提下）：
 
 - C runtime 增加了“运行时分配跟踪 + `atexit` 清理”机制：`vox_vec` backing storage、字符串运行时结果（`slice/concat/to_string` 等）和部分句柄分配会注册到跟踪表，并在进程退出时统一释放。
+- 目录遍历/路径辅助运行时（`mkdir_p`、`walk_vox_files`、`path_join2`）已统一使用 `vox_rt_malloc` 跟踪分配，不再混用裸 `malloc/free`。
+- 运行时新增 `vox_rt_free`（配合跟踪表移除）用于“可提前释放”的临时分配；`mkdir_p` 与目录遍历中不逃逸的路径缓冲已在使用后立即释放，降低长流程工具命令的峰值内存。
 - 该机制只解决“进程生命周期内累计泄漏”问题，不改变值语义；容器共享 backing storage、浅拷贝行为与当前 type system 约束保持不变。
+- `std/sync` 新增显式释放路径：`mutex_drop/atomic_drop`（对应低层 `__mutex_*_drop/__atomic_*_drop`），可在长流程工具中提前释放句柄分配；不改变当前值语义与浅拷贝语义。
+- `vox_rt_free` 改为“仅释放 tracked 指针”：若指针未被跟踪或已释放则直接忽略，避免在当前值拷贝/共享句柄语义下重复显式 drop 导致 double-free。
+- `std/sync` 句柄增加运行时活性表（`vox_sync_handle_add/live/remove`）：`load/store/fetch/swap` 对已 drop 或无效句柄会明确 panic，`drop` 走 remove 门控后再释放，实现幂等 drop；活性表节点也走 `vox_rt_malloc/vox_rt_free`，避免未 drop 句柄路径下的注册表泄漏。
+- `std/string` 与 `std/collections`（含 `Map`）增加显式 `Release` 基线：`release(String)`/`release_vec(Vec[T])`/`Map.release()` 返回空值并断开当前值；在当前浅拷贝模型下不做共享 backing storage 的物理回收，以保证别名路径无 UAF（幂等、安全）。
+- typecheck 已补充最小误用防护：`release` 相关调用若作为裸表达式语句会报错（`release call result must be assigned back`），要求调用方显式重绑定返回值。
+- typecheck 进一步补充最小 moved 诊断：被 `release` 消耗的局部变量后续读取会报错（`use of moved value: <name>`）；`x = release(x)` 作为自重绑定路径保持可用。
+- moved 状态已做最小控制流传播：`if/while` 与普通语句块会把 release 产生的 moved 标记同步到外层作用域（当前为保守策略，优先 no-UAF）。
 
 当前补充：
 
@@ -94,4 +103,4 @@ Stage2 补充（在不引入语言级 drop 的前提下）：
 3. 类型反射 intrinsic：已支持 `@size_of/@align_of/@type/@type_name/@field_count/@field_name/@field_type/@field_type_id/@same_type/@assignable_to/@castable_to/@eq_comparable_with/@ordered_with/@same_layout/@bitcastable` 以及 `@is_integer/@is_signed_int/@is_unsigned_int/@is_float/@is_bool/@is_string/@is_struct/@is_enum/@is_vec/@is_range/@is_eq_comparable/@is_ordered/@is_unit/@is_numeric/@is_zero_sized`，并在 const 与 IR lowering 阶段常量折叠。
 4. stdlib 基座：`std/sync` 已统一为泛型句柄 API（`Mutex[T]/Atomic[T]`，当前由 `SyncScalar` 约束覆盖 `i32/i64`）；`std/io` 网络最小 TCP API（`net_connect/net_send/net_recv/net_close`）在解释器与 C 后端可用。
 5. 诊断定位：AST 顶层声明已携带 `Span`，typecheck/irgen 的声明级错误与 `missing return` 已优先输出真实 `file:line:col`。
-6. 自举兼容约束（当前实例）：`std/collections/map.vox` 在 Stage2 源码中采用 bootstrap-safe 实现（避免 `Vec.set/remove/insert` 与局部 `Map[K,V]` let 注解），以保证 `stage1 -> stage2` 链路稳定。退出条件：Stage1 补齐对应语义后，切回更直接实现并删除兼容层，同时保持 `make test-stage2-tests` 绿灯。
+6. 自举兼容约束（已收敛）：`std/collections/map.vox` 已退出 bootstrap-safe 退化实现，改为直接使用 `Vec.set/remove/clear` 的常规路径；`stage1 -> stage2` 链路保持通过（见 `make test-stage2-tests` 门禁）。

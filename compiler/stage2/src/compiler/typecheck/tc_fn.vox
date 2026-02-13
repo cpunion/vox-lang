@@ -1,6 +1,11 @@
 import "compiler/ast" as ast
 import "compiler/ir" as ir
 
+fn has_prefix_tc_fn(s: String, pre: String) -> bool {
+  if s.len() < pre.len() { return false; }
+  return s.slice(0, pre.len()) == pre;
+}
+
 fn find_param_ty_idx_fn_body(ctx: Ctx, name: String) -> i32 {
   let mut i: i32 = 0;
   while i < ctx.pool.tys.len() {
@@ -73,6 +78,7 @@ fn remap_sig_for_body(ctx: Ctx, sig: FuncSig, src_method_tps: Vec[String]) -> Fu
 
   return FuncSig {
     params: out_params,
+    param_borrow_kinds: sig.param_borrow_kinds,
     ret: out_ret,
     has_variadic: sig.has_variadic,
     variadic_elem: out_variadic_elem,
@@ -151,7 +157,8 @@ fn tc_block(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.Expr
     i = i + 1;
   }
   l = locals_exit(l);
-  return TcStmtResult { ok: true, err: TcError.None, ctx: c, locals: l0 };
+  let l1: Locals = locals_sync_moved(l0, l);
+  return TcStmtResult { ok: true, err: TcError.None, ctx: c, locals: l1 };
 }
 
 fn tc_stmt(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, st: ast.Stmt) -> TcStmtResult {
@@ -190,10 +197,55 @@ fn tc_stmt(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprP
   };
 }
 
+struct LetInitPlaceResult { ok: bool, mutable: bool }
+
+fn expr_let_init_place(exprs: ast.ExprPool, l0: Locals, expr_id: i32) -> LetInitPlaceResult {
+  let mut cur: i32 = expr_id;
+  while true {
+    let n: ast.ExprNode = ast.expr_pool_get(exprs, cur);
+    if match n { ast.ExprNode.Ident(_s) => true, _ => false } {
+      let name: String = match n { ast.ExprNode.Ident(s) => s, _ => "" };
+      let vr: LookupVarResult = locals_lookup(l0, name);
+      if !vr.found { return LetInitPlaceResult { ok: false, mutable: false }; }
+      return LetInitPlaceResult { ok: true, mutable: vr.mutable };
+    }
+    if match n { ast.ExprNode.Member(r, _name) => true, _ => false } {
+      cur = match n { ast.ExprNode.Member(r, _name) => r, _ => -1 };
+      continue;
+    }
+    return LetInitPlaceResult { ok: false, mutable: false };
+  }
+  return LetInitPlaceResult { ok: false, mutable: false };
+}
+
+fn check_let_borrow_init(exprs: ast.ExprPool, l0: Locals, ann: ast.TypeName, init: i32) -> TcError {
+  let bk: i32 = tn_param_borrow_kind(ann);
+  if bk == param_borrow_none() || bk == param_borrow_ref_static() { return TcError.None; }
+
+  let pr: LetInitPlaceResult = expr_let_init_place(exprs, l0, init);
+  let isp: ast.Span = ast.expr_pool_span(exprs, init);
+
+  if bk == param_borrow_ref() {
+    if !pr.ok { return type_error_at(isp, "let init for & annotation must be place"); }
+    return TcError.None;
+  }
+
+  if param_borrow_is_mut(bk) {
+    if !pr.ok { return type_error_at(isp, "let init for &mut annotation must be mutable place"); }
+    if !pr.mutable { return type_error_at(isp, "let init for &mut annotation is immutable"); }
+    return TcError.None;
+  }
+
+  return TcError.None;
+}
+
 fn tc_stmt_let(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, mutable: bool, name: String, has_ann: bool, ann: ast.TypeName, init: i32) -> TcStmtResult {
   let mut c: Ctx = ctx;
   let mut expected: i32 = -1;
   if has_ann {
+    if !tn_nonstatic_borrow_allowed_local_type(ann) {
+      return TcStmtResult { ok: false, err: type_error_at(sp, "non-static borrowed type in let annotation must be top-level &T or &mut T"), ctx: c, locals: l0 };
+    }
     let rr: ResolveTyResult = resolve_type(c, w, mod_path, imps, l0.type_params, ann);
     c = rr.ctx;
     if !rr.ok {
@@ -202,6 +254,10 @@ fn tc_stmt_let(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
     }
     expected = rr.idx;
   }
+  if has_ann {
+    let berr: TcError = check_let_borrow_init(exprs, l0, ann, init);
+    if berr != TcError.None { return TcStmtResult { ok: false, err: berr, ctx: c, locals: l0 }; }
+  }
   let er: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l0, init, expected);
   if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: c, locals: l0 }; }
   let mut final_ty: i32 = er.ty;
@@ -209,7 +265,10 @@ fn tc_stmt_let(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
     final_ty = expected;
     if !assignable_to(c, final_ty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, init), "let init type mismatch"), ctx: c, locals: l0 }; }
   }
-  let l1: Locals = locals_decl(l0, name, final_ty, mutable);
+  let rm: ReleaseMoveSourceResult = release_move_source(c, l0, imps, exprs, init);
+  let mut lbase: Locals = l0;
+  if rm.found { lbase = locals_mark_moved(lbase, rm.name); }
+  let l1: Locals = locals_decl(lbase, name, final_ty, mutable);
   return TcStmtResult { ok: true, err: TcError.None, ctx: c, locals: l1 };
 }
 
@@ -220,12 +279,16 @@ fn tc_stmt_assign(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, rhs, vr.ty);
   if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
   if !assignable_to(ctx, vr.ty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "assign type mismatch"), ctx: ctx, locals: l0 }; }
-  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+  let rm: ReleaseMoveSourceResult = release_move_source(ctx, l0, imps, exprs, rhs);
+  let mut l1: Locals = locals_clear_moved(l0, name);
+  if rm.found && rm.name != name { l1 = locals_mark_moved(l1, rm.name); }
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l1 };
 }
 
 fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, recv: String, field: String, rhs: i32) -> TcStmtResult {
   let vr: LookupVarResult = locals_lookup(l0, recv);
   if !vr.found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown var"), ctx: ctx, locals: l0 }; }
+  if vr.moved { return TcStmtResult { ok: false, err: type_error_at(sp, "assign to field of moved var"), ctx: ctx, locals: l0 }; }
   if !vr.mutable { return TcStmtResult { ok: false, err: type_error_at(sp, "assign to immutable var"), ctx: ctx, locals: l0 }; }
 
   let parts: Vec[String] = split_field_path(field);
@@ -267,10 +330,156 @@ fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exp
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
 }
 
-fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, _sp: ast.Span, eid: i32) -> TcStmtResult {
+struct ReleaseMoveSourceResult { found: bool, name: String }
+
+fn expr_ident_name(exprs: ast.ExprPool, eid: i32) -> String {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
+  return match n { ast.ExprNode.Ident(name) => name, _ => "" };
+}
+
+fn is_release_track_ty(ctx: Ctx, ty0: i32) -> bool {
+  let ty: i32 = strip_range(ctx, ty0);
+  if ty == ctx.ty_string || is_vec_ty(ctx, ty) { return true; }
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Struct && t.mod_path == "std/collections" && has_prefix_tc_fn(t.name, "Map") { return true; }
+  return false;
+}
+
+fn release_move_source(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, eid: i32) -> ReleaseMoveSourceResult {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
+  if !match n { ast.ExprNode.Call(_c, _t, _a) => true, _ => false } {
+    return ReleaseMoveSourceResult { found: false, name: "" };
+  }
+
+  let callee: i32 = match n { ast.ExprNode.Call(c, _t, _a) => c, _ => -1 };
+  let args: Vec[i32] = match n { ast.ExprNode.Call(_c, _t, a) => a, _ => Vec() };
+  let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+
+  if match cn { ast.ExprNode.Ident(name) => name == "release" || name == "release_vec", _ => false } {
+    if args.len() == 1 {
+      let src: String = expr_ident_name(exprs, args.get(0));
+      if src != "" {
+        let vr: LookupVarResult = locals_lookup(l0, src);
+        if vr.found && is_release_track_ty(ctx, vr.ty) { return ReleaseMoveSourceResult { found: true, name: src }; }
+      }
+    }
+    return ReleaseMoveSourceResult { found: false, name: "" };
+  }
+
+  if match cn { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+    let recv: i32 = match cn { ast.ExprNode.Member(r, _name) => r, _ => -1 };
+    let mname: String = match cn { ast.ExprNode.Member(_r, name) => name, _ => "" };
+    let rn: ast.ExprNode = ast.expr_pool_get(exprs, recv);
+
+    if mname == "release" && args.len() == 0 && match rn { ast.ExprNode.Ident(_s) => true, _ => false } {
+      let src0: String = match rn { ast.ExprNode.Ident(s) => s, _ => "" };
+      let vr0: LookupVarResult = locals_lookup(l0, src0);
+      if vr0.found && is_release_track_ty(ctx, vr0.ty) { return ReleaseMoveSourceResult { found: true, name: src0 }; }
+    }
+
+    if match rn { ast.ExprNode.Ident(alias) => true, _ => false } {
+      let alias: String = match rn { ast.ExprNode.Ident(s) => s, _ => "" };
+      let p: String = find_import_alias_path(imps, alias);
+      let ok_mod_fn: bool =
+        (p == "std/string" && mname == "release") ||
+        (p == "std/collections" && (mname == "release" || mname == "release_vec"));
+      if ok_mod_fn && args.len() == 1 {
+        let src1: String = expr_ident_name(exprs, args.get(0));
+        if src1 != "" {
+          let vr1: LookupVarResult = locals_lookup(l0, src1);
+          if vr1.found && is_release_track_ty(ctx, vr1.ty) { return ReleaseMoveSourceResult { found: true, name: src1 }; }
+        }
+      }
+    }
+  }
+
+  return ReleaseMoveSourceResult { found: false, name: "" };
+}
+
+fn find_import_alias_path(imps: Imports, alias: String) -> String {
+  let mut i: i32 = 0;
+  while i < imps.aliases.len() {
+    let a: ImportAlias = imps.aliases.get(i);
+    if a.alias == alias { return a.path; }
+    i = i + 1;
+  }
+  return "";
+}
+
+fn is_std_release_module_call(imps: Imports, exprs: ast.ExprPool, callee: i32) -> bool {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+  if match n { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+    let recv: i32 = match n { ast.ExprNode.Member(r, _name) => r, _ => -1 };
+    let name: String = match n { ast.ExprNode.Member(_r, s) => s, _ => "" };
+    let rn: ast.ExprNode = ast.expr_pool_get(exprs, recv);
+    if match rn { ast.ExprNode.Ident(_alias) => true, _ => false } {
+      let alias: String = match rn { ast.ExprNode.Ident(s) => s, _ => "" };
+      let p: String = find_import_alias_path(imps, alias);
+      if p == "std/string" && name == "release" { return true; }
+      if p == "std/collections" && (name == "release_vec" || name == "release") { return true; }
+    }
+    return false;
+  }
+  if match n { ast.ExprNode.Ident(name) => name == "release_vec", _ => false } { return true; }
+  return false;
+}
+
+fn is_release_call_expr(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, eid: i32) -> bool {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
+  if match n { ast.ExprNode.Call(callee, _type_args, _args) => is_std_release_module_call(imps, exprs, callee), _ => false } {
+    return true;
+  }
+  let rm: ReleaseMoveSourceResult = release_move_source(ctx, l0, imps, exprs, eid);
+  return rm.found;
+}
+
+fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, eid: i32) -> TcStmtResult {
   let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, eid, -1);
   if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
+  if er.ty != ctx.ty_unit && is_release_call_expr(ctx, l0, imps, exprs, eid) {
+    return TcStmtResult { ok: false, err: type_error_at(sp, "release call result must be assigned back"), ctx: ctx, locals: l0 };
+  }
   return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+}
+
+fn locals_join_if_moved(l0: Locals, then_in: Locals, has_else: bool, else_in: Locals) -> Locals {
+  let then_l: Locals = locals_exit(then_in);
+  let else_l: Locals = if has_else { locals_exit(else_in) } else { l0 };
+
+  let mut out: Locals = l0;
+  let mut i: i32 = 0;
+  while i < out.vars.len() {
+    let v: VarEntry = out.vars.get(i);
+    if v.depth <= out.depth {
+      let tv: LookupVarResult = locals_lookup(then_l, v.name);
+      let ev: LookupVarResult = locals_lookup(else_l, v.name);
+      let moved: bool =
+        if has_else {
+          (tv.found && tv.moved) || (ev.found && ev.moved)
+        } else {
+          v.moved || (tv.found && tv.moved)
+        };
+      out = locals_set_moved_at(out, i, moved);
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn locals_join_while_moved(l0: Locals, body_in: Locals) -> Locals {
+  let body_l: Locals = locals_exit(body_in);
+  let mut out: Locals = l0;
+  let mut i: i32 = 0;
+  while i < out.vars.len() {
+    let v: VarEntry = out.vars.get(i);
+    if v.depth <= out.depth {
+      let bv: LookupVarResult = locals_lookup(body_l, v.name);
+      let moved: bool = v.moved || (bv.found && bv.moved);
+      out = locals_set_moved_at(out, i, moved);
+    }
+    i = i + 1;
+  }
+  return out;
 }
 
 fn tc_stmt_if(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, _sp: ast.Span, cond: i32, then_b: ast.Block, has_else: bool, else_b: ast.Block) -> TcStmtResult {
@@ -280,11 +489,15 @@ fn tc_stmt_if(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.Ex
 
   let r1: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, locals_enter(l0), ret_ty, then_b);
   if !r1.ok { return r1; }
+  let mut out: Locals = l0;
   if has_else {
     let r2: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, locals_enter(l0), ret_ty, else_b);
     if !r2.ok { return r2; }
+    out = locals_join_if_moved(l0, r1.locals, true, r2.locals);
+  } else {
+    out = locals_join_if_moved(l0, r1.locals, false, l0);
   }
-  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: out };
 }
 
 fn tc_stmt_while(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, _sp: ast.Span, cond: i32, body: ast.Block) -> TcStmtResult {
@@ -295,7 +508,8 @@ fn tc_stmt_while(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast
   lb.loop_depth = lb.loop_depth + 1;
   let r1: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, lb, ret_ty, body);
   if !r1.ok { return r1; }
-  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+  let out: Locals = locals_join_while_moved(l0, r1.locals);
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: out };
 }
 
 fn tc_stmt_return(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, sp: ast.Span, has: bool, eid: i32) -> TcStmtResult {
