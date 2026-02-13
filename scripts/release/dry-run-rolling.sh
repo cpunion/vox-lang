@@ -74,5 +74,7 @@ export VOX_BOOTSTRAP="$BOOTSTRAP_BIN"
 "$ROOT/scripts/release/build-release-bundle.sh" "$VERSION"
 "$ROOT/scripts/release/smoke-toolchains.sh"
 "$ROOT/scripts/release/verify-release-bundle.sh" "$VERSION"
+"$ROOT/scripts/release/build-source-bundle.sh" "$VERSION"
+"$ROOT/scripts/release/verify-source-bundle.sh" "$VERSION"
 
 echo "[dry-run] release rolling bootstrap gate passed for version=$VERSION"

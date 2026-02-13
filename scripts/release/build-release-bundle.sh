@@ -14,6 +14,11 @@ if [[ $# -ne 1 ]]; then
 fi
 
 VERSION="$1"
+VERSION_CORE="$VERSION"
+if [[ "$VERSION_CORE" == v* ]]; then
+  VERSION_CORE="${VERSION_CORE#v}"
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIST_DIR="${DIST_DIR:-$ROOT/dist}"
 
@@ -151,6 +156,28 @@ sha256_file() {
   fi
   shasum -a 256 "$src" > "$out"
 }
+
+BUILDINFO_FILE="$ROOT/src/vox/buildinfo/buildinfo.vox"
+BUILDINFO_BACKUP="$(mktemp "${TMPDIR:-/tmp}/vox-buildinfo-backup.XXXXXX")"
+cp "$BUILDINFO_FILE" "$BUILDINFO_BACKUP"
+cleanup_buildinfo() {
+  if [[ -f "$BUILDINFO_BACKUP" ]]; then
+    cp "$BUILDINFO_BACKUP" "$BUILDINFO_FILE"
+    rm -f "$BUILDINFO_BACKUP"
+  fi
+}
+trap cleanup_buildinfo EXIT
+
+cat > "$BUILDINFO_FILE" <<EOF_BUILDINFO
+// Build metadata embedded in the compiler executable.
+// Default channel is "dev" for repository builds; release scripts override this file.
+
+pub const VERSION: String = "$VERSION_CORE";
+pub const CHANNEL: String = "release";
+
+pub fn version() -> String { return VERSION; }
+pub fn channel() -> String { return CHANNEL; }
+EOF_BUILDINFO
 
 mkdir -p "$DIST_DIR"
 bootstrap_cc_env

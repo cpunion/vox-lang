@@ -1663,17 +1663,87 @@ fn is_version_cmd(cmd: String) -> bool {
   return cmd == "version" || cmd == "--version" || cmd == "-V";
 }
 
+fn normalize_cli_version(v0: String) -> String {
+  let v: String = trim_space_main(v0);
+  if v == "" { return ""; }
+  if v.len() > 1 && v.byte_at(0) == 118 { return v.slice(1, v.len()); } // 'v'
+  return v;
+}
+
 fn embedded_version() -> String {
-  return trim_space_main(bi.version());
+  return normalize_cli_version(bi.version());
+}
+
+fn embedded_channel() -> String {
+  return trim_space_main(bi.channel());
+}
+
+fn build_version_override() -> String {
+  return normalize_cli_version(proc.getenv("VOX_BUILD_VERSION"));
+}
+
+fn run_git_capture(root: String, suffix: String, subcmd: String) -> String {
+  if !fs.exists(path_join(root, ".git")) { return ""; }
+  fs.mkdir_p("target/debug");
+  let out: String = path_join("target/debug", ".vox_git_".concat(suffix));
+  let cmd: String = "git -C ".concat(shell_quote(root)).concat(" ").concat(subcmd).concat(" > ").concat(shell_quote(out)).concat(" 2>&1");
+  if proc.exec(cmd) != 0 { return ""; }
+  return trim_space_main(fs.read_to_string(out));
+}
+
+fn git_head_short(root: String) -> String {
+  return run_git_capture(root, "head_short", "rev-parse --short=12 HEAD");
+}
+
+fn git_dirty(root: String) -> bool {
+  let s: String = run_git_capture(root, "status_porcelain", "status --porcelain");
+  return s != "";
+}
+
+fn git_count_since_base_tag(root: String, base: String) -> String {
+  if base == "" { return ""; }
+  let tag: String = "v".concat(base);
+  return run_git_capture(root, "count_since_tag", "rev-list --count ".concat(shell_quote(tag).concat("..HEAD")));
+}
+
+fn git_count_total(root: String) -> String {
+  return run_git_capture(root, "count_total", "rev-list --count HEAD");
+}
+
+fn git_exact_base_tag(root: String, base: String) -> bool {
+  if base == "" { return false; }
+  let tag: String = "v".concat(base);
+  let got: String = run_git_capture(root, "exact_tag", "describe --tags --exact-match --match ".concat(shell_quote(tag)));
+  return got == tag;
+}
+
+fn resolve_cli_version() -> String {
+  let override: String = build_version_override();
+  if override != "" { return override; }
+
+  let base0: String = embedded_version();
+  let base: String = if base0 != "" { base0 } else { "0.0.0" };
+  let root: String = stage1_root();
+  let sha: String = git_head_short(root);
+  if sha != "" {
+    let dirty: bool = git_dirty(root);
+    if !dirty && git_exact_base_tag(root, base) { return base; }
+
+    let mut n: String = git_count_since_base_tag(root, base);
+    if n == "" { n = git_count_total(root); }
+    if n == "" { n = "0"; }
+
+    if dirty { return base.concat("-dirty-").concat(n).concat("+g").concat(sha); }
+    return base.concat("-").concat(n).concat("+g").concat(sha);
+  }
+
+  if embedded_channel() == "release" { return base; }
+  if base != "" { return base.concat("+src"); }
+  return "unknown";
 }
 
 fn print_version() -> () {
-  let v: String = embedded_version();
-  if v == "" {
-    print("vox unknown\n");
-    return;
-  }
-  print("vox ".concat(v).concat("\n"));
+  print("vox ".concat(resolve_cli_version()).concat("\n"));
 }
 
 fn main() -> i32 {

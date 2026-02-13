@@ -9,21 +9,28 @@
 
 ## 1. 发布产物
 
-每个版本发布以下平台包：
+每个版本发布以下二进制平台包：
 
 - `vox-lang-<version>-linux-amd64.tar.gz`
 - `vox-lang-<version>-darwin-amd64.tar.gz`
 - `vox-lang-<version>-windows-amd64.tar.gz`
 
-每个包包含：
+并额外发布自制源码包：
+
+- `vox-lang-src-<version>.tar.gz`
+
+二进制平台包包含：
 
 - `bin/vox[.exe]`
 - `VERSION`
 - `BOOTSTRAP_MODE`（必须为 `rolling`）
 
+源码包包含仓库源码（不含 `.git`），并将 `src/vox/buildinfo/buildinfo.vox` 固定为 release 通道。
+
 并发布对应校验文件：
 
 - `vox-lang-<version>-<platform>.tar.gz.sha256`
+- `vox-lang-src-<version>.tar.gz.sha256`
 
 ## 2. 构建链路
 
@@ -72,6 +79,7 @@ CI 步骤：
 4. `scripts/release/verify-release-bundle.sh` 对每个平台产物验证通过。
 5. tag 发布时上传全量资产到 GitHub Release。
 6. 产物内 `bin/vox[.exe] version` 可输出内嵌版本号。
+7. 自制源码包 `vox-lang-src-<version>.tar.gz` 与其 `.sha256` 产出并通过校验。
 
 ## 6. 锁版本维护流程
 
@@ -95,8 +103,14 @@ make release-dry-run VERSION=v0.2.0-rc1
 ./scripts/release/dry-run-rolling.sh v0.2.0-rc1
 ```
 
-只做产物结构校验：
+只校验二进制包：
 
 ```bash
 make release-verify VERSION=v0.2.0-rc1
+```
+
+校验源码包：
+
+```bash
+make release-source-verify VERSION=v0.2.0-rc1
 ```

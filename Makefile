@@ -1,5 +1,6 @@
 .PHONY: fmt test test-rolling test-selfhost-build test-selfhost-smoke test-public-api test-p0p1 \
-	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run
+	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run \
+	release-source-bundle release-source-verify
 
 fmt:
 	@echo "[fmt] no formatter configured for .vox yet"
@@ -67,6 +68,24 @@ release-verify:
 		exit 1; \
 	fi
 	./scripts/release/verify-release-bundle.sh $(VERSION)
+
+# Build local release source bundle.
+# Usage: make release-source-bundle VERSION=v0.2.0
+release-source-bundle:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "usage: make release-source-bundle VERSION=v0.2.0"; \
+		exit 1; \
+	fi
+	./scripts/release/build-source-bundle.sh $(VERSION)
+
+# Verify local release source bundle.
+# Usage: make release-source-verify VERSION=v0.2.0
+release-source-verify:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "usage: make release-source-verify VERSION=v0.2.0"; \
+		exit 1; \
+	fi
+	./scripts/release/verify-source-bundle.sh $(VERSION)
 
 # Local rolling bootstrap rehearsal (build bundle + smoke + verify).
 # Usage: make release-dry-run VERSION=v0.2.0-rc1
