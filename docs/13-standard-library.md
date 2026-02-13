@@ -24,20 +24,20 @@
     - `String` 参数版本：`starts_with`、`ends_with`、`contains`、`index_of`、`last_index_of`、`equals`、`compare`
     - `StrView` 参数版本：`starts_with_view`、`ends_with_view`、`contains_view`、`index_of_view`、`last_index_of_view`、`equals_view`、`compare_view`
   - 语言层当前不支持裸 `str`（会报错）；请使用 `String`（拥有）或 `&str`/`&'static str`（借用）。同时支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法（当前过渡语义映射到 `T`，`&'a T` 这类命名 lifetime 在 parser 阶段拒绝）。
-  - 显式释放基线：`release(s: String) -> String`，返回空字符串并断开当前值（不触发别名 UAF）。该调用必须接收返回值（例如 `s = release(s)`），裸表达式语句会报错。
+  - 显式释放基线：`release(s: String) -> String`，返回空字符串并断开当前值（不触发别名 UAF）。该调用必须接收返回值（例如 `s = release(s)`），裸表达式语句会报错；被释放变量后续读取会报 `use of moved value`（除非先重绑定）。
 - `std::collections` 已提供 `Slice[T]`（拥有型 `Vec[T]` 视图）。
   - 基础 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`get`、`to_vec`。
   - view-first 子切片 API（推荐）：`take_prefix`、`take_suffix`、`drop_prefix`、`drop_suffix`。
   - 查找与匹配 API：`contains`、`index_of`、`last_index_of`、`starts_with`、`ends_with`、`contains_slice`、`index_of_slice`、`last_index_of_slice`（相关 API 需要 `T: Eq`）。
   - 比较 API：`equals`/`equals_vec`（`T: Eq`）、`compare`/`compare_vec`（`T: Ord`）。
-  - 显式释放基线：`release_vec[T](v: Vec[T]) -> Vec[T]`，返回新的空 `Vec`，不释放共享底层存储（避免别名 UAF）。该调用必须接收返回值。
+  - 显式释放基线：`release_vec[T](v: Vec[T]) -> Vec[T]`，返回新的空 `Vec`，不释放共享底层存储（避免别名 UAF）。该调用必须接收返回值；被释放变量后续读取会报 `use of moved value`（除非先重绑定）。
 - `std::collections` 还提供最小泛型 `Map[K,V]`（线性实现）：
   - 构造函数：`map[K,V]()`
   - inherent impl（`impl[K: Eq, V] Map[K,V]`）方法：
     - `len`、`is_empty`、`index_of_key`、`contains_key`
     - `get`、`get_or`（缺失键时返回调用方提供的 fallback）
     - `keys`、`values`（按当前存储顺序返回拷贝）
-    - `set`（存在则覆盖，不存在则插入）、`remove`、`clear`、`release`（需接收返回值）
+    - `set`（存在则覆盖，不存在则插入）、`remove`、`clear`、`release`（需接收返回值，释放后旧变量读取会报 `use of moved value`）
   - 其中键比较相关 API 需要 `K: Eq`。
   - 另外提供 `impl[K: Eq + Clone, V: Clone] Clone for Map[K,V]`（深拷贝 keys/vals，不共享底层 Vec 存储）。
   - 另外提供 `impl[K: Eq, V] Release for Map[K,V]`（返回空 `Map`，显式断开当前值）。
