@@ -30,6 +30,7 @@ struct MacroSite {
   args: Vec[i32],
   sp: ast.Span,
   name: String,
+  stmt_pos: bool,
 }
 
 fn no_site() -> MacroSite {
@@ -42,6 +43,7 @@ fn no_site() -> MacroSite {
     args: Vec(),
     sp: ast.span0(),
     name: "",
+    stmt_pos: false,
   };
 }
 
@@ -54,7 +56,7 @@ fn find_macro_callee_name(exprs: ast.ExprPool, callee: i32) -> String {
   };
 }
 
-fn site_from_macro_call(exprs: ast.ExprPool, mod_idx: i32, expr_id: i32, callee: i32, targs: Vec[ast.TypeName], args: Vec[i32]) -> MacroSite {
+fn site_from_macro_call(exprs: ast.ExprPool, mod_idx: i32, expr_id: i32, callee: i32, targs: Vec[ast.TypeName], args: Vec[i32], stmt_pos: bool) -> MacroSite {
   let name: String = find_macro_callee_name(exprs, callee);
   return MacroSite {
     found: true,
@@ -65,6 +67,7 @@ fn site_from_macro_call(exprs: ast.ExprPool, mod_idx: i32, expr_id: i32, callee:
     args: args,
     sp: ast.expr_pool_span(exprs, expr_id),
     name: name,
+    stmt_pos: stmt_pos,
   };
 }
 
@@ -154,12 +157,23 @@ fn find_macro_site_in_match_expr(exprs: ast.ExprPool, mod_idx: i32, scrut: i32, 
   return no_site();
 }
 
+fn find_macro_site_in_expr_stmt(exprs: ast.ExprPool, mod_idx: i32, ex: i32) -> MacroSite {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, ex);
+  if match n { ast.ExprNode.MacroCall(_callee, _ta, _args) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.MacroCall(c, _ta, _args) => c, _ => -1 };
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.MacroCall(_c, ta, _args) => ta, _ => Vec() };
+    let args: Vec[i32] = match n { ast.ExprNode.MacroCall(_c, _ta, as0) => as0, _ => Vec() };
+    return site_from_macro_call(exprs, mod_idx, ex, callee, targs, args, true);
+  }
+  return find_macro_site_in_expr(exprs, mod_idx, ex);
+}
+
 fn find_macro_site_in_stmt(exprs: ast.ExprPool, mod_idx: i32, st: ast.Stmt) -> MacroSite {
   return match st {
     ast.Stmt.Let(_sp, _mut, _name, _has_ann, _ann, init) => find_macro_site_in_expr(exprs, mod_idx, init),
     ast.Stmt.Assign(_sp, _name, ex) => find_macro_site_in_expr(exprs, mod_idx, ex),
     ast.Stmt.AssignField(_sp, _recv, _field, ex) => find_macro_site_in_expr(exprs, mod_idx, ex),
-    ast.Stmt.ExprStmt(_sp, ex) => find_macro_site_in_expr(exprs, mod_idx, ex),
+    ast.Stmt.ExprStmt(_sp, ex) => find_macro_site_in_expr_stmt(exprs, mod_idx, ex),
     ast.Stmt.IfStmt(_sp, cond, then_b, has_else, else_b) => find_macro_site_in_if_stmt(exprs, mod_idx, cond, then_b, has_else, else_b),
     ast.Stmt.WhileStmt(_sp, cond, body) => find_macro_site_in_while_stmt(exprs, mod_idx, cond, body),
     ast.Stmt.Break(_sp) => no_site(),
@@ -184,7 +198,7 @@ fn find_macro_site_in_expr(exprs: ast.ExprPool, mod_idx: i32, id: i32) -> MacroS
     ast.ExprNode.Binary(_op, l, r) => find_macro_site_in_binary_expr(exprs, mod_idx, l, r),
     ast.ExprNode.Member(recv, _name) => find_macro_site_in_expr(exprs, mod_idx, recv),
     ast.ExprNode.Call(callee, _targs, args) => find_macro_site_in_call_expr(exprs, mod_idx, callee, args),
-    ast.ExprNode.MacroCall(callee, targs, args) => site_from_macro_call(exprs, mod_idx, id, callee, targs, args),
+    ast.ExprNode.MacroCall(callee, targs, args) => site_from_macro_call(exprs, mod_idx, id, callee, targs, args, false),
     ast.ExprNode.TryBlock(bid) => find_macro_site_in_expr(exprs, mod_idx, bid),
     ast.ExprNode.Try(a) => find_macro_site_in_expr(exprs, mod_idx, a),
     ast.ExprNode.StructLit(tyex, fields) => find_macro_site_in_struct_lit_expr(exprs, mod_idx, tyex, fields),
@@ -341,11 +355,24 @@ fn macro_exec_ret_type_name(tn: ast.TypeName) -> String {
   return "<non-ast>";
 }
 
-fn macro_exec_expr_site_error(sp: ast.Span, ret: ast.TypeName) -> tc.TcError {
+fn is_macro_exec_ret_allowed_for_site(ret: ast.TypeName, stmt_pos: bool) -> bool {
+  if !is_macro_exec_ret_type(ret) { return false; }
+  if stmt_pos {
+    return is_macro_exec_expr_ret_type(ret) || type_name_is_simple(ret, "AstStmt");
+  }
+  return is_macro_exec_expr_ret_type(ret);
+}
+
+fn macro_exec_site_expected_ret_text(stmt_pos: bool) -> String {
+  if stmt_pos { return "AstExpr or AstBlock or AstStmt"; }
+  return "AstExpr or AstBlock";
+}
+
+fn macro_exec_expr_site_error(sp: ast.Span, stmt_pos: bool, ret: ast.TypeName) -> tc.TcError {
   let got: String = macro_exec_ret_type_name(ret);
   return tc.tc_type_error_at(
     sp,
-    "expression macro call requires AstExpr or AstBlock return type; got ".concat(got));
+    "macro call requires ".concat(macro_exec_site_expected_ret_text(stmt_pos)).concat(" return type; got ").concat(got));
 }
 
 struct MacroExecFnRef {
@@ -619,8 +646,8 @@ fn compile_bang_try_lower_call_to_macro_call(w: tc.World, site: MacroSite, arg_n
   let callee_mod: tc.WorldModule = w.mods.get(callee_mod_idx);
   let fd: ast.FuncDecl = callee_mod.prog.funcs.get(fi);
   if !is_macro_exec_ret_type(fd.ret) { return compile_bang_arg_ok(arg_node); }
-  if !is_macro_exec_expr_ret_type(fd.ret) {
-    return compile_bang_arg_err(macro_exec_expr_site_error(site.sp, fd.ret));
+  if !is_macro_exec_ret_allowed_for_site(fd.ret, site.stmt_pos) {
+    return compile_bang_arg_err(macro_exec_expr_site_error(site.sp, site.stmt_pos, fd.ret));
   }
 
   return compile_bang_arg_ok(ast.ExprNode.MacroCall(callee, targs, args));
