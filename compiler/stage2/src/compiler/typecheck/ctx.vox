@@ -72,6 +72,7 @@ fn ty_eq(a: ir.Ty, b: ir.Ty) -> bool {
     ir.TyKind.F32 => match b.kind { ir.TyKind.F32 => true, _ => false },
     ir.TyKind.F64 => match b.kind { ir.TyKind.F64 => true, _ => false },
     ir.TyKind.String => match b.kind { ir.TyKind.String => true, _ => false },
+    ir.TyKind.Ref => match b.kind { ir.TyKind.Ref => a.elem == b.elem && a.lo == b.lo && a.hi == b.hi, _ => false },
     ir.TyKind.Param => match b.kind { ir.TyKind.Param => a.name == b.name, _ => false },
     ir.TyKind.Struct => match b.kind { ir.TyKind.Struct => a.mod_path == b.mod_path && a.name == b.name, _ => false },
     ir.TyKind.Enum => match b.kind { ir.TyKind.Enum => a.mod_path == b.mod_path && a.name == b.name, _ => false },
@@ -571,19 +572,28 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
   }
 
   // Reference syntax sugar lowering (stage2 transition):
-  // - `&T` / `&mut T` / `&'static T` / `&'static mut T` => T in IR type pool.
-  // - call-site borrow constraints are enforced separately via `param_borrow_kinds`
-  //   (mutable-place checks for `&mut`, place-root checks for non-static `&`).
+  // - `&T` / `&mut T` / `&'static T` / `&'static mut T` => `TyKind.Ref` in type pool.
+  // - call-site borrow constraints are still enforced by `param_borrow_kinds` for stage2 compatibility.
   // - named lifetimes (`&'a T`) are currently rejected.
   if tn.parts.len() == 1 && tn.args.len() == 1 {
     let tag: String = tn.parts.get(0);
     if tag == "@ref" || tag == "@ref_static" || tag == "@ref_mut" || tag == "@ref_static_mut" {
       let bt: ast.TypeName = tn.args.get(0);
-      if typename_is0(bt, "str") { return ResolveTyResult { ctx: c, ok: true, idx: c.ty_string }; }
-      let ir: ResolveTyResult = resolve_type_bound(c, w, cur_mod, imps, type_params, binds, bt);
-      c = ir.ctx;
-      if !ir.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
-      return ResolveTyResult { ctx: c, ok: true, idx: ir.idx };
+      let br: ResolveTyResult = if typename_is0(bt, "str") {
+        ResolveTyResult { ctx: c, ok: true, idx: c.ty_string }
+      } else {
+        resolve_type_bound(c, w, cur_mod, imps, type_params, binds, bt)
+      };
+      c = br.ctx;
+      if !br.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      let mut is_mut: bool = false;
+      let mut is_static: bool = false;
+      if tag == "@ref_mut" { is_mut = true; }
+      if tag == "@ref_static" { is_static = true; }
+      if tag == "@ref_static_mut" { is_mut = true; is_static = true; }
+      let ir0: InternResult = intern_ty(c, ir.ty_ref(br.idx, is_mut, is_static));
+      c = ir0.ctx;
+      return ResolveTyResult { ctx: c, ok: true, idx: ir0.idx };
     }
   }
   if tn.parts.len() == 1 && (tn.parts.get(0) == "@ref_lt" || tn.parts.get(0) == "@ref_lt_mut") && tn.args.len() == 1 {

@@ -40,6 +40,12 @@ IR v0 只定义 stage0 必需类型：
 - `struct(<qualified_name>)`（名义结构体类型）
 - `enum(<qualified_name>)`（名义枚举类型）
 
+Stage2（编译器内部类型池）补充说明：
+
+- typecheck 层新增 `TyKind.Ref` 表达借用形状（`&T/&mut T/&'static T/&'static mut T`）。
+- 当前 stage2 为保持自举稳定，在 irgen 输出 IR 之前会将 `Ref/Range` 擦除到底层类型；因此 IR v0 文本格式与后端仍保持本章定义。
+- 后续 `D06` 会继续推进“借用非擦除地穿透 IR/codegen”。
+
 说明（Stage0 实现策略）：
 
 - `enum` 在 stage0 C 后端降低为 tagged union：
