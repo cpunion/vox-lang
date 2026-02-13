@@ -6,15 +6,16 @@
 
 1. 单一入口名：统一使用 `vox/*`。
 2. 分层稳定性：公开层稳定，内部层允许重构。
-3. 数据结构优先：先稳定 AST/Token/IR 这类数据模型，再稳定完整 driver。
+3. 数据结构优先：先稳定位置系统/AST/Token/IR，再稳定完整 driver。
 4. 诊断一致性：所有层使用统一 span/diagnostic 语义。
 
 ## 2. 模块分层（当前与目标）
 
 ### 2.1 Stable（对外承诺兼容）
 
+- `vox/token`
 - `vox/ast`
-- `vox/lex`（含 token/lexer）
+- `vox/lex`（scanner/tokenize）
 - `vox/parse`
 - `vox/manifest`
 - `vox/ir`
@@ -34,17 +35,18 @@
 
 ### 2.3 Internal（后续逐步下沉）
 
-后续建议把仅供编译器自身使用的辅助逻辑收敛到 `vox/internal/*`，避免外部依赖内部实现细节。
+后续把仅供编译器自身使用的辅助逻辑收敛到 `vox/internal/*`，避免外部依赖内部实现细节。
 
 ## 3. 对齐 Go 风格的模块映射
 
-对照 Go 生态（`go/ast`、`go/parser`、`go/token`、`go/types`）：
+对照 Go 生态（`go/token`、`go/scanner`、`go/ast`、`go/parser`、`go/types`、`go list`）：
 
+- `vox/token` 对应 `go/token`
+- `vox/lex` 对应 `go/scanner`
 - `vox/ast` 对应 `go/ast`
-- `vox/lex` 对应 `go/token + go/scanner`
 - `vox/parse` 对应 `go/parser`
 - `vox/typecheck` 对应 `go/types`（当前为 Experimental）
-- `vox/manifest` 对应 `go/build` 的依赖/包清单侧能力
+- `vox/manifest` + 计划中的 `vox/list` 对应 `go/build` + `go list`
 
 ## 4. API 稳定性约定
 
@@ -56,7 +58,19 @@
 
 ## 5. 最小示例
 
-### 5.1 `vox/lex`
+### 5.1 `vox/token`
+
+```vox
+import "vox/token" as tok
+
+fn pos_text() -> String {
+  let ar: tok.AddFileResult = tok.file_set_add_file_from_text(tok.file_set(), "src/main.vox", "a\nb");
+  let p: tok.Position = tok.file_set_position(ar.fset, tok.file_set_pos(ar.fset, ar.file_idx, 2));
+  return tok.position_string(p); // src/main.vox:2:1
+}
+```
+
+### 5.2 `vox/lex`
 
 ```vox
 import "vox/lex" as lex
@@ -68,7 +82,7 @@ fn first_token_kind(src: String) -> String {
 }
 ```
 
-### 5.2 `vox/parse`
+### 5.3 `vox/parse`
 
 ```vox
 import "vox/parse" as p
@@ -80,7 +94,7 @@ fn fn_count(src: String) -> i32 {
 }
 ```
 
-### 5.3 `vox/manifest`
+### 5.4 `vox/manifest`
 
 ```vox
 import "vox/manifest" as mf
@@ -92,7 +106,7 @@ fn dep_count(text: String) -> i32 {
 }
 ```
 
-### 5.4 `vox/ir`
+### 5.5 `vox/ir`
 
 ```vox
 import "vox/ir" as ir
@@ -104,7 +118,7 @@ fn empty_ir_text() -> String {
 }
 ```
 
-### 5.5 `vox/ast`
+### 5.6 `vox/ast`
 
 ```vox
 import "vox/ast" as ast
@@ -118,5 +132,8 @@ fn default_span_line() -> i32 {
 ## 6. 当前落地状态
 
 1. [x] Stable 层最小示例：见本章第 5 节。
-2. [ ] Stable/Experimental 模块统一头注释（稳定性级别 + 迁移策略）。
-3. [x] `vox/*` 库级回归测试：`src/vox/public_api_contract_test.vox`。
+2. [x] `vox/*` 库级回归测试：`src/vox/public_api_contract_test.vox`。
+3. [x] `vox/token` 初版（`Pos + File + FileSet + Position`）。
+4. [x] `vox/internal/*` 首批下沉：`vox/internal/text`，并在 `vox/manifest` 中复用。
+5. [ ] Stable/Experimental 模块统一头注释（稳定性级别 + 迁移策略）。
+6. [ ] `vox/list`（go list 对标）：输出完整包依赖图（模块、导入边、可选 JSON）。

@@ -1,0 +1,154 @@
+// token positions and file sets (go/token style, simplified for Vox).
+
+pub struct File {
+  pub name: String,
+  pub base: i32,       // absolute position base; 0 is reserved for no_pos
+  pub size: i32,       // bytes
+  pub line_starts: Vec[i32], // byte offsets, always starts with 0
+}
+
+pub struct FileSet {
+  pub files: Vec[File],
+  pub next_base: i32,
+}
+
+pub struct Position {
+  pub filename: String,
+  pub offset: i32, // file-local byte offset
+  pub line: i32,   // 1-based; 0 when invalid/no_pos
+  pub col: i32,    // 1-based byte column; 0 when invalid/no_pos
+}
+
+pub struct AddFileResult {
+  pub fset: FileSet,
+  pub file_idx: i32,
+  pub file: File,
+}
+
+struct LineCol { line: i32, col: i32 }
+
+pub fn no_pos() -> i32 { return 0; }
+
+pub fn file_set() -> FileSet {
+  return FileSet { files: Vec(), next_base: 1 };
+}
+
+fn clamp_i32(x: i32, lo: i32, hi: i32) -> i32 {
+  if x < lo { return lo; }
+  if x > hi { return hi; }
+  return x;
+}
+
+fn new_file(name: String, base: i32, size: i32) -> File {
+  let mut ls: Vec[i32] = Vec();
+  ls.push(0);
+  return File { name: name, base: base, size: size, line_starts: ls };
+}
+
+pub fn file_set_add_file(fs: FileSet, name: String, size0: i32) -> AddFileResult {
+  let mut q: FileSet = fs;
+  let size: i32 = if size0 < 0 { 0 } else { size0 };
+  let f: File = new_file(name, q.next_base, size);
+  let idx: i32 = q.files.len();
+  q.files.push(f);
+  q.next_base = q.next_base + size + 1;
+  return AddFileResult { fset: q, file_idx: idx, file: f };
+}
+
+fn file_add_line(f0: File, off0: i32) -> File {
+  let mut f: File = f0;
+  let off: i32 = clamp_i32(off0, 0, f.size);
+  if off <= 0 { return f; }
+  let n: i32 = f.line_starts.len();
+  let last: i32 = f.line_starts.get(n - 1);
+  if off <= last { return f; }
+  f.line_starts.push(off);
+  return f;
+}
+
+pub fn file_set_add_line(fs0: FileSet, file_idx: i32, off: i32) -> FileSet {
+  let mut fs: FileSet = fs0;
+  if file_idx < 0 || file_idx >= fs.files.len() { return fs; }
+  let f0: File = fs.files.get(file_idx);
+  let f1: File = file_add_line(f0, off);
+  fs.files.set(file_idx, f1);
+  return fs;
+}
+
+pub fn file_set_add_file_from_text(fs0: FileSet, name: String, text: String) -> AddFileResult {
+  let ar: AddFileResult = file_set_add_file(fs0, name, text.len());
+  let mut fs: FileSet = ar.fset;
+  let mut f: File = ar.file;
+  let mut i: i32 = 0;
+  while i < text.len() {
+    if text.byte_at(i) == 10 { // '\n'
+      f = file_add_line(f, i + 1);
+    }
+    i = i + 1;
+  }
+  fs.files.set(ar.file_idx, f);
+  return AddFileResult { fset: fs, file_idx: ar.file_idx, file: f };
+}
+
+pub fn file_set_file(fs: FileSet, file_idx: i32) -> File {
+  if file_idx < 0 || file_idx >= fs.files.len() {
+    return new_file("", 0, 0);
+  }
+  return fs.files.get(file_idx);
+}
+
+pub fn file_set_pos(fs: FileSet, file_idx: i32, off0: i32) -> i32 {
+  let f: File = file_set_file(fs, file_idx);
+  if f.base == 0 { return no_pos(); }
+  let off: i32 = clamp_i32(off0, 0, f.size);
+  return f.base + off;
+}
+
+fn file_has_pos(f: File, pos: i32) -> bool {
+  if pos == no_pos() { return false; }
+  if f.base <= 0 { return false; }
+  return pos >= f.base && pos <= (f.base + f.size);
+}
+
+fn find_file_idx(fs: FileSet, pos: i32) -> i32 {
+  let mut i: i32 = 0;
+  while i < fs.files.len() {
+    if file_has_pos(fs.files.get(i), pos) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn line_col_for_off(f: File, off0: i32) -> LineCol {
+  let off: i32 = clamp_i32(off0, 0, f.size);
+  // Binary search last line_start <= off.
+  let mut lo: i32 = 0;
+  let mut hi: i32 = f.line_starts.len();
+  while lo + 1 < hi {
+    let mid: i32 = (lo + hi) / 2;
+    if f.line_starts.get(mid) <= off { lo = mid; } else { hi = mid; }
+  }
+  let line_start: i32 = f.line_starts.get(lo);
+  return LineCol { line: lo + 1, col: (off - line_start) + 1 };
+}
+
+pub fn file_set_position(fs: FileSet, pos: i32) -> Position {
+  if pos == no_pos() {
+    return Position { filename: "", offset: 0, line: 0, col: 0 };
+  }
+
+  let fi: i32 = find_file_idx(fs, pos);
+  if fi < 0 {
+    return Position { filename: "", offset: 0, line: 0, col: 0 };
+  }
+
+  let f: File = fs.files.get(fi);
+  let off: i32 = pos - f.base;
+  let lc: LineCol = line_col_for_off(f, off);
+  return Position { filename: f.name, offset: off, line: lc.line, col: lc.col };
+}
+
+pub fn position_string(p: Position) -> String {
+  if p.filename == "" { return "<invalid>:0:0"; }
+  return p.filename.concat(":").concat(p.line.to_string()).concat(":").concat(p.col.to_string());
+}
