@@ -22,6 +22,9 @@ vox toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
 ```bash
 make test-active   # rolling selfhost + test smoke
 make test          # test-active + examples smoke
+# or
+just test-active
+just test
 ```
 
 关键脚本：
@@ -32,12 +35,14 @@ make test          # test-active + examples smoke
 ## 发布与滚动自举
 
 - 唯一链路：`locked release compiler -> new compiler`
-- 锁文件：`scripts/release/bootstrap.lock`（将来会去掉历史命名）
+- 锁文件：`scripts/release/bootstrap.lock`
 - 本地演练：
 
 ```bash
 make release-dry-run VERSION=v0.2.0-rc1
+just release-dry-run v0.2.0-rc1
 make release-verify VERSION=v0.2.0-rc1
+just release-verify v0.2.0-rc1
 ```
 
 详见：`docs/24-release-process.md`。

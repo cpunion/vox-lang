@@ -19,7 +19,7 @@
 
 - `bin/vox[.exe]`
 - `VERSION`
-- `BOOTSTRAP_MODE`（必须为 `rolling`；兼容字面量由 release 脚本内部处理）
+- `BOOTSTRAP_MODE`（必须为 `rolling`）
 
 并发布对应校验文件：
 
@@ -85,17 +85,17 @@ CI 步骤：
 推荐执行：
 
 ```bash
-make release-dry-run VERSION=v0.1.0-rc1
+make release-dry-run VERSION=v0.2.0-rc1
 ```
 
 等价脚本：
 
 ```bash
-./scripts/release/dry-run-rolling.sh v0.1.0-rc1
+./scripts/release/dry-run-rolling.sh v0.2.0-rc1
 ```
 
 只做产物结构校验：
 
 ```bash
-make release-verify VERSION=v0.1.0-rc1
+make release-verify VERSION=v0.2.0-rc1
 ```

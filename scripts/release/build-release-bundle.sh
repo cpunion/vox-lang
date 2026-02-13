@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat >&2 <<USAGE
 usage: $(basename "$0") <version>
-example: $(basename "$0") v0.1.0
+example: $(basename "$0") v0.2.0
 USAGE
 }
 
@@ -110,14 +110,21 @@ resolve_bin() {
   return 1
 }
 
-pick_bootstrap_stage2() {
+pick_bootstrap() {
+  if [[ -n "${VOX_BOOTSTRAP:-}" && -f "${VOX_BOOTSTRAP}" ]]; then
+    printf '%s\n' "$VOX_BOOTSTRAP"
+    return 0
+  fi
   if [[ -n "${VOX_BOOTSTRAP_STAGE2:-}" && -f "${VOX_BOOTSTRAP_STAGE2}" ]]; then
     printf '%s\n' "$VOX_BOOTSTRAP_STAGE2"
     return 0
   fi
 
   local candidates=(
+    "$ROOT/target/bootstrap/vox_prev"
     "$ROOT/target/bootstrap/vox_stage2_prev"
+    "$ROOT/target/release/vox"
+    "$ROOT/target/debug/vox"
     "$ROOT/target/release/vox_stage2"
     "$ROOT/target/debug/vox_stage2"
     "$ROOT/target/debug/vox_stage2_b_tool"
@@ -152,48 +159,48 @@ if [[ -n "$CC_BASH" ]]; then
   echo "[release] bash CC command: $CC_BASH"
 fi
 
-STAGE2_BOOTSTRAP=""
-if ! STAGE2_BOOTSTRAP="$(pick_bootstrap_stage2)"; then
-  echo "[release] rolling bootstrap stage2 binary is required" >&2
-  echo "[release] set VOX_BOOTSTRAP_STAGE2 or prepare target/bootstrap/vox_stage2_prev" >&2
+BOOTSTRAP_BIN=""
+if ! BOOTSTRAP_BIN="$(pick_bootstrap)"; then
+  echo "[release] rolling bootstrap compiler binary is required" >&2
+  echo "[release] set VOX_BOOTSTRAP or prepare target/bootstrap/vox_prev" >&2
   exit 1
 fi
 
-BOOTSTRAP_MODE="rolling-stage2"
-echo "[release] stage2 bootstrap binary: $STAGE2_BOOTSTRAP"
+BOOTSTRAP_MODE="rolling"
+echo "[release] bootstrap compiler binary: $BOOTSTRAP_BIN"
 set +e
-"$STAGE2_BOOTSTRAP" >/dev/null 2>&1
-stage2_bootstrap_probe=$?
+"$BOOTSTRAP_BIN" >/dev/null 2>&1
+bootstrap_probe_rc=$?
 set -e
-echo "[release] stage2 bootstrap probe exit: $stage2_bootstrap_probe"
+echo "[release] bootstrap probe exit: $bootstrap_probe_rc"
 
 mkdir -p "$ROOT/target/release"
-STAGE2_TOOL_LOG="$ROOT/target/release/stage2-tool-build.log"
+TOOL_BUILD_LOG="$ROOT/target/release/tool-build.log"
 set +e
 (
   cd "$ROOT"
   if [[ "$GOOS" == "windows" && -n "$CC_BASH" ]]; then
-    if "$STAGE2_BOOTSTRAP" emit-pkg-c --driver=tool target/release/vox_stage2.c; then
-      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox_stage2.c -o target/release/vox_stage2 -lws2_32 -static -Wl,--stack,8388608
+    if "$BOOTSTRAP_BIN" emit-pkg-c --driver=tool target/release/vox.c; then
+      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox.c -o target/release/vox -lws2_32 -static -Wl,--stack,8388608
     else
-      "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+      "$BOOTSTRAP_BIN" build-pkg --driver=tool target/release/vox
     fi
   else
-    "$STAGE2_BOOTSTRAP" build-pkg --driver=tool target/release/vox_stage2
+    "$BOOTSTRAP_BIN" build-pkg --driver=tool target/release/vox
   fi
-) >"$STAGE2_TOOL_LOG" 2>&1
-stage2_tool_rc=$?
+) >"$TOOL_BUILD_LOG" 2>&1
+tool_rc=$?
 set -e
 
-if [[ $stage2_tool_rc -ne 0 ]]; then
-  echo "[release] stage2 tool build failed: exit $stage2_tool_rc" >&2
-  echo "[release] stage2 tool build log begin" >&2
-  cat "$STAGE2_TOOL_LOG" >&2 || true
-  echo "[release] stage2 tool build log end" >&2
-  exit $stage2_tool_rc
+if [[ $tool_rc -ne 0 ]]; then
+  echo "[release] tool build failed: exit $tool_rc" >&2
+  echo "[release] tool build log begin" >&2
+  cat "$TOOL_BUILD_LOG" >&2 || true
+  echo "[release] tool build log end" >&2
+  exit $tool_rc
 fi
 
-STAGE2_TOOL="$(resolve_bin "$ROOT/target/release/vox_stage2")"
+TOOL_BIN="$(resolve_bin "$ROOT/target/release/vox")"
 
 BUNDLE_NAME="vox-lang-${VERSION}-${PLATFORM}"
 BUNDLE_DIR="$DIST_DIR/$BUNDLE_NAME"
@@ -202,7 +209,7 @@ CHECKSUM_PATH="${ARCHIVE_PATH}.sha256"
 
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/bin"
-cp "$STAGE2_TOOL" "$BUNDLE_DIR/bin/vox-stage2${EXE_SUFFIX}"
+cp "$TOOL_BIN" "$BUNDLE_DIR/bin/vox${EXE_SUFFIX}"
 printf '%s\n' "$VERSION" > "$BUNDLE_DIR/VERSION"
 printf '%s\n' "$BOOTSTRAP_MODE" > "$BUNDLE_DIR/BOOTSTRAP_MODE"
 

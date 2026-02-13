@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat >&2 <<USAGE
 usage: $(basename "$0") <version> [platform]
-example: $(basename "$0") v0.1.0 darwin-amd64
+example: $(basename "$0") v0.2.0 darwin-amd64
 USAGE
 }
 
@@ -81,7 +81,7 @@ require_file() {
   fi
 }
 
-require_file "$BUNDLE_DIR/bin/vox-stage2${EXE_SUFFIX}"
+require_file "$BUNDLE_DIR/bin/vox${EXE_SUFFIX}"
 require_file "$BUNDLE_DIR/VERSION"
 require_file "$BUNDLE_DIR/BOOTSTRAP_MODE"
 
@@ -92,8 +92,8 @@ if [[ "$BUNDLE_VERSION" != "$VERSION" ]]; then
 fi
 
 BOOTSTRAP_MODE="$(tr -d '\r\n' < "$BUNDLE_DIR/BOOTSTRAP_MODE")"
-if [[ "$BOOTSTRAP_MODE" != "rolling-stage2" ]]; then
-  echo "[verify] BOOTSTRAP_MODE must be rolling-stage2, actual=$BOOTSTRAP_MODE" >&2
+if [[ "$BOOTSTRAP_MODE" != "rolling" ]]; then
+  echo "[verify] BOOTSTRAP_MODE must be rolling, actual=$BOOTSTRAP_MODE" >&2
   exit 1
 fi
 

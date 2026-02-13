@@ -39,7 +39,7 @@ if ! command -v gh >/dev/null 2>&1; then
 fi
 
 mkdir -p "$ROOT/target/bootstrap"
-rm -f "$ROOT/target/bootstrap/vox_stage2_prev" "$ROOT/target/bootstrap/vox_stage2_prev.exe"
+rm -f "$ROOT/target/bootstrap/vox_prev" "$ROOT/target/bootstrap/vox_prev.exe"
 
 TMP_DIR="$ROOT/.tmp_prev_locked"
 rm -rf "$TMP_DIR"
@@ -58,15 +58,15 @@ if [[ ! -f "$ARCHIVE" ]]; then
 fi
 
 tar -xzf "$ARCHIVE" -C "$TMP_DIR"
-PREV_BIN="$(find "$TMP_DIR" -type f \( -path '*/bin/vox-stage2' -o -path '*/bin/vox-stage2.exe' -o -name 'vox-stage2' -o -name 'vox-stage2.exe' \) | head -n 1 || true)"
+PREV_BIN="$(find "$TMP_DIR" -type f \( -path '*/bin/vox' -o -path '*/bin/vox.exe' -o -name 'vox' -o -name 'vox.exe' -o -path '*/bin/vox-stage2' -o -path '*/bin/vox-stage2.exe' -o -name 'vox-stage2' -o -name 'vox-stage2.exe' \) | head -n 1 || true)"
 if [[ -z "$PREV_BIN" ]]; then
-  echo "[bootstrap] stage2 binary not found in locked archive" >&2
+  echo "[bootstrap] compiler binary not found in locked archive" >&2
   exit 1
 fi
 
-cp "$PREV_BIN" "$ROOT/target/bootstrap/vox_stage2_prev"
+cp "$PREV_BIN" "$ROOT/target/bootstrap/vox_prev"
 if [[ "$PREV_BIN" == *.exe ]]; then
-  cp "$PREV_BIN" "$ROOT/target/bootstrap/vox_stage2_prev.exe"
+  cp "$PREV_BIN" "$ROOT/target/bootstrap/vox_prev.exe"
 fi
 
-echo "[bootstrap] using locked stage2 bootstrap: $PREV_BIN"
+echo "[bootstrap] using locked bootstrap compiler: $PREV_BIN"

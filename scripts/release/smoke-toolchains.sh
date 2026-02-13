@@ -91,7 +91,15 @@ resolve_bin() {
 
 bootstrap_cc_env
 
-STAGE2_BIN="$(resolve_bin "$ROOT/target/release/vox_stage2")"
+TOOL_BIN=""
+if TOOL_BIN="$(resolve_bin "$ROOT/target/release/vox" 2>/dev/null)"; then
+  :
+elif TOOL_BIN="$(resolve_bin "$ROOT/target/release/vox_stage2" 2>/dev/null)"; then
+  :
+else
+  echo "[smoke] release compiler binary not found under target/release" >&2
+  exit 1
+fi
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vox-release-smoke.XXXXXX")"
 cleanup() {
@@ -114,16 +122,16 @@ import "std/testing" as t
 fn test_basic() -> () { t.assert(true); }
 VOX
 
-echo "[smoke] stage2 build-pkg"
+echo "[smoke] compiler build-pkg"
 (
   cd "$TMP_DIR"
-  "$STAGE2_BIN" build-pkg target/smoke_stage2
+  "$TOOL_BIN" build-pkg target/smoke_tool
 )
 
-echo "[smoke] stage2 test-pkg"
+echo "[smoke] compiler test-pkg"
 (
   cd "$TMP_DIR"
-  "$STAGE2_BIN" test-pkg --run='*test_basic*' target/smoke_stage2_tests
+  "$TOOL_BIN" test-pkg --run='*test_basic*' target/smoke_tool_tests
 )
 
 echo "[smoke] ok"
