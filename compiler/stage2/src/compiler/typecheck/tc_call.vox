@@ -673,6 +673,7 @@ pub fn materialize_pack_sig_types(
 
   let out: FuncSig = FuncSig {
     params: ps,
+    param_borrow_kinds: sig.param_borrow_kinds,
     ret: ret,
     has_variadic: sig.has_variadic,
     variadic_elem: variadic_elem,
@@ -786,25 +787,54 @@ fn is_string_builtin_method(name: String) -> bool {
     name == "last_index_of";
 }
 
-struct VecPushRecvPlaceResult { ok: bool, mutable: bool }
+struct MutPlaceResult { ok: bool, mutable: bool }
 
-fn vec_push_recv_place(exprs: ast.ExprPool, l0: Locals, recv_id: i32) -> VecPushRecvPlaceResult {
-  let mut cur: i32 = recv_id;
+fn expr_mut_place(exprs: ast.ExprPool, l0: Locals, expr_id: i32) -> MutPlaceResult {
+  let mut cur: i32 = expr_id;
   while true {
     let n: ast.ExprNode = ast.expr_pool_get(exprs, cur);
     if match n { ast.ExprNode.Ident(_s) => true, _ => false } {
       let name: String = match n { ast.ExprNode.Ident(s) => s, _ => "" };
       let vr: LookupVarResult = locals_lookup(l0, name);
-      if !vr.found { return VecPushRecvPlaceResult { ok: false, mutable: false }; }
-      return VecPushRecvPlaceResult { ok: true, mutable: vr.mutable };
+      if !vr.found { return MutPlaceResult { ok: false, mutable: false }; }
+      return MutPlaceResult { ok: true, mutable: vr.mutable };
     }
     if match n { ast.ExprNode.Member(r, _name) => true, _ => false } {
       cur = match n { ast.ExprNode.Member(r, _name) => r, _ => -1 };
       continue;
     }
-    return VecPushRecvPlaceResult { ok: false, mutable: false };
+    return MutPlaceResult { ok: false, mutable: false };
   }
-  return VecPushRecvPlaceResult { ok: false, mutable: false };
+  return MutPlaceResult { ok: false, mutable: false };
+}
+
+fn sig_param_borrow_kind(sig: FuncSig, idx: i32) -> i32 {
+  if idx < 0 || idx >= sig.param_borrow_kinds.len() { return param_borrow_none(); }
+  return sig.param_borrow_kinds.get(idx);
+}
+
+fn mut_borrow_arg_where(arg_idx0: i32, variadic: bool) -> String {
+  let where0: String = if variadic { "call variadic arg #" } else { "call arg #" };
+  return where0.concat((arg_idx0 + 1).to_string());
+}
+
+fn mut_borrow_arg_place_error(sp: ast.Span, arg_idx0: i32, variadic: bool) -> TcError {
+  let msg: String = mut_borrow_arg_where(arg_idx0, variadic)
+    .concat(" for &mut parameter must be mutable place");
+  return type_error_at(sp, msg);
+}
+
+fn mut_borrow_arg_immutable_error(sp: ast.Span, arg_idx0: i32, variadic: bool) -> TcError {
+  let msg: String = mut_borrow_arg_where(arg_idx0, variadic)
+    .concat(" for &mut parameter is immutable");
+  return type_error_at(sp, msg);
+}
+
+fn ensure_mut_borrow_arg_place(sp: ast.Span, exprs: ast.ExprPool, l0: Locals, arg_id: i32, arg_idx0: i32, variadic: bool) -> TcError {
+  let pr: MutPlaceResult = expr_mut_place(exprs, l0, arg_id);
+  if !pr.ok { return mut_borrow_arg_place_error(sp, arg_idx0, variadic); }
+  if !pr.mutable { return mut_borrow_arg_immutable_error(sp, arg_idx0, variadic); }
+  return TcError.None;
 }
 
 fn locals_has_type_param_bound(ctx: Ctx, l0: Locals, type_param: String, trait_mod: String, trait_name: String) -> bool {
@@ -895,6 +925,7 @@ fn subst_self_in_sig(ctx: Ctx, sig: FuncSig, recv_ty: i32) -> FuncSig {
   let ve: i32 = if sig.has_variadic { subst_self_ty(ctx, sig.variadic_elem, recv_ty) } else { sig.variadic_elem };
   return FuncSig {
     params: ps,
+    param_borrow_kinds: sig.param_borrow_kinds,
     ret: rr,
     has_variadic: sig.has_variadic,
     variadic_elem: ve,
@@ -1188,7 +1219,7 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs
   let elem: i32 = vec_elem(ctx, recv_ty);
 
   if mname == "push" {
-    let pr: VecPushRecvPlaceResult = vec_push_recv_place(exprs, l0, recv_id);
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
     if !pr.ok {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.push receiver must be mutable place") };
     }
@@ -1203,7 +1234,7 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs
   }
 
   if mname == "insert" {
-    let pr: VecPushRecvPlaceResult = vec_push_recv_place(exprs, l0, recv_id);
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
     if !pr.ok {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.insert receiver must be mutable place") };
     }
@@ -1220,7 +1251,7 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs
   }
 
   if mname == "set" {
-    let pr: VecPushRecvPlaceResult = vec_push_recv_place(exprs, l0, recv_id);
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
     if !pr.ok {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.set receiver must be mutable place") };
     }
@@ -1237,7 +1268,7 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs
   }
 
   if mname == "clear" {
-    let pr: VecPushRecvPlaceResult = vec_push_recv_place(exprs, l0, recv_id);
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
     if !pr.ok {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.clear receiver must be mutable place") };
     }
@@ -1250,7 +1281,7 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs
   }
 
   if mname == "extend" {
-    let pr: VecPushRecvPlaceResult = vec_push_recv_place(exprs, l0, recv_id);
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
     if !pr.ok {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.extend receiver must be mutable place") };
     }
@@ -1265,7 +1296,7 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs
   }
 
   if mname == "pop" {
-    let pr: VecPushRecvPlaceResult = vec_push_recv_place(exprs, l0, recv_id);
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
     if !pr.ok {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.pop receiver must be mutable place") };
     }
@@ -1278,7 +1309,7 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs
   }
 
   if mname == "remove" {
-    let pr: VecPushRecvPlaceResult = vec_push_recv_place(exprs, l0, recv_id);
+    let pr: MutPlaceResult = expr_mut_place(exprs, l0, recv_id);
     if !pr.ok {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec.remove receiver must be mutable place") };
     }
@@ -1549,6 +1580,11 @@ fn tc_call_func_sig(
         if !assignable_to(ctx, want, ar.ty) {
           return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ar.ty, false) };
         }
+        let bk: i32 = sig_param_borrow_kind(sig, i);
+        if param_borrow_is_mut(bk) {
+          let perr: TcError = ensure_mut_borrow_arg_place(call_sp, exprs, l0, args.get(i), i, false);
+          if perr != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr }; }
+        }
         i = i + 1;
       }
     } else {
@@ -1568,6 +1604,11 @@ fn tc_call_func_sig(
         if !assignable_to(ctx, want_fixed, arf.ty) {
           return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, arf.ty, false) };
         }
+        let bk_fixed: i32 = sig_param_borrow_kind(sig, i);
+        if param_borrow_is_mut(bk_fixed) {
+          let perr_fixed: TcError = ensure_mut_borrow_arg_place(call_sp, exprs, l0, args.get(i), i, false);
+          if perr_fixed != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr_fixed }; }
+        }
         i = i + 1;
       }
       let mut j: i32 = fixed_n;
@@ -1585,6 +1626,11 @@ fn tc_call_func_sig(
         }
         if !assignable_to(ctx, want_var, arv.ty) {
           return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, arv.ty, true) };
+        }
+        let bk_var0: i32 = sig_param_borrow_kind(sig, fixed_n);
+        if param_borrow_is_mut(bk_var0) {
+          let perr_var0: TcError = ensure_mut_borrow_arg_place(call_sp, exprs, l0, args.get(j), j, true);
+          if perr_var0 != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr_var0 }; }
         }
         j = j + 1;
       }
@@ -1767,6 +1813,11 @@ fn tc_call_func_sig(
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgu2) };
       }
       subs = ur2.subs;
+      let bk2: i32 = sig_param_borrow_kind(sig_use, i);
+      if param_borrow_is_mut(bk2) {
+        let perr2: TcError = ensure_mut_borrow_arg_place(call_sp, exprs, l0, args.get(i), i, false);
+        if perr2 != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr2 }; }
+      }
       i = i + 1;
     }
   } else {
@@ -1791,6 +1842,11 @@ fn tc_call_func_sig(
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msguf) };
       }
       subs = urf.subs;
+      let bkf: i32 = sig_param_borrow_kind(sig_use, i);
+      if param_borrow_is_mut(bkf) {
+        let perrf: TcError = ensure_mut_borrow_arg_place(call_sp, exprs, l0, args.get(i), i, false);
+        if perrf != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perrf }; }
+      }
       i = i + 1;
     }
     let mut j: i32 = fixed_n;
@@ -1814,6 +1870,11 @@ fn tc_call_func_sig(
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msguv) };
       }
       subs = urv.subs;
+      let bkv: i32 = sig_param_borrow_kind(sig_use, fixed_n);
+      if param_borrow_is_mut(bkv) {
+        let perrv: TcError = ensure_mut_borrow_arg_place(call_sp, exprs, l0, args.get(j), j, true);
+        if perrv != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perrv }; }
+      }
       j = j + 1;
     }
   }
