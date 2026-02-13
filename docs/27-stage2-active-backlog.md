@@ -115,10 +115,10 @@ Governance from now on:
 - [ ] D05 FFI/WASM detailed ABI/attribute model.
   - Source: `docs/17-ffi-interop.md`.
 
-- [ ] D06 First-class borrow IR/type representation (`&T`/`&str` non-erased types, borrow-aware IR ops).
+- [x] D06 First-class borrow IR/type representation (`&T`/`&str` non-erased types, borrow-aware IR ops).
   - [x] D06-1 Type-pool level borrow representation landed: `ir::TyKind.Ref` + `resolve_type` preserves `&T/&mut T/&'static T/&'static mut T` and reflection (`@type_name/@type`) can observe borrow shape.
-  - [x] D06-2 Stage2 bootstrap boundary kept stable: irgen currently erases `Ref/Range` to base scalar/nominal types before emitting IR/codegen signatures.
-  - [ ] D06-3 Remaining: borrow-aware IR ops and non-erased borrow flow through IR/codegen.
+  - [x] D06-2 Stage2 bootstrap boundary updated: irgen now preserves `Ref` in IR signatures/slots/calls, while `Range` continues to lower to base + `range_check` for v0 stability.
+  - [x] D06-3 Borrow-aware IR/codegen landed: codegen `Ref` transparent type mapping + compare/nominal-eq borrow-aware unwrapping, with regression tests for IR signature preservation and `&str` compare codegen.
   - Extracted from A02 stage2 closure note.
   - Source: `docs/19-ir-spec.md`, `docs/13-standard-library.md`.
 
