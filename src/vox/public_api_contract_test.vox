@@ -1,0 +1,88 @@
+import "std/testing" as t
+import "vox/ast" as ast
+import "vox/lex" as lex
+import "vox/parse" as p
+import "vox/manifest" as mf
+import "vox/ir" as ir
+
+fn lex_err_none(e: lex.LexError) -> bool {
+  return match e { lex.LexError.None => true, _ => false, };
+}
+
+fn parse_err_none(e: p.ParseError) -> bool {
+  return match e { p.ParseError.None => true, _ => false, };
+}
+
+fn test_public_api_ast_smoke() -> () {
+  let sp: ast.Span = ast.span0();
+  t.assert_eq(sp.line, 1);
+  t.assert_eq(sp.col, 1);
+  t.assert(ast.vis_is_pub(ast.vis_pub()));
+  t.assert(!ast.vis_is_pub(ast.vis_private()));
+
+  let pool0: ast.ExprPool = ast.expr_pool();
+  let add: ast.AddExprResult = ast.expr_pool_add(pool0, ast.ExprNode.Int("42"), sp);
+  let node: ast.ExprNode = ast.expr_pool_get(add.pool, add.id);
+  let out: String = match node { ast.ExprNode.Int(s) => s, _ => "", };
+  t.assert_eq(out, "42");
+}
+
+fn test_public_api_lex_smoke() -> () {
+  let r: lex.LexResult = lex.lex_text("fn main() -> i32 { return 0; }");
+  t.assert(lex_err_none(r.err));
+  t.assert(r.tokens.len() > 0);
+
+  let t0: lex.Token = r.tokens.get(0);
+  t.assert(lex.token_kind_eq(t0.kind, lex.TokenKind.KwFn));
+  t.assert_eq(lex.token_kind_name(t0.kind), "fn");
+
+  let te: lex.Token = r.tokens.get(r.tokens.len() - 1);
+  t.assert(lex.token_kind_eq(te.kind, lex.TokenKind.Eof));
+}
+
+fn test_public_api_parse_smoke() -> () {
+  let src: String = "fn main() -> i32 { return 0; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(parse_err_none(r.err));
+  t.assert_eq(r.prog.funcs.len(), 1);
+  t.assert_eq(r.prog.funcs.get(0).name, "main");
+}
+
+fn test_public_api_manifest_smoke() -> () {
+  let text: String =
+    "[package]\n"
+      .concat("name = \"demo\"\n\n")
+      .concat("[dependencies]\n")
+      .concat("foo = \"1.2.3\"\n")
+      .concat("bar = { path = \"../bar\" }\n");
+
+  let r: mf.ParseResult = mf.parse(text);
+  t.assert(r.ok);
+  t.assert_eq(r.m.pkg_name, "demo");
+  t.assert_eq(r.m.deps.len(), 2);
+
+  let d0: mf.Dependency = r.m.deps.get(0);
+  t.assert_eq(d0.name, "foo");
+  t.assert(d0.has_version);
+  t.assert_eq(d0.version, "1.2.3");
+
+  let d1: mf.Dependency = r.m.deps.get(1);
+  t.assert_eq(d1.name, "bar");
+  t.assert(d1.has_path);
+  t.assert_eq(d1.path, "../bar");
+}
+
+fn test_public_api_ir_smoke() -> () {
+  let add: ir.AddTyResult = ir.ty_pool_add(ir.ty_pool(), ir.ty_i32());
+  let ty: ir.Ty = ir.ty_pool_get(add.pool, add.idx);
+  let is_i32: bool = match ty.kind { ir.TyKind.I32 => true, _ => false, };
+  t.assert(is_i32);
+
+  let prog: ir.Program = ir.program(add.pool);
+  let text: String = ir.format_program(prog);
+  t.assert(text.len() >= 5);
+  t.assert_eq(text.slice(0, 5), "ir v0");
+
+  let vr: ir.VerifyResult = ir.verify_program(prog);
+  t.assert(vr.ok);
+}

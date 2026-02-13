@@ -54,14 +54,69 @@
 2. Experimental 层变更可更快，但必须在 release notes 标注。
 3. Internal 层不对外承诺兼容。
 
-## 5. 推荐扩展模式
+## 5. 最小示例
 
-1. 语法工具：`vox/lex + vox/parse + vox/ast`。
-2. 类型工具：在 `vox/typecheck` 稳定前，优先只读 AST/IR，减少对内部语义耦合。
-3. 编译驱动：通过 CLI 或 `vox/compile`（Experimental）封装，避免直接依赖 `vox/codegen` 细节。
+### 5.1 `vox/lex`
 
-## 6. 近期落地任务
+```vox
+import "vox/lex" as lex
 
-1. 为 Stable 层补最小示例（解析、AST 遍历、IR 打印）。
-2. 给 Stable/Experimental 模块增加统一头注释（稳定性级别 + 迁移策略）。
-3. 增加 `vox/*` 库级回归测试（作为对外 API 契约测试）。
+fn first_token_kind(src: String) -> String {
+  let r: lex.LexResult = lex.lex_text(src);
+  if match r.err { lex.LexError.None => false, _ => true } { return "err"; }
+  return lex.token_kind_name(r.tokens.get(0).kind);
+}
+```
+
+### 5.2 `vox/parse`
+
+```vox
+import "vox/parse" as p
+
+fn fn_count(src: String) -> i32 {
+  let r: p.ParseResult = p.parse_text(src);
+  if match r.err { p.ParseError.None => false, _ => true } { return -1; }
+  return r.prog.funcs.len();
+}
+```
+
+### 5.3 `vox/manifest`
+
+```vox
+import "vox/manifest" as mf
+
+fn dep_count(text: String) -> i32 {
+  let r: mf.ParseResult = mf.parse(text);
+  if !r.ok { return -1; }
+  return r.m.deps.len();
+}
+```
+
+### 5.4 `vox/ir`
+
+```vox
+import "vox/ir" as ir
+
+fn empty_ir_text() -> String {
+  let add: ir.AddTyResult = ir.ty_pool_add(ir.ty_pool(), ir.ty_i32());
+  let prog: ir.Program = ir.program(add.pool);
+  return ir.format_program(prog);
+}
+```
+
+### 5.5 `vox/ast`
+
+```vox
+import "vox/ast" as ast
+
+fn default_span_line() -> i32 {
+  let sp: ast.Span = ast.span0();
+  return sp.line;
+}
+```
+
+## 6. 当前落地状态
+
+1. [x] Stable 层最小示例：见本章第 5 节。
+2. [ ] Stable/Experimental 模块统一头注释（稳定性级别 + 迁移策略）。
+3. [x] `vox/*` 库级回归测试：`src/vox/public_api_contract_test.vox`。

@@ -20,7 +20,8 @@ vox toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
 ## 仓库门禁
 
 ```bash
-make test-active   # rolling selfhost + test smoke
+make test-active   # rolling selfhost + test smoke + public API contract
+make test-public-api
 make test          # test-active + examples smoke```
 
 关键脚本：

@@ -1,14 +1,14 @@
-.PHONY: fmt test test-rolling test-selfhost-build test-selfhost-smoke test-p0p1 \
+.PHONY: fmt test test-rolling test-selfhost-build test-selfhost-smoke test-public-api test-p0p1 \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run
 
 fmt:
 	@echo "[fmt] no formatter configured for .vox yet"
 
 # Run core repo tests: rolling selfhost gates + example package smoke.
-test: test-rolling test-examples
+test: test-rolling test-public-api test-examples
 
 # Active development gate.
-test-active: test-rolling
+test-active: test-rolling test-public-api
 
 # Rolling bootstrap gate (previous compiler -> new compiler).
 test-rolling: test-selfhost-build test-selfhost-smoke
@@ -18,6 +18,12 @@ test-selfhost-build:
 
 test-selfhost-smoke:
 	./scripts/ci/rolling-selfhost.sh test
+
+# Stable public library API contract gate.
+test-public-api:
+	@set -e; \
+	COMPILER_BIN=$$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1); \
+	"$$COMPILER_BIN" test-pkg --run='*public_api*' target/debug/vox.public_api
 
 # P0/P1 closure gate (docs/archive/25-p0p1-closure.md).
 test-p0p1:

@@ -21,6 +21,7 @@ Recommended gates:
 
 ```bash
 make test-active
+make test-public-api
 make test```
 
 Quick selfhost smoke:
