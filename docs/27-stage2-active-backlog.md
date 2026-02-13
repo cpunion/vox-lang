@@ -45,7 +45,9 @@ Governance from now on:
     - Covered in `compiler/stage2/src/compiler/typecheck/ctx.vox`, with compile/typecheck regressions in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
   - [x] A02-2 `&mut`/`&'static mut` call arguments now require mutable place roots (local mutable var or member-chain rooted at one), across direct calls, variadic paths, generic calls, and method-sugar dispatch.
     - Covered in `compiler/stage2/src/compiler/typecheck/tc_call.vox`, with regressions in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
-  - Current gap: `&T` remains transitional mapping in type layer.
+  - [x] A02-3 Non-static `&T` call arguments now require place roots (identifier/member-chain rooted at local), across direct calls, generic calls, variadic paths, and method-sugar dispatch.
+    - Covered in `compiler/stage2/src/compiler/typecheck/tc_call.vox`, with regressions in `compiler/stage2/src/compiler/typecheck/typecheck_test.vox` and `compiler/stage2/src/compiler/compile/compile_test.vox`.
+  - Current gap: `&T`/`&str` are still transitional in type representation (borrow is tracked by signature metadata, not a first-class IR type).
   - Sources: `docs/13-standard-library.md`, `docs/21-stage1-compiler.md`, `docs/19-ir-spec.md`.
 
 - [ ] A03 Runtime memory model convergence.
