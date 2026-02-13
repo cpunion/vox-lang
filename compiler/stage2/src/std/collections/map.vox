@@ -1,5 +1,52 @@
 fn panic_key_not_found() -> () { panic("Map key not found"); }
 
+fn map_find_idx[K: Eq](keys: Vec[K], key: K) -> i32 {
+  let mut i: i32 = 0;
+  let n: i32 = keys.len();
+  while i < n {
+    if keys.get(i) == key { return i; }
+    i = i + 1;
+  }
+  return 0 - 1;
+}
+
+fn vec_replace_at[V](xs: Vec[V], idx: i32, val: V) -> Vec[V] {
+  let mut out: Vec[V] = Vec();
+  let mut i: i32 = 0;
+  let n: i32 = xs.len();
+  while i < n {
+    if i == idx {
+      out.push(val);
+    } else {
+      out.push(xs.get(i));
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn vec_without_at[T](xs: Vec[T], idx: i32) -> Vec[T] {
+  let mut out: Vec[T] = Vec();
+  let mut i: i32 = 0;
+  let n: i32 = xs.len();
+  while i < n {
+    if i != idx { out.push(xs.get(i)); }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn vec_copy[T](xs: Vec[T]) -> Vec[T] {
+  let mut out: Vec[T] = Vec();
+  let mut i: i32 = 0;
+  let n: i32 = xs.len();
+  while i < n {
+    out.push(xs.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
 pub struct Map[K, V] {
   keys: Vec[K],
   vals: Vec[V],
@@ -10,20 +57,16 @@ impl[K: Eq, V] Map[K, V] {
   fn is_empty(x: Map[K, V]) -> bool { return x.keys.len() == 0; }
 
   fn index_of_key(x: Map[K, V], key: K) -> i32 {
-    let mut i: i32 = 0;
-    let n: i32 = x.keys.len();
-    while i < n {
-      if x.keys.get(i) == key { return i; }
-      i = i + 1;
-    }
-    return -1;
+    return map_find_idx(x.keys, key);
   }
 
-  fn contains_key(x: Map[K, V], key: K) -> bool { return x.index_of_key(key) != -1; }
+  fn contains_key(x: Map[K, V], key: K) -> bool {
+    return map_find_idx(x.keys, key) >= 0;
+  }
 
   fn get(x: Map[K, V], key: K) -> V {
-    let i: i32 = x.index_of_key(key);
-    if i == -1 {
+    let i: i32 = map_find_idx(x.keys, key);
+    if i < 0 {
       panic_key_not_found();
       // Unreachable at runtime; keeps IR builder happy for generic return type.
       return x.vals.get(0);
@@ -32,8 +75,8 @@ impl[K: Eq, V] Map[K, V] {
   }
 
   fn get_or(x: Map[K, V], key: K, fallback: V) -> V {
-    let i: i32 = x.index_of_key(key);
-    if i == -1 { return fallback; }
+    let i: i32 = map_find_idx(x.keys, key);
+    if i < 0 { return fallback; }
     return x.vals.get(i);
   }
 
@@ -59,13 +102,12 @@ impl[K: Eq, V] Map[K, V] {
     return out;
   }
 
-  // Normal path implementation (no bootstrap-safe rebuild workaround):
-  // overwrite uses Vec.set; delete uses Vec.remove; clear uses Vec.clear.
+  // Bootstrap-safe path: only rely on Vec.push/len/get so stage1 can build stage2.
   fn set(x: Map[K, V], key: K, val: V) -> Map[K, V] {
-    let mut out: Map[K, V] = x;
-    let i: i32 = out.index_of_key(key);
-    if i != -1 {
-      out.vals.set(i, val);
+    let mut out = x;
+    let i: i32 = map_find_idx(out.keys, key);
+    if i >= 0 {
+      out.vals = vec_replace_at(out.vals, i, val);
       return out;
     }
     out.keys.push(key);
@@ -73,28 +115,25 @@ impl[K: Eq, V] Map[K, V] {
     return out;
   }
 
-  fn clear(x: Map[K, V]) -> Map[K, V] {
-    let mut out: Map[K, V] = x;
-    out.keys.clear();
-    out.vals.clear();
-    return out;
+  fn clear(_x: Map[K, V]) -> Map[K, V] {
+    return Map { keys: Vec(), vals: Vec() };
   }
 
-  fn release(x: Map[K, V]) -> Map[K, V] { return Release.release(x); }
+  fn release(_x: Map[K, V]) -> Map[K, V] { return Map { keys: Vec(), vals: Vec() }; }
 
   fn remove(x: Map[K, V], key: K) -> Map[K, V] {
-    let mut out: Map[K, V] = x;
-    let i: i32 = out.index_of_key(key);
-    if i == -1 { return out; }
-    out.keys.remove(i);
-    out.vals.remove(i);
+    let mut out = x;
+    let i: i32 = map_find_idx(out.keys, key);
+    if i < 0 { return out; }
+    out.keys = vec_without_at(out.keys, i);
+    out.vals = vec_without_at(out.vals, i);
     return out;
   }
 }
 
-impl[K: Eq + Clone, V: Clone] Clone for Map[K, V] {
+impl[K: Eq, V] Clone for Map[K, V] {
   fn clone(x: Map[K, V]) -> Map[K, V] {
-    return Map { keys: Clone.clone(x.keys), vals: Clone.clone(x.vals) };
+    return Map { keys: vec_copy(x.keys), vals: vec_copy(x.vals) };
   }
 }
 
