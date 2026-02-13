@@ -56,7 +56,7 @@ Governance from now on:
 ### P1
 
 - [ ] A05 Macro system closure from MVP to stable full execution model (while keeping deterministic diagnostics).
-  - [x] A05-1 Expression-site macro execution is now strictly typed: macro fns returning `AstStmt/AstItem/AstBlock` are rejected at macroexpand call sites with deterministic diagnostics (`expression macro call requires AstExpr return type; got ...`).
+  - [x] A05-1 Expression-site macro execution is now strictly typed: macro fns returning `AstStmt/AstItem` are rejected at macroexpand call sites with deterministic diagnostics (`expression macro call requires AstExpr or AstBlock return type; got ...`).
     - Covered in `compiler/stage2/src/compiler/macroexpand/macroexpand.vox`, `compiler/stage2/src/compiler/macroexpand/user_macro_inline.vox`, and tests in `compiler/stage2/src/compiler/macroexpand/macroexpand_test.vox`.
   - Source: `docs/10-macro-system.md`.
 
