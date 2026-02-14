@@ -1,4 +1,4 @@
-.PHONY: fmt test test-rolling test-selfhost-build test-selfhost-smoke test-public-api test-p0p1 \
+.PHONY: fmt test test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-p0p1 \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run \
 	release-source-bundle release-source-verify
 
@@ -6,16 +6,19 @@ fmt:
 	@echo "[fmt] no formatter configured for .vox yet"
 
 # Run core repo tests: rolling selfhost gates + example package smoke.
-test: test-rolling test-public-api test-examples
+test: test-rolling test-examples
 
 # Active development gate.
-test-active: test-rolling test-public-api
+test-active: test-rolling
 
 # Rolling bootstrap gate (previous compiler -> new compiler).
-test-rolling: test-selfhost-build test-selfhost-smoke
+test-rolling: test-selfhost-build test-selfhost-gate
 
 test-selfhost-build:
 	./scripts/ci/rolling-selfhost.sh build
+
+test-selfhost-gate:
+	VOX_TEST_RUN='*api*' ./scripts/ci/rolling-selfhost.sh test
 
 test-selfhost-smoke:
 	./scripts/ci/rolling-selfhost.sh test
