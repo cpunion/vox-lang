@@ -93,6 +93,278 @@ fn cc_common_flags() -> String {
   return " -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE";
 }
 
+
+struct CliTargetSpec {
+  ok: bool,
+  err: String,
+  raw: String,
+  os: String,
+  arch: String,
+  abi: String,
+  canon: String,
+  triple: String,
+}
+
+fn target_abi_from_text(s: String) -> String {
+  if text_contains(s, "msvc") { return "msvc"; }
+  if text_contains(s, "mingw") || text_contains(s, "gnu") || text_contains(s, "w64") { return "gnu"; }
+  return "";
+}
+
+fn target_triple_for(os: String, arch: String, abi0: String) -> String {
+  let mut abi: String = abi0;
+  if os == "windows" && abi == "" { abi = "gnu"; }
+
+  if os == "linux" {
+    if arch == "amd64" { return "x86_64-unknown-linux-gnu"; }
+    if arch == "x86" { return "i686-unknown-linux-gnu"; }
+    return "aarch64-unknown-linux-gnu";
+  }
+  if os == "darwin" {
+    if arch == "amd64" { return "x86_64-apple-darwin"; }
+    return "aarch64-apple-darwin";
+  }
+  if os == "windows" {
+    if abi == "msvc" {
+      if arch == "amd64" { return "x86_64-pc-windows-msvc"; }
+      if arch == "x86" { return "i686-pc-windows-msvc"; }
+      return "aarch64-pc-windows-msvc";
+    }
+    if arch == "amd64" { return "x86_64-w64-mingw32"; }
+    if arch == "x86" { return "i686-w64-mingw32"; }
+    return "aarch64-w64-mingw32";
+  }
+  return os.concat("-").concat(arch);
+}
+
+fn cli_target_spec_ok(raw: String, os: String, arch: String, abi0: String) -> CliTargetSpec {
+  let mut abi: String = abi0;
+  if os != "windows" { abi = ""; }
+  if os == "windows" && abi == "" { abi = "gnu"; }
+  let canon: String = os.concat("-").concat(arch);
+  return CliTargetSpec {
+    ok: true,
+    err: "",
+    raw: raw,
+    os: os,
+    arch: arch,
+    abi: abi,
+    canon: canon,
+    triple: target_triple_for(os, arch, abi),
+  };
+}
+
+fn cli_target_spec_err(raw: String, msg: String) -> CliTargetSpec {
+  return CliTargetSpec {
+    ok: false,
+    err: msg,
+    raw: raw,
+    os: "",
+    arch: "",
+    abi: "",
+    canon: "",
+    triple: "",
+  };
+}
+
+fn target_os_supported(os: String) -> bool {
+  return os == "linux" || os == "darwin" || os == "windows";
+}
+
+fn target_arch_supported(arch: String) -> bool {
+  return arch == "amd64" || arch == "arm64" || arch == "x86";
+}
+
+fn target_pair_supported(os: String, arch: String) -> bool {
+  if os == "darwin" && arch == "x86" { return false; }
+  return true;
+}
+
+fn target_os_from_text(s: String) -> String {
+  if s == "windows" || s == "win" || s == "win32" || text_contains(s, "windows") || text_contains(s, "mingw") || text_contains(s, "w64") || text_contains(s, "msvc") {
+    return "windows";
+  }
+  if s == "darwin" || s == "macos" || s == "mac" || text_contains(s, "darwin") || text_contains(s, "apple") {
+    return "darwin";
+  }
+  if s == "linux" || text_contains(s, "linux") { return "linux"; }
+  return "";
+}
+
+fn target_arch_from_text(s: String) -> String {
+  if text_contains(s, "x86_64") || text_contains(s, "amd64") || text_contains(s, "x64") || text_contains(s, "x86-64") {
+    return "amd64";
+  }
+  if text_contains(s, "aarch64") || text_contains(s, "arm64") {
+    return "arm64";
+  }
+  if s == "x86" || text_contains(s, "i386") || text_contains(s, "i486") || text_contains(s, "i586") || text_contains(s, "i686") || text_contains(s, "x86") {
+    return "x86";
+  }
+  return "";
+}
+
+fn platform_os_part(p: String) -> String {
+  let mut i: i32 = 0;
+  while i < p.len() {
+    if p.byte_at(i) == 45 { return p.slice(0, i); } // '-'
+    i = i + 1;
+  }
+  if p == "" { return "linux"; }
+  return p;
+}
+
+fn platform_arch_part(p: String) -> String {
+  let mut i: i32 = 0;
+  while i < p.len() {
+    if p.byte_at(i) == 45 {
+      if i + 1 >= p.len() { return "amd64"; }
+      return p.slice(i + 1, p.len());
+    }
+    i = i + 1;
+  }
+  return "amd64";
+}
+
+fn parse_cli_target_spec(raw0: String, host_os: String, host_arch: String) -> CliTargetSpec {
+  let raw: String = trim_space_main(raw0);
+  let s: String = tc_ascii_lower(raw);
+  if s == "" || s == "host" || s == "native" {
+    return cli_target_spec_ok(raw, host_os, host_arch, "");
+  }
+
+  let os: String = target_os_from_text(s);
+  let mut arch: String = target_arch_from_text(s);
+  let mut abi: String = target_abi_from_text(s);
+  if os == "" {
+    return cli_target_spec_err(raw, "invalid --target: unknown os in '".concat(raw).concat("'"));
+  }
+  if arch == "" { arch = host_arch; }
+  if os == "windows" && abi == "" { abi = "gnu"; }
+  if os != "windows" { abi = ""; }
+
+  if !target_os_supported(os) {
+    return cli_target_spec_err(raw, "invalid --target: unsupported os '".concat(os).concat("'"));
+  }
+  if !target_arch_supported(arch) {
+    return cli_target_spec_err(raw, "invalid --target: unsupported arch '".concat(arch).concat("'"));
+  }
+  if !target_pair_supported(os, arch) {
+    return cli_target_spec_err(raw, "invalid --target: unsupported platform '".concat(os).concat("-").concat(arch).concat("'"));
+  }
+  return cli_target_spec_ok(raw, os, arch, abi);
+}
+fn env_key_suffix(s: String) -> String {
+  let mut out: String = "";
+  let up: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    if ch >= 97 && ch <= 122 {
+      out = out.concat(up.slice(ch - 97, ch - 96));
+      i = i + 1;
+      continue;
+    }
+    if (ch >= 65 && ch <= 90) || (ch >= 48 && ch <= 57) {
+      out = out.concat(s.slice(i, i + 1));
+      i = i + 1;
+      continue;
+    }
+    out = out.concat("_");
+    i = i + 1;
+  }
+  return out;
+}
+
+fn cc_is_msvc_cmd(cmd0: String) -> bool {
+  let cmd: String = tc_ascii_lower(trim_space_main(cmd0));
+  return cmd == "cl" || cmd == "cl.exe" || text_contains(cmd, "\\cl.exe") || text_contains(cmd, "/cl.exe");
+}
+
+fn cc_cmd_for_target(host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String) -> String {
+  let cc_env: String = trim_space_main(proc.getenv("CC"));
+  if cc_env != "" { return cc_env; }
+
+  let cc_canon: String = trim_space_main(proc.getenv("CC_".concat(env_key_suffix(target_os.concat("_").concat(target_arch)))));
+  if cc_canon != "" { return cc_canon; }
+
+  let cc_triple: String = trim_space_main(proc.getenv("CC_".concat(env_key_suffix(target_triple))));
+  if cc_triple != "" { return cc_triple; }
+
+  if host_os == target_os && host_arch == target_arch {
+    if target_os == "windows" {
+      if target_abi == "msvc" { return "cl"; }
+      return "gcc";
+    }
+    return "cc";
+  }
+
+  if target_os == "windows" {
+    if target_abi == "msvc" {
+      if host_os == "windows" { return "cl"; }
+      return "clang";
+    }
+    if target_arch == "amd64" { return "x86_64-w64-mingw32-gcc"; }
+    if target_arch == "x86" { return "i686-w64-mingw32-gcc"; }
+    return "aarch64-w64-mingw32-gcc";
+  }
+  if target_os == "linux" {
+    if target_arch == "amd64" { return "x86_64-linux-gnu-gcc"; }
+    if target_arch == "x86" { return "i686-linux-gnu-gcc"; }
+    return "aarch64-linux-gnu-gcc";
+  }
+  if target_os == "darwin" { return "clang"; }
+  return "cc";
+}
+
+fn cc_target_flags_for_target(cmd: String, host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String) -> String {
+  if host_os == target_os && host_arch == target_arch { return ""; }
+  if cc_is_msvc_cmd(cmd) { return ""; }
+  if text_contains(cmd, "clang") || cmd == "cc" {
+    return " --target=".concat(target_triple);
+  }
+  return "";
+}
+
+fn cc_link_flags_for_target(target_os: String, use_msvc: bool) -> String {
+  if target_os != "windows" { return ""; }
+  if use_msvc { return " /link ws2_32.lib /STACK:8388608"; }
+  return " -lws2_32 -static -Wl,--stack,8388608";
+}
+
+fn cc_common_flags_for_target(target_os: String, use_msvc: bool) -> String {
+  if use_msvc { return ""; }
+  if target_os == "windows" { return ""; }
+  return " -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE";
+}
+
+fn cc_cmdline_for_target(host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, cpath: String, out: String) -> String {
+  let cc: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
+  let use_msvc: bool = cc_is_msvc_cmd(cc);
+  let tflags: String = cc_target_flags_for_target(cc, host_os, host_arch, target_os, target_arch, target_triple);
+  if use_msvc {
+    return cc
+      .concat(" /nologo /TC /Od /Zi")
+      .concat(" ")
+      .concat(cpath)
+      .concat(" /Fe:")
+      .concat(out)
+      .concat(cc_link_flags_for_target(target_os, true));
+  }
+  return cc
+    .concat(tflags)
+    .concat(" -std=c11 -O0 -g")
+    .concat(cc_common_flags_for_target(target_os, false))
+    .concat(" ")
+    .concat(cpath)
+    .concat(" -o ")
+    .concat(out)
+    .concat(cc_link_flags_for_target(target_os, false));
+}
+fn cmd_supports_target(cmd: String) -> bool {
+  return cmd == "build" || cmd == "build-pkg" || cmd == "test-pkg";
+}
+
 fn usage() -> () {
   let bin: String = path_base_name(proc.exe_path());
   print(bin.concat(" usage:\n"));
@@ -115,6 +387,7 @@ fn usage() -> () {
   print("  --list              test-pkg: list selected tests and exit\n");
   print("  --rerun-failed      test-pkg: run only previously failed tests\n");
   print("  --json              test-pkg/list-pkg: print JSON report\n");
+  print("  --target=<value>    build/build-pkg/test-pkg: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc, i686-w64-mingw32)\n");
   print("  --version, -V       print embedded compiler version\n");
 }
 
@@ -467,11 +740,23 @@ fn print_test_selection(discovered: i32, selected: i32, module_pat: String, run_
 }
 
 fn print_test_list(tests: Vec[String]) -> () {
-  let mods: Vec[String] = unique_sorted_modules_from_tests(tests);
+  let mut tests_for_mods: Vec[String] = Vec();
+  let mut tmi: i32 = 0;
+  while tmi < tests.len() {
+    tests_for_mods.push(tests.get(tmi));
+    tmi = tmi + 1;
+  }
+  let mods: Vec[String] = unique_sorted_modules_from_tests(tests_for_mods);
   let mut i: i32 = 0;
   while i < mods.len() {
     let module: String = mods.get(i);
-    let names: Vec[String] = tests_in_module_sorted(tests, module);
+    let mut tests_copy: Vec[String] = Vec();
+    let mut ti: i32 = 0;
+    while ti < tests.len() {
+      tests_copy.push(tests.get(ti));
+      ti = ti + 1;
+    }
+    let names: Vec[String] = tests_in_module_sorted(tests_copy, module);
     print("[list] ".concat(module).concat(" (").concat(names.len().to_string()).concat(")\n"));
     let mut j: i32 = 0;
     while j < names.len() {
@@ -575,7 +860,14 @@ fn find_module_summary(mods: Vec[ModuleSummary], module: String) -> i32 {
 fn update_module_summary(mods0: Vec[ModuleSummary], name: String, ok: bool, dur_ns: i64) -> Vec[ModuleSummary] {
   let mut mods: Vec[ModuleSummary] = mods0;
   let module: String = test_module_name(name);
-  let idx: i32 = find_module_summary(mods, module);
+  let mut mods_for_find: Vec[ModuleSummary] = Vec();
+  let mut mfi: i32 = 0;
+  while mfi < mods.len() {
+    mods_for_find.push(mods.get(mfi));
+    mfi = mfi + 1;
+  }
+  let module_for_find: String = module.slice(0, module.len());
+  let idx: i32 = find_module_summary(mods_for_find, module_for_find);
   if idx < 0 {
     let mut s: ModuleSummary = ModuleSummary { module: module, passed: 0, failed: 0, dur_ns: 0 };
     if ok { s.passed = 1; } else { s.failed = 1; }
@@ -647,7 +939,14 @@ fn find_module_detail(ds: Vec[ModuleDetail], module: String) -> i32 {
 fn update_module_detail(ds0: Vec[ModuleDetail], name: String, ok: bool, dur_ns: i64) -> Vec[ModuleDetail] {
   let module: String = test_module_name(name);
   let mut ds: Vec[ModuleDetail] = ds0;
-  let idx: i32 = find_module_detail(ds, module);
+  let mut ds_for_find: Vec[ModuleDetail] = Vec();
+  let mut dfi: i32 = 0;
+  while dfi < ds.len() {
+    ds_for_find.push(ds.get(dfi));
+    dfi = dfi + 1;
+  }
+  let module_for_find: String = module.slice(0, module.len());
+  let idx: i32 = find_module_detail(ds_for_find, module_for_find);
   if idx < 0 {
     let mut tests: Vec[String] = Vec();
     tests.push(name);
@@ -836,7 +1135,14 @@ fn build_module_queues(tests: Vec[String]) -> Vec[ModuleQueue] {
   while i < tests.len() {
     let name: String = tests.get(i);
     let module: String = test_module_name(name);
-    let qi: i32 = find_module_queue_idx(out, module);
+    let mut out_for_find: Vec[ModuleQueue] = Vec();
+    let mut ofi: i32 = 0;
+    while ofi < out.len() {
+      out_for_find.push(out.get(ofi));
+      ofi = ofi + 1;
+    }
+    let module_for_find: String = module.slice(0, module.len());
+    let qi: i32 = find_module_queue_idx(out_for_find, module_for_find);
     if qi < 0 {
       let mut ts: Vec[String] = Vec();
       ts.push(name);
@@ -1082,7 +1388,13 @@ fn print_json_report(
   skipped: i32,
   total_ns: i64
 ) -> () {
-  let list_module_details: Vec[ModuleDetail] = if list_only { module_details_from_tests(selected_tests) } else { module_details };
+  let mut selected_tests_for_modules: Vec[String] = Vec();
+  let mut stmi: i32 = 0;
+  while stmi < selected_tests.len() {
+    selected_tests_for_modules.push(selected_tests.get(stmi));
+    stmi = stmi + 1;
+  }
+  let list_module_details: Vec[ModuleDetail] = if list_only { module_details_from_tests(selected_tests_for_modules) } else { module_details };
   let mut out: String = "{";
   out = out.concat("\"report_version\":1");
   out = out.concat(",\"rerun_cache_path\":").concat(json_quote(failed_tests_path()));
@@ -1236,12 +1548,18 @@ fn read_failed_tests() -> Vec[String] {
 fn write_failed_tests(names: Vec[String]) -> () {
   fs.mkdir_p("target/debug");
   let canon: Vec[String] = normalize_failed_tests(names);
+  let mut canon_for_failed: Vec[String] = Vec();
+  let mut cfi: i32 = 0;
+  while cfi < canon.len() {
+    canon_for_failed.push(canon.get(cfi));
+    cfi = cfi + 1;
+  }
   let updated_us: i64 = tm.now_ns() / 1000;
   let mut out: String = "{";
   out = out.concat("\"version\":1");
   out = out.concat(",\"updated_unix_us\":").concat(updated_us.to_string());
   out = out.concat(",\"tests\":").concat(json_of_tests(canon));
-  out = out.concat(",\"failed_tests\":").concat(json_of_tests(canon));
+  out = out.concat(",\"failed_tests\":").concat(json_of_tests(canon_for_failed));
   out = out.concat("}\n");
   fs.write_string(failed_tests_path(), out);
 }
@@ -1413,12 +1731,12 @@ fn strip_git_plus_prefix(src: String) -> String {
   return src;
 }
 
-fn resolve_registry_root(base: String, d: mf.Dependency) -> ResolveRegistryRootResult {
-  if !d.has_registry {
+fn resolve_registry_root(base: String, has_registry: bool, registry: String) -> ResolveRegistryRootResult {
+  if !has_registry {
     return reg_root_ok(path_join(dep_cache_root(base), "registry"));
   }
 
-  let raw: String = d.registry;
+  let raw: String = registry;
   let mut git_src: String = strip_git_plus_prefix(raw);
   let as_git: bool = has_prefix(raw, "git+") || is_git_like_remote_src(git_src);
   if !as_git {
@@ -1516,7 +1834,7 @@ fn resolve_dep_source(base: String, d: mf.Dependency) -> ResolveDepResult {
   if !d.has_version {
     return dep_res_err("dependency requires path/git/version: ".concat(d.name));
   }
-  let reg_rr: ResolveRegistryRootResult = resolve_registry_root(base, d);
+  let reg_rr: ResolveRegistryRootResult = resolve_registry_root(base, d.has_registry, d.registry);
   if !reg_rr.ok {
     return dep_res_err(reg_rr.err);
   }
@@ -1560,10 +1878,11 @@ fn load_deps_from_manifest_at(base: String, files0: Vec[ld.SourceFile], seen0: V
     if contains_str(seen, d.name) { i = i + 1; continue; }
     seen.push(d.name);
 
+    let dep_name: String = d.name.slice(0, d.name.len());
     let rr0: ResolveDepResult = resolve_dep_source(base, d);
     if !rr0.ok { return deps_err(rr0.err); }
     resolved.push(rr0.dep);
-    let dep_files: Vec[ld.SourceFile] = load_dep_sources(d.name, rr0.dep_root);
+    let dep_files: Vec[ld.SourceFile] = load_dep_sources(dep_name, rr0.dep_root);
     let mut di: i32 = 0;
     while di < dep_files.len() { files.push(dep_files.get(di)); di = di + 1; }
 
@@ -1583,12 +1902,12 @@ fn toml_quote(s: String) -> String {
   return "\"".concat(s.escape_c()).concat("\"");
 }
 
-fn dep_source_kind(d: mf.Dependency) -> String {
-  if d.has_git { return "git"; }
-  if d.has_registry { return "registry"; }
-  if d.has_path && !d.has_version { return "path"; }
-  if d.has_path && d.has_version && !d.has_git { return "path"; }
-  if d.has_version { return "registry"; }
+fn dep_source_kind(has_path: bool, has_version: bool, has_git: bool, has_registry: bool) -> String {
+  if has_git { return "git"; }
+  if has_registry { return "registry"; }
+  if has_path && !has_version { return "path"; }
+  if has_path && has_version && !has_git { return "path"; }
+  if has_version { return "registry"; }
   return "path";
 }
 
@@ -1600,7 +1919,7 @@ fn write_lockfile(deps: Vec[mf.Dependency]) -> () {
     let digest: String = lock_dep_digest(d.path);
     out = out.concat("\n[[dependency]]\n");
     out = out.concat("name = ").concat(toml_quote(d.name)).concat("\n");
-    out = out.concat("source = ").concat(toml_quote(dep_source_kind(d))).concat("\n");
+    out = out.concat("source = ").concat(toml_quote(dep_source_kind(d.has_path, d.has_version, d.has_git, d.has_registry))).concat("\n");
     if d.has_path {
       out = out.concat("path = ").concat(toml_quote(d.path)).concat("\n");
     }
@@ -1748,7 +2067,13 @@ fn print_version() -> () {
 
 fn main() -> i32 {
   let args: Vec[String] = proc.args();
-  let routed: ToolchainRouteResult = maybe_handle_toolchain_or_reroute(args);
+  let mut args_for_route: Vec[String] = Vec();
+  let mut ari: i32 = 0;
+  while ari < args.len() {
+    args_for_route.push(args.get(ari));
+    ari = ari + 1;
+  }
+  let routed: ToolchainRouteResult = maybe_handle_toolchain_or_reroute(args_for_route);
   if routed.handled { return routed.code; }
   if args.len() < 1 {
     usage();
@@ -1769,6 +2094,7 @@ fn main() -> i32 {
   let mut test_list_only: bool = false;
   let mut test_rerun_failed: bool = false;
   let mut test_json: bool = false;
+  let mut target_flag: String = "";
   let mut out: String = "";
   let mut src_start: i32 = -1;
   let mut i: i32 = 1;
@@ -1934,6 +2260,31 @@ fn main() -> i32 {
       i = i + 1;
       continue;
     }
+    if has_prefix(a, "--target=") {
+      if !cmd_supports_target(cmd.slice(0, cmd.len())) {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      target_flag = a.slice(9, a.len());
+      i = i + 1;
+      continue;
+    }
+    if a == "--target" {
+      if !cmd_supports_target(cmd.slice(0, cmd.len())) {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      if i + 1 >= args.len() {
+        usage();
+        print("missing value for --target\n");
+        return 1;
+      }
+      target_flag = args.get(i + 1);
+      i = i + 2;
+      continue;
+    }
     if has_prefix(a, "-") {
       usage();
       print("unknown flag: ".concat(a).concat("\n"));
@@ -1964,12 +2315,31 @@ fn main() -> i32 {
     print("missing out path\n");
     return 1;
   }
-  let srcs: Vec[String] = if src_start >= 0 { slice_vec(args, src_start) } else { Vec() };
+
+  let host_platform: String = tc_detect_platform();
+  let host_os: String = platform_os_part(host_platform);
+  let host_arch: String = platform_arch_part(host_platform);
+  let tr: CliTargetSpec = parse_cli_target_spec(target_flag, host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()));
+  if !tr.ok {
+    usage();
+    print(tr.err.concat("\n"));
+    return 1;
+  }
+  let target_os: String = tr.os;
+  let target_arch: String = tr.arch;
+  let target_triple: String = tr.triple;
+  let target_abi: String = tr.abi;
 
   if cmd == "list-pkg" {
     let all: Vec[String] = fs.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_sources(all);
-    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths) { Vec() } else { load_stage1_std() };
+    let mut paths_for_std: Vec[String] = Vec();
+    let mut psi: i32 = 0;
+    while psi < paths.len() {
+      paths_for_std.push(paths.get(psi));
+      psi = psi + 1;
+    }
+    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths_for_std) { Vec() } else { load_stage1_std() };
     let dr: DepsResult = load_deps_from_manifest();
     if !dr.ok {
       print("invalid vox.toml: ".concat(dr.err).concat("\n"));
@@ -1995,9 +2365,17 @@ fn main() -> i32 {
   }
 
   if cmd == "emit-c" {
-    if srcs.len() == 0 { usage(); print("missing sources\n"); return 1; }
+    let mut srcs_emit: Vec[String] = Vec();
+    if src_start >= 0 {
+      let mut sei: i32 = src_start;
+      while sei < args.len() {
+        srcs_emit.push(args.get(sei));
+        sei = sei + 1;
+      }
+    }
+    if srcs_emit.len() == 0 { usage(); print("missing sources\n"); return 1; }
     let mut files: Vec[ld.SourceFile] = load_stage1_std();
-    let user: Vec[ld.SourceFile] = load_files(srcs);
+    let user: Vec[ld.SourceFile] = load_files(srcs_emit);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
     let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: true, driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
@@ -2009,9 +2387,17 @@ fn main() -> i32 {
     return 0;
   }
   if cmd == "build" {
-    if srcs.len() == 0 { usage(); print("missing sources\n"); return 1; }
+    let mut srcs_build: Vec[String] = Vec();
+    if src_start >= 0 {
+      let mut sbi: i32 = src_start;
+      while sbi < args.len() {
+        srcs_build.push(args.get(sbi));
+        sbi = sbi + 1;
+      }
+    }
+    if srcs_build.len() == 0 { usage(); print("missing sources\n"); return 1; }
     let mut files: Vec[ld.SourceFile] = load_stage1_std();
-    let user: Vec[ld.SourceFile] = load_files(srcs);
+    let user: Vec[ld.SourceFile] = load_files(srcs_build);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
     let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: true, driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
@@ -2021,7 +2407,7 @@ fn main() -> i32 {
     }
     let cpath: String = out.concat(".c");
     fs.write_string(cpath, r.c);
-    let cmdline: String = cc_cmd().concat(" -std=c11 -O0 -g").concat(cc_common_flags()).concat(" ").concat(cpath).concat(" -o ").concat(out).concat(cc_link_flags());
+    let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, out);
     let code: i32 = proc.exec(cmdline);
     if code != 0 {
       print("cc failed: ".concat(cmdline).concat("\n"));
@@ -2033,7 +2419,13 @@ fn main() -> i32 {
   if cmd == "emit-pkg-c" {
     let all: Vec[String] = fs.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_sources(all);
-    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths) { Vec() } else { load_stage1_std() };
+    let mut paths_for_std: Vec[String] = Vec();
+    let mut psi: i32 = 0;
+    while psi < paths.len() {
+      paths_for_std.push(paths.get(psi));
+      psi = psi + 1;
+    }
+    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths_for_std) { Vec() } else { load_stage1_std() };
     let dr: DepsResult = load_deps_from_manifest();
     if !dr.ok {
       print("invalid vox.toml: ".concat(dr.err).concat("\n"));
@@ -2061,7 +2453,13 @@ fn main() -> i32 {
   if cmd == "build-pkg" {
     let all: Vec[String] = fs.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_sources(all);
-    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths) { Vec() } else { load_stage1_std() };
+    let mut paths_for_std: Vec[String] = Vec();
+    let mut psi: i32 = 0;
+    while psi < paths.len() {
+      paths_for_std.push(paths.get(psi));
+      psi = psi + 1;
+    }
+    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths_for_std) { Vec() } else { load_stage1_std() };
     let dr: DepsResult = load_deps_from_manifest();
     if !dr.ok {
       print("invalid vox.toml: ".concat(dr.err).concat("\n"));
@@ -2085,7 +2483,7 @@ fn main() -> i32 {
     }
     let cpath: String = out.concat(".c");
     fs.write_string(cpath, r.c);
-    let cmdline: String = cc_cmd().concat(" -std=c11 -O0 -g").concat(cc_common_flags()).concat(" ").concat(cpath).concat(" -o ").concat(out).concat(cc_link_flags());
+    let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, out);
     let code: i32 = proc.exec(cmdline);
     if code != 0 {
       print("cc failed: ".concat(cmdline).concat("\n"));
@@ -2097,6 +2495,12 @@ fn main() -> i32 {
   if cmd == "test-pkg" {
     let all: Vec[String] = fs.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_test_sources(all);
+    let mut paths_for_std_test: Vec[String] = Vec();
+    let mut pst: i32 = 0;
+    while pst < paths.len() {
+      paths_for_std_test.push(paths.get(pst));
+      pst = pst + 1;
+    }
 
     let prev_failed: Vec[String] = if test_rerun_failed { read_failed_tests() } else { Vec() };
     if test_rerun_failed && prev_failed.len() == 0 {
@@ -2107,8 +2511,32 @@ fn main() -> i32 {
       }
       return 0;
     }
-    let discovered: Vec[String] = if test_list_only { discover_tests_cached_fast(paths) } else { discover_tests_cached(paths) };
-    let base: Vec[String] = if test_rerun_failed { intersect_tests(discovered, prev_failed) } else { discovered };
+    let mut paths_fast: Vec[String] = Vec();
+    let mut pfi: i32 = 0;
+    while pfi < paths.len() {
+      paths_fast.push(paths.get(pfi));
+      pfi = pfi + 1;
+    }
+    let mut paths_full: Vec[String] = Vec();
+    let mut pni: i32 = 0;
+    while pni < paths.len() {
+      paths_full.push(paths.get(pni));
+      pni = pni + 1;
+    }
+    let discovered: Vec[String] = if test_list_only { discover_tests_cached_fast(paths_fast) } else { discover_tests_cached(paths_full) };
+    let mut discovered_for_base: Vec[String] = Vec();
+    let mut dbi: i32 = 0;
+    while dbi < discovered.len() {
+      discovered_for_base.push(discovered.get(dbi));
+      dbi = dbi + 1;
+    }
+    let mut prev_failed_for_base: Vec[String] = Vec();
+    let mut pbi: i32 = 0;
+    while pbi < prev_failed.len() {
+      prev_failed_for_base.push(prev_failed.get(pbi));
+      pbi = pbi + 1;
+    }
+    let base: Vec[String] = if test_rerun_failed { intersect_tests(discovered_for_base, prev_failed_for_base) } else { discovered_for_base };
     let by_module: Vec[String] = filter_tests_module_pattern(base, test_module_pat);
     let by_run: Vec[String] = filter_tests_run_pattern(by_module, test_run_pat);
     let tests: Vec[String] = filter_tests_contains(by_run, test_filter);
@@ -2116,10 +2544,22 @@ fn main() -> i32 {
       print_test_selection(discovered.len(), tests.len(), test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, if test_rerun_failed { prev_failed.len() } else { -1 });
     }
     if test_list_only {
+      let mut tests_for_list_json: Vec[String] = Vec();
+      let mut tli: i32 = 0;
+      while tli < tests.len() {
+        tests_for_list_json.push(tests.get(tli));
+        tli = tli + 1;
+      }
+      let mut tests_for_list_text: Vec[String] = Vec();
+      let mut tlt: i32 = 0;
+      while tlt < tests.len() {
+        tests_for_list_text.push(tests.get(tlt));
+        tlt = tlt + 1;
+      }
       if test_json {
-        print_json_report(discovered.len(), tests.len(), test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, true, tests, Vec(), Vec(), Vec(), Vec(), Vec(), "", "", 0, 0, 0, 0);
+        print_json_report(discovered.len(), tests.len(), test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, true, tests_for_list_json, Vec(), Vec(), Vec(), Vec(), Vec(), "", "", 0, 0, 0, 0);
       } else {
-        print_test_list(tests);
+        print_test_list(tests_for_list_text);
       }
       return 0;
     }
@@ -2133,7 +2573,7 @@ fn main() -> i32 {
       return 0;
     }
 
-    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths) { Vec() } else { load_stage1_std() };
+    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths_for_std_test) { Vec() } else { load_stage1_std() };
     let dr: DepsResult = load_deps_from_manifest();
     if !dr.ok {
       print("invalid vox.toml: ".concat(dr.err).concat("\n"));
@@ -2153,16 +2593,41 @@ fn main() -> i32 {
 
     let cpath: String = out.concat(".test.c");
     let bin: String = out.concat(".test");
-    let build_key: String = test_build_cache_key(files, tests);
+    let mut tests_for_cache: Vec[String] = Vec();
+    let mut tci: i32 = 0;
+    while tci < tests.len() {
+      tests_for_cache.push(tests.get(tci));
+      tci = tci + 1;
+    }
+    let mut tests_for_compile: Vec[String] = Vec();
+    let mut tco: i32 = 0;
+    while tco < tests.len() {
+      tests_for_compile.push(tests.get(tco));
+      tco = tco + 1;
+    }
+    let mut tests_for_queues: Vec[String] = Vec();
+    let mut tqu: i32 = 0;
+    while tqu < tests.len() {
+      tests_for_queues.push(tests.get(tqu));
+      tqu = tqu + 1;
+    }
+    let total_tests: i32 = tests.len();
+    let mut files_for_cache: Vec[ld.SourceFile] = Vec();
+    let mut fci: i32 = 0;
+    while fci < files.len() {
+      files_for_cache.push(files.get(fci));
+      fci = fci + 1;
+    }
+    let build_key: String = test_build_cache_key(files_for_cache, tests_for_cache);
     if !test_build_cache_hit(out, build_key, cpath, bin) {
-      let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests });
+      let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile });
       if !r.ok {
         print("compile failed: ".concat(r.err).concat("\n"));
         return 1;
       }
 
       fs.write_string(cpath, r.c);
-      let cmdline: String = cc_cmd().concat(" -std=c11 -O0 -g").concat(cc_common_flags()).concat(" ").concat(cpath).concat(" -o ").concat(bin).concat(cc_link_flags());
+      let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, bin);
       let code: i32 = proc.exec(cmdline);
       if code != 0 {
         print("cc failed: ".concat(cmdline).concat("\n"));
@@ -2180,16 +2645,28 @@ fn main() -> i32 {
     let mut module_summaries: Vec[ModuleSummary] = Vec();
     let mut module_details: Vec[ModuleDetail] = Vec();
     let mut results: Vec[TestRunResult] = Vec();
-    let mut queues: Vec[ModuleQueue] = build_module_queues(tests);
+    let mut queues: Vec[ModuleQueue] = build_module_queues(tests_for_queues);
     let mut running: Vec[RunningJob] = Vec();
     let mut launch_seq: i32 = 0;
     let mut stop_launch: bool = false;
     let mut fail_fast_announced: bool = false;
     let run_dir: String = path_join("target/debug", ".vox_test_jobs_".concat(run_start_ns.to_string()));
     fs.mkdir_p(run_dir);
-    while passed + failed < tests.len() {
+    while passed + failed < total_tests {
       while !stop_launch && running.len() < test_jobs {
-        let qi: i32 = pick_runnable_queue_idx(queues, running);
+        let mut queues_for_pick: Vec[ModuleQueue] = Vec();
+        let mut qpi: i32 = 0;
+        while qpi < queues.len() {
+          queues_for_pick.push(queues.get(qpi));
+          qpi = qpi + 1;
+        }
+        let mut running_for_pick: Vec[RunningJob] = Vec();
+        let mut rpi: i32 = 0;
+        while rpi < running.len() {
+          running_for_pick.push(running.get(rpi));
+          rpi = rpi + 1;
+        }
+        let qi: i32 = pick_runnable_queue_idx(queues_for_pick, running_for_pick);
         if qi < 0 { break; }
         let q: ModuleQueue = queues.get(qi);
         let name: String = q.tests.get(q.next);
@@ -2199,7 +2676,13 @@ fn main() -> i32 {
         launch_seq = launch_seq + 1;
       }
 
-      if running.len() == 0 && (!has_pending_queues(queues) || stop_launch) { break; }
+      let mut queues_for_pending: Vec[ModuleQueue] = Vec();
+      let mut qpn: i32 = 0;
+      while qpn < queues.len() {
+        queues_for_pending.push(queues.get(qpn));
+        qpn = qpn + 1;
+      }
+      if running.len() == 0 && (!has_pending_queues(queues_for_pending) || stop_launch) { break; }
 
       let mut next_running: Vec[RunningJob] = Vec();
       let mut completed: bool = false;
@@ -2258,13 +2741,25 @@ fn main() -> i32 {
       }
     }
     let total_ns: i64 = dur_nonneg_ns(run_start_ns, tm.now_ns());
-    let skipped: i32 = tests.len() - (passed + failed);
+    let skipped: i32 = total_tests - (passed + failed);
     let results_sorted: Vec[TestRunResult] = sort_test_results(results);
     let module_summaries_sorted: Vec[ModuleSummary] = sort_module_summaries(module_summaries);
     let module_details_sorted: Vec[ModuleDetail] = sort_module_details(module_details);
     let failed_names_sorted: Vec[String] = sort_strings(failed_names);
-    let slowest: Vec[NamedDuration] = build_slowest(results_sorted);
-    write_failed_tests(failed_names_sorted);
+    let mut results_for_slowest: Vec[TestRunResult] = Vec();
+    let mut rsi: i32 = 0;
+    while rsi < results_sorted.len() {
+      results_for_slowest.push(results_sorted.get(rsi));
+      rsi = rsi + 1;
+    }
+    let slowest: Vec[NamedDuration] = build_slowest(results_for_slowest);
+    let mut failed_names_for_write: Vec[String] = Vec();
+    let mut fwi: i32 = 0;
+    while fwi < failed_names_sorted.len() {
+      failed_names_for_write.push(failed_names_sorted.get(fwi));
+      fwi = fwi + 1;
+    }
+    write_failed_tests(failed_names_for_write);
     let hint: String = if failed != 0 { build_rerun_hint(out, test_jobs, test_fail_fast) } else { "" };
     if test_json {
       print_json_report(discovered.len(), tests.len(), test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, tests, results_sorted, module_summaries_sorted, module_details_sorted, slowest, failed_names_sorted, hint, "", passed, failed, skipped, total_ns);
