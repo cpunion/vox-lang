@@ -122,13 +122,13 @@ Governance from now on:
   - Extracted from A02 closure note.
   - Source: `docs/19-ir-spec.md`, `docs/13-standard-library.md`.
 
-- [ ] D07 Full ownership/move/drop semantics for general values/containers.
+- [x] D07 Full ownership/move/drop semantics for general values/containers.
   - [x] D07-1 Remove bootstrap-safe `std/collections/map` fallback: switch to direct `Vec.set/remove/clear` implementation and keep `stage1 -> compiler` gate green.
   - [x] D07-2 Container-level deterministic release model (Vec/String/Map) that is alias-safe under current value-copy semantics.
     - [x] D07-2a Deep-clone baseline landed: `Clone` trait + `impl[T: Clone] Clone for Vec[T]` + `impl[K: Eq + Clone, V: Clone] Clone for Map[K,V]` for explicit non-aliasing copy paths.
     - [x] D07-2b Add deterministic release semantics compatible with the current value-copy model (no UAF on alias copies).
       - Landed baseline: prelude `Release` trait + `release(String)`/`release_vec(Vec[T])`/`Map.release()` reset APIs; release is alias-safe and idempotent, while physical shared-storage reclaim remains deferred to D07-3 ownership/move/drop model.
-  - [ ] D07-3 Language-level ownership/move/drop rules and diagnostics (no-UAF contract) across function boundaries and aggregates.
+  - [x] D07-3 Language-level ownership/move/drop rules and diagnostics (no-UAF contract) across function boundaries and aggregates.
     - [x] D07-3a Release API rebind enforcement: expression-statement `release` calls are rejected (`release call result must be assigned back`) to avoid silent non-rebinding misuse.
     - [x] D07-3b Minimal move-after-release diagnostics: values consumed by `release` are marked moved; later reads error as `use of moved value: <name>`, while `x = release(x)` remains a valid self-rebind path.
     - [x] D07-3c Move-state propagation baseline in control flow: `block/if/while` now conservatively propagate moved flags for outer locals, so branch/loop release paths are visible to later reads.

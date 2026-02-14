@@ -898,6 +898,325 @@ fn ensure_borrow_arg_requirements(
   return TcError.None;
 }
 
+pub struct CallMoveSlot {
+  pub expr_id: i32,
+  pub borrow_kind: i32,
+}
+
+pub struct CallMoveSlotsResult {
+  pub ok: bool,
+  pub slots: Vec[CallMoveSlot],
+}
+
+fn call_move_slots_ok(slots: Vec[CallMoveSlot]) -> CallMoveSlotsResult {
+  return CallMoveSlotsResult { ok: true, slots: slots };
+}
+
+fn call_move_slots_fail() -> CallMoveSlotsResult {
+  return CallMoveSlotsResult { ok: false, slots: Vec() };
+}
+
+fn call_move_slots_push(slots0: Vec[CallMoveSlot], expr_id: i32, borrow_kind: i32) -> Vec[CallMoveSlot] {
+  let mut out: Vec[CallMoveSlot] = slots0;
+  out.push(CallMoveSlot { expr_id: expr_id, borrow_kind: borrow_kind });
+  return out;
+}
+
+fn call_move_slots_from_sig(sig: FuncSig, arg_exprs: Vec[i32]) -> CallMoveSlotsResult {
+  let mut out: Vec[CallMoveSlot] = Vec();
+  if !sig.has_variadic {
+    if arg_exprs.len() != sig.params.len() { return call_move_slots_fail(); }
+    let mut i: i32 = 0;
+    while i < arg_exprs.len() {
+      out = call_move_slots_push(out, arg_exprs.get(i), sig_param_borrow_kind(sig, i));
+      i = i + 1;
+    }
+    return call_move_slots_ok(out);
+  }
+
+  if sig.params.len() == 0 { return call_move_slots_fail(); }
+  let fixed_n: i32 = sig.params.len() - 1;
+  if arg_exprs.len() < fixed_n { return call_move_slots_fail(); }
+
+  let mut i: i32 = 0;
+  while i < fixed_n {
+    out = call_move_slots_push(out, arg_exprs.get(i), sig_param_borrow_kind(sig, i));
+    i = i + 1;
+  }
+  let mut j: i32 = fixed_n;
+  while j < arg_exprs.len() {
+    out = call_move_slots_push(out, arg_exprs.get(j), sig_param_borrow_kind(sig, fixed_n));
+    j = j + 1;
+  }
+  return call_move_slots_ok(out);
+}
+
+fn call_move_slots_enum_ctor(args: Vec[i32]) -> CallMoveSlotsResult {
+  let mut out: Vec[CallMoveSlot] = Vec();
+  let mut i: i32 = 0;
+  while i < args.len() {
+    out = call_move_slots_push(out, args.get(i), param_borrow_none());
+    i = i + 1;
+  }
+  return call_move_slots_ok(out);
+}
+
+fn move_call_non_consuming_module(mod_path: String) -> bool {
+  if mod_path == "" { return true; }
+  if mod_path.len() >= 4 && mod_path.slice(0, 4) == "std/" { return true; }
+  if mod_path.len() >= 4 && mod_path.slice(0, 4) == "vox/" { return true; }
+  return false;
+}
+
+fn call_move_slots_non_consuming_args(args: Vec[i32]) -> CallMoveSlotsResult {
+  let mut out: Vec[CallMoveSlot] = Vec();
+  let mut i: i32 = 0;
+  while i < args.len() {
+    out = call_move_slots_push(out, args.get(i), param_borrow_ref());
+    i = i + 1;
+  }
+  return call_move_slots_ok(out);
+}
+
+fn vec_builtin_recv_borrow_kind(name: String) -> i32 {
+  if name == "push" || name == "insert" || name == "set" || name == "clear" || name == "extend" || name == "pop" || name == "remove" {
+    return param_borrow_ref_mut();
+  }
+  return param_borrow_ref();
+}
+
+fn is_map_builtin_method(name: String) -> bool {
+  return name == "len" ||
+    name == "is_empty" ||
+    name == "index_of_key" ||
+    name == "contains_key" ||
+    name == "get" ||
+    name == "get_or" ||
+    name == "keys" ||
+    name == "values" ||
+    name == "set" ||
+    name == "clear" ||
+    name == "release" ||
+    name == "remove";
+}
+
+fn map_builtin_recv_borrow_kind(name: String) -> i32 {
+  if name == "set" || name == "clear" || name == "release" || name == "remove" {
+    return param_borrow_none();
+  }
+  return param_borrow_ref();
+}
+
+fn call_move_slots_for_unqualified_fn(ctx: Ctx, mod_path: String, imps: Imports, name: String, args: Vec[i32]) -> CallMoveSlotsResult {
+  let nf: NamedFuncImport = find_named_func(imps.named_funcs, name);
+  if nf.local != "" {
+    let frx: FindFuncResult = find_func(ctx, nf.mod_path, nf.name);
+    if frx.found {
+      if move_call_non_consuming_module(nf.mod_path) { return call_move_slots_non_consuming_args(args); }
+      return call_move_slots_from_sig(frx.sig, args);
+    }
+    return call_move_slots_fail();
+  }
+
+  let fr0: FindFuncResult = find_func(ctx, mod_path, name);
+  if fr0.found {
+    if move_call_non_consuming_module(mod_path) { return call_move_slots_non_consuming_args(args); }
+    return call_move_slots_from_sig(fr0.sig, args);
+  }
+
+  let prelude: String = "std/prelude";
+  let fr1: FindFuncResult = find_func(ctx, prelude, name);
+  if fr1.found && vis_allows(fr1.sig.vis, prelude, mod_path) {
+    if move_call_non_consuming_module(prelude) { return call_move_slots_non_consuming_args(args); }
+    return call_move_slots_from_sig(fr1.sig, args);
+  }
+
+  let fr2: FindFuncResult = find_func(ctx, "", name);
+  if fr2.found {
+    if move_call_non_consuming_module("") { return call_move_slots_non_consuming_args(args); }
+    return call_move_slots_from_sig(fr2.sig, args);
+  }
+  return call_move_slots_fail();
+}
+
+fn call_move_slots_for_qualified_fn(ctx: Ctx, cur_mod: String, target_mod: String, name: String, args: Vec[i32]) -> CallMoveSlotsResult {
+  let fr: FindFuncResult = find_func(ctx, target_mod, name);
+  if !fr.found { return call_move_slots_fail(); }
+  if !vis_allows(fr.sig.vis, target_mod, cur_mod) { return call_move_slots_fail(); }
+  if move_call_non_consuming_module(target_mod) { return call_move_slots_non_consuming_args(args); }
+  return call_move_slots_from_sig(fr.sig, args);
+}
+
+fn call_move_slots_for_trait_static(ctx: Ctx, cur_mod: String, trait_mod: String, trait_name: String, method: String, args: Vec[i32]) -> CallMoveSlotsResult {
+  let tf: FindTraitResult = find_trait(ctx, trait_mod, trait_name);
+  if !tf.found { return call_move_slots_fail(); }
+  if !vis_allows(tf.sig.vis, trait_mod, cur_mod) { return call_move_slots_fail(); }
+  let tm: FindTraitMethodResult = find_trait_method(tf.sig, method);
+  if !tm.found { return call_move_slots_fail(); }
+  return call_move_slots_from_sig(tm.m.sig, args);
+}
+
+pub fn resolve_call_move_slots(
+  ctx: Ctx,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  callee: i32,
+  _type_args: Vec[ast.TypeName],
+  args: Vec[i32]
+) -> CallMoveSlotsResult {
+  let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+
+  if match cn { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+    let recv_id: i32 = match cn { ast.ExprNode.Member(r, _n) => r, _ => -1 };
+    let mname: String = match cn { ast.ExprNode.Member(_r, n) => n, _ => "" };
+    let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv_id, -1);
+    if !rr.ok { return call_move_slots_fail(); }
+
+    if is_vec_ty(ctx, rr.ty) && is_vec_builtin_method(mname) {
+      let mut out: Vec[CallMoveSlot] = Vec();
+      out = call_move_slots_push(out, recv_id, vec_builtin_recv_borrow_kind(mname));
+      let mut ai: i32 = 0;
+      while ai < args.len() {
+        out = call_move_slots_push(out, args.get(ai), param_borrow_none());
+        ai = ai + 1;
+      }
+      return call_move_slots_ok(out);
+    }
+    if rr.ty == ctx.ty_string && is_string_builtin_method(mname) {
+      let mut out: Vec[CallMoveSlot] = Vec();
+      out = call_move_slots_push(out, recv_id, param_borrow_ref());
+      let mut ai: i32 = 0;
+      while ai < args.len() {
+        out = call_move_slots_push(out, args.get(ai), param_borrow_ref());
+        ai = ai + 1;
+      }
+      return call_move_slots_ok(out);
+    }
+    if mname == "to_string" && (rr.ty == ctx.ty_bool || rr.ty == ctx.ty_string || is_int_like_ty(ctx, rr.ty) || is_float_ty(ctx, rr.ty)) {
+      return call_move_slots_ok(call_move_slots_push(Vec(), recv_id, param_borrow_ref()));
+    }
+
+    let rty: i32 = strip_range(ctx, rr.ty);
+    let rt: ir.Ty = ir.ty_pool_get(ctx.pool, rty);
+    if rt.kind == ir.TyKind.Struct && rt.mod_path == "std/collections" && rt.name.len() >= 3 && rt.name.slice(0, 3) == "Map" && is_map_builtin_method(mname) {
+      let mut out: Vec[CallMoveSlot] = Vec();
+      out = call_move_slots_push(out, recv_id, map_builtin_recv_borrow_kind(mname));
+      let mut ai: i32 = 0;
+      while ai < args.len() {
+        out = call_move_slots_push(out, args.get(ai), param_borrow_none());
+        ai = ai + 1;
+      }
+      return call_move_slots_ok(out);
+    }
+    if rt.kind == ir.TyKind.Param {
+      let bm: BoundMethodSearch = find_bound_trait_methods(ctx, l0, rt.name, mname);
+      if bm.cands.len() != 1 { return call_move_slots_fail(); }
+      let c0: BoundMethodCand = bm.cands.get(0);
+      let msig0: FuncSig = subst_self_in_sig(ctx, c0.sig, rty);
+      let mut all_args0: Vec[i32] = Vec();
+      all_args0.push(recv_id);
+      let mut aj0: i32 = 0;
+      while aj0 < args.len() {
+        all_args0.push(args.get(aj0));
+        aj0 = aj0 + 1;
+      }
+      return call_move_slots_from_sig(msig0, all_args0);
+    }
+
+    let inh: FindInherentDispatchMethodResult = find_inherent_dispatch_method(ctx, strip_range(ctx, rr.ty), mname);
+    if inh.ambiguous { return call_move_slots_fail(); }
+    if inh.found {
+      let mut all_args_inh: Vec[i32] = Vec();
+      all_args_inh.push(recv_id);
+      let mut ai_inh: i32 = 0;
+      while ai_inh < args.len() {
+        all_args_inh.push(args.get(ai_inh));
+        ai_inh = ai_inh + 1;
+      }
+      return call_move_slots_from_sig(inh.m.sig, all_args_inh);
+    }
+
+    let dm: FindTraitDispatchMethodResult = find_trait_dispatch_method(ctx, mod_path, strip_range(ctx, rr.ty), mname);
+    if dm.ambiguous { return call_move_slots_fail(); }
+    if dm.found {
+      let mut all_args: Vec[i32] = Vec();
+      all_args.push(recv_id);
+      let mut ai: i32 = 0;
+      while ai < args.len() {
+        all_args.push(args.get(ai));
+        ai = ai + 1;
+      }
+      return call_move_slots_from_sig(dm.m.sig, all_args);
+    }
+    return call_move_slots_fail();
+  }
+
+  if match cn { ast.ExprNode.DotIdent(_x) => true, _ => false } {
+    return call_move_slots_enum_ctor(args);
+  }
+
+  let pr: ExprTypePathResult = expr_type_path(exprs, callee);
+  if !pr.ok { return call_move_slots_fail(); }
+  let parts: Vec[String] = pr.parts;
+  let path_targs: Vec[ast.TypeName] = pr.targs;
+
+  if parts.len() == 1 {
+    if path_targs.len() != 0 { return call_move_slots_fail(); }
+    if parts.get(0) == "Vec" {
+      if args.len() == 0 { return call_move_slots_ok(Vec()); }
+      return call_move_slots_fail();
+    }
+    return call_move_slots_for_unqualified_fn(ctx, mod_path, imps, parts.get(0), args);
+  }
+
+  if parts.len() == 2 {
+    if path_targs.len() != 0 {
+      return call_move_slots_enum_ctor(args);
+    }
+    let mp: String = find_alias(imps.aliases, parts.get(0));
+    if mp != "" {
+      return call_move_slots_for_qualified_fn(ctx, mod_path, mp, parts.get(1), args);
+    }
+
+    let nt: NamedTypeImport = find_named_type(imps.named_types, parts.get(0));
+    if nt.local != "" {
+      if nt.kind == named_type_kind_trait() {
+        return call_move_slots_for_trait_static(ctx, mod_path, nt.mod_path, nt.name, parts.get(1), args);
+      }
+      return call_move_slots_enum_ctor(args);
+    }
+
+    let ft: FindTraitResult = find_trait(ctx, mod_path, parts.get(0));
+    if ft.found {
+      return call_move_slots_for_trait_static(ctx, mod_path, mod_path, parts.get(0), parts.get(1), args);
+    }
+    let prelude: String = "std/prelude";
+    let fp: FindTraitResult = find_trait(ctx, prelude, parts.get(0));
+    if fp.found && vis_allows(fp.sig.vis, prelude, mod_path) {
+      return call_move_slots_for_trait_static(ctx, mod_path, prelude, parts.get(0), parts.get(1), args);
+    }
+    return call_move_slots_enum_ctor(args);
+  }
+
+  if parts.len() == 3 {
+    let mp: String = find_alias(imps.aliases, parts.get(0));
+    if mp == "" { return call_move_slots_fail(); }
+    if path_targs.len() != 0 {
+      return call_move_slots_enum_ctor(args);
+    }
+    let ft: FindTraitResult = find_trait(ctx, mp, parts.get(1));
+    if ft.found {
+      return call_move_slots_for_trait_static(ctx, mod_path, mp, parts.get(1), parts.get(2), args);
+    }
+    return call_move_slots_enum_ctor(args);
+  }
+
+  return call_move_slots_fail();
+}
+
 fn locals_has_type_param_bound(ctx: Ctx, l0: Locals, type_param: String, trait_mod: String, trait_name: String) -> bool {
   let mut i: i32 = 0;
   while i < l0.type_param_bounds.len() {
