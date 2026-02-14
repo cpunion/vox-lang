@@ -1096,6 +1096,14 @@ fn parse_primary(p: Parser) -> ParseExprResult {
   }
   let k: lex.TokenKind = peek_kind(p);
 
+  if kind_is(k, lex.TokenKind.KwAwait) {
+    let mut q: Parser = p;
+    let at: i32 = peek(p).start;
+    q.has_err = true;
+    q.err = ParseError.InvalidType(at, "await expression is deferred (D03)");
+    return ParseExprResult { p: q, id: -1 };
+  }
+
   if kind_is(k, lex.TokenKind.Int) {
     let ar: AdvanceResult = advance(p);
     let tok: lex.Token = ar.tok;
@@ -1871,7 +1879,14 @@ fn parse_fn_decl(
   ffi_imports: Vec[ast.FfiImportAttr],
   ffi_exports: Vec[ast.FfiExportAttr]
 ) -> ParseFnResult {
-  let ar1: AdvanceResult = expect(p, lex.TokenKind.KwFn);
+  let mut q0: Parser = p;
+  let mut is_async: bool = false;
+  if kind_is(peek_kind(q0), lex.TokenKind.KwAsync) {
+    let ar0: AdvanceResult = advance(q0);
+    q0 = ar0.p;
+    is_async = true;
+  }
+  let ar1: AdvanceResult = expect(q0, lex.TokenKind.KwFn);
   let r2: ParseIdentResult = parse_ident(ar1.p);
   let mut q: Parser = r2.p;
   let mut tps: Vec[String] = Vec();
@@ -1943,6 +1958,7 @@ fn parse_fn_decl(
       sp: span_tok(p, ar1.tok),
       vis: vis,
       is_pub: is_pub,
+      is_async: is_async,
       name: r2.name,
       type_params: tps,
       type_param_packs: tpps,
@@ -2465,6 +2481,28 @@ fn parse_enum_decl(p: Parser, vis: i32, is_pub: bool) -> ParseEnumResult {
 }
 
 fn parse_trait_method_decl(p: Parser) -> ParseTraitMethodResult {
+  if kind_is(peek_kind(p), lex.TokenKind.KwAsync) {
+    let ar0: AdvanceResult = advance(p);
+    let mut q0: Parser = ar0.p;
+    q0.has_err = true;
+    q0.err = ParseError.InvalidType(ar0.tok.start, "async trait method is deferred (D03)");
+    return ParseTraitMethodResult {
+      p: q0,
+      m: ast.TraitMethodDecl {
+        sp: ast.span0(),
+        name: "",
+        type_params: Vec(),
+        type_param_packs: Vec(),
+        const_params: Vec(),
+        type_param_bounds: Vec(),
+        const_where_bounds: Vec(),
+        params: Vec(),
+        ret: ast.TypeName { parts: Vec(), args: Vec() },
+        has_body: false,
+        body: ast.Block { stmts: Vec() },
+      },
+    };
+  }
   let ar1: AdvanceResult = expect(p, lex.TokenKind.KwFn);
   let r2: ParseIdentResult = parse_ident(ar1.p);
   let mut q0: Parser = r2.p;
@@ -2934,7 +2972,7 @@ fn parse_pub_marker(p: Parser) -> ParsePubResult {
 
     let k: lex.TokenKind = peek_kind(q);
     let has_fn_attrs: bool = ar.ffi_imports.len() != 0 || ar.ffi_exports.len() != 0;
-    if has_fn_attrs && !kind_is(k, lex.TokenKind.KwFn) {
+    if has_fn_attrs && !kind_is(k, lex.TokenKind.KwFn) && !kind_is(k, lex.TokenKind.KwAsync) {
       let mut qe: Parser = q;
       qe.has_err = true;
       qe.err = ParseError.UnexpectedToken(lex.TokenKind.KwFn, k, peek(q).start);

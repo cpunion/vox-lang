@@ -6,11 +6,13 @@
 
 声明：
 
-`fn struct enum trait impl type const static`
+`fn struct enum trait impl type const static async`
 
 控制流：
 
-`if else match for while loop break continue return`
+`if else match for while loop break continue return await`
+
+说明：`async`/`await` 当前为保留关键字（见 `docs/09-async-model.md`，语义尚未开启）。
 
 绑定与可变性：
 

@@ -107,6 +107,10 @@ Governance from now on:
   - Source: `docs/08-thread-safety.md`.
 
 - [ ] D03 Async model.
+  - [x] D03-1 词法/语法前置：保留 `async`/`await` 关键字，`async fn` AST 标记接入。
+  - [x] D03-2 未启用语义的稳定诊断：`async fn`/`await`/trait async method 给出明确 deferred 错误。
+  - [ ] D03-3 Future 表示与 lowering（状态机/poll 模型）。
+  - [ ] D03-4 借用跨 `await` 约束与诊断。
   - Source: `docs/09-async-model.md`.
 
 - [ ] D04 Effect/resource system.
