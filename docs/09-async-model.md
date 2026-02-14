@@ -14,7 +14,7 @@
 2. `async fn` 语法已接入 parser，AST 有 `FuncDecl.is_async`。
 3. 语义尚未开启：
    - `async fn` 在 typecheck 报 `async fn is deferred (D03)`
-   - `await` 表达式在 parser 报 `await expression is deferred (D03)`
+   - `await` 表达式已解析为 AST 节点（`ExprNode.Await`），在 typecheck 报 `await expression is deferred (D03)`
    - trait `async fn` 在 parser 报 `async trait method is deferred (D03)`
 
 ## 2. 为什么核心选 pull
