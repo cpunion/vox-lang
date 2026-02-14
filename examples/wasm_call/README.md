@@ -47,10 +47,10 @@ node node/run.mjs
 先启动一个静态文件服务（从 `examples/wasm_call` 目录）：
 
 ```bash
-node web/server.mjs
+VOX_WASM_WEB_PORT=8080 node web/server.mjs
 ```
 
-然后打开：
+然后打开（端口默认 8080，可用 `VOX_WASM_WEB_PORT` 覆盖）：
 
 - <http://127.0.0.1:8080/web/>
 

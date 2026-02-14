@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const host = "127.0.0.1";
-const port = 8080;
+const port = Number(process.env.VOX_WASM_WEB_PORT || "8080") || 8080;
 
 const mime = new Map([
   [".html", "text/html; charset=utf-8"],
