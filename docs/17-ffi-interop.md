@@ -50,6 +50,14 @@ pub fn add(a: i32, b: i32) -> i32 {
 - `@ffi_import("c", "...")` 生成 `extern` 函数声明，并在调用点直连外部符号。
 - `@ffi_export("c", "...")` 生成导出包装函数，包装内部 mangled Vox 函数名。
 
+## 构建导出库
+
+- 可执行（默认）：`vox build-pkg out.bin`
+- 共享库：`vox build-pkg --artifact=shared libvox.so`（macOS 常用 `.dylib`，Windows 常用 `.dll`）
+- 静态库：`vox build-pkg --artifact=static libvox.a`（Windows MSVC 常用 `.lib`）
+
+`shared/static` 产物不会生成 driver `main`。
+
 ## WASM 状态
 
 - `wasm` 目标的导入/导出属性在语法与类型系统中保留。

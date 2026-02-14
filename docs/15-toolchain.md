@@ -4,8 +4,8 @@
 
 ```bash
 vox emit-c    [--driver=user|tool] <out.c>   <src...>
-vox build     [--driver=user|tool] <out.bin> <src...>
-vox build-pkg [--driver=user|tool] <out.bin>
+vox build     [--driver=user|tool] [--artifact=exe|static|shared] <out.bin> <src...>
+vox build-pkg [--driver=user|tool] [--artifact=exe|static|shared] <out.bin>
 vox test-pkg  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] <out.bin>
 vox list-pkg  [--json]
 vox toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
@@ -13,6 +13,8 @@ vox version | --version | -V
 ```
 
 `vox version` 解析顺序：`VOX_BUILD_VERSION`（若设置）优先；否则在 git 仓库中推导为 `X.Y.Z[-dirty]-<n>+g<sha>`（命中 tag 且干净时输出 `X.Y.Z`）；无 git 时 `release` 构建输出 `X.Y.Z`，普通源码包输出 `X.Y.Z+src`。
+
+产物类型：`--artifact=exe|static|shared`，默认 `exe`。
 
 ## 仓库布局
 

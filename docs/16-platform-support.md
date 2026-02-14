@@ -8,10 +8,17 @@
 
 ## CLI
 
-`vox build/build-pkg/test-pkg` 支持：
+`vox build/build-pkg/test-pkg` 支持目标平台参数：
 
 - `--target=<value>`
 - `--target <value>`
+
+`vox build/build-pkg` 额外支持产物参数：
+
+- `--artifact=<kind>`
+- `--artifact <kind>`
+
+`<kind>`: `exe`（默认）| `static` | `shared`
 
 `<value>` 可用形式：
 
@@ -76,10 +83,16 @@ Windows 目标支持两条工具链：
 
 ## 链接与宏
 
-- Windows GNU 自动附加：`-lws2_32 -static -Wl,--stack,8388608`
-- Windows MSVC 自动附加：`/link ws2_32.lib /STACK:8388608`
+- `exe`:
+  - Windows GNU: `-lws2_32 -static -Wl,--stack,8388608`
+  - Windows MSVC: `/link ws2_32.lib /STACK:8388608`
+- `shared`:
+  - Linux/Windows GNU: `-shared`
+  - macOS: `-dynamiclib`
+  - Windows MSVC: `/LD`
+- `static`: 先生成对象文件，再用 `ar/lib` 打包静态库。
 - 非 Windows 自动附加：`-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE`
 
 ## WASM / 嵌入
 
-WASM 与嵌入制品（`staticlib`/`cdylib`）仍在后续 FFI/目标扩展范围内。
+WASM 目标仍在后续 FFI/目标扩展范围内。
