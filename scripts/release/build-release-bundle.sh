@@ -235,22 +235,27 @@ echo "[release] target platform: $PLATFORM"
 
 mkdir -p "$ROOT/target/release"
 TOOL_BUILD_LOG="$ROOT/target/release/tool-build.log"
-TARGET_FLAG=()
 if [[ "$IS_CROSS" == "1" ]]; then
-  TARGET_FLAG=("--target=${TARGET_OS}-${TARGET_ARCH}")
+  TARGET_ARG="--target=${TARGET_OS}-${TARGET_ARCH}"
+else
+  TARGET_ARG=""
 fi
 
 set +e
 (
   cd "$ROOT"
-  if [[ "$GOOS" == "windows" && ${#TARGET_FLAG[@]} -eq 0 && -n "$CC_BASH" ]]; then
+  if [[ "$GOOS" == "windows" && "$IS_CROSS" == "0" && -n "$CC_BASH" ]]; then
     if "$BOOTSTRAP_BIN" emit-pkg-c --driver=tool target/release/vox.c; then
       "$CC_BASH" -v -std=c11 -O0 -g target/release/vox.c -o target/release/vox -lws2_32 -static -Wl,--stack,8388608
     else
-      "$BOOTSTRAP_BIN" build-pkg --driver=tool "${TARGET_FLAG[@]}" target/release/vox
+      "$BOOTSTRAP_BIN" build-pkg --driver=tool target/release/vox
     fi
   else
-    "$BOOTSTRAP_BIN" build-pkg --driver=tool "${TARGET_FLAG[@]}" target/release/vox
+    if [[ -n "$TARGET_ARG" ]]; then
+      "$BOOTSTRAP_BIN" build-pkg --driver=tool "$TARGET_ARG" target/release/vox
+    else
+      "$BOOTSTRAP_BIN" build-pkg --driver=tool target/release/vox
+    fi
   fi
 ) >"$TOOL_BUILD_LOG" 2>&1
 tool_rc=$?
