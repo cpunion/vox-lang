@@ -3,7 +3,7 @@
 本章定义 `vox-lang` 当前发布策略：
 
 - 发布产物：`vox`（单一可执行）
-- 平台覆盖：`linux` / `darwin` / `windows`
+- 平台覆盖：`linux` / `darwin` / `windows`（含 `x86` 扩展包）
 - 构建链路：`compiler(locked release) -> compiler(new)`
 - 禁止链路：发布与 CI 门禁不再使用 `stage1` fallback
 
@@ -12,8 +12,10 @@
 每个版本发布以下二进制平台包：
 
 - `vox-lang-<version>-linux-amd64.tar.gz`
-- `vox-lang-<version>-darwin-amd64.tar.gz`
+- `vox-lang-<version>-linux-x86.tar.gz`
+- `vox-lang-<version>-darwin-arm64.tar.gz`
 - `vox-lang-<version>-windows-amd64.tar.gz`
+- `vox-lang-<version>-windows-x86.tar.gz`
 
 并额外发布自制源码包：
 
@@ -60,12 +62,14 @@ CI 步骤：
 
 ## 4. 触发规则
 
-- CI 构建校验：`pull_request -> main`（三平台构建 + 烟测，不发布）
-- 版本发布：`push tag vX.Y.Z`（三平台构建 + 烟测 + GitHub Release）
+- CI 构建校验：`pull_request -> main`
+  - 宿主平台：`linux-amd64` / `darwin-arm64` / `windows-amd64`（完整构建 + 烟测 + target 回归）
+  - 交叉扩展：`linux-x86` / `windows-x86`（交叉编译门禁 + 打包校验）
+- 版本发布：`push tag vX.Y.Z`（与 PR 相同构建链路 + GitHub Release 上传）
 
 推荐流程：
 
-1. PR 合并到 `main`（完成三平台构建与烟测）
+1. PR 合并到 `main`（完成宿主与 x86 扩展构建校验）
 2. 打 tag
 3. GitHub Actions 上传 release 资产
 
@@ -73,13 +77,14 @@ CI 步骤：
 
 发布 workflow 至少满足：
 
-1. 三个平台均成功产出 `vox`。
-2. 三个平台 `BOOTSTRAP_MODE` 均为 `rolling`。
-3. 每个平台产物均产出 `.sha256`。
-4. `scripts/release/verify-release-bundle.sh` 对每个平台产物验证通过。
-5. tag 发布时上传全量资产到 GitHub Release。
-6. 产物内 `bin/vox[.exe] version` 可输出内嵌版本号。
-7. 自制源码包 `vox-lang-src-<version>.tar.gz` 与其 `.sha256` 产出并通过校验。
+1. 宿主平台三套资产成功产出并通过 smoke/test 门禁。
+2. `linux-x86` / `windows-x86` 交叉资产成功产出并通过结构/校验门禁。
+3. 全平台 `BOOTSTRAP_MODE` 均为 `rolling`。
+4. 每个平台产物均产出 `.sha256`。
+5. `scripts/release/verify-release-bundle.sh` 对每个平台产物验证通过。
+6. 同宿主平台产物可执行 `vox version` 且输出内嵌版本号；非宿主交叉包跳过执行校验。
+7. tag 发布时上传全量资产到 GitHub Release。
+8. 自制源码包 `vox-lang-src-<version>.tar.gz` 与其 `.sha256` 产出并通过校验。
 
 ## 6. 锁版本维护流程
 

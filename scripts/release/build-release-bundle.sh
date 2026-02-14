@@ -3,12 +3,13 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<USAGE
-usage: $(basename "$0") <version>
+usage: $(basename "$0") <version> [platform]
 example: $(basename "$0") v0.2.0
+example: $(basename "$0") v0.2.0 linux-x86
 USAGE
 }
 
-if [[ $# -ne 1 ]]; then
+if [[ $# -lt 1 || $# -gt 2 ]]; then
   usage
   exit 1
 fi
@@ -24,9 +25,33 @@ DIST_DIR="${DIST_DIR:-$ROOT/dist}"
 
 GOOS="$(go env GOOS)"
 GOARCH="$(go env GOARCH)"
-PLATFORM="${GOOS}-${GOARCH}"
+
+host_arch_from_goarch() {
+  case "$1" in
+    amd64) echo "amd64" ;;
+    arm64) echo "arm64" ;;
+    386) echo "x86" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+PLATFORM="${2:-${VOX_RELEASE_PLATFORM:-${GOOS}-$(host_arch_from_goarch "$GOARCH")}}"
+TARGET_OS="${PLATFORM%%-*}"
+TARGET_ARCH="${PLATFORM#*-}"
+if [[ -z "$TARGET_OS" || -z "$TARGET_ARCH" || "$TARGET_OS" == "$PLATFORM" ]]; then
+  echo "[release] invalid platform: $PLATFORM (expected <os>-<arch>)" >&2
+  exit 1
+fi
+
+HOST_OS="$GOOS"
+HOST_ARCH="$(host_arch_from_goarch "$GOARCH")"
+IS_CROSS="0"
+if [[ "$TARGET_OS" != "$HOST_OS" || "$TARGET_ARCH" != "$HOST_ARCH" ]]; then
+  IS_CROSS="1"
+fi
+
 EXE_SUFFIX=""
-if [[ "$GOOS" == "windows" ]]; then
+if [[ "$TARGET_OS" == "windows" ]]; then
   EXE_SUFFIX=".exe"
 fi
 
@@ -76,6 +101,11 @@ bootstrap_cc_env() {
       return 0
     fi
     echo "[release] CC is set but not found in PATH: $CC" >&2
+  fi
+
+  if [[ "$IS_CROSS" == "1" ]]; then
+    echo "[release] cross build: leave CC unset (use target-specific defaults)"
+    return 0
   fi
 
   local candidates=()
@@ -200,20 +230,32 @@ set +e
 bootstrap_probe_rc=$?
 set -e
 echo "[release] bootstrap probe exit: $bootstrap_probe_rc"
+echo "[release] host platform: ${HOST_OS}-${HOST_ARCH}"
+echo "[release] target platform: $PLATFORM"
 
 mkdir -p "$ROOT/target/release"
 TOOL_BUILD_LOG="$ROOT/target/release/tool-build.log"
+if [[ "$IS_CROSS" == "1" ]]; then
+  TARGET_ARG="--target=${TARGET_OS}-${TARGET_ARCH}"
+else
+  TARGET_ARG=""
+fi
+
 set +e
 (
   cd "$ROOT"
-  if [[ "$GOOS" == "windows" && -n "$CC_BASH" ]]; then
+  if [[ "$GOOS" == "windows" && "$IS_CROSS" == "0" && -n "$CC_BASH" ]]; then
     if "$BOOTSTRAP_BIN" emit-pkg-c --driver=tool target/release/vox.c; then
       "$CC_BASH" -v -std=c11 -O0 -g target/release/vox.c -o target/release/vox -lws2_32 -static -Wl,--stack,8388608
     else
       "$BOOTSTRAP_BIN" build-pkg --driver=tool target/release/vox
     fi
   else
-    "$BOOTSTRAP_BIN" build-pkg --driver=tool target/release/vox
+    if [[ -n "$TARGET_ARG" ]]; then
+      "$BOOTSTRAP_BIN" build-pkg --driver=tool "$TARGET_ARG" target/release/vox
+    else
+      "$BOOTSTRAP_BIN" build-pkg --driver=tool target/release/vox
+    fi
   fi
 ) >"$TOOL_BUILD_LOG" 2>&1
 tool_rc=$?

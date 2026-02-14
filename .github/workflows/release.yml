@@ -13,12 +13,18 @@ permissions:
 
 jobs:
   build:
-    name: build-and-smoke-${{ matrix.os }}
+    name: build-and-smoke-${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            platform: linux-amd64
+          - os: macos-14
+            platform: darwin-arm64
+          - os: windows-latest
+            platform: windows-amd64
 
     env:
       VOX_REQUIRE_ROLLING_BOOTSTRAP: "1"
@@ -30,7 +36,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
-          cache: false
+          cache: true
 
       - name: Install C compiler (Windows)
         if: runner.os == 'Windows'
@@ -44,13 +50,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          arch="$(go env GOARCH)"
-          case "${RUNNER_OS}" in
-            Linux) plat="linux-${arch}" ;;
-            macOS) plat="darwin-${arch}" ;;
-            Windows) plat="windows-${arch}" ;;
-            *) echo "unsupported RUNNER_OS=${RUNNER_OS}"; exit 1 ;;
-          esac
+          plat="${{ matrix.platform }}"
           if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/* ]]; then
             ver="${GITHUB_REF_NAME}"
           else
@@ -58,6 +58,24 @@ jobs:
           fi
           echo "PLATFORM=${plat}" >> "$GITHUB_ENV"
           echo "BUILD_VERSION=${ver}" >> "$GITHUB_ENV"
+
+      - name: Verify runner host matches platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          host_os="$(go env GOOS)"
+          host_arch="$(go env GOARCH)"
+          case "$host_arch" in
+            amd64) host_arch="amd64" ;;
+            arm64) host_arch="arm64" ;;
+            386) host_arch="x86" ;;
+          esac
+          expected_os="${PLATFORM%%-*}"
+          expected_arch="${PLATFORM#*-}"
+          if [[ "$host_os" != "$expected_os" || "$host_arch" != "$expected_arch" ]]; then
+            echo "runner host mismatch: host=${host_os}-${host_arch} expected=${PLATFORM}" >&2
+            exit 1
+          fi
 
       - name: Prepare locked bootstrap compiler
         shell: bash
@@ -71,7 +89,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./scripts/release/build-release-bundle.sh "${BUILD_VERSION}"
+          ./scripts/release/build-release-bundle.sh "${BUILD_VERSION}" "${PLATFORM}"
 
       - name: Run smoke tests (rolling bootstrap)
         shell: bash
@@ -84,21 +102,33 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/debug
-          COMPILER_BIN="$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1)"
-          case "${RUNNER_OS}" in
-            Linux) target_os="linux" ;;
-            macOS) target_os="darwin" ;;
-            Windows) target_os="windows" ;;
-            *) echo "unsupported RUNNER_OS=${RUNNER_OS}"; exit 1 ;;
-          esac
-          case "$(go env GOARCH)" in
-            amd64) target_arch="amd64" ;;
-            arm64) target_arch="arm64" ;;
-            *) echo "unsupported GOARCH=$(go env GOARCH)"; exit 1 ;;
-          esac
-          target="${target_os}-${target_arch}"
+          COMPILER_BIN="target/release/vox"
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            COMPILER_BIN="target/release/vox.exe"
+          fi
+          if [[ ! -f "$COMPILER_BIN" ]]; then
+            echo "compiler not found: $COMPILER_BIN"
+            exit 1
+          fi
+
+          target="${PLATFORM}"
           "$COMPILER_BIN" build-pkg "--target=${target}" target/debug/vox.target_host
           "$COMPILER_BIN" test-pkg "--target=${target}" "--run=*std_sync_runtime_generic_api_smoke" target/debug/vox.target_host.test
+
+      - name: Validate --target regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/debug
+          COMPILER_BIN="target/release/vox"
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            COMPILER_BIN="target/release/vox.exe"
+          fi
+          if [[ ! -f "$COMPILER_BIN" ]]; then
+            echo "compiler not found: $COMPILER_BIN"
+            exit 1
+          fi
+          "$COMPILER_BIN" test-pkg "--run=*target_matrix_*" target/debug/vox.target_matrix.test
 
       - name: Verify release bundle manifest
         shell: bash
@@ -115,24 +145,9 @@ jobs:
             dist/vox-lang-${{ env.BUILD_VERSION }}-${{ env.PLATFORM }}.tar.gz
             dist/vox-lang-${{ env.BUILD_VERSION }}-${{ env.PLATFORM }}.tar.gz.sha256
 
-  target-regression:
-    name: target-regression-${{ matrix.os }}-${{ matrix.suite.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        suite:
-          - name: parse
-            run_glob: "*cli_target_parse_*"
-            out_name: "vox.target_parse.test"
-          - name: reject
-            run_glob: "*cli_target_reject_*"
-            out_name: "vox.target_reject.test"
-          - name: cmdline
-            run_glob: "*cc_cmdline_*"
-            out_name: "vox.target_cmdline.test"
-
+  build-cross-x86:
+    name: build-cross-x86
+    runs-on: ubuntu-latest
     env:
       VOX_REQUIRE_ROLLING_BOOTSTRAP: "1"
     steps:
@@ -143,28 +158,25 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
-          cache: false
+          cache: true
 
-      - name: Install C compiler (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          choco install mingw -y --no-progress
-          Add-Content -Path $env:GITHUB_PATH -Value 'C:\ProgramData\mingw64\mingw64\bin'
-          Add-Content -Path $env:GITHUB_PATH -Value 'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin'
-
-      - name: Compute platform metadata
+      - name: Install cross C toolchains
         shell: bash
         run: |
           set -euo pipefail
-          arch="$(go env GOARCH)"
-          case "${RUNNER_OS}" in
-            Linux) plat="linux-${arch}" ;;
-            macOS) plat="darwin-${arch}" ;;
-            Windows) plat="windows-${arch}" ;;
-            *) echo "unsupported RUNNER_OS=${RUNNER_OS}"; exit 1 ;;
-          esac
-          echo "PLATFORM=${plat}" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install -y gcc-i686-linux-gnu gcc-mingw-w64-i686
+
+      - name: Compute build metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/* ]]; then
+            ver="${GITHUB_REF_NAME}"
+          else
+            ver="pr-${GITHUB_SHA::7}"
+          fi
+          echo "BUILD_VERSION=${ver}" >> "$GITHUB_ENV"
 
       - name: Prepare locked bootstrap compiler
         shell: bash
@@ -172,21 +184,54 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          ./scripts/release/prepare-locked-bootstrap.sh "${GITHUB_REPOSITORY}" "${PLATFORM}"
+          ./scripts/release/prepare-locked-bootstrap.sh "${GITHUB_REPOSITORY}" "linux-amd64"
 
-      - name: Run target regression suite
+      - name: Build host rolling compiler for cross gate
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p target/debug
-          COMPILER_BIN="$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1)"
-          "$COMPILER_BIN" test-pkg "--run=${{ matrix.suite.run_glob }}" "target/debug/${{ matrix.suite.out_name }}"
+          ./scripts/ci/rolling-selfhost.sh build
+
+      - name: Validate cross target build-pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/debug
+          COMPILER_BIN="target/debug/vox_rolling"
+          "$COMPILER_BIN" build-pkg --target=linux-x86 target/debug/vox.cross_linux_x86
+          "$COMPILER_BIN" build-pkg --target=windows-x86 target/debug/vox.cross_windows_x86
+
+      - name: Build x86 release bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          VOX_BOOTSTRAP=target/debug/vox_rolling ./scripts/release/build-release-bundle.sh "${BUILD_VERSION}" "linux-x86"
+          VOX_BOOTSTRAP=target/debug/vox_rolling ./scripts/release/build-release-bundle.sh "${BUILD_VERSION}" "windows-x86"
+
+      - name: Verify x86 release bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          VOX_VERIFY_EXEC=0 ./scripts/release/verify-release-bundle.sh "${BUILD_VERSION}" "linux-x86"
+          VOX_VERIFY_EXEC=0 ./scripts/release/verify-release-bundle.sh "${BUILD_VERSION}" "windows-x86"
+
+      - name: Upload x86 artifacts
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-x86
+          path: |
+            dist/vox-lang-${{ env.BUILD_VERSION }}-linux-x86.tar.gz
+            dist/vox-lang-${{ env.BUILD_VERSION }}-linux-x86.tar.gz.sha256
+            dist/vox-lang-${{ env.BUILD_VERSION }}-windows-x86.tar.gz
+            dist/vox-lang-${{ env.BUILD_VERSION }}-windows-x86.tar.gz.sha256
 
   publish:
     name: publish-release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    needs: [build, target-regression]
+    needs: [build, build-cross-x86]
     permissions:
       contents: write
 
