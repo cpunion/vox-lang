@@ -93,6 +93,263 @@ fn cc_common_flags() -> String {
   return " -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE";
 }
 
+
+struct CliTargetSpec {
+  ok: bool,
+  err: String,
+  raw: String,
+  os: String,
+  arch: String,
+  abi: String,
+  canon: String,
+  triple: String,
+}
+
+fn target_abi_from_text(s: String) -> String {
+  if text_contains(s, "msvc") { return "msvc"; }
+  if text_contains(s, "mingw") || text_contains(s, "gnu") || text_contains(s, "w64") { return "gnu"; }
+  return "";
+}
+
+fn target_triple_for(os: String, arch: String, abi0: String) -> String {
+  let mut abi: String = abi0;
+  if os == "windows" && abi == "" { abi = "gnu"; }
+
+  if os == "linux" {
+    if arch == "amd64" { return "x86_64-unknown-linux-gnu"; }
+    return "aarch64-unknown-linux-gnu";
+  }
+  if os == "darwin" {
+    if arch == "amd64" { return "x86_64-apple-darwin"; }
+    return "aarch64-apple-darwin";
+  }
+  if os == "windows" {
+    if abi == "msvc" {
+      if arch == "amd64" { return "x86_64-pc-windows-msvc"; }
+      return "aarch64-pc-windows-msvc";
+    }
+    if arch == "amd64" { return "x86_64-w64-mingw32"; }
+    return "aarch64-w64-mingw32";
+  }
+  return os.concat("-").concat(arch);
+}
+
+fn cli_target_spec_ok(raw: String, os: String, arch: String, abi0: String) -> CliTargetSpec {
+  let mut abi: String = abi0;
+  if os != "windows" { abi = ""; }
+  if os == "windows" && abi == "" { abi = "gnu"; }
+  let canon: String = os.concat("-").concat(arch);
+  return CliTargetSpec {
+    ok: true,
+    err: "",
+    raw: raw,
+    os: os,
+    arch: arch,
+    abi: abi,
+    canon: canon,
+    triple: target_triple_for(os, arch, abi),
+  };
+}
+
+fn cli_target_spec_err(raw: String, msg: String) -> CliTargetSpec {
+  return CliTargetSpec {
+    ok: false,
+    err: msg,
+    raw: raw,
+    os: "",
+    arch: "",
+    abi: "",
+    canon: "",
+    triple: "",
+  };
+}
+
+fn target_os_supported(os: String) -> bool {
+  return os == "linux" || os == "darwin" || os == "windows";
+}
+
+fn target_arch_supported(arch: String) -> bool {
+  return arch == "amd64" || arch == "arm64";
+}
+
+fn target_os_from_text(s: String) -> String {
+  if s == "windows" || s == "win" || s == "win32" || text_contains(s, "windows") || text_contains(s, "mingw") || text_contains(s, "w64") || text_contains(s, "msvc") {
+    return "windows";
+  }
+  if s == "darwin" || s == "macos" || s == "mac" || text_contains(s, "darwin") || text_contains(s, "apple") {
+    return "darwin";
+  }
+  if s == "linux" || text_contains(s, "linux") { return "linux"; }
+  return "";
+}
+
+fn target_arch_from_text(s: String) -> String {
+  if text_contains(s, "x86_64") || text_contains(s, "amd64") || text_contains(s, "x64") || text_contains(s, "x86-64") {
+    return "amd64";
+  }
+  if text_contains(s, "aarch64") || text_contains(s, "arm64") {
+    return "arm64";
+  }
+  return "";
+}
+
+fn platform_os_part(p: String) -> String {
+  let mut i: i32 = 0;
+  while i < p.len() {
+    if p.byte_at(i) == 45 { return p.slice(0, i); } // '-'
+    i = i + 1;
+  }
+  if p == "" { return "linux"; }
+  return p;
+}
+
+fn platform_arch_part(p: String) -> String {
+  let mut i: i32 = 0;
+  while i < p.len() {
+    if p.byte_at(i) == 45 {
+      if i + 1 >= p.len() { return "amd64"; }
+      return p.slice(i + 1, p.len());
+    }
+    i = i + 1;
+  }
+  return "amd64";
+}
+
+fn parse_cli_target_spec(raw0: String, host_os: String, host_arch: String) -> CliTargetSpec {
+  let raw: String = trim_space_main(raw0);
+  let s: String = tc_ascii_lower(raw);
+  if s == "" || s == "host" || s == "native" {
+    return cli_target_spec_ok(raw, host_os, host_arch, "");
+  }
+
+  let os: String = target_os_from_text(s);
+  let mut arch: String = target_arch_from_text(s);
+  let mut abi: String = target_abi_from_text(s);
+  if os == "" {
+    return cli_target_spec_err(raw, "invalid --target: unknown os in '".concat(raw).concat("'"));
+  }
+  if arch == "" { arch = host_arch; }
+  if os == "windows" && abi == "" { abi = "gnu"; }
+  if os != "windows" { abi = ""; }
+
+  if !target_os_supported(os) {
+    return cli_target_spec_err(raw, "invalid --target: unsupported os '".concat(os).concat("'"));
+  }
+  if !target_arch_supported(arch) {
+    return cli_target_spec_err(raw, "invalid --target: unsupported arch '".concat(arch).concat("'"));
+  }
+  return cli_target_spec_ok(raw, os, arch, abi);
+}
+fn env_key_suffix(s: String) -> String {
+  let mut out: String = "";
+  let up: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    if ch >= 97 && ch <= 122 {
+      out = out.concat(up.slice(ch - 97, ch - 96));
+      i = i + 1;
+      continue;
+    }
+    if (ch >= 65 && ch <= 90) || (ch >= 48 && ch <= 57) {
+      out = out.concat(s.slice(i, i + 1));
+      i = i + 1;
+      continue;
+    }
+    out = out.concat("_");
+    i = i + 1;
+  }
+  return out;
+}
+
+
+fn cc_is_msvc_cmd(cmd0: String) -> bool {
+  let cmd: String = tc_ascii_lower(trim_space_main(cmd0));
+  return cmd == "cl" || cmd == "cl.exe" || text_contains(cmd, "\\cl.exe") || text_contains(cmd, "/cl.exe");
+}
+
+fn cc_cmd_for_target(host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String) -> String {
+  let cc_env: String = trim_space_main(proc.getenv("CC"));
+  if cc_env != "" { return cc_env; }
+
+  let cc_canon: String = trim_space_main(proc.getenv("CC_".concat(env_key_suffix(target_os.concat("_").concat(target_arch)))));
+  if cc_canon != "" { return cc_canon; }
+
+  let cc_triple: String = trim_space_main(proc.getenv("CC_".concat(env_key_suffix(target_triple))));
+  if cc_triple != "" { return cc_triple; }
+
+  if host_os == target_os && host_arch == target_arch {
+    if target_os == "windows" {
+      if target_abi == "msvc" { return "cl"; }
+      return "gcc";
+    }
+    return "cc";
+  }
+
+  if target_os == "windows" {
+    if target_abi == "msvc" {
+      if host_os == "windows" { return "cl"; }
+      return "clang";
+    }
+    if target_arch == "amd64" { return "x86_64-w64-mingw32-gcc"; }
+    return "aarch64-w64-mingw32-gcc";
+  }
+  if target_os == "linux" {
+    if target_arch == "amd64" { return "x86_64-linux-gnu-gcc"; }
+    return "aarch64-linux-gnu-gcc";
+  }
+  if target_os == "darwin" { return "clang"; }
+  return "cc";
+}
+
+fn cc_target_flags_for_target(cmd: String, host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String) -> String {
+  if host_os == target_os && host_arch == target_arch { return ""; }
+  if cc_is_msvc_cmd(cmd) { return ""; }
+  if text_contains(cmd, "clang") || cmd == "cc" {
+    return " --target=".concat(target_triple);
+  }
+  return "";
+}
+
+fn cc_link_flags_for_target(target_os: String, use_msvc: bool) -> String {
+  if target_os != "windows" { return ""; }
+  if use_msvc { return " /link ws2_32.lib /STACK:8388608"; }
+  return " -lws2_32 -static -Wl,--stack,8388608";
+}
+
+fn cc_common_flags_for_target(target_os: String, use_msvc: bool) -> String {
+  if use_msvc { return ""; }
+  if target_os == "windows" { return ""; }
+  return " -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE";
+}
+
+fn cc_cmdline_for_target(host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, cpath: String, out: String) -> String {
+  let cc: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
+  let use_msvc: bool = cc_is_msvc_cmd(cc);
+  let tflags: String = cc_target_flags_for_target(cc, host_os, host_arch, target_os, target_arch, target_triple);
+  if use_msvc {
+    return cc
+      .concat(" /nologo /TC /Od /Zi")
+      .concat(" ")
+      .concat(cpath)
+      .concat(" /Fe:")
+      .concat(out)
+      .concat(cc_link_flags_for_target(target_os, true));
+  }
+  return cc
+    .concat(tflags)
+    .concat(" -std=c11 -O0 -g")
+    .concat(cc_common_flags_for_target(target_os, false))
+    .concat(" ")
+    .concat(cpath)
+    .concat(" -o ")
+    .concat(out)
+    .concat(cc_link_flags_for_target(target_os, false));
+}
+fn cmd_supports_target(cmd: String) -> bool {
+  return cmd == "build" || cmd == "build-pkg" || cmd == "test-pkg";
+}
+
 fn usage() -> () {
   let bin: String = path_base_name(proc.exe_path());
   print(bin.concat(" usage:\n"));
@@ -115,6 +372,7 @@ fn usage() -> () {
   print("  --list              test-pkg: list selected tests and exit\n");
   print("  --rerun-failed      test-pkg: run only previously failed tests\n");
   print("  --json              test-pkg/list-pkg: print JSON report\n");
+  print("  --target=<value>    build/build-pkg/test-pkg: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc)\n");
   print("  --version, -V       print embedded compiler version\n");
 }
 
@@ -1821,6 +2079,7 @@ fn main() -> i32 {
   let mut test_list_only: bool = false;
   let mut test_rerun_failed: bool = false;
   let mut test_json: bool = false;
+  let mut target_flag: String = "";
   let mut out: String = "";
   let mut src_start: i32 = -1;
   let mut i: i32 = 1;
@@ -1986,6 +2245,31 @@ fn main() -> i32 {
       i = i + 1;
       continue;
     }
+    if has_prefix(a, "--target=") {
+      if !cmd_supports_target(cmd.slice(0, cmd.len())) {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      target_flag = a.slice(9, a.len());
+      i = i + 1;
+      continue;
+    }
+    if a == "--target" {
+      if !cmd_supports_target(cmd.slice(0, cmd.len())) {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      if i + 1 >= args.len() {
+        usage();
+        print("missing value for --target\n");
+        return 1;
+      }
+      target_flag = args.get(i + 1);
+      i = i + 2;
+      continue;
+    }
     if has_prefix(a, "-") {
       usage();
       print("unknown flag: ".concat(a).concat("\n"));
@@ -2016,6 +2300,21 @@ fn main() -> i32 {
     print("missing out path\n");
     return 1;
   }
+
+  let host_platform: String = tc_detect_platform();
+  let host_os: String = platform_os_part(host_platform);
+  let host_arch: String = platform_arch_part(host_platform);
+  let tr: CliTargetSpec = parse_cli_target_spec(target_flag, host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()));
+  if !tr.ok {
+    usage();
+    print(tr.err.concat("\n"));
+    return 1;
+  }
+  let target_os: String = tr.os;
+  let target_arch: String = tr.arch;
+  let target_triple: String = tr.triple;
+  let target_abi: String = tr.abi;
+
   if cmd == "list-pkg" {
     let all: Vec[String] = fs.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_sources(all);
@@ -2093,7 +2392,7 @@ fn main() -> i32 {
     }
     let cpath: String = out.concat(".c");
     fs.write_string(cpath, r.c);
-    let cmdline: String = cc_cmd().concat(" -std=c11 -O0 -g").concat(cc_common_flags()).concat(" ").concat(cpath).concat(" -o ").concat(out).concat(cc_link_flags());
+    let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, out);
     let code: i32 = proc.exec(cmdline);
     if code != 0 {
       print("cc failed: ".concat(cmdline).concat("\n"));
@@ -2169,7 +2468,7 @@ fn main() -> i32 {
     }
     let cpath: String = out.concat(".c");
     fs.write_string(cpath, r.c);
-    let cmdline: String = cc_cmd().concat(" -std=c11 -O0 -g").concat(cc_common_flags()).concat(" ").concat(cpath).concat(" -o ").concat(out).concat(cc_link_flags());
+    let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, out);
     let code: i32 = proc.exec(cmdline);
     if code != 0 {
       print("cc failed: ".concat(cmdline).concat("\n"));
@@ -2313,7 +2612,7 @@ fn main() -> i32 {
       }
 
       fs.write_string(cpath, r.c);
-      let cmdline: String = cc_cmd().concat(" -std=c11 -O0 -g").concat(cc_common_flags()).concat(" ").concat(cpath).concat(" -o ").concat(bin).concat(cc_link_flags());
+      let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, bin);
       let code: i32 = proc.exec(cmdline);
       if code != 0 {
         print("cc failed: ".concat(cmdline).concat("\n"));
