@@ -136,5 +136,6 @@ Governance from now on:
     - [x] D07-3e Member-chain moved-value diagnostics propagation: receiver member/call paths now preserve upstream `use of moved value` diagnostics instead of degrading to enum/path fallback errors.
     - [x] D07-3f Expression-shape move-source detection: `if`/block/match and nested call-expression trees now participate in release source discovery, so `let _ = if ... { release(x) } ...` and block-expression release paths mark `x` moved.
     - [x] D07-3g UFCS release parity: `Release.release(x)` now participates in move-source detection with the same moved-value diagnostics/self-rebind behavior as `release(x)` and `x.release()`.
+    - [x] D07-3h Multi-source release tracking: expressions containing multiple release paths now mark all consumed roots (including call-arg fanout and `assign field` RHS), so moved diagnostics are not silently dropped for later sources.
   - Extracted from A03 closure note.
   - Source: `docs/archive/21-stage1-compiler.md`.
