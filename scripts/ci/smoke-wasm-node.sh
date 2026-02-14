@@ -73,8 +73,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
-sleep 1
-curl -fsS "http://127.0.0.1:${PORT}/web/" >/dev/null
+echo "[wasm-smoke] waiting for web server on :${PORT}"
+ready=0
+for _ in $(seq 1 20); do
+  if curl -fsS "http://127.0.0.1:${PORT}/web/" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 0.25
+done
+
+if [[ "${ready}" != "1" ]]; then
+  echo "[wasm-smoke] web server did not become ready" >&2
+  if [[ -f "${SERVER_LOG}" ]]; then
+    echo "[wasm-smoke] server log:" >&2
+    cat "${SERVER_LOG}" >&2 || true
+  fi
+  exit 1
+fi
+
 curl -fsS "http://127.0.0.1:${PORT}/target/vox_wasm_demo.wasm" >/dev/null
 
 echo "[wasm-smoke] ok"
