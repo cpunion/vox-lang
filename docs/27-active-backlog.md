@@ -110,6 +110,9 @@ Governance from now on:
   - [x] D03-1 词法/语法前置：保留 `async`/`await` 关键字，`async fn` AST 标记接入。
   - [x] D03-2 未启用语义的稳定诊断：`async fn`/`await`/trait async method 给出明确 deferred 错误。
   - [ ] D03-3 Future 表示与 lowering（状态机/poll 模型）。
+  - [x] D03-3a `std/async` pull-core 契约落地：`Poll[T]`、`Waker`、`Context`、`Future`、`Sink` 与基础 helper。
+  - [ ] D03-3b `async fn` lowering 到状态机 frame + `poll`。
+  - [ ] D03-3c `await` 的 typecheck/irgen 接入。
   - [ ] D03-4 借用跨 `await` 约束与诊断。
   - Source: `docs/09-async-model.md`.
 

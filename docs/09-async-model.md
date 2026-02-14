@@ -1,23 +1,121 @@
 # Async 模型（D03）
 
-当前状态（Stage2，2026-02）：
+本章定义 Vox 的 async/await 设计方向。
 
-1. 关键字已保留：`async`、`await`。
-2. `async fn` 语法已接入 parser（AST 可识别 `FuncDecl.is_async`）。
-3. 语义层暂未开启：typecheck 会报错 `async fn is deferred (D03)`。
-4. `await` 表达式暂未开启：parser 报错 `await expression is deferred (D03)`。
-5. trait 方法上的 `async fn` 暂未开启：parser 报错 `async trait method is deferred (D03)`。
+结论：
 
-这样做的目的：
+1. 语言核心采用 **pull 模型**（Future + poll）。
+2. push 模型作为边界适配能力（例如 UI 事件流、SSE、WebSocket）。
+3. lowering 采用状态机（不是纯 CPS）。
 
-- 先锁定词法/语法形状，避免后续引入 async 时产生关键字兼容破坏。
-- 在尚未具备完整执行模型前，给出稳定且明确的诊断。
+## 1. 当前已落地
 
-## 后续落地顺序
+1. 关键字保留：`async`、`await`。
+2. `async fn` 语法已接入 parser，AST 有 `FuncDecl.is_async`。
+3. 语义尚未开启：
+   - `async fn` 在 typecheck 报 `async fn is deferred (D03)`
+   - `await` 表达式在 parser 报 `await expression is deferred (D03)`
+   - trait `async fn` 在 parser 报 `async trait method is deferred (D03)`
 
-1. Future 表示：确定语言级 `Future[T]` 表示与最小 runtime 契约。
-2. lowering：把 `async fn` 降级到状态机/轮询接口。
-3. `await` 语义：接入表达式求值与错误传播规则。
-4. 借用约束：明确“借用不得跨 `await`”的检查与诊断。
+## 2. 为什么核心选 pull
 
-在以上项完成前，D03 仍视为未完成。
+1. 与 Rust-like 语义一致，心智模型稳定。
+2. backpressure 自然：只有被 poll 才推进。
+3. lowering 可控：`async fn -> Future state machine`。
+4. 便于静态规则：后续可做“借用不得跨 await”。
+
+## 3. 核心抽象（std/async）
+
+```vox
+enum Poll[T] { Pending, Ready(T) }
+
+struct Waker { token: i64 }
+struct Context { waker: Waker }
+
+trait Future {
+  type Output;
+  fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output];
+}
+```
+
+说明：
+
+1. `Pending` 表示当前不能继续，需要由 waker 驱动下一次 poll。
+2. `Ready(T)` 表示完成，返回结果。
+3. `Context/Waker` 定义最小执行器接口契约；具体调度策略由 runtime/宿主决定。
+
+## 4. lowering 设计（D03-3 目标）
+
+`async fn f(args) -> T` 语义改写为“返回 future 值”：
+
+1. 编译器生成 frame 结构（局部变量 + 子 future + state tag）。
+2. 生成对应 `poll(frame, cx) -> Poll[T]`：
+   - 从 `state` 恢复执行点。
+   - 遇到 `await e`：先确保子 future 已初始化，再 poll。
+   - 子 future `Pending`：保存 state，返回 `Pending`。
+   - 子 future `Ready(v)`：恢复并继续执行。
+   - 函数返回：`Ready(ret)`。
+
+## 5. await 的类型/语义规则（D03-3 目标）
+
+1. `await e` 要求 `e` 的类型实现 `Future`。
+2. `await e` 的表达式类型为该 `Future::Output`。
+3. `await` 只能出现在 async 上下文（`async fn`/`async` block，后者可后续引入）。
+
+## 6. push 与 pull 的转换
+
+核心规则：pull 是语言内核，push 在边界适配。
+
+### 6.1 push -> pull
+
+典型做法：
+
+1. push 源写入队列。
+2. push 源触发 waker。
+3. pull 侧 future 在 poll 中消费队列，空则 `Pending`。
+
+### 6.2 pull -> push
+
+典型做法：
+
+1. 执行器驱动 future poll。
+2. `Ready(v)` 时调用 push 回调/下游 sink。
+3. `Pending` 时让出执行权，等待唤醒。
+
+`std/async` 中保留 `Sink` 作为最小边界契约：
+
+```vox
+trait Sink {
+  type Item;
+  fn push(x: &mut Self, v: Self.Item) -> bool;
+  fn close(x: &mut Self) -> ();
+}
+```
+
+## 7. 取消与 drop
+
+约定：future 被 drop 视为取消。
+
+1. 编译器生成的 frame 在 drop 时释放已初始化字段。
+2. 必须保证“未初始化字段不 drop”。
+3. 取消语义保持幂等（重复取消不出错）。
+
+## 8. 与借用规则的关系（D03-4 目标）
+
+后续强制规则：
+
+1. 非 static 借用不得跨 `await` 存活。
+2. 违反时报静态错误，并定位到借用创建点与 `await` 点。
+
+这与 Vox “无用户生命周期标注”目标一致：
+
+- 用户不写 `'a`。
+- 编译器内部完成跨挂起点的借用安全检查。
+
+## 9. 分阶段计划
+
+1. D03-1/2：关键字 + deferred 诊断（已完成）。
+2. D03-3：Future 表示 + lowering + await typecheck/irgen。
+3. D03-4：跨 await 借用约束与诊断。
+
+在 D03-3/4 完成前，`async fn`/`await` 继续保持 deferred 诊断，不开放运行时语义。
