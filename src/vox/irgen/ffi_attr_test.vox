@@ -1,0 +1,52 @@
+import "std/testing" as t
+import "vox/typecheck" as tc
+import "vox/irgen" as g
+import "vox/ir" as ir
+
+fn ffi_ir_add_mod(w: tc.World, path: String, src: String) -> tc.World {
+  return add_mod(w, path, src);
+}
+
+fn ffi_ir_has_func(funcs: Vec[ir.Func], name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < funcs.len() {
+    if funcs.get(i).name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn test_irgen_ffi_import_export_metadata_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "@ffi_import(\"c\", \"puts\")\nfn puts(msg: String) -> i32;\n@ffi_export(\"c\", \"vox_add\")\npub fn add(a: i32, b: i32) -> i32 { return a + b; }\nfn main() -> i32 { return add(1, 2); }";
+  w = ffi_ir_add_mod(w, "main", src);
+
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert_eq(r.prog.ffi_imports.len(), 1);
+  t.assert_eq(r.prog.ffi_exports.len(), 1);
+
+  let im: ir.FfiImportDecl = r.prog.ffi_imports.get(0);
+  t.assert_eq(im.target, "c");
+  t.assert_eq(im.symbol, "puts");
+  t.assert_eq(im.params.len(), 1);
+
+  let ex: ir.FfiExportDecl = r.prog.ffi_exports.get(0);
+  t.assert_eq(ex.target, "c");
+  t.assert_eq(ex.symbol, "vox_add");
+}
+
+fn test_irgen_ffi_import_function_has_no_body_func() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "@ffi_import(\"c\", \"puts\")\nfn puts(msg: String) -> i32;\npub fn add(a: i32, b: i32) -> i32 { return a + b; }\nfn main() -> i32 { return puts(\"x\") + add(1, 2); }";
+  w = ffi_ir_add_mod(w, "main", src);
+
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+
+  let import_func: String = r.prog.ffi_imports.get(0).func;
+  t.assert(!ffi_ir_has_func(r.prog.funcs, import_func));
+  t.assert_eq(r.prog.funcs.len(), 2);
+}

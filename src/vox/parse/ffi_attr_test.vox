@@ -1,0 +1,68 @@
+import "std/testing" as t
+import "vox/parse" as p
+
+fn ffi_parse_ok(e: p.ParseError) -> bool {
+  return e == p.ParseError.None;
+}
+
+fn test_parse_ffi_import_c_decl_smoke() -> () {
+  let src: String = "@ffi_import(\"c\", \"puts\")\nfn puts(msg: String) -> i32;";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ffi_parse_ok(r.err));
+  t.assert_eq(r.prog.funcs.len(), 1);
+
+  let f = r.prog.funcs.get(0);
+  t.assert_eq(f.name, "puts");
+  t.assert_eq(f.ffi_imports.len(), 1);
+  t.assert_eq(f.ffi_exports.len(), 0);
+  t.assert_eq(f.body.stmts.len(), 0);
+
+  let imp = f.ffi_imports.get(0);
+  t.assert_eq(imp.target, "c");
+  t.assert_eq(imp.module, "");
+  t.assert_eq(imp.symbol, "puts");
+}
+
+fn test_parse_ffi_import_wasm_decl_smoke() -> () {
+  let src: String = "@ffi_import(\"wasm\", \"env\", \"memory_grow\")\nfn memory_grow(pages: i32) -> i32;";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ffi_parse_ok(r.err));
+  t.assert_eq(r.prog.funcs.len(), 1);
+
+  let f = r.prog.funcs.get(0);
+  t.assert_eq(f.ffi_imports.len(), 1);
+  let imp = f.ffi_imports.get(0);
+  t.assert_eq(imp.target, "wasm");
+  t.assert_eq(imp.module, "env");
+  t.assert_eq(imp.symbol, "memory_grow");
+}
+
+fn test_parse_ffi_export_multi_target_smoke() -> () {
+  let src: String = "@ffi_export(\"c\", \"vox_add\")\n@ffi_export(\"wasm\", \"vox_add\")\npub fn add(a: i32, b: i32) -> i32 { return a + b; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ffi_parse_ok(r.err));
+  t.assert_eq(r.prog.funcs.len(), 1);
+
+  let f = r.prog.funcs.get(0);
+  t.assert_eq(f.ffi_imports.len(), 0);
+  t.assert_eq(f.ffi_exports.len(), 2);
+  t.assert_eq(f.ffi_exports.get(0).target, "c");
+  t.assert_eq(f.ffi_exports.get(0).symbol, "vox_add");
+  t.assert_eq(f.ffi_exports.get(1).target, "wasm");
+  t.assert_eq(f.ffi_exports.get(1).symbol, "vox_add");
+}
+
+fn test_parse_ffi_attrs_must_precede_fn() -> () {
+  let src: String = "@ffi_export(\"c\", \"bad\")\nstruct S { v: i32 }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(!ffi_parse_ok(r.err));
+  t.assert(contains(p.parse_error_to_string(r.err), "expected fn"));
+}
+
+fn test_parse_ffi_import_requires_decl_no_body() -> () {
+  let src: String = "@ffi_import(\"c\", \"puts\")\nfn puts(msg: String) -> i32 { return 0; }";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(!ffi_parse_ok(r.err));
+  let msg: String = p.parse_error_to_string(r.err);
+  t.assert(contains(msg, "expected ;"));
+}

@@ -76,6 +76,69 @@ fn emit_forward_decl(pool: ir.TyPool, f: ir.Func) -> String {
   return s.concat(");");
 }
 
+fn emit_ffi_import_decl(pool: ir.TyPool, f: ir.FfiImportDecl) -> String {
+  if f.target != "c" { panic("c backend does not support non-c ffi_import"); }
+  let mut s: String = "extern ".concat(c_type(pool, f.ret)).concat(" ").concat(f.symbol).concat("(");
+  let mut i: i32 = 0;
+  while i < f.params.len() {
+    if i != 0 { s = s.concat(", "); }
+    let pa: ir.Param = f.params.get(i);
+    s = s.concat(c_type(pool, pa.ty)).concat(" ").concat(c_param_name(i));
+    i = i + 1;
+  }
+  return s.concat(");");
+}
+
+struct FindFuncByNameResult { found: bool, f: ir.Func }
+
+fn find_func_by_name(p: ir.Program, name: String) -> FindFuncByNameResult {
+  let mut i: i32 = 0;
+  while i < p.funcs.len() {
+    let f: ir.Func = p.funcs.get(i);
+    if f.name == name { return FindFuncByNameResult { found: true, f: f }; }
+    i = i + 1;
+  }
+  return FindFuncByNameResult { found: false, f: ir.Func { name: "", params: Vec(), ret: -1, blocks: Vec() } };
+}
+
+fn emit_ffi_export_wrapper(pool: ir.TyPool, p: ir.Program, ex: ir.FfiExportDecl) -> Vec[String] {
+  if ex.target != "c" { panic("c backend does not support non-c ffi_export"); }
+  let fr: FindFuncByNameResult = find_func_by_name(p, ex.func);
+  if !fr.found { panic("ffi export function not found"); }
+
+  let f: ir.Func = fr.f;
+  let mut out: Vec[String] = Vec();
+  let mut sig: String = c_type(pool, f.ret).concat(" ").concat(ex.symbol).concat("(");
+  let mut i: i32 = 0;
+  while i < f.params.len() {
+    if i != 0 { sig = sig.concat(", "); }
+    let pa: ir.Param = f.params.get(i);
+    sig = sig.concat(c_type(pool, pa.ty)).concat(" ").concat(c_param_name(i));
+    i = i + 1;
+  }
+  sig = sig.concat(") {");
+  out.push(sig);
+
+  let mut call: String = c_fn_name(f.name).concat("(");
+  i = 0;
+  while i < f.params.len() {
+    if i != 0 { call = call.concat(", "); }
+    call = call.concat(c_param_name(i));
+    i = i + 1;
+  }
+  call = call.concat(")");
+
+  let rk: ir.TyKind = main_ret_kind(pool, f.ret);
+  if rk == ir.TyKind.Unit {
+    out.push("  ".concat(call).concat(";"));
+    out.push("  return;");
+  } else {
+    out.push("  return ".concat(call).concat(";"));
+  }
+  out.push("}");
+  return out;
+}
+
 fn find_main(p: ir.Program) -> MainResult {
   let mut i: i32 = 0;
   while i < p.funcs.len() {
@@ -234,7 +297,29 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
   out = append_lines(out, emit_nominal_types(pool, p));
   out = append_lines(out, emit_nominal_eq_lines(pool, p));
 
-  // Forward decls
+  let mut fi: i32 = 0;
+  while fi < p.ffi_imports.len() {
+    if p.ffi_imports.get(fi).target != "c" {
+      panic("c backend does not support non-c ffi_import");
+    }
+    fi = fi + 1;
+  }
+  let mut fe: i32 = 0;
+  while fe < p.ffi_exports.len() {
+    if p.ffi_exports.get(fe).target != "c" {
+      panic("c backend does not support non-c ffi_export");
+    }
+    fe = fe + 1;
+  }
+
+  // Forward decls (ffi imports first, then internal funcs).
+  let mut ii: i32 = 0;
+  while ii < p.ffi_imports.len() {
+    out.push(emit_ffi_import_decl(pool, p.ffi_imports.get(ii)));
+    ii = ii + 1;
+  }
+  if p.ffi_imports.len() != 0 { out.push(""); }
+
   let mut i: i32 = 0;
   while i < p.funcs.len() {
     out.push(emit_forward_decl(pool, p.funcs.get(i)));
@@ -248,6 +333,14 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
     out = append_lines(out, emit_func(pool, p, p.funcs.get(j)));
     out.push("");
     j = j + 1;
+  }
+
+  // C exports wrappers.
+  let mut exi: i32 = 0;
+  while exi < p.ffi_exports.len() {
+    out = append_lines(out, emit_ffi_export_wrapper(pool, p, p.ffi_exports.get(exi)));
+    out.push("");
+    exi = exi + 1;
   }
 
   if opts.emit_driver_main && opts.emit_test_main {

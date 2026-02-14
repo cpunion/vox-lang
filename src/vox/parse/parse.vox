@@ -267,6 +267,7 @@ struct ParseBracedExprResult { p: Parser, id: i32 }
 struct ParseTypeDeclResult { p: Parser, is_union: bool, t: ast.TypeAliasDecl, e: ast.EnumDecl }
 struct ParsePubResult { p: Parser, vis: i32, is_pub: bool }
 struct ParseConstDefaultResult { p: Parser, ok: bool, text: String }
+struct ParseTopFnAttrsResult { p: Parser, ffi_imports: Vec[ast.FfiImportAttr], ffi_exports: Vec[ast.FfiExportAttr] }
 
 fn dummy_token() -> lex.Token {
   return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0 };
@@ -1863,7 +1864,13 @@ fn parse_block(p: Parser) -> ParseBlockResult {
   return ParseBlockResult { p: ar2.p, b: ast.Block { stmts: stmts } };
 }
 
-fn parse_fn_decl(p: Parser, vis: i32, is_pub: bool) -> ParseFnResult {
+fn parse_fn_decl(
+  p: Parser,
+  vis: i32,
+  is_pub: bool,
+  ffi_imports: Vec[ast.FfiImportAttr],
+  ffi_exports: Vec[ast.FfiExportAttr]
+) -> ParseFnResult {
   let ar1: AdvanceResult = expect(p, lex.TokenKind.KwFn);
   let r2: ParseIdentResult = parse_ident(ar1.p);
   let mut q: Parser = r2.p;
@@ -1902,10 +1909,35 @@ fn parse_fn_decl(p: Parser, vis: i32, is_pub: bool) -> ParseFnResult {
       wi = wi + 1;
     }
   }
+
+  let mut q3: Parser = q2;
+  let mut body: ast.Block = ast.Block { stmts: Vec() };
+  if ffi_imports.len() != 0 {
+    if kind_is(peek_kind(q3), lex.TokenKind.Semicolon) {
+      let ar8: AdvanceResult = advance(q3);
+      q3 = ar8.p;
+    } else {
+      let mut qe: Parser = q3;
+      let at: i32 = peek(q3).start;
+      qe.has_err = true;
+      qe.err = ParseError.UnexpectedToken(lex.TokenKind.Semicolon, peek_kind(q3), at);
+      q3 = qe;
+    }
+  } else if kind_is(peek_kind(q3), lex.TokenKind.LBrace) {
+    let r9: ParseBlockResult = parse_block(q3);
+    q3 = r9.p;
+    body = r9.b;
+  } else {
+    let mut qe: Parser = q3;
+    let at: i32 = peek(q3).start;
+    qe.has_err = true;
+    qe.err = ParseError.UnexpectedToken(lex.TokenKind.LBrace, peek_kind(q3), at);
+    q3 = qe;
+  }
+
   let params: Vec[ast.Param] = r5.params;
-  let r9: ParseBlockResult = parse_block(q2);
   return ParseFnResult {
-    p: r9.p,
+    p: q3,
     f: ast.FuncDecl {
       file: p.file,
       sp: span_tok(p, ar1.tok),
@@ -1919,7 +1951,9 @@ fn parse_fn_decl(p: Parser, vis: i32, is_pub: bool) -> ParseFnResult {
       const_where_bounds: cwbs2,
       params: params,
       ret: r8.ty,
-      body: r9.b,
+      ffi_imports: ffi_imports,
+      ffi_exports: ffi_exports,
+      body: body,
     },
   };
 }
@@ -2629,7 +2663,7 @@ fn parse_impl_decl(p: Parser) -> ParseImplResult {
       q = ar.p;
       assoc_types.push(ar.a);
     } else {
-      let r: ParseFnResult = parse_fn_decl(q, ast.vis_private(), false);
+      let r: ParseFnResult = parse_fn_decl(q, ast.vis_private(), false, Vec(), Vec());
       q = r.p;
       methods.push(r.f);
     }
@@ -2775,6 +2809,74 @@ fn parse_params(p: Parser) -> ParseParamsResult {
   return ParseParamsResult { p: q, params: params };
 }
 
+fn is_ffi_target(s: String) -> bool {
+  return s == "c" || s == "wasm";
+}
+
+fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
+  let mut q: Parser = p;
+  let mut ffi_imports: Vec[ast.FfiImportAttr] = Vec();
+  let mut ffi_exports: Vec[ast.FfiExportAttr] = Vec();
+
+  while !q.has_err && kind_is(peek_kind(q), lex.TokenKind.At) {
+    let ar_at: AdvanceResult = expect(q, lex.TokenKind.At);
+    let sp0: ast.Span = span_tok(q, ar_at.tok);
+    let rn: ParseIdentResult = parse_ident(ar_at.p);
+    let ar_l: AdvanceResult = expect(rn.p, lex.TokenKind.LParen);
+    let mut qa: Parser = ar_l.p;
+    let mut args: Vec[String] = Vec();
+
+    if !kind_is(peek_kind(qa), lex.TokenKind.RParen) {
+      while !qa.has_err {
+        let rs: ParseStringResult = parse_string_inner(qa);
+        qa = rs.p;
+        args.push(rs.s);
+        if kind_is(peek_kind(qa), lex.TokenKind.Comma) {
+          let ar_c: AdvanceResult = advance(qa);
+          qa = ar_c.p;
+          if kind_is(peek_kind(qa), lex.TokenKind.RParen) { break; }
+          continue;
+        }
+        break;
+      }
+    }
+    let ar_r: AdvanceResult = expect(qa, lex.TokenKind.RParen);
+    q = ar_r.p;
+    if q.has_err {
+      return ParseTopFnAttrsResult { p: q, ffi_imports: ffi_imports, ffi_exports: ffi_exports };
+    }
+
+    if rn.name == "ffi_import" {
+      if args.len() == 2 && args.get(0) == "c" {
+        ffi_imports.push(ast.FfiImportAttr { sp: sp0, target: "c", module: "", symbol: args.get(1) });
+      } else if args.len() == 3 && args.get(0) == "wasm" {
+        ffi_imports.push(ast.FfiImportAttr { sp: sp0, target: "wasm", module: args.get(1), symbol: args.get(2) });
+      } else {
+        let mut qe: Parser = q;
+        qe.has_err = true;
+        qe.err = ParseError.InvalidType(rn.at, "bad ffi attribute arguments");
+        return ParseTopFnAttrsResult { p: qe, ffi_imports: ffi_imports, ffi_exports: ffi_exports };
+      }
+    } else if rn.name == "ffi_export" {
+      if args.len() == 2 && is_ffi_target(args.get(0)) {
+        ffi_exports.push(ast.FfiExportAttr { sp: sp0, target: args.get(0), symbol: args.get(1) });
+      } else {
+        let mut qe2: Parser = q;
+        qe2.has_err = true;
+        qe2.err = ParseError.InvalidType(rn.at, "bad ffi attribute arguments");
+        return ParseTopFnAttrsResult { p: qe2, ffi_imports: ffi_imports, ffi_exports: ffi_exports };
+      }
+    } else {
+      let mut qe3: Parser = q;
+      qe3.has_err = true;
+      qe3.err = ParseError.InvalidType(rn.at, "unknown function attribute");
+      return ParseTopFnAttrsResult { p: qe3, ffi_imports: ffi_imports, ffi_exports: ffi_exports };
+    }
+  }
+
+  return ParseTopFnAttrsResult { p: q, ffi_imports: ffi_imports, ffi_exports: ffi_exports };
+}
+
 fn parse_pub_marker(p: Parser) -> ParsePubResult {
   if !kind_is(peek_kind(p), lex.TokenKind.KwPub) {
     return ParsePubResult { p: p, vis: ast.vis_private(), is_pub: false };
@@ -2804,68 +2906,81 @@ fn parse_pub_marker(p: Parser) -> ParsePubResult {
 }
 
 		fn parse_program(p: Parser) -> ParseProgramResult {
-		  let mut q: Parser = p;
-		  let mut imports: Vec[ast.ImportDecl] = Vec();
-		  let mut types: Vec[ast.TypeAliasDecl] = Vec();
-		  let mut consts: Vec[ast.ConstDecl] = Vec();
-		  let mut structs: Vec[ast.StructDecl] = Vec();
-		  let mut enums: Vec[ast.EnumDecl] = Vec();
-		  let mut traits: Vec[ast.TraitDecl] = Vec();
-		  let mut impls: Vec[ast.ImplDecl] = Vec();
-		  let mut funcs: Vec[ast.FuncDecl] = Vec();
-	  while !q.has_err && !kind_is(peek_kind(q), lex.TokenKind.Eof) {
-	    if kind_is(peek_kind(q), lex.TokenKind.KwImport) {
-	      let r: ParseImportResult = parse_import_decl(q);
-	      q = r.p;
-	      imports.push(r.imp);
-	    } else {
-	      // optional `pub`
-	      let mut is_pub: bool = false;
-      let mut vis: i32 = ast.vis_private();
-	      let pr: ParsePubResult = parse_pub_marker(q);
-	      q = pr.p;
-	      is_pub = pr.is_pub;
-      vis = pr.vis;
-	      let k: lex.TokenKind = peek_kind(q);
-	      if kind_is(k, lex.TokenKind.KwType) {
-	        let r: ParseTypeDeclResult = parse_type_decl(q, vis, is_pub);
-	        q = r.p;
-	        if r.is_union {
-	          enums.push(r.e);
-	        } else {
-	          types.push(r.t);
-	        }
-	      } else if kind_is(k, lex.TokenKind.KwConst) {
-	        let r: ParseConstResult = parse_const_decl(q, vis, is_pub);
-	        q = r.p;
-	        consts.push(r.c);
-	      } else if kind_is(k, lex.TokenKind.KwStruct) {
-	        let r: ParseStructResult = parse_struct_decl(q, vis, is_pub);
-	        q = r.p;
-	        structs.push(r.s);
-		      } else if kind_is(k, lex.TokenKind.KwEnum) {
-		        let r: ParseEnumResult = parse_enum_decl(q, vis, is_pub);
-		        q = r.p;
-		        enums.push(r.e);
-		      } else if kind_is(k, lex.TokenKind.KwTrait) {
-		        let r: ParseTraitResult = parse_trait_decl(q, vis, is_pub);
-		        q = r.p;
-		        traits.push(r.t);
-		      } else if kind_is(k, lex.TokenKind.KwImpl) {
-		        let r: ParseImplResult = parse_impl_decl(q);
-		        q = r.p;
-		        impls.push(r.i);
-		      } else {
-		        let r: ParseFnResult = parse_fn_decl(q, vis, is_pub);
-		        q = r.p;
-		        funcs.push(r.f);
-		      }
-		    }
-		  }
-		  return ParseProgramResult { p: q, prog: ast.Program { imports: imports, types: types, consts: consts, structs: structs, enums: enums, traits: traits, impls: impls, funcs: funcs, exprs: q.exprs } };
-		}
+  let mut q: Parser = p;
+  let mut imports: Vec[ast.ImportDecl] = Vec();
+  let mut types: Vec[ast.TypeAliasDecl] = Vec();
+  let mut consts: Vec[ast.ConstDecl] = Vec();
+  let mut structs: Vec[ast.StructDecl] = Vec();
+  let mut enums: Vec[ast.EnumDecl] = Vec();
+  let mut traits: Vec[ast.TraitDecl] = Vec();
+  let mut impls: Vec[ast.ImplDecl] = Vec();
+  let mut funcs: Vec[ast.FuncDecl] = Vec();
 
-	pub fn parse_text_with_path(path: String, text: String) -> ParseResult {
+  while !q.has_err && !kind_is(peek_kind(q), lex.TokenKind.Eof) {
+    if kind_is(peek_kind(q), lex.TokenKind.KwImport) {
+      let r: ParseImportResult = parse_import_decl(q);
+      q = r.p;
+      imports.push(r.imp);
+      continue;
+    }
+
+    let ar: ParseTopFnAttrsResult = parse_top_fn_attrs(q);
+    q = ar.p;
+
+    let pr: ParsePubResult = parse_pub_marker(q);
+    q = pr.p;
+    let is_pub: bool = pr.is_pub;
+    let vis: i32 = pr.vis;
+
+    let k: lex.TokenKind = peek_kind(q);
+    let has_fn_attrs: bool = ar.ffi_imports.len() != 0 || ar.ffi_exports.len() != 0;
+    if has_fn_attrs && !kind_is(k, lex.TokenKind.KwFn) {
+      let mut qe: Parser = q;
+      qe.has_err = true;
+      qe.err = ParseError.UnexpectedToken(lex.TokenKind.KwFn, k, peek(q).start);
+      q = qe;
+      break;
+    }
+
+    if kind_is(k, lex.TokenKind.KwType) {
+      let r: ParseTypeDeclResult = parse_type_decl(q, vis, is_pub);
+      q = r.p;
+      if r.is_union {
+        enums.push(r.e);
+      } else {
+        types.push(r.t);
+      }
+    } else if kind_is(k, lex.TokenKind.KwConst) {
+      let r: ParseConstResult = parse_const_decl(q, vis, is_pub);
+      q = r.p;
+      consts.push(r.c);
+    } else if kind_is(k, lex.TokenKind.KwStruct) {
+      let r: ParseStructResult = parse_struct_decl(q, vis, is_pub);
+      q = r.p;
+      structs.push(r.s);
+    } else if kind_is(k, lex.TokenKind.KwEnum) {
+      let r: ParseEnumResult = parse_enum_decl(q, vis, is_pub);
+      q = r.p;
+      enums.push(r.e);
+    } else if kind_is(k, lex.TokenKind.KwTrait) {
+      let r: ParseTraitResult = parse_trait_decl(q, vis, is_pub);
+      q = r.p;
+      traits.push(r.t);
+    } else if kind_is(k, lex.TokenKind.KwImpl) {
+      let r: ParseImplResult = parse_impl_decl(q);
+      q = r.p;
+      impls.push(r.i);
+    } else {
+      let r: ParseFnResult = parse_fn_decl(q, vis, is_pub, ar.ffi_imports, ar.ffi_exports);
+      q = r.p;
+      funcs.push(r.f);
+    }
+  }
+
+  return ParseProgramResult { p: q, prog: ast.Program { imports: imports, types: types, consts: consts, structs: structs, enums: enums, traits: traits, impls: impls, funcs: funcs, exprs: q.exprs } };
+}
+
+pub fn parse_text_with_path(path: String, text: String) -> ParseResult {
 	  let lr: lex.LexResult = lex.lex_text(text);
 	  if !lex_err_none(lr.err) {
 	    return ParseResult { prog: ast.Program { imports: Vec(), types: Vec(), consts: Vec(), structs: Vec(), enums: Vec(), traits: Vec(), impls: Vec(), funcs: Vec(), exprs: ast.expr_pool() }, err: ParseError.Lex(lr.err) };
