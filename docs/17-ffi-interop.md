@@ -67,3 +67,10 @@ pub fn add(a: i32, b: i32) -> i32 {
 - 当前仍是“C 后端 + 外部 wasm 工具链”路线，不是独立 wasm IR/后端。
 - 构建示例：`vox build-pkg --target=wasm32-unknown-unknown out.wasm`
 - wasi 测试示例：`WASM_RUNNER=wasmtime vox test-pkg --target=wasm32-wasi out.test`
+
+## 示例
+
+- Node.js + 浏览器调用 wasm：`examples/wasm_call/`
+  - 构建：`vox build-pkg --target=wasm32-unknown-unknown target/vox_wasm_demo.wasm`
+  - Node 运行：`node node/run.mjs`
+  - Web 运行：`node web/server.mjs` 后访问 `http://127.0.0.1:8080/web/`
