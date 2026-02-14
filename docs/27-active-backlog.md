@@ -112,7 +112,10 @@ Governance from now on:
 - [ ] D04 Effect/resource system.
   - Source: `docs/00-overview.md`.
 
-- [ ] D05 FFI/WASM detailed ABI/attribute model.
+- [x] D05 FFI/WASM detailed ABI/attribute model.
+  - [x] D05-1 统一属性签名与约束（位置/组合/泛型/符号唯一性）。
+  - [x] D05-2 ABI 白名单与类型映射明确化（C 后端基线）。
+  - [x] D05-3 wasm import/export 代码生成别名规则与 target 运行约束文档化。
   - Source: `docs/17-ffi-interop.md`.
 
 - [x] D06 First-class borrow IR/type representation (`&T`/`&str` non-erased types, borrow-aware IR ops).
