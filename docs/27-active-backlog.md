@@ -111,10 +111,12 @@ Governance from now on:
   - [x] D03-2 未启用语义的稳定诊断：`await`/trait async method 给出明确 deferred 错误。
   - [x] D03-2a `await` 前置语法通路：parser 产出 `ExprNode.Await`，由 typecheck/irgen 统一给 deferred 语义错误。
   - [x] D03-3b0 async fn 管线打通（scaffold）：`async fn`（无 `await`）进入正常 typecheck/codegen 流程；完整 frame/poll lowering 仍在 D03-3b。
+  - [x] D03-3c0 await 脚手架接入：`await` 仅允许出现在 `async fn`；在当前阶段按同步直通表达式进入 typecheck/irgen（真实 Future 语义仍在 D03-3b/3c）。
   - [ ] D03-3 Future 表示与 lowering（状态机/poll 模型）。
   - [x] D03-3a `std/async` pull-core 契约落地：`Poll[T]`、`Waker`、`Context`、`Future`、`Sink` 与基础 helper。
   - [ ] D03-3b `async fn` lowering 到状态机 frame + `poll`。
-  - [ ] D03-3c `await` 的 typecheck/irgen 接入。
+  - [x] D03-3c `await` 的 typecheck/irgen 接入（Poll scaffold）：仅允许 `async fn`；操作数要求 Poll-shaped 枚举 `{ Pending, Ready(T) }`；`Ready(v)` 提取为 `T`；`Pending` 走 runtime panic。
+  - [ ] D03-3c1 从 Poll scaffold 过渡到 Future trait（`Future::Output`）绑定。
   - [ ] D03-4 借用跨 `await` 约束与诊断。
   - Source: `docs/09-async-model.md`.
 

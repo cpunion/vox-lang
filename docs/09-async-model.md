@@ -14,7 +14,7 @@
 2. `async fn` 语法已接入 parser，AST 有 `FuncDecl.is_async`。
 3. 语义部分开启（D03-3 scaffold）：
    - `async fn`（无 `await`）已进入正常 typecheck/codegen 管线（当前行为仍等价同步函数）
-   - `await` 表达式已解析为 AST 节点（`ExprNode.Await`），在 typecheck 报 `await expression is deferred (D03)`
+   - `await` 表达式已解析为 AST 节点（`ExprNode.Await`），并已接入 typecheck/irgen 脚手架：仅允许在 `async fn` 中使用；当前阶段要求操作数为 Poll-shaped 枚举 `{ Pending, Ready(T) }`，`await` 结果类型为 `T`，lowering 为 `Ready(v) => v`、`Pending => panic`（完整 Future 语义仍 deferred）
    - trait `async fn` 在 parser 报 `async trait method is deferred (D03)`
 
 ## 2. 为什么核心选 pull
@@ -56,11 +56,20 @@ trait Future {
    - 子 future `Ready(v)`：恢复并继续执行。
    - 函数返回：`Ready(ret)`。
 
-## 5. await 的类型/语义规则（D03-3 目标）
+## 5. await 的类型/语义规则
+
+当前阶段（已落地，scaffold）：
+
+1. `await e` 只能用于 Poll-shaped 枚举 `{ Pending, Ready(T) }`。
+2. `await e` 的表达式类型为 `T`。
+3. lowering 语义：`Ready(v) => v`，`Pending => panic`。
+4. `await` 只能出现在 async 上下文（`async fn`，`async` block 后续引入）。
+
+目标阶段（D03-3b 之后）：
 
 1. `await e` 要求 `e` 的类型实现 `Future`。
 2. `await e` 的表达式类型为该 `Future::Output`。
-3. `await` 只能出现在 async 上下文（`async fn`/`async` block，后者可后续引入）。
+3. `Pending` 通过状态机挂起与唤醒，不再是 panic。
 
 ## 6. push 与 pull 的转换
 
@@ -118,4 +127,4 @@ trait Sink {
 2. D03-3：Future 表示 + lowering + await typecheck/irgen。
 3. D03-4：跨 await 借用约束与诊断。
 
-在 D03-3/4 完成前，`async fn`/`await` 继续保持 deferred 诊断，不开放运行时语义。
+在 D03-3b/4 完成前，`async fn` 仍按同步函数执行；`await` 目前仅提供 Poll-shaped 脚手架语义（`Ready` 提取、`Pending` panic），不提供真实 Future/poll 挂起恢复语义。

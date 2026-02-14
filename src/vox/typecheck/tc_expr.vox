@@ -7,6 +7,7 @@ import "vox/ir" as ir
 
 pub struct ExprTyResult { pub ok: bool, pub ty: i32, pub err: TcError }
 struct TryContainerInfo { ok: bool, is_result: bool, ok_ty: i32, residual_ty: i32 }
+struct AwaitPollInfo { ok: bool, out_ty: i32 }
 struct VariantLookupFieldResult { found: bool, field_count: i32, field0: i32 }
 struct TryErrCompatResult { ok: bool, err: TcError }
 
@@ -42,7 +43,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
     ast.ExprNode.MacroCall(callee, _targs, _args) => tc_expr_macro_call(ctx, exprs, callee, ast.expr_pool_span(exprs, id)),
     ast.ExprNode.TryBlock(bid) => tc_expr_try_block(ctx, w, mod_path, imps, exprs, l0, id, bid, expected),
     ast.ExprNode.Try(a) => tc_expr_try(ctx, w, mod_path, imps, exprs, l0, id, a, expected),
-    ast.ExprNode.Await(_a) => ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(ast.expr_pool_span(exprs, id), "await expression is deferred (D03)") },
+    ast.ExprNode.Await(a) => tc_expr_await(ctx, w, mod_path, imps, exprs, l0, id, a, expected),
     ast.ExprNode.StructLit(ty_expr, fields) => tc_expr_struct_lit(ctx, w, mod_path, imps, exprs, l0, ty_expr, fields, expected),
     ast.ExprNode.Match(scrut, arms) => tc_expr_match(ctx, w, mod_path, imps, exprs, l0, scrut, arms, expected),
   };
@@ -52,6 +53,41 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
   // If a helper didn't attach a reason, fall back to a generic error at the expr span.
   let sp: ast.Span = ast.expr_pool_span(exprs, id);
   return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "typecheck failed") };
+}
+
+fn tc_expr_await(
+  ctx: Ctx,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  id: i32,
+  a: i32,
+  expected: i32
+) -> ExprTyResult {
+  let sp: ast.Span = ast.expr_pool_span(exprs, id);
+  if !l0.fn_is_async {
+    return ExprTyResult {
+      ok: false,
+      ty: ctx.ty_bad,
+      err: type_error_at(sp, "await can only be used in async fn (D03)"),
+    };
+  }
+  let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, -1);
+  if !ar.ok { return ar; }
+  let ai: AwaitPollInfo = await_poll_info(ctx, ar.ty);
+  if !ai.ok {
+    return ExprTyResult {
+      ok: false,
+      ty: ctx.ty_bad,
+      err: type_error_at(sp, "`await` requires Poll-like enum { Pending, Ready(T) } in current D03 scaffold"),
+    };
+  }
+  if expected != -1 && !assignable_to(ctx, expected, ai.out_ty) {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+  }
+  return ExprTyResult { ok: true, ty: ai.out_ty, err: TcError.None };
 }
 
 fn macro_callee_display_name(exprs: ast.ExprPool, callee: i32) -> String {
@@ -110,6 +146,22 @@ fn try_container_info(ctx: Ctx, ty0: i32) -> TryContainerInfo {
   return TryContainerInfo { ok: false, is_result: false, ok_ty: ctx.ty_bad, residual_ty: ctx.ty_bad };
 }
 
+
+fn await_poll_info(ctx: Ctx, ty0: i32) -> AwaitPollInfo {
+  let ty: i32 = strip_range(ctx, ty0);
+  if ty < 0 || ty >= ctx.pool.tys.len() { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind != ir.TyKind.Enum { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
+  let fe: FindEnumResult = find_enum(ctx, ty_mod(t), ty_name(t));
+  if !fe.found { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
+  let es: EnumSig = fe.sig;
+
+  let pending: VariantLookupFieldResult = find_enum_variant_field(es, "Pending");
+  let ready: VariantLookupFieldResult = find_enum_variant_field(es, "Ready");
+  if !pending.found || !ready.found { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
+  if pending.field_count != 0 || ready.field_count != 1 { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
+  return AwaitPollInfo { ok: true, out_ty: ready.field0 };
+}
 fn try_impl_assoc_ty(sig: ImplSig, assoc: String) -> i32 {
   let mut i: i32 = 0;
   while i < sig.assoc_types.len() {
