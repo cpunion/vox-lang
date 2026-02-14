@@ -310,7 +310,68 @@ fn impl_lowered_name(ts: TraitSig, method: String, nth: i32) -> String {
   return "impl$".concat(m).concat("$").concat(ts.name).concat("$").concat(method).concat("$").concat(nth.to_string());
 }
 
-fn trait_method_sig_for(ctx: Ctx, ms: TraitMethodSig, for_ty: i32, assocs: Vec[ImplAssocTypeSig]) -> FuncSig {
+struct CtiSubstTyResult { ok: bool, ctx: Ctx, ty: i32 }
+struct TraitMethodSigForResult { ok: bool, ctx: Ctx, sig: FuncSig }
+
+fn cti_subst_ty_intern(ctx0: Ctx, ty_idx: i32, subs: Vec[TySub]) -> CtiSubstTyResult {
+  let mut c: Ctx = ctx0;
+  let t: ir.Ty = ir.ty_pool_get(c.pool, ty_idx);
+  if t.kind == ir.TyKind.Param {
+    let r: i32 = subs_lookup(subs, t.name);
+    if r != -1 { return CtiSubstTyResult { ok: true, ctx: c, ty: r }; }
+    let rp: i32 = subst_proj_param(c, t.name, subs);
+    if rp != -1 { return CtiSubstTyResult { ok: true, ctx: c, ty: rp }; }
+    return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx };
+  }
+  if t.kind == ir.TyKind.Ref {
+    let er: CtiSubstTyResult = cti_subst_ty_intern(c, t.elem, subs);
+    c = er.ctx;
+    if !er.ok { return CtiSubstTyResult { ok: false, ctx: c, ty: c.ty_bad }; }
+    if er.ty == t.elem { return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx }; }
+    let mut ridx: i32 = find_ref_ty_idx(c, er.ty, ir.ty_ref_is_mut(t), ir.ty_ref_is_static(t));
+    if ridx == -1 {
+      let ir0: InternResult = intern_ty(c, ir.ty_ref(er.ty, ir.ty_ref_is_mut(t), ir.ty_ref_is_static(t)));
+      c = ir0.ctx;
+      ridx = ir0.idx;
+    }
+    return CtiSubstTyResult { ok: true, ctx: c, ty: ridx };
+  }
+  if t.kind == ir.TyKind.Vec {
+    let er: CtiSubstTyResult = cti_subst_ty_intern(c, t.elem, subs);
+    c = er.ctx;
+    if !er.ok { return CtiSubstTyResult { ok: false, ctx: c, ty: c.ty_bad }; }
+    if er.ty == t.elem { return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx }; }
+    let mut vidx: i32 = find_vec_ty_idx(c, er.ty);
+    if vidx == -1 {
+      let ir0: InternResult = intern_ty(c, ir.ty_vec(er.ty));
+      c = ir0.ctx;
+      vidx = ir0.idx;
+    }
+    return CtiSubstTyResult { ok: true, ctx: c, ty: vidx };
+  }
+  if t.kind == ir.TyKind.Range {
+    let er: CtiSubstTyResult = cti_subst_ty_intern(c, t.elem, subs);
+    c = er.ctx;
+    if !er.ok { return CtiSubstTyResult { ok: false, ctx: c, ty: c.ty_bad }; }
+    if er.ty == t.elem { return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx }; }
+    let mut ridx: i32 = find_range_ty_idx_subst(c, er.ty, t.lo, t.hi);
+    if ridx == -1 {
+      let ir0: InternResult = intern_ty(c, ir.ty_range(er.ty, t.lo, t.hi));
+      c = ir0.ctx;
+      ridx = ir0.idx;
+    }
+    return CtiSubstTyResult { ok: true, ctx: c, ty: ridx };
+  }
+
+  let s: i32 = subst_ty(c, ty_idx, subs);
+  if s == c.ty_bad {
+    return CtiSubstTyResult { ok: false, ctx: c, ty: c.ty_bad };
+  }
+  return CtiSubstTyResult { ok: true, ctx: c, ty: s };
+}
+
+fn trait_method_sig_for(ctx0: Ctx, ms: TraitMethodSig, for_ty: i32, assocs: Vec[ImplAssocTypeSig]) -> TraitMethodSigForResult {
+  let mut c: Ctx = ctx0;
   let mut subs: Vec[TySub] = Vec();
   subs.push(TySub { name: "Self", ty: for_ty });
   let mut ai: i32 = 0;
@@ -323,23 +384,78 @@ fn trait_method_sig_for(ctx: Ctx, ms: TraitMethodSig, for_ty: i32, assocs: Vec[I
   let mut ps: Vec[i32] = Vec();
   let mut i: i32 = 0;
   while i < ms.sig.params.len() {
-    ps.push(subst_ty(ctx, ms.sig.params.get(i), subs));
+    let pr: CtiSubstTyResult = cti_subst_ty_intern(c, ms.sig.params.get(i), subs);
+    c = pr.ctx;
+    if !pr.ok {
+      return TraitMethodSigForResult {
+        ok: false,
+        ctx: c,
+        sig: FuncSig {
+          params: Vec(), param_borrow_kinds: Vec(), ret: c.ty_bad,
+          has_variadic: false, variadic_elem: -1,
+          vis: ast.vis_private(), is_pub: false,
+          type_params: Vec(), type_param_packs: Vec(), const_params: Vec(),
+          type_param_bounds: Vec(), const_where_bounds: Vec(),
+        },
+      };
+    }
+    ps.push(pr.ty);
     i = i + 1;
   }
-  let ret: i32 = subst_ty(ctx, ms.sig.ret, subs);
-  return FuncSig {
-    params: ps,
-    param_borrow_kinds: ms.sig.param_borrow_kinds,
-    ret: ret,
-    has_variadic: ms.sig.has_variadic,
-    variadic_elem: if ms.sig.has_variadic { subst_ty(ctx, ms.sig.variadic_elem, subs) } else { ms.sig.variadic_elem },
-    vis: ast.vis_private(),
-    is_pub: false,
-    type_params: ms.sig.type_params,
-    type_param_packs: ms.sig.type_param_packs,
-    const_params: ms.sig.const_params,
-    type_param_bounds: ms.sig.type_param_bounds,
-    const_where_bounds: ms.sig.const_where_bounds,
+
+  let rr: CtiSubstTyResult = cti_subst_ty_intern(c, ms.sig.ret, subs);
+  c = rr.ctx;
+  if !rr.ok {
+    return TraitMethodSigForResult {
+      ok: false,
+      ctx: c,
+      sig: FuncSig {
+        params: Vec(), param_borrow_kinds: Vec(), ret: c.ty_bad,
+        has_variadic: false, variadic_elem: -1,
+        vis: ast.vis_private(), is_pub: false,
+        type_params: Vec(), type_param_packs: Vec(), const_params: Vec(),
+        type_param_bounds: Vec(), const_where_bounds: Vec(),
+      },
+    };
+  }
+
+  let mut var_ty: i32 = ms.sig.variadic_elem;
+  if ms.sig.has_variadic {
+    let vr: CtiSubstTyResult = cti_subst_ty_intern(c, ms.sig.variadic_elem, subs);
+    c = vr.ctx;
+    if !vr.ok {
+      return TraitMethodSigForResult {
+        ok: false,
+        ctx: c,
+        sig: FuncSig {
+          params: Vec(), param_borrow_kinds: Vec(), ret: c.ty_bad,
+          has_variadic: false, variadic_elem: -1,
+          vis: ast.vis_private(), is_pub: false,
+          type_params: Vec(), type_param_packs: Vec(), const_params: Vec(),
+          type_param_bounds: Vec(), const_where_bounds: Vec(),
+        },
+      };
+    }
+    var_ty = vr.ty;
+  }
+
+  return TraitMethodSigForResult {
+    ok: true,
+    ctx: c,
+    sig: FuncSig {
+      params: ps,
+      param_borrow_kinds: ms.sig.param_borrow_kinds,
+      ret: rr.ty,
+      has_variadic: ms.sig.has_variadic,
+      variadic_elem: var_ty,
+      vis: ast.vis_private(),
+      is_pub: false,
+      type_params: ms.sig.type_params,
+      type_param_packs: ms.sig.type_param_packs,
+      const_params: ms.sig.const_params,
+      type_param_bounds: ms.sig.type_param_bounds,
+      const_where_bounds: ms.sig.const_where_bounds,
+    },
   };
 }
 
@@ -1238,7 +1354,10 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
             return TcCtxResult { ok: false, err: type_error_at(id.sp, msg), ctx: c };
           }
 
-          let want0: FuncSig = trait_method_sig_for(c, tms, for_ty, impl_assocs);
+          let wr0: TraitMethodSigForResult = trait_method_sig_for(c, tms, for_ty, impl_assocs);
+          c = wr0.ctx;
+          if !wr0.ok { return TcCtxResult { ok: false, err: type_error_at(id.sp, "trait method type substitution failed"), ctx: c }; }
+          let want0: FuncSig = wr0.sig;
           let emit0: FuncSig = impl_method_emit_sig(id.type_params, head_tpbs, want0);
           let lowered0: String = fresh_impl_lowered_name(c, m.path, tf.sig, tms.name, c.impls.len() * 1000 + 500 + tm);
           c.funcs.push(FuncSym { mod_path: m.path, name: lowered0, sig: emit0 });
@@ -1262,7 +1381,10 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let md: ast.FuncDecl = id.methods.get(mdi);
         let pv0: CtiValidateTypeParamPacksResult = cti_validate_type_param_packs(md.sp, md.type_params, md.type_param_packs);
         if !pv0.ok { return TcCtxResult { ok: false, err: pv0.err, ctx: c }; }
-        let want: FuncSig = trait_method_sig_for(c, tms, for_ty, impl_assocs);
+        let wr1: TraitMethodSigForResult = trait_method_sig_for(c, tms, for_ty, impl_assocs);
+        c = wr1.ctx;
+        if !wr1.ok { return TcCtxResult { ok: false, err: type_error_at(md.sp, "trait method type substitution failed"), ctx: c }; }
+        let want: FuncSig = wr1.sig;
         if md.const_params.len() != want.const_params.len() {
           return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param count mismatch"), ctx: c };
         }
