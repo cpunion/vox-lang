@@ -1,36 +1,76 @@
-# FFI 与互操作（草案）
+# FFI 与互操作
 
-## C FFI
+## 语法
+
+导入外部符号：
 
 ```vox
-extern "C" {
-  fn malloc(size: usize) -> *mut u8;
-  fn free(ptr: *mut u8);
+@ffi_import("c", "puts")
+fn c_puts(s: String) -> i32;
+
+@ffi_import("wasm", "env", "log_i32")
+fn wasm_log(v: i32) -> ();
+```
+
+导出 Vox 函数：
+
+```vox
+@ffi_export("c", "vox_add")
+@ffi_export("wasm", "vox_add")
+pub fn add(a: i32, b: i32) -> i32 {
+  return a + b;
 }
 ```
 
-导出符号（属性语法待定，示意）：
+## 约束
 
-```vox
-#[export_name = "vox_add"]
-#[no_mangle]
-extern "C" fn add(a: i32, b: i32) -> i32 { a + b }
-```
+- `@ffi_import` 仅允许标注在顶层函数声明上，且该函数必须以 `;` 结尾（无函数体）。
+- `@ffi_import("c", "symbol")` 需要 2 个参数。
+- `@ffi_import("wasm", "module", "symbol")` 需要 3 个参数。
+- 单个函数最多一个 `@ffi_import`。
+- `@ffi_export("c", "symbol")` 与 `@ffi_export("wasm", "symbol")` 需要 2 个参数。
+- 单个函数可有多个 `@ffi_export`（不同 target）。
+- 同一函数上禁止同时出现 `@ffi_import` 与 `@ffi_export`。
+- `@ffi_export` 函数必须是 `pub fn` 且必须有函数体。
+- 同一包内，同一 `target + symbol` 组合只允许出现一次（避免导出冲突）。
+- v0 限制：FFI 函数不支持类型参数/常量参数与可变参数。
 
-## 布局与映射
+## v0 FFI 类型白名单
 
-- `#[repr(C)]`：保证与 C 兼容布局
-- 指针映射：`*const T` / `*mut T`
-- `&T` / `&mut T` 仅作为临时参数传递到 C（调用方负责保证有效期）
+- `()`
+- `bool`
+- `i8 i16 i32 i64 isize`
+- `u8 u16 u32 u64 usize`
+- `f32 f64`
+- `String`（当前 C 后端按 `const char*` 处理）
 
-## 字符串
+超出白名单的类型（结构体、枚举、Vec、引用、range、泛型实例等）在类型检查阶段报错。
 
-建议提供：
+## C 后端行为（v0）
 
-- `CStr`/`CString`（与 Rust 类似）
-- 字面量 `c"..."`（是否引入该语法待定）
+- `@ffi_import("c", "...")` 生成 `extern` 函数声明，并在调用点直连外部符号。
+- `@ffi_export("c", "...")` 生成导出包装函数，包装内部 mangled Vox 函数名。
+- `@ffi_import("wasm", "module", "symbol")` 生成 wasm import 属性（clang 风格 `import_module/import_name`），并使用内部 C 名称别名，避免与用户符号冲突。
+- `@ffi_export("wasm", "symbol")` 生成 wasm export 属性（clang 风格 `export_name`），包装函数使用内部 C 名称别名，保证导出名稳定并避免符号重定义。
 
-## WASM/JS
+## 构建导出库
 
-保留 `#[wasm_import(...)]` / `#[wasm_export]` 一类属性（细节 deferred）。
+- 可执行（默认）：`vox build-pkg out.bin`
+- 共享库：`vox build-pkg --artifact=shared libvox.so`（macOS 常用 `.dylib`，Windows 常用 `.dll`）
+- 静态库：`vox build-pkg --artifact=static libvox.a`（Windows MSVC 常用 `.lib`）
 
+`shared/static` 产物不会生成 driver `main`。
+
+## WASM 状态
+
+- `wasm` 导入/导出属性已可在 C 后端生成对应属性声明（实验态）。
+- 当前仍是“C 后端 + 外部 wasm 工具链”路线，不是独立 wasm IR/后端。
+- 构建示例：`vox build-pkg --target=wasm32-unknown-unknown out.wasm`
+- wasi 测试示例：`WASM_RUNNER=wasmtime vox test-pkg --target=wasm32-wasi out.test`
+
+## 示例
+
+- Node.js + 浏览器调用 wasm：`examples/wasm_call/`
+  - 构建：`vox build-pkg --target=wasm32-unknown-unknown target/vox_wasm_demo.wasm`
+  - Node 运行：`node node/run.mjs`
+  - Web 运行：`node web/server.mjs` 后访问 `http://127.0.0.1:8080/web/`

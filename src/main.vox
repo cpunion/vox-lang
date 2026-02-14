@@ -108,6 +108,8 @@ struct CliTargetSpec {
 fn target_abi_from_text(s: String) -> String {
   if text_contains(s, "msvc") { return "msvc"; }
   if text_contains(s, "mingw") || text_contains(s, "gnu") || text_contains(s, "w64") { return "gnu"; }
+  if text_contains(s, "wasi") { return "wasi"; }
+  if text_contains(s, "emscripten") { return "emscripten"; }
   return "";
 }
 
@@ -134,13 +136,19 @@ fn target_triple_for(os: String, arch: String, abi0: String) -> String {
     if arch == "x86" { return "i686-w64-mingw32"; }
     return "aarch64-w64-mingw32";
   }
+  if os == "wasm" {
+    if abi == "wasi" { return "wasm32-wasi"; }
+    if abi == "emscripten" { return "wasm32-unknown-emscripten"; }
+    return "wasm32-unknown-unknown";
+  }
   return os.concat("-").concat(arch);
 }
 
 fn cli_target_spec_ok(raw: String, os: String, arch: String, abi0: String) -> CliTargetSpec {
   let mut abi: String = abi0;
-  if os != "windows" { abi = ""; }
+  if os != "windows" && os != "wasm" { abi = ""; }
   if os == "windows" && abi == "" { abi = "gnu"; }
+  if os == "wasm" && abi == "" { abi = "unknown"; }
   let canon: String = os.concat("-").concat(arch);
   return CliTargetSpec {
     ok: true,
@@ -168,15 +176,16 @@ fn cli_target_spec_err(raw: String, msg: String) -> CliTargetSpec {
 }
 
 fn target_os_supported(os: String) -> bool {
-  return os == "linux" || os == "darwin" || os == "windows";
+  return os == "linux" || os == "darwin" || os == "windows" || os == "wasm";
 }
 
 fn target_arch_supported(arch: String) -> bool {
-  return arch == "amd64" || arch == "arm64" || arch == "x86";
+  return arch == "amd64" || arch == "arm64" || arch == "x86" || arch == "wasm32";
 }
 
 fn target_pair_supported(os: String, arch: String) -> bool {
   if os == "darwin" && arch == "x86" { return false; }
+  if os == "wasm" && arch != "wasm32" { return false; }
   return true;
 }
 
@@ -188,10 +197,12 @@ fn target_os_from_text(s: String) -> String {
     return "darwin";
   }
   if s == "linux" || text_contains(s, "linux") { return "linux"; }
+  if s == "wasm" || text_contains(s, "wasm") || text_contains(s, "wasi") { return "wasm"; }
   return "";
 }
 
 fn target_arch_from_text(s: String) -> String {
+  if text_contains(s, "wasm32") { return "wasm32"; }
   if text_contains(s, "x86_64") || text_contains(s, "amd64") || text_contains(s, "x64") || text_contains(s, "x86-64") {
     return "amd64";
   }
@@ -239,9 +250,12 @@ fn parse_cli_target_spec(raw0: String, host_os: String, host_arch: String) -> Cl
   if os == "" {
     return cli_target_spec_err(raw, "invalid --target: unknown os in '".concat(raw).concat("'"));
   }
-  if arch == "" { arch = host_arch; }
+  if arch == "" {
+    if os == "wasm" { arch = "wasm32"; } else { arch = host_arch; }
+  }
   if os == "windows" && abi == "" { abi = "gnu"; }
-  if os != "windows" { abi = ""; }
+  if os == "wasm" && abi == "" { abi = "unknown"; }
+  if os != "windows" && os != "wasm" { abi = ""; }
 
   if !target_os_supported(os) {
     return cli_target_spec_err(raw, "invalid --target: unsupported os '".concat(os).concat("'"));
@@ -254,6 +268,35 @@ fn parse_cli_target_spec(raw0: String, host_os: String, host_arch: String) -> Cl
   }
   return cli_target_spec_ok(raw, os, arch, abi);
 }
+
+struct CliArtifactSpec {
+  ok: bool,
+  err: String,
+  kind: String, // exe | static | shared
+}
+
+fn cli_artifact_spec_ok(kind: String) -> CliArtifactSpec {
+  return CliArtifactSpec { ok: true, err: "", kind: kind };
+}
+
+fn cli_artifact_spec_err(msg: String) -> CliArtifactSpec {
+  return CliArtifactSpec { ok: false, err: msg, kind: "" };
+}
+
+fn parse_cli_artifact(raw0: String) -> CliArtifactSpec {
+  let s: String = tc_ascii_lower(trim_space_main(raw0));
+  if s == "" || s == "exe" {
+    return cli_artifact_spec_ok("exe");
+  }
+  if s == "static" || s == "staticlib" {
+    return cli_artifact_spec_ok("static");
+  }
+  if s == "shared" || s == "sharedlib" || s == "dylib" || s == "cdylib" {
+    return cli_artifact_spec_ok("shared");
+  }
+  return cli_artifact_spec_err("invalid --artifact: expected exe|static|shared, got '".concat(raw0).concat("'"));
+}
+
 fn env_key_suffix(s: String) -> String {
   let mut out: String = "";
   let up: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -314,6 +357,11 @@ fn cc_cmd_for_target(host_os: String, host_arch: String, target_os: String, targ
     return "aarch64-linux-gnu-gcc";
   }
   if target_os == "darwin" { return "clang"; }
+  if target_os == "wasm" {
+    if target_abi == "wasi" { return "clang"; }
+    if target_abi == "emscripten" { return "emcc"; }
+    return "emcc";
+  }
   return "cc";
 }
 
@@ -326,43 +374,135 @@ fn cc_target_flags_for_target(cmd: String, host_os: String, host_arch: String, t
   return "";
 }
 
-fn cc_link_flags_for_target(target_os: String, use_msvc: bool) -> String {
+fn cc_link_flags_for_target(target_os: String, target_abi: String, use_msvc: bool, artifact: String) -> String {
+  if artifact == "static" { return ""; }
+  if target_os == "wasm" {
+    if target_abi == "wasi" { return ""; }
+    return " -Wl,--no-entry -Wl,--export-all";
+  }
   if target_os != "windows" { return ""; }
-  if use_msvc { return " /link ws2_32.lib /STACK:8388608"; }
+  if use_msvc {
+    if artifact == "shared" { return " /link ws2_32.lib"; }
+    return " /link ws2_32.lib /STACK:8388608";
+  }
+  if artifact == "shared" { return " -lws2_32"; }
   return " -lws2_32 -static -Wl,--stack,8388608";
 }
 
 fn cc_common_flags_for_target(target_os: String, use_msvc: bool) -> String {
   if use_msvc { return ""; }
-  if target_os == "windows" { return ""; }
+  if target_os == "windows" || target_os == "wasm" { return ""; }
   return " -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE";
 }
 
-fn cc_cmdline_for_target(host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, cpath: String, out: String) -> String {
+fn ar_cmd_for_target(host_os: String, target_os: String, target_arch: String, target_triple: String, target_abi: String) -> String {
+  let ar_env: String = trim_space_main(proc.getenv("AR"));
+  if ar_env != "" { return ar_env; }
+
+  let ar_canon: String = trim_space_main(proc.getenv("AR_".concat(env_key_suffix(target_os.concat("_").concat(target_arch)))));
+  if ar_canon != "" { return ar_canon; }
+
+  let ar_triple: String = trim_space_main(proc.getenv("AR_".concat(env_key_suffix(target_triple))));
+  if ar_triple != "" { return ar_triple; }
+
+  if target_abi == "msvc" {
+    if host_os == "windows" { return "lib"; }
+    return "llvm-lib";
+  }
+
+  if target_os == "windows" {
+    if target_arch == "amd64" { return "x86_64-w64-mingw32-ar"; }
+    if target_arch == "x86" { return "i686-w64-mingw32-ar"; }
+    return "aarch64-w64-mingw32-ar";
+  }
+  if target_os == "linux" {
+    if target_arch == "amd64" { return "x86_64-linux-gnu-ar"; }
+    if target_arch == "x86" { return "i686-linux-gnu-ar"; }
+    return "aarch64-linux-gnu-ar";
+  }
+  return "ar";
+}
+
+fn cc_shared_flag_for_target(target_os: String, use_msvc: bool) -> String {
+  if use_msvc { return " /LD"; }
+  if target_os == "darwin" { return " -dynamiclib"; }
+  return " -shared";
+}
+
+fn cc_cmdline_for_target_artifact(host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, artifact: String, cpath: String, out: String) -> String {
   let cc: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
   let use_msvc: bool = cc_is_msvc_cmd(cc);
   let tflags: String = cc_target_flags_for_target(cc, host_os, host_arch, target_os, target_arch, target_triple);
+
+  if artifact == "static" {
+    let ar: String = ar_cmd_for_target(host_os, target_os, target_arch, target_triple, target_abi);
+    if use_msvc {
+      let obj: String = out.concat(".obj");
+      return cc
+        .concat(" /nologo /TC /Od /Zi /c")
+        .concat(" ")
+        .concat(cpath)
+        .concat(" /Fo:")
+        .concat(obj)
+        .concat(" && ")
+        .concat(ar)
+        .concat(" /nologo /OUT:")
+        .concat(out)
+        .concat(" ")
+        .concat(obj);
+    }
+    let obj: String = out.concat(".o");
+    return cc
+      .concat(tflags)
+      .concat(" -std=c11 -O0 -g")
+      .concat(cc_common_flags_for_target(target_os, false))
+      .concat(" -c ")
+      .concat(cpath)
+      .concat(" -o ")
+      .concat(obj)
+      .concat(" && ")
+      .concat(ar)
+      .concat(" rcs ")
+      .concat(out)
+      .concat(" ")
+      .concat(obj);
+  }
+
   if use_msvc {
+    let shared_flag: String = if artifact == "shared" { cc_shared_flag_for_target(target_os, true) } else { "" };
     return cc
       .concat(" /nologo /TC /Od /Zi")
+      .concat(shared_flag)
       .concat(" ")
       .concat(cpath)
       .concat(" /Fe:")
       .concat(out)
-      .concat(cc_link_flags_for_target(target_os, true));
+      .concat(cc_link_flags_for_target(target_os, target_abi, true, artifact));
   }
+
+  let shared_flag: String = if artifact == "shared" { cc_shared_flag_for_target(target_os, false) } else { "" };
   return cc
     .concat(tflags)
     .concat(" -std=c11 -O0 -g")
     .concat(cc_common_flags_for_target(target_os, false))
+    .concat(shared_flag)
     .concat(" ")
     .concat(cpath)
     .concat(" -o ")
     .concat(out)
-    .concat(cc_link_flags_for_target(target_os, false));
+    .concat(cc_link_flags_for_target(target_os, target_abi, false, artifact));
 }
+
+fn cc_cmdline_for_target(host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, cpath: String, out: String) -> String {
+  return cc_cmdline_for_target_artifact(host_os, host_arch, target_os, target_arch, target_triple, target_abi, "exe", cpath, out);
+}
+
 fn cmd_supports_target(cmd: String) -> bool {
   return cmd == "build" || cmd == "build-pkg" || cmd == "test-pkg";
+}
+
+fn cmd_supports_artifact(cmd: String) -> bool {
+  return cmd == "build" || cmd == "build-pkg";
 }
 
 fn usage() -> () {
@@ -387,7 +527,8 @@ fn usage() -> () {
   print("  --list              test-pkg: list selected tests and exit\n");
   print("  --rerun-failed      test-pkg: run only previously failed tests\n");
   print("  --json              test-pkg/list-pkg: print JSON report\n");
-  print("  --target=<value>    build/build-pkg/test-pkg: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc, i686-w64-mingw32)\n");
+  print("  --target=<value>    build/build-pkg/test-pkg: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc, i686-w64-mingw32, wasm32-unknown-unknown)\n");
+  print("  --artifact=<kind>   build/build-pkg: artifact kind (exe|static|shared)\n");
   print("  --version, -V       print embedded compiler version\n");
 }
 
@@ -1209,17 +1350,23 @@ fn pick_runnable_queue_idx(qs: Vec[ModuleQueue], rs: Vec[RunningJob]) -> i32 {
   return -1;
 }
 
-fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test_name: String) -> RunningJob {
+fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test_name: String, runner_cmd: String) -> RunningJob {
   let tag: String = module_idx.to_string().concat("_").concat(seq.to_string());
   let rc_file: String = path_join(run_dir, "job_".concat(tag).concat(".rc"));
   let log_file: String = path_join(run_dir, "job_".concat(tag).concat(".log"));
   let bin_exec: String = shell_exec_path(bin);
-  let cmd_head: String = shell_quote(bin_exec).concat(" ").concat(shell_quote(test_name));
+
+  let mut cmd_head: String = shell_quote(bin_exec).concat(" ").concat(shell_quote(test_name));
+  let mut cmd_head_win: String = bin_exec.concat(" ").concat(test_name);
+  if trim_space_main(runner_cmd) != "" {
+    let re: String = shell_exec_path(trim_space_main(runner_cmd));
+    cmd_head = shell_quote(re).concat(" ").concat(shell_quote(bin_exec)).concat(" ").concat(shell_quote(test_name));
+    cmd_head_win = re.concat(" ").concat(bin_exec).concat(" ").concat(test_name);
+  }
+
   let log_redir: String = " > ".concat(shell_quote(shell_exec_path(log_file))).concat(" 2>&1");
   if host_is_windows() {
-    let run_cmd_win: String =
-      bin_exec.concat(" ").concat(test_name)
-        .concat(" > ").concat(shell_exec_path(log_file)).concat(" 2>&1");
+    let run_cmd_win: String = cmd_head_win.concat(" > ").concat(shell_exec_path(log_file)).concat(" 2>&1");
     let rc: i32 = proc.exec(run_cmd_win);
     fs.write_string(rc_file, if rc == 0 { "0" } else { "1" });
     return RunningJob {
@@ -2095,6 +2242,7 @@ fn main() -> i32 {
   let mut test_rerun_failed: bool = false;
   let mut test_json: bool = false;
   let mut target_flag: String = "";
+  let mut artifact_flag: String = "";
   let mut out: String = "";
   let mut src_start: i32 = -1;
   let mut i: i32 = 1;
@@ -2285,6 +2433,31 @@ fn main() -> i32 {
       i = i + 2;
       continue;
     }
+    if has_prefix(a, "--artifact=") {
+      if !cmd_supports_artifact(cmd.slice(0, cmd.len())) {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      artifact_flag = a.slice(11, a.len());
+      i = i + 1;
+      continue;
+    }
+    if a == "--artifact" {
+      if !cmd_supports_artifact(cmd.slice(0, cmd.len())) {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      if i + 1 >= args.len() {
+        usage();
+        print("missing value for --artifact\n");
+        return 1;
+      }
+      artifact_flag = args.get(i + 1);
+      i = i + 2;
+      continue;
+    }
     if has_prefix(a, "-") {
       usage();
       print("unknown flag: ".concat(a).concat("\n"));
@@ -2329,6 +2502,27 @@ fn main() -> i32 {
   let target_arch: String = tr.arch;
   let target_triple: String = tr.triple;
   let target_abi: String = tr.abi;
+
+  let ar: CliArtifactSpec = parse_cli_artifact(artifact_flag);
+  if !ar.ok {
+    usage();
+    print(ar.err.concat("\n"));
+    return 1;
+  }
+  let artifact: String = ar.kind;
+
+  if target_os == "wasm" {
+    if cmd == "test-pkg" && target_abi != "wasi" {
+      usage();
+      print("invalid --target for test-pkg: wasm target requires wasm32-wasi runner mode\n");
+      return 1;
+    }
+    if cmd_supports_artifact(cmd) && artifact != "exe" {
+      usage();
+      print("invalid --artifact for wasm target: expected exe\n");
+      return 1;
+    }
+  }
 
   if cmd == "list-pkg" {
     let all: Vec[String] = fs.walk_vox_files(".");
@@ -2400,14 +2594,14 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(srcs_build);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: true, driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
+    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
     if !r.ok {
       print("compile failed: ".concat(r.err).concat("\n"));
       return 1;
     }
     let cpath: String = out.concat(".c");
     fs.write_string(cpath, r.c);
-    let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, out);
+    let cmdline: String = cc_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), artifact, cpath, out);
     let code: i32 = proc.exec(cmdline);
     if code != 0 {
       print("cc failed: ".concat(cmdline).concat("\n"));
@@ -2476,14 +2670,14 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: true, driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
+    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
     if !r.ok {
       print("compile failed: ".concat(r.err).concat("\n"));
       return 1;
     }
     let cpath: String = out.concat(".c");
     fs.write_string(cpath, r.c);
-    let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, out);
+    let cmdline: String = cc_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), artifact, cpath, out);
     let code: i32 = proc.exec(cmdline);
     if code != 0 {
       print("cc failed: ".concat(cmdline).concat("\n"));
@@ -2638,6 +2832,11 @@ fn main() -> i32 {
     }
 
     // Run tests by module-level parallel queues, keeping module-internal order.
+    let mut test_runner_cmd: String = "";
+    if target_os == "wasm" && target_abi == "wasi" {
+      test_runner_cmd = trim_space_main(proc.getenv("WASM_RUNNER"));
+      if test_runner_cmd == "" { test_runner_cmd = "wasmtime"; }
+    }
     let run_start_ns: i64 = tm.now_ns();
     let mut passed: i32 = 0;
     let mut failed: i32 = 0;
@@ -2671,7 +2870,7 @@ fn main() -> i32 {
         let q: ModuleQueue = queues.get(qi);
         let name: String = q.tests.get(q.next);
         queues = set_module_queue_next(queues, qi, q.next + 1);
-        let job: RunningJob = launch_test_job(bin, run_dir, qi, launch_seq, name);
+        let job: RunningJob = launch_test_job(bin, run_dir, qi, launch_seq, name, test_runner_cmd);
         running.push(job);
         launch_seq = launch_seq + 1;
       }

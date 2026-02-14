@@ -511,7 +511,29 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
   panic("unknown binop");
 }
 
-fn emit_instr_call(has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec[ir.Value]) -> Vec[String] {
+fn ffi_import_symbol_for_call(p: ir.Program, name: String) -> String {
+  let mut i: i32 = 0;
+  while i < p.ffi_imports.len() {
+    let im: ir.FfiImportDecl = p.ffi_imports.get(i);
+    if im.func == name {
+      if im.target != "c" && im.target != "wasm" {
+        panic("c backend does not support ffi_import target in calls: ".concat(im.target));
+      }
+      if im.target == "wasm" { return c_ffi_import_name(im.func); }
+      return im.symbol;
+    }
+    i = i + 1;
+  }
+  return "";
+}
+
+fn c_call_name(p: ir.Program, name: String) -> String {
+  let sym: String = ffi_import_symbol_for_call(p, name);
+  if sym != "" { return sym; }
+  return c_fn_name(name);
+}
+
+fn emit_instr_call(p: ir.Program, has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec[ir.Value]) -> Vec[String] {
   if name == "panic" {
     if args.len() != 1 { panic("panic expects 1 arg"); }
     return vec1("  vox_builtin_panic(".concat(c_value(args.get(0))).concat(");"));
@@ -658,7 +680,7 @@ fn emit_instr_call(has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec
   }
   let mut s: String = "  ";
   if has_dst && ret_ty != -1 { s = s.concat(c_temp_name(tid)).concat(" = "); }
-  s = s.concat(c_fn_name(name)).concat("(");
+  s = s.concat(c_call_name(p, name)).concat("(");
   let mut i: i32 = 0;
   while i < args.len() {
     if i != 0 { s = s.concat(", "); }
@@ -751,7 +773,7 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr) -> Vec[String] {
     ir.Instr.F64ToStr(tid, v) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_f64_to_string(").concat(c_value(v)).concat(");")),
     ir.Instr.BoolToStr(tid, v) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_bool_to_string(").concat(c_value(v)).concat(");")),
 
-    ir.Instr.Call(has_dst, tid, ret_ty, name, args) => emit_instr_call(has_dst, tid, ret_ty, name, args),
+    ir.Instr.Call(has_dst, tid, ret_ty, name, args) => emit_instr_call(p, has_dst, tid, ret_ty, name, args),
   };
 }
 
