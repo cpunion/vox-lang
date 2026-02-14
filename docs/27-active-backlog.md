@@ -108,8 +108,9 @@ Governance from now on:
 
 - [ ] D03 Async model.
   - [x] D03-1 词法/语法前置：保留 `async`/`await` 关键字，`async fn` AST 标记接入。
-  - [x] D03-2 未启用语义的稳定诊断：`async fn`/`await`/trait async method 给出明确 deferred 错误。
+  - [x] D03-2 未启用语义的稳定诊断：`await`/trait async method 给出明确 deferred 错误。
   - [x] D03-2a `await` 前置语法通路：parser 产出 `ExprNode.Await`，由 typecheck/irgen 统一给 deferred 语义错误。
+  - [x] D03-3b0 async fn 管线打通（scaffold）：`async fn`（无 `await`）进入正常 typecheck/codegen 流程；完整 frame/poll lowering 仍在 D03-3b。
   - [ ] D03-3 Future 表示与 lowering（状态机/poll 模型）。
   - [x] D03-3a `std/async` pull-core 契约落地：`Poll[T]`、`Waker`、`Context`、`Future`、`Sink` 与基础 helper。
   - [ ] D03-3b `async fn` lowering 到状态机 frame + `poll`。

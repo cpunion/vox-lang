@@ -12,8 +12,8 @@
 
 1. 关键字保留：`async`、`await`。
 2. `async fn` 语法已接入 parser，AST 有 `FuncDecl.is_async`。
-3. 语义尚未开启：
-   - `async fn` 在 typecheck 报 `async fn is deferred (D03)`
+3. 语义部分开启（D03-3 scaffold）：
+   - `async fn`（无 `await`）已进入正常 typecheck/codegen 管线（当前行为仍等价同步函数）
    - `await` 表达式已解析为 AST 节点（`ExprNode.Await`），在 typecheck 报 `await expression is deferred (D03)`
    - trait `async fn` 在 parser 报 `async trait method is deferred (D03)`
 
