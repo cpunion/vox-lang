@@ -32,6 +32,7 @@ pub fn add(a: i32, b: i32) -> i32 {
 - 单个函数可有多个 `@ffi_export`（不同 target）。
 - 同一函数上禁止同时出现 `@ffi_import` 与 `@ffi_export`。
 - `@ffi_export` 函数必须是 `pub fn` 且必须有函数体。
+- 同一包内，同一 `target + symbol` 组合只允许出现一次（避免导出冲突）。
 - v0 限制：FFI 函数不支持类型参数/常量参数与可变参数。
 
 ## v0 FFI 类型白名单
@@ -49,8 +50,8 @@ pub fn add(a: i32, b: i32) -> i32 {
 
 - `@ffi_import("c", "...")` 生成 `extern` 函数声明，并在调用点直连外部符号。
 - `@ffi_export("c", "...")` 生成导出包装函数，包装内部 mangled Vox 函数名。
-- `@ffi_import("wasm", "module", "symbol")` 在 C 后端会生成 wasm import 属性（clang 风格 `import_module/import_name`）。
-- `@ffi_export("wasm", "symbol")` 在 C 后端会生成 wasm export 属性（clang 风格 `export_name`）。
+- `@ffi_import("wasm", "module", "symbol")` 生成 wasm import 属性（clang 风格 `import_module/import_name`），并使用内部 C 名称别名，避免与用户符号冲突。
+- `@ffi_export("wasm", "symbol")` 生成 wasm export 属性（clang 风格 `export_name`），包装函数使用内部 C 名称别名，保证导出名稳定并避免符号重定义。
 
 ## 构建导出库
 
@@ -65,3 +66,4 @@ pub fn add(a: i32, b: i32) -> i32 {
 - `wasm` 导入/导出属性已可在 C 后端生成对应属性声明（实验态）。
 - 当前仍是“C 后端 + 外部 wasm 工具链”路线，不是独立 wasm IR/后端。
 - 构建示例：`vox build-pkg --target=wasm32-unknown-unknown out.wasm`
+- wasi 测试示例：`WASM_RUNNER=wasmtime vox test-pkg --target=wasm32-wasi out.test`

@@ -5,7 +5,7 @@
 - Linux: `linux-x86`, `linux-amd64`, `linux-arm64`
 - macOS: `darwin-amd64`, `darwin-arm64`
 - Windows: `windows-x86`, `windows-amd64`, `windows-arm64`
-- WASM: `wasm-wasm32`（三元组：`wasm32-unknown-unknown` / `wasm32-wasi`）
+- WASM: `wasm-wasm32`（三元组：`wasm32-unknown-unknown` / `wasm32-wasi` / `wasm32-unknown-emscripten`）
 
 ## CLI
 
@@ -38,6 +38,7 @@
   - `aarch64-pc-windows-msvc`
   - `wasm32-unknown-unknown`
   - `wasm32-wasi`
+  - `wasm32-unknown-emscripten`
 - `host` / `native` / 空值：使用当前宿主平台
 
 说明：`emit-c` / `emit-pkg-c` / `list-pkg` 不接受 `--target`。
@@ -79,12 +80,16 @@ Windows 目标支持两条工具链：
   - `linux-amd64` -> `x86_64-linux-gnu-gcc`
   - `linux-arm64` -> `aarch64-linux-gnu-gcc`
   - `darwin-*` -> `clang --target=<triple>`
-  - `wasm-wasm32` -> `emcc`（可通过 `CC` 覆盖）
+  - `wasm-wasm32`:
+    - `wasm32-wasi` -> `clang --target=wasm32-wasi`
+    - `wasm32-unknown-unknown` / `wasm32-unknown-emscripten` -> `emcc`
+    - 以上均可通过 `CC` 覆盖
 
 ## 组合约束
 
 - 当前不支持 `darwin-x86`（已在 `--target` 解析阶段拒绝）。
-- `test-pkg` 不支持 `wasm` 目标（stage2 当前仅支持 wasm 编译，不支持本地运行 wasm 测试执行器）。
+- `test-pkg` 对 wasm 仅支持 `wasm32-wasi`。
+- wasm 测试 runner 通过环境变量 `WASM_RUNNER` 指定（默认 `wasmtime`）。
 - `wasm` 目标当前仅支持 `--artifact=exe`。
 
 ## 链接与宏
@@ -98,8 +103,14 @@ Windows 目标支持两条工具链：
   - Windows MSVC: `/LD`
 - `static`: 先生成对象文件，再用 `ar/lib` 打包静态库。
 - 非 Windows 自动附加：`-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE`
+- wasm 链接：
+  - `wasm32-wasi`: 不附加 `--no-entry/--export-all`
+  - 其他 wasm 目标：附加 `-Wl,--no-entry -Wl,--export-all`
 
 ## WASM / 嵌入
 
-当前支持通过 C 后端编译到 wasm 目标（实验态）。
-默认三元组：`wasm32-unknown-unknown`，可显式使用 `wasm32-wasi`。
+当前支持通过 C 后端编译到 wasm 目标（实验态）：
+
+- `wasm32-wasi`: 可用于 `test-pkg`（由 `WASM_RUNNER` 执行）
+- `wasm32-unknown-unknown`: 仅构建
+- `wasm32-unknown-emscripten`: 仅构建
