@@ -2,9 +2,9 @@
 
 目标平台（当前实现）：
 
-- Linux: `linux-amd64`, `linux-arm64`
+- Linux: `linux-x86`, `linux-amd64`, `linux-arm64`
 - macOS: `darwin-amd64`, `darwin-arm64`
-- Windows: `windows-amd64`, `windows-arm64`
+- Windows: `windows-x86`, `windows-amd64`, `windows-arm64`
 
 ## CLI
 
@@ -15,14 +15,17 @@
 
 `<value>` 可用形式：
 
-- 规范形式：`<os>-<arch>`（例如 `darwin-arm64`）
+- 规范形式：`<os>-<arch>`（例如 `linux-x86`）
 - 常见 triple（会自动归一）：
+  - `i686-unknown-linux-gnu`
   - `x86_64-unknown-linux-gnu`
   - `aarch64-unknown-linux-gnu`
   - `x86_64-apple-darwin`
   - `aarch64-apple-darwin`
+  - `i686-w64-mingw32`
   - `x86_64-w64-mingw32`
   - `aarch64-w64-mingw32`
+  - `i686-pc-windows-msvc`
   - `x86_64-pc-windows-msvc`
   - `aarch64-pc-windows-msvc`
 - `host` / `native` / 空值：使用当前宿主平台
@@ -47,8 +50,8 @@ Windows 目标支持两条工具链：
 按以下优先级选择 C 编译器：
 
 1. `CC`
-2. `CC_<OS_ARCH>`（例如 `CC_WINDOWS_AMD64`）
-3. `CC_<TRIPLE>`（例如 `CC_X86_64_W64_MINGW32` / `CC_X86_64_PC_WINDOWS_MSVC`）
+2. `CC_<OS_ARCH>`（例如 `CC_WINDOWS_X86`）
+3. `CC_<TRIPLE>`（例如 `CC_I686_W64_MINGW32` / `CC_I686_PC_WINDOWS_MSVC`）
 4. 内置默认
 
 内置默认：
@@ -58,12 +61,18 @@ Windows 目标支持两条工具链：
   - Windows MSVC 默认 `cl`
   - 其他平台默认 `cc`
 - 交叉目标：
+  - `windows-x86` GNU -> `i686-w64-mingw32-gcc`
   - `windows-amd64` GNU -> `x86_64-w64-mingw32-gcc`
   - `windows-arm64` GNU -> `aarch64-w64-mingw32-gcc`
   - `windows-*` MSVC -> Windows 宿主默认 `cl`，非 Windows 宿主默认 `clang --target=<msvc-triple>`
+  - `linux-x86` -> `i686-linux-gnu-gcc`
   - `linux-amd64` -> `x86_64-linux-gnu-gcc`
   - `linux-arm64` -> `aarch64-linux-gnu-gcc`
   - `darwin-*` -> `clang --target=<triple>`
+
+## 组合约束
+
+- 当前不支持 `darwin-x86`（已在 `--target` 解析阶段拒绝）。
 
 ## 链接与宏
 
