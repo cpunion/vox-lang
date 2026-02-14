@@ -49,6 +49,8 @@ pub fn add(a: i32, b: i32) -> i32 {
 
 - `@ffi_import("c", "...")` 生成 `extern` 函数声明，并在调用点直连外部符号。
 - `@ffi_export("c", "...")` 生成导出包装函数，包装内部 mangled Vox 函数名。
+- `@ffi_import("wasm", "module", "symbol")` 在 C 后端会生成 wasm import 属性（clang 风格 `import_module/import_name`）。
+- `@ffi_export("wasm", "symbol")` 在 C 后端会生成 wasm export 属性（clang 风格 `export_name`）。
 
 ## 构建导出库
 
@@ -60,5 +62,6 @@ pub fn add(a: i32, b: i32) -> i32 {
 
 ## WASM 状态
 
-- `wasm` 目标的导入/导出属性在语法与类型系统中保留。
-- C 后端不产出 wasm 导入/导出制品；完整 wasm 后端在后续任务中实现。
+- `wasm` 导入/导出属性已可在 C 后端生成对应属性声明（实验态）。
+- 当前仍是“C 后端 + 外部 wasm 工具链”路线，不是独立 wasm IR/后端。
+- 构建示例：`vox build-pkg --target=wasm32-unknown-unknown out.wasm`

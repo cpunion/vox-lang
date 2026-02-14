@@ -108,6 +108,7 @@ struct CliTargetSpec {
 fn target_abi_from_text(s: String) -> String {
   if text_contains(s, "msvc") { return "msvc"; }
   if text_contains(s, "mingw") || text_contains(s, "gnu") || text_contains(s, "w64") { return "gnu"; }
+  if text_contains(s, "wasi") { return "wasi"; }
   return "";
 }
 
@@ -134,13 +135,18 @@ fn target_triple_for(os: String, arch: String, abi0: String) -> String {
     if arch == "x86" { return "i686-w64-mingw32"; }
     return "aarch64-w64-mingw32";
   }
+  if os == "wasm" {
+    if abi == "wasi" { return "wasm32-wasi"; }
+    return "wasm32-unknown-unknown";
+  }
   return os.concat("-").concat(arch);
 }
 
 fn cli_target_spec_ok(raw: String, os: String, arch: String, abi0: String) -> CliTargetSpec {
   let mut abi: String = abi0;
-  if os != "windows" { abi = ""; }
+  if os != "windows" && os != "wasm" { abi = ""; }
   if os == "windows" && abi == "" { abi = "gnu"; }
+  if os == "wasm" && abi == "" { abi = "unknown"; }
   let canon: String = os.concat("-").concat(arch);
   return CliTargetSpec {
     ok: true,
@@ -168,15 +174,16 @@ fn cli_target_spec_err(raw: String, msg: String) -> CliTargetSpec {
 }
 
 fn target_os_supported(os: String) -> bool {
-  return os == "linux" || os == "darwin" || os == "windows";
+  return os == "linux" || os == "darwin" || os == "windows" || os == "wasm";
 }
 
 fn target_arch_supported(arch: String) -> bool {
-  return arch == "amd64" || arch == "arm64" || arch == "x86";
+  return arch == "amd64" || arch == "arm64" || arch == "x86" || arch == "wasm32";
 }
 
 fn target_pair_supported(os: String, arch: String) -> bool {
   if os == "darwin" && arch == "x86" { return false; }
+  if os == "wasm" && arch != "wasm32" { return false; }
   return true;
 }
 
@@ -188,10 +195,12 @@ fn target_os_from_text(s: String) -> String {
     return "darwin";
   }
   if s == "linux" || text_contains(s, "linux") { return "linux"; }
+  if s == "wasm" || text_contains(s, "wasm") || text_contains(s, "wasi") { return "wasm"; }
   return "";
 }
 
 fn target_arch_from_text(s: String) -> String {
+  if text_contains(s, "wasm32") { return "wasm32"; }
   if text_contains(s, "x86_64") || text_contains(s, "amd64") || text_contains(s, "x64") || text_contains(s, "x86-64") {
     return "amd64";
   }
@@ -239,9 +248,12 @@ fn parse_cli_target_spec(raw0: String, host_os: String, host_arch: String) -> Cl
   if os == "" {
     return cli_target_spec_err(raw, "invalid --target: unknown os in '".concat(raw).concat("'"));
   }
-  if arch == "" { arch = host_arch; }
+  if arch == "" {
+    if os == "wasm" { arch = "wasm32"; } else { arch = host_arch; }
+  }
   if os == "windows" && abi == "" { abi = "gnu"; }
-  if os != "windows" { abi = ""; }
+  if os == "wasm" && abi == "" { abi = "unknown"; }
+  if os != "windows" && os != "wasm" { abi = ""; }
 
   if !target_os_supported(os) {
     return cli_target_spec_err(raw, "invalid --target: unsupported os '".concat(os).concat("'"));
@@ -343,6 +355,7 @@ fn cc_cmd_for_target(host_os: String, host_arch: String, target_os: String, targ
     return "aarch64-linux-gnu-gcc";
   }
   if target_os == "darwin" { return "clang"; }
+  if target_os == "wasm" { return "emcc"; }
   return "cc";
 }
 
@@ -357,6 +370,7 @@ fn cc_target_flags_for_target(cmd: String, host_os: String, host_arch: String, t
 
 fn cc_link_flags_for_target(target_os: String, use_msvc: bool, artifact: String) -> String {
   if artifact == "static" { return ""; }
+  if target_os == "wasm" { return " -Wl,--no-entry -Wl,--export-all"; }
   if target_os != "windows" { return ""; }
   if use_msvc {
     if artifact == "shared" { return " /link ws2_32.lib"; }
@@ -368,7 +382,7 @@ fn cc_link_flags_for_target(target_os: String, use_msvc: bool, artifact: String)
 
 fn cc_common_flags_for_target(target_os: String, use_msvc: bool) -> String {
   if use_msvc { return ""; }
-  if target_os == "windows" { return ""; }
+  if target_os == "windows" || target_os == "wasm" { return ""; }
   return " -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE";
 }
 
@@ -504,7 +518,7 @@ fn usage() -> () {
   print("  --list              test-pkg: list selected tests and exit\n");
   print("  --rerun-failed      test-pkg: run only previously failed tests\n");
   print("  --json              test-pkg/list-pkg: print JSON report\n");
-  print("  --target=<value>    build/build-pkg/test-pkg: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc, i686-w64-mingw32)\n");
+  print("  --target=<value>    build/build-pkg/test-pkg: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc, i686-w64-mingw32, wasm32-unknown-unknown)\n");
   print("  --artifact=<kind>   build/build-pkg: artifact kind (exe|static|shared)\n");
   print("  --version, -V       print embedded compiler version\n");
 }
@@ -2481,6 +2495,19 @@ fn main() -> i32 {
     return 1;
   }
   let artifact: String = ar.kind;
+
+  if target_os == "wasm" {
+    if cmd == "test-pkg" {
+      usage();
+      print("invalid --target for test-pkg: wasm target is compile-only in stage2\n");
+      return 1;
+    }
+    if cmd_supports_artifact(cmd) && artifact != "exe" {
+      usage();
+      print("invalid --artifact for wasm target: expected exe\n");
+      return 1;
+    }
+  }
 
   if cmd == "list-pkg" {
     let all: Vec[String] = fs.walk_vox_files(".");

@@ -5,6 +5,7 @@
 - Linux: `linux-x86`, `linux-amd64`, `linux-arm64`
 - macOS: `darwin-amd64`, `darwin-arm64`
 - Windows: `windows-x86`, `windows-amd64`, `windows-arm64`
+- WASM: `wasm-wasm32`（三元组：`wasm32-unknown-unknown` / `wasm32-wasi`）
 
 ## CLI
 
@@ -35,6 +36,8 @@
   - `i686-pc-windows-msvc`
   - `x86_64-pc-windows-msvc`
   - `aarch64-pc-windows-msvc`
+  - `wasm32-unknown-unknown`
+  - `wasm32-wasi`
 - `host` / `native` / 空值：使用当前宿主平台
 
 说明：`emit-c` / `emit-pkg-c` / `list-pkg` 不接受 `--target`。
@@ -76,10 +79,13 @@ Windows 目标支持两条工具链：
   - `linux-amd64` -> `x86_64-linux-gnu-gcc`
   - `linux-arm64` -> `aarch64-linux-gnu-gcc`
   - `darwin-*` -> `clang --target=<triple>`
+  - `wasm-wasm32` -> `emcc`（可通过 `CC` 覆盖）
 
 ## 组合约束
 
 - 当前不支持 `darwin-x86`（已在 `--target` 解析阶段拒绝）。
+- `test-pkg` 不支持 `wasm` 目标（stage2 当前仅支持 wasm 编译，不支持本地运行 wasm 测试执行器）。
+- `wasm` 目标当前仅支持 `--artifact=exe`。
 
 ## 链接与宏
 
@@ -95,4 +101,5 @@ Windows 目标支持两条工具链：
 
 ## WASM / 嵌入
 
-WASM 目标仍在后续 FFI/目标扩展范围内。
+当前支持通过 C 后端编译到 wasm 目标（实验态）。
+默认三元组：`wasm32-unknown-unknown`，可显式使用 `wasm32-wasi`。
