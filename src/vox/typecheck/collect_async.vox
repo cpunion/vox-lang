@@ -1,6 +1,8 @@
 import "vox/ast" as ast
 import "vox/ir" as ir
 
+// Async await scanning helpers live in async_await_scan.vox.
+
 fn find_func_sym_idx(ctx: Ctx, mod_path: String, name: String) -> i32 {
   let mut i: i32 = 0;
   while i < ctx.funcs.len() {
@@ -141,6 +143,85 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
       let fsym0: FuncSym = c.funcs.get(fidx);
       let output_ty: i32 = fsym0.sig.ret;
 
+      // Base imports for typechecking the async body (including await operand probing),
+      // and for resolving std/async types for lowering.
+      let ir0: ImportsResult = build_imports(w, m.path, m.prog.imports, fd.file);
+      if !ir0.ok { return TcCtxResult { ok: false, err: ir0.err, ctx: c }; }
+      let base_imps: Imports = ir0.imps;
+      let async_alias: String = fresh_internal_async_alias(base_imps);
+      let imps2: Imports = imps_add_alias(base_imps, async_alias, "std/async");
+
+      // If the async fn contains a single top-level `await`, we store the awaited Future in
+      // the frame to preserve progress across polls (D03).
+      let exprs: ast.ExprPool = m.prog.exprs;
+      let mut await_found: bool = false;
+      let mut await_stmt_idx: i32 = -1;
+      let mut await_operand_expr: i32 = -1;
+      let mut pre_let_names: Vec[String] = Vec();
+      let mut l_pre: Locals = locals_new();
+      let mut pi0: i32 = 0;
+      while pi0 < fd.params.len() {
+        let pty0: i32 = strip_range_only(c, fsym0.sig.params.get(pi0));
+        let p: ast.Param = fd.params.get(pi0);
+        l_pre = locals_decl(l_pre, p.name, pty0, false);
+        pi0 = pi0 + 1;
+      }
+      let mut saw_non_let_before_await: bool = false;
+      let mut si0: i32 = 0;
+      while si0 < fd.body.stmts.len() {
+        let st0: ast.Stmt = fd.body.stmts.get(si0);
+        let ta: TopAwaitResult = stmt_top_level_await(exprs, st0);
+        if !ta.ok {
+          return TcCtxResult { ok: false, err: type_error_at(stmt_span(st0), ta.err), ctx: c };
+        }
+        if ta.found {
+          if await_found {
+            return TcCtxResult { ok: false, err: type_error_at(stmt_span(st0), "async fn with multiple await is deferred (D03)"), ctx: c };
+          }
+          if saw_non_let_before_await {
+            return TcCtxResult { ok: false, err: type_error_at(stmt_span(st0), "async statements before await are deferred (D03)"), ctx: c };
+          }
+          await_found = true;
+          await_stmt_idx = si0;
+          await_operand_expr = ta.operand_expr;
+        } else {
+          if !await_found {
+            // v0 restriction: only allow `let` statements before the first await, so we can
+            // typecheck the await operand with a simple locals model.
+            if match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+              let sp0: ast.Span = stmt_span(st0);
+              let is_mut: bool = match st0 { ast.Stmt.Let(_sp, m0, _n, _ha, _ann, _e) => m0, _ => false };
+              let name0: String = match st0 { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
+              let has_ann: bool = match st0 { ast.Stmt.Let(_sp, _m, _n, ha0, _ann, _e) => ha0, _ => false };
+              let ann0: ast.TypeName = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, an0, _e) => an0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+              let init0: i32 = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e0) => e0, _ => -1 };
+              let mut want0: i32 = -1;
+              if has_ann {
+                let tr0: ResolveTyResult = resolve_type(c, w, m.path, base_imps, l_pre.type_params, ann0);
+                c = tr0.ctx;
+                if !tr0.ok { return TcCtxResult { ok: false, err: type_error_at(sp0, "let annotation type resolve failed"), ctx: c }; }
+                want0 = tr0.idx;
+              }
+              let er0: ExprTyResult = tc_expr(c, w, m.path, base_imps, exprs, l_pre, init0, want0);
+              if !er0.ok {
+                return TcCtxResult { ok: false, err: type_error_at(sp0, "failed to typecheck let init before await: ".concat(tc_error_to_string(er0.err))), ctx: c };
+              }
+              let vty0: i32 = if has_ann { want0 } else { er0.ty };
+              l_pre = locals_decl(l_pre, name0, strip_range_only(c, vty0), is_mut);
+              pre_let_names.push(name0);
+            } else {
+              saw_non_let_before_await = true;
+            }
+          } else {
+            // After we've found an await, any further await is deferred.
+            if stmt_contains_await(exprs, st0) {
+              return TcCtxResult { ok: false, err: type_error_at(stmt_span(st0), "async fn with multiple await is deferred (D03)"), ctx: c };
+            }
+          }
+        }
+        si0 = si0 + 1;
+      }
+
       // Synthesize frame struct.
       let frame_name: String = async_frame_fresh_name(c, m.path, fd.name);
       let irs: ResolveTyResult = nominal_intern_struct(c, m.path, frame_name);
@@ -150,16 +231,36 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
       }
       let frame_ty: i32 = irs.idx;
 
-      let fs: Vec[StructFieldSig] = async_frame_fields(c, fd, fsym0.sig);
+      let mut fs: Vec[StructFieldSig] = async_frame_fields(c, fd, fsym0.sig);
+      if await_found {
+        if await_operand_expr == -1 {
+          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "internal: missing await operand"), ctx: c };
+        }
+        let er_op: ExprTyResult = tc_expr(c, w, m.path, base_imps, exprs, l_pre, await_operand_expr, -1);
+        if !er_op.ok {
+          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "failed to typecheck await operand (D03): ".concat(tc_error_to_string(er_op.err))), ctx: c };
+        }
+        let op_ty: i32 = strip_range_only(c, er_op.ty);
+        fs.push(StructFieldSig { name: "a0", ty: op_ty, vis: ast.vis_private(), is_pub: false });
+
+        // v0: disallow using pre-await locals after the await point (they are not stored in the frame yet).
+        let mut ni: i32 = 0;
+        while ni < pre_let_names.len() {
+          let nm: String = pre_let_names.get(ni);
+          let mut sj: i32 = await_stmt_idx + 1;
+          while sj < fd.body.stmts.len() {
+            let stj: ast.Stmt = fd.body.stmts.get(sj);
+            if stmt_uses_name(exprs, stj, nm) {
+              return TcCtxResult { ok: false, err: type_error_at(stmt_span(stj), "local across await is deferred (D03): ".concat(nm)), ctx: c };
+            }
+            sj = sj + 1;
+          }
+          ni = ni + 1;
+        }
+      }
       c = ctx_add_struct_sig(c, StructSig { mod_path: m.path, name: frame_name, base_name: frame_name, vis: ast.vis_private(), is_pub: false, fields: fs });
 
       // Future impl lowered poll name and signature.
-      let ir0: ImportsResult = build_imports(w, m.path, m.prog.imports, fd.file);
-      if !ir0.ok { return TcCtxResult { ok: false, err: ir0.err, ctx: c }; }
-      let base_imps: Imports = ir0.imps;
-      let async_alias: String = fresh_internal_async_alias(base_imps);
-      let imps2: Imports = imps_add_alias(base_imps, async_alias, "std/async");
-
       let poll_lowered: String = async_poll_fresh_lowered(c, m.path, fd.name);
       let mut poll_parts: Vec[String] = Vec();
       poll_parts.push(async_alias);

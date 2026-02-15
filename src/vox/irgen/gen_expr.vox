@@ -176,7 +176,11 @@ fn pick_struct_field(fs: tc.StructSig, preferred: String) -> StructFieldPick {
   return StructFieldPick { ok: true, name: f0.name, ty: f0.ty };
 }
 
-fn gen_await_poll_from_future(g0: Gen, recv: ir.Value, recv_ty0: i32) -> AwaitFuturePollResult {
+// Lower `Future::poll` call for an awaited operand that implements std/async::Future.
+// If recv_slot != -1, recv is treated as a place rooted at that slot (optionally with fields),
+// and poll is invoked in-place (mutations persist). Otherwise, recv is treated as a value and
+// is copied into a temporary slot for the duration of the call.
+fn gen_await_poll_from_future(g0: Gen, recv: ir.Value, recv_slot: i32, recv_fields: Vec[String], recv_ty0: i32) -> AwaitFuturePollResult {
   let recv_ty: i32 = tc.strip_range(g0.ctx, recv_ty0);
   let fi: tc.FindImplForTyResult = tc.find_impl_for_ty(g0.ctx, "std/async", "Future", recv_ty);
   if fi.ambiguous {
@@ -289,12 +293,7 @@ fn gen_await_poll_from_future(g0: Gen, recv: ir.Value, recv_ty0: i32) -> AwaitFu
   g = pr.g;
   let p_tid: i32 = pr.id;
   let mut args: Vec[ir.Value] = Vec();
-  // `Future::poll` takes `&mut Self`; lower as inout: create a stack slot copy and pass its address.
-  let ns: GenNewIdResult = gen_new_slot(g);
-  g = ns.g;
-  let recv_slot: i32 = ns.id;
-  g = gen_emit(g, ir.Instr.SlotDecl(recv_slot, recv_ty));
-  g = gen_emit(g, ir.Instr.Store(recv_slot, recv));
+  // `Future::poll` takes `&mut Self`; lower as inout.
   let rr: tc.ResolveTyResult = tc.intern_ref(g.ctx, recv_ty, true, false);
   g.ctx = rr.ctx;
   if !rr.ok {
@@ -304,7 +303,20 @@ fn gen_await_poll_from_future(g0: Gen, recv: ir.Value, recv_ty0: i32) -> AwaitFu
   let na: GenNewIdResult = gen_new_temp(g);
   g = na.g;
   let recv_ptr: i32 = na.id;
-  g = gen_emit(g, ir.Instr.AddrOfSlot(recv_ptr, ref_ty, recv_slot));
+  if recv_slot != -1 {
+    if recv_fields.len() == 0 {
+      g = gen_emit(g, ir.Instr.AddrOfSlot(recv_ptr, ref_ty, recv_slot));
+    } else {
+      g = gen_emit(g, ir.Instr.AddrOfFieldChain(recv_ptr, ref_ty, recv_slot, recv_fields));
+    }
+  } else {
+    let ns: GenNewIdResult = gen_new_slot(g);
+    g = ns.g;
+    let tmp_slot: i32 = ns.id;
+    g = gen_emit(g, ir.Instr.SlotDecl(tmp_slot, recv_ty));
+    g = gen_emit(g, ir.Instr.Store(tmp_slot, recv));
+    g = gen_emit(g, ir.Instr.AddrOfSlot(recv_ptr, ref_ty, tmp_slot));
+  }
   args.push(ir.v_temp(recv_ptr));
   args.push(ir.v_temp(c_tid));
   g = gen_emit(g, ir.Instr.Call(true, p_tid, poll_ret, qname(fi.sig.mod_path, im.m.lowered_name), args));
@@ -464,6 +476,18 @@ fn try_resolve_err_conv(g0: Gen, src_err_ty: i32, dst_err_ty: i32) -> TryErrConv
 
 fn gen_expr_await(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
   let mut g: Gen = g0;
+  // If the await operand is a place, prefer in-place poll lowering so the Future
+  // can mutate itself across polls (used by async frame fields).
+  let mc: MemberChainResult = place_chain(g.exprs, a);
+  let mut recv_slot: i32 = -1;
+  let mut recv_fields: Vec[String] = Vec();
+  if mc.ok {
+    let br: LookupSlotResult = slots_lookup(g.slots, mc.base);
+    if br.found && br.mutable {
+      recv_slot = br.slot;
+      recv_fields = mc.fields;
+    }
+  }
   let ar: GenExprResult = gen_expr(g, a, -1);
   if !ar.ok { return ar; }
   g = ar.g;
@@ -473,7 +497,7 @@ fn gen_expr_await(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
   let mut await_out_ty: i32 = -1;
   let mut ai: AwaitPollInfo = await_poll_info(g, poll_ty);
   if !ai.ok {
-    let fr: AwaitFuturePollResult = gen_await_poll_from_future(g, poll_val, poll_ty);
+    let fr: AwaitFuturePollResult = gen_await_poll_from_future(g, poll_val, recv_slot, recv_fields, poll_ty);
     if !fr.ok {
       return GenExprResult { ok: false, err: fr.err, g: fr.g, val: ir.v_int(0), ty: fr.g.ctx.ty_bad };
     }
