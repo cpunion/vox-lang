@@ -5,7 +5,18 @@ import "vox/typecheck" as tc
 fn tc_src(src: String) -> tc.TcResult {
   let pr: p.ParseResult = p.parse_text(src);
   t.assert(pr.err == p.ParseError.None);
+
+  let std_async_src: String = """
+    pub enum Poll[T] { Pending, Ready(T) }
+    pub struct Waker { pub token: i64 }
+    pub struct Context { pub waker: Waker }
+    pub trait Future { type Output; fn poll(x: Self, cx: Context) -> Poll[Self.Output]; }
+  """;
+  let pr_std: p.ParseResult = p.parse_text(std_async_src);
+  t.assert(pr_std.err == p.ParseError.None);
+
   let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "std/async", pr_std.prog);
   w = tc.world_add(w, "main", pr.prog);
   return tc.typecheck_world(w);
 }
@@ -18,6 +29,24 @@ fn test_typecheck_async_fn_without_await_smoke() -> () {
 
 fn test_typecheck_async_fn_with_await_poll_ready_smoke() -> () {
   let src: String = "enum Poll[T] { Pending, Ready(T) }\nasync fn main() -> i32 { let p: Poll[i32] = .Ready(1); let x: i32 = await p; return x + 1; }";
+  let r: tc.TcResult = tc_src(src);
+  t.assert_with(r.ok, tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_async_fn_with_await_future_impl_smoke() -> () {
+  let src: String = """
+    import "std/async" as a
+    struct C { n: i32 }
+    impl a.Future for C {
+      type Output = i32;
+      fn poll(x: C, _cx: a.Context) -> a.Poll[i32] { return .Ready(x.n); }
+    }
+    async fn main() -> i32 {
+      let c: C = C { n: 1 };
+      let x: i32 = await c;
+      return x + 1;
+    }
+  """;
   let r: tc.TcResult = tc_src(src);
   t.assert_with(r.ok, tc.tc_error_to_string(r.err));
 }
@@ -42,10 +71,10 @@ fn test_typecheck_await_expr_requires_async_fn_error() -> () {
   t.assert(contains(msg, "await can only be used in async fn (D03)"));
 }
 
-fn test_typecheck_await_expr_requires_poll_operand_error() -> () {
+fn test_typecheck_await_expr_requires_poll_or_future_operand_error() -> () {
   let src: String = "async fn main() -> i32 { let x: i32 = await 1; return x; }";
   let r: tc.TcResult = tc_src(src);
   t.assert(!r.ok);
   let msg: String = tc.tc_error_to_string(r.err);
-  t.assert(contains(msg, "`await` requires Poll-like enum { Pending, Ready(T) } in current D03 scaffold"));
+  t.assert(contains(msg, "`await` requires Poll-like enum { Pending, Ready(T) } or std/async::Future impl (D03 scaffold)"));
 }

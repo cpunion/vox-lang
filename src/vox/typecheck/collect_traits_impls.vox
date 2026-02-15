@@ -300,6 +300,12 @@ fn impl_method_decl_name_unique(ds: Vec[ast.FuncDecl], name: String, idx: i32) -
   return true;
 }
 
+fn cti_ty_compat(ctx: Ctx, want: i32, got: i32) -> bool {
+  if want == got { return true; }
+  let ur: UnifyResult = unify_ty(ctx, want, got, Vec());
+  return ur.ok;
+}
+
 fn impl_lowered_name(ts: TraitSig, method: String, nth: i32) -> String {
   let mut m: String = ts.mod_path;
   let mut i: i32 = 0;
@@ -312,6 +318,190 @@ fn impl_lowered_name(ts: TraitSig, method: String, nth: i32) -> String {
 
 struct CtiSubstTyResult { ok: bool, ctx: Ctx, ty: i32 }
 struct TraitMethodSigForResult { ok: bool, ctx: Ctx, sig: FuncSig }
+
+fn cti_fresh_subst_nominal_name(ctx: Ctx, mod_path: String, base_name: String, tag: String) -> String {
+  let mut n: i32 = 0;
+  while true {
+    let cand: String = base_name.concat("$").concat(tag).concat("$").concat(n.to_string());
+    let fs: FindStructResult = find_struct(ctx, mod_path, cand);
+    let fe: FindEnumResult = find_enum(ctx, mod_path, cand);
+    if !fs.found && !fe.found { return cand; }
+    n = n + 1;
+  }
+  return base_name.concat("$").concat(tag).concat("$0");
+}
+
+fn cti_find_struct_by_layout(ctx: Ctx, sig: StructSig, tys: Vec[i32]) -> String {
+  let mut si: i32 = 0;
+  while si < ctx.structs.len() {
+    let s: StructSig = ctx.structs.get(si);
+    if s.mod_path == sig.mod_path && s.base_name == sig.base_name && s.fields.len() == sig.fields.len() {
+      let mut ok: bool = true;
+      let mut fi: i32 = 0;
+      while fi < s.fields.len() {
+        let sf: StructFieldSig = s.fields.get(fi);
+        let pf: StructFieldSig = sig.fields.get(fi);
+        if sf.name != pf.name || sf.ty != tys.get(fi) {
+          ok = false;
+          fi = s.fields.len();
+        } else {
+          fi = fi + 1;
+        }
+      }
+      if ok { return s.name; }
+    }
+    si = si + 1;
+  }
+  return "";
+}
+
+fn cti_find_enum_by_layout(ctx: Ctx, sig: EnumSig, vars: Vec[EnumVariantSig]) -> String {
+  let mut ei: i32 = 0;
+  while ei < ctx.enums.len() {
+    let e: EnumSig = ctx.enums.get(ei);
+    if e.mod_path == sig.mod_path && e.base_name == sig.base_name && e.vars.len() == vars.len() {
+      let mut ok: bool = true;
+      let mut vi: i32 = 0;
+      while vi < e.vars.len() {
+        let ev: EnumVariantSig = e.vars.get(vi);
+        let wv: EnumVariantSig = vars.get(vi);
+        if ev.name != wv.name || ev.fields.len() != wv.fields.len() {
+          ok = false;
+          vi = e.vars.len();
+        } else {
+          let mut fi: i32 = 0;
+          while fi < ev.fields.len() {
+            if ev.fields.get(fi) != wv.fields.get(fi) {
+              ok = false;
+              fi = ev.fields.len();
+            } else {
+              fi = fi + 1;
+            }
+          }
+          vi = vi + 1;
+        }
+      }
+      if ok { return e.name; }
+    }
+    ei = ei + 1;
+  }
+  return "";
+}
+
+fn cti_subst_struct_nominal_intern(ctx0: Ctx, ty_idx: i32, subs: Vec[TySub]) -> CtiSubstTyResult {
+  let mut c: Ctx = ctx0;
+  let t: ir.Ty = ir.ty_pool_get(c.pool, ty_idx);
+  let fs: FindStructResult = find_struct(c, t.mod_path, t.name);
+  if !fs.found { return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx }; }
+
+  let mut changed: bool = false;
+  let mut tys: Vec[i32] = Vec();
+  let mut fi: i32 = 0;
+  while fi < fs.sig.fields.len() {
+    let f: StructFieldSig = fs.sig.fields.get(fi);
+    // Keep recursive nominals deferred; full recursive substitution is handled
+    // by resolve_type placeholder construction.
+    if f.ty == ty_idx { return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx }; }
+    let sr: CtiSubstTyResult = cti_subst_ty_intern(c, f.ty, subs);
+    c = sr.ctx;
+    if !sr.ok { return CtiSubstTyResult { ok: false, ctx: c, ty: c.ty_bad }; }
+    if sr.ty != f.ty { changed = true; }
+    tys.push(sr.ty);
+    fi = fi + 1;
+  }
+  if !changed { return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx }; }
+
+  let ex: String = cti_find_struct_by_layout(c, fs.sig, tys);
+  if ex != "" {
+    let irs: ResolveTyResult = nominal_intern_struct(c, fs.sig.mod_path, ex);
+    return CtiSubstTyResult { ok: true, ctx: irs.ctx, ty: irs.idx };
+  }
+
+  let mut wi: i32 = 0;
+  while wi < tys.len() {
+    if ty_has_param(c, tys.get(wi)) { return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx }; }
+    wi = wi + 1;
+  }
+
+  let inst: String = cti_fresh_subst_nominal_name(c, fs.sig.mod_path, fs.sig.base_name, "subst_s");
+  let mut fields: Vec[StructFieldSig] = Vec();
+  fi = 0;
+  while fi < fs.sig.fields.len() {
+    let pf: StructFieldSig = fs.sig.fields.get(fi);
+    fields.push(StructFieldSig { name: pf.name, ty: tys.get(fi), vis: pf.vis, is_pub: pf.is_pub });
+    fi = fi + 1;
+  }
+  c.structs.push(StructSig {
+    mod_path: fs.sig.mod_path,
+    name: inst,
+    base_name: fs.sig.base_name,
+    vis: fs.sig.vis,
+    is_pub: fs.sig.is_pub,
+    fields: fields,
+  });
+  let ir_new: ResolveTyResult = nominal_intern_struct(c, fs.sig.mod_path, inst);
+  return CtiSubstTyResult { ok: true, ctx: ir_new.ctx, ty: ir_new.idx };
+}
+
+fn cti_subst_enum_nominal_intern(ctx0: Ctx, ty_idx: i32, subs: Vec[TySub]) -> CtiSubstTyResult {
+  let mut c: Ctx = ctx0;
+  let t: ir.Ty = ir.ty_pool_get(c.pool, ty_idx);
+  let fe: FindEnumResult = find_enum(c, t.mod_path, t.name);
+  if !fe.found { return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx }; }
+
+  let mut changed: bool = false;
+  let mut vars: Vec[EnumVariantSig] = Vec();
+  let mut vi: i32 = 0;
+  while vi < fe.sig.vars.len() {
+    let v: EnumVariantSig = fe.sig.vars.get(vi);
+    let mut ftys: Vec[i32] = Vec();
+    let mut fi: i32 = 0;
+    while fi < v.fields.len() {
+      let fty: i32 = v.fields.get(fi);
+      if fty == ty_idx { return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx }; }
+      let sr: CtiSubstTyResult = cti_subst_ty_intern(c, fty, subs);
+      c = sr.ctx;
+      if !sr.ok { return CtiSubstTyResult { ok: false, ctx: c, ty: c.ty_bad }; }
+      if sr.ty != fty { changed = true; }
+      ftys.push(sr.ty);
+      fi = fi + 1;
+    }
+    vars.push(EnumVariantSig { name: v.name, fields: ftys });
+    vi = vi + 1;
+  }
+  if !changed { return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx }; }
+
+  let ex: String = cti_find_enum_by_layout(c, fe.sig, vars);
+  if ex != "" {
+    let ire: ResolveTyResult = nominal_intern_enum(c, fe.sig.mod_path, ex);
+    return CtiSubstTyResult { ok: true, ctx: ire.ctx, ty: ire.idx };
+  }
+
+  vi = 0;
+  while vi < vars.len() {
+    let vv: EnumVariantSig = vars.get(vi);
+    let mut fi2: i32 = 0;
+    while fi2 < vv.fields.len() {
+      if ty_has_param(c, vv.fields.get(fi2)) {
+        return CtiSubstTyResult { ok: true, ctx: c, ty: ty_idx };
+      }
+      fi2 = fi2 + 1;
+    }
+    vi = vi + 1;
+  }
+
+  let inst: String = cti_fresh_subst_nominal_name(c, fe.sig.mod_path, fe.sig.base_name, "subst_e");
+  c.enums.push(EnumSig {
+    mod_path: fe.sig.mod_path,
+    name: inst,
+    base_name: fe.sig.base_name,
+    vis: fe.sig.vis,
+    is_pub: fe.sig.is_pub,
+    vars: vars,
+  });
+  let ir_new: ResolveTyResult = nominal_intern_enum(c, fe.sig.mod_path, inst);
+  return CtiSubstTyResult { ok: true, ctx: ir_new.ctx, ty: ir_new.idx };
+}
 
 fn cti_subst_ty_intern(ctx0: Ctx, ty_idx: i32, subs: Vec[TySub]) -> CtiSubstTyResult {
   let mut c: Ctx = ctx0;
@@ -361,6 +551,12 @@ fn cti_subst_ty_intern(ctx0: Ctx, ty_idx: i32, subs: Vec[TySub]) -> CtiSubstTyRe
       ridx = ir0.idx;
     }
     return CtiSubstTyResult { ok: true, ctx: c, ty: ridx };
+  }
+  if t.kind == ir.TyKind.Struct {
+    return cti_subst_struct_nominal_intern(c, ty_idx, subs);
+  }
+  if t.kind == ir.TyKind.Enum {
+    return cti_subst_enum_nominal_intern(c, ty_idx, subs);
   }
 
   let s: i32 = subst_ty(c, ty_idx, subs);
@@ -1552,7 +1748,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           c = rr.ctx;
           if !rr.ok { return TcCtxResult { ok: false, err: type_error_at(md.sp, resolve_fail_msg(nr.ty, "impl method param type resolve failed")), ctx: c }; }
           let gotp: i32 = subst_ty(c, rr.idx, impl_to_trait_tps);
-          if gotp != want.params.get(pi) {
+          if !cti_ty_compat(c, want.params.get(pi), gotp) {
             let msgp: String =
               "impl method param type mismatch at index "
                 .concat(pi.to_string())
@@ -1570,7 +1766,15 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let ret_r: ResolveTyResult = resolve_type_bound(c, w, m.path, imps, concat_strs(id.type_params, md.type_params), impl_self_assoc_binds(for_ty, impl_assocs), md.ret);
         c = ret_r.ctx;
         if !ret_r.ok { return TcCtxResult { ok: false, err: type_error_at(md.sp, resolve_fail_msg(md.ret, "impl method ret type resolve failed")), ctx: c }; }
-        if subst_ty(c, ret_r.idx, impl_to_trait_tps) != want.ret { return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method ret type mismatch"), ctx: c }; }
+        let got_ret: i32 = subst_ty(c, ret_r.idx, impl_to_trait_tps);
+        if !cti_ty_compat(c, want.ret, got_ret) {
+          let msgr: String =
+            "impl method ret type mismatch: got "
+              .concat(ty_inst_str(c, got_ret))
+              .concat(", want ")
+              .concat(ty_inst_str(c, want.ret));
+          return TcCtxResult { ok: false, err: type_error_at(md.sp, msgr), ctx: c };
+        }
 
         let emit_sig: FuncSig = impl_method_emit_sig(id.type_params, head_tpbs, want);
         let lowered: String = fresh_impl_lowered_name(c, m.path, tf.sig, tms.name, c.impls.len() * 1000 + mdi);

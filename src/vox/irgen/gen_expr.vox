@@ -7,6 +7,8 @@ struct TryEnumInfo { ok: bool, is_result: bool, ok_name: String, ok_idx: i32, ok
 struct CurrentTryResult { found: bool, t: TryCtx }
 struct TryErrConvResult { ok: bool, err: String, need_call: bool, mod_path: String, fn_name: String, ret_ty: i32, g: Gen }
 struct AwaitPollInfo { ok: bool, ready_name: String, ready_idx: i32, ready_ty: i32 }
+struct StructFieldPick { ok: bool, name: String, ty: i32 }
+struct AwaitFuturePollResult { ok: bool, err: String, g: Gen, poll_val: ir.Value, poll_ty: i32, out_ty: i32 }
 
 fn gen_expr(g0: Gen, id: i32, expected: i32) -> GenExprResult {
   let tr: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.imps, g0.exprs, g0.locals, id, expected);
@@ -153,6 +155,134 @@ fn await_poll_info(g0: Gen, ty0: i32) -> AwaitPollInfo {
     ready_name: "Ready",
     ready_idx: ready_idx,
     ready_ty: ready.fields.get(0),
+  };
+}
+
+fn pick_struct_field(fs: tc.StructSig, preferred: String) -> StructFieldPick {
+  let mut i: i32 = 0;
+  while i < fs.fields.len() {
+    let f: tc.StructFieldSig = fs.fields.get(i);
+    if f.name == preferred {
+      return StructFieldPick { ok: true, name: f.name, ty: f.ty };
+    }
+    i = i + 1;
+  }
+  if fs.fields.len() == 0 {
+    return StructFieldPick { ok: false, name: "", ty: -1 };
+  }
+  let f0: tc.StructFieldSig = fs.fields.get(0);
+  return StructFieldPick { ok: true, name: f0.name, ty: f0.ty };
+}
+
+fn gen_await_poll_from_future(g0: Gen, recv: ir.Value, recv_ty0: i32) -> AwaitFuturePollResult {
+  let recv_ty: i32 = tc.strip_range(g0.ctx, recv_ty0);
+  let fi: tc.FindImplForTyResult = tc.find_impl_for_ty(g0.ctx, "std/async", "Future", recv_ty);
+  if fi.ambiguous {
+    return AwaitFuturePollResult { ok: false, err: "await Future impl is ambiguous", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+  if !fi.found {
+    return AwaitFuturePollResult { ok: false, err: "await operand does not implement std/async::Future", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+
+  let ur: tc.UnifyResult = tc.unify_ty(g0.ctx, fi.sig.for_ty, recv_ty, Vec());
+  if !ur.ok {
+    return AwaitFuturePollResult { ok: false, err: "await Future impl unification failed", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+  let subs: Vec[tc.TySub] = ur.subs;
+
+  let out0: i32 = try_impl_assoc_ty_ir(fi.sig, "Output");
+  if out0 == -1 {
+    return AwaitFuturePollResult { ok: false, err: "await Future impl missing assoc type Output", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+  let out_ty: i32 = tc.subst_ty(g0.ctx, out0, subs);
+
+  let im: tc.FindImplMethodResult = tc.find_impl_method(fi.sig, "poll");
+  if !im.found {
+    return AwaitFuturePollResult { ok: false, err: "await Future impl missing method poll", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+  if im.m.sig.type_params.len() != 0 || im.m.sig.const_params.len() != 0 {
+    return AwaitFuturePollResult { ok: false, err: "await on generic Future::poll is not supported yet (D03)", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+  if im.m.sig.params.len() != 2 {
+    return AwaitFuturePollResult { ok: false, err: "await Future::poll arity mismatch", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+
+  let poll_ret0: i32 = tc.subst_ty(g0.ctx, im.m.sig.ret, subs);
+  let poll_ret: i32 = tc.strip_range_only(g0.ctx, poll_ret0);
+  let ai: AwaitPollInfo = await_poll_info(g0, poll_ret);
+  if !ai.ok {
+    return AwaitFuturePollResult { ok: false, err: "await Future::poll must return Poll-like enum", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+  if !tc.assignable_to(g0.ctx, out_ty, ai.ready_ty) || !tc.assignable_to(g0.ctx, ai.ready_ty, out_ty) {
+    return AwaitFuturePollResult { ok: false, err: "await Future::Output does not match poll Ready payload", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+
+  let ctx_arg_ty0: i32 = tc.subst_ty(g0.ctx, im.m.sig.params.get(1), subs);
+  let ctx_arg_ty: i32 = tc.strip_range(g0.ctx, ctx_arg_ty0);
+  if ctx_arg_ty < 0 || ctx_arg_ty >= g0.ctx.pool.tys.len() {
+    return AwaitFuturePollResult { ok: false, err: "await Future::poll context type is invalid", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+  let ctx_t: ir.Ty = ir.ty_pool_get(g0.ctx.pool, ctx_arg_ty);
+  if ctx_t.kind != ir.TyKind.Struct {
+    return AwaitFuturePollResult { ok: false, err: "await Future::poll context parameter must be struct-like", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+  let cfs: tc.FindStructResult = tc.find_struct(g0.ctx, tc.ty_mod(ctx_t), tc.ty_name(ctx_t));
+  if !cfs.found {
+    return AwaitFuturePollResult { ok: false, err: "await Future::poll context struct declaration missing", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+
+  let waker_field: StructFieldPick = pick_struct_field(cfs.sig, "waker");
+  if !waker_field.ok {
+    return AwaitFuturePollResult { ok: false, err: "await Future::poll context has no fields", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+  let waker_ty: i32 = tc.strip_range(g0.ctx, waker_field.ty);
+  if waker_ty < 0 || waker_ty >= g0.ctx.pool.tys.len() {
+    return AwaitFuturePollResult { ok: false, err: "await Future::poll waker type is invalid", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+  let waker_t: ir.Ty = ir.ty_pool_get(g0.ctx.pool, waker_ty);
+  if waker_t.kind != ir.TyKind.Struct {
+    return AwaitFuturePollResult { ok: false, err: "await Future::poll waker must be struct-like", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+  let wfs: tc.FindStructResult = tc.find_struct(g0.ctx, tc.ty_mod(waker_t), tc.ty_name(waker_t));
+  if !wfs.found {
+    return AwaitFuturePollResult { ok: false, err: "await Future::poll waker struct declaration missing", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+
+  let token_field: StructFieldPick = pick_struct_field(wfs.sig, "token");
+  if !token_field.ok {
+    return AwaitFuturePollResult { ok: false, err: "await Future::poll waker has no fields", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
+  }
+
+  let mut g: Gen = g0;
+  let wr: GenNewIdResult = gen_new_temp(g);
+  g = wr.g;
+  let w_tid: i32 = wr.id;
+  let mut wf: Vec[ir.StructInitField] = Vec();
+  wf.push(ir.StructInitField { name: token_field.name, val: ir.v_int(0) });
+  g = gen_emit(g, ir.Instr.StructInit(w_tid, waker_ty, wf));
+
+  let cr: GenNewIdResult = gen_new_temp(g);
+  g = cr.g;
+  let c_tid: i32 = cr.id;
+  let mut cf: Vec[ir.StructInitField] = Vec();
+  cf.push(ir.StructInitField { name: waker_field.name, val: ir.v_temp(w_tid) });
+  g = gen_emit(g, ir.Instr.StructInit(c_tid, ctx_arg_ty, cf));
+
+  let pr: GenNewIdResult = gen_new_temp(g);
+  g = pr.g;
+  let p_tid: i32 = pr.id;
+  let mut args: Vec[ir.Value] = Vec();
+  args.push(recv);
+  args.push(ir.v_temp(c_tid));
+  g = gen_emit(g, ir.Instr.Call(true, p_tid, poll_ret, qname(fi.sig.mod_path, im.m.lowered_name), args));
+
+  return AwaitFuturePollResult {
+    ok: true,
+    err: "",
+    g: g,
+    poll_val: ir.v_temp(p_tid),
+    poll_ty: poll_ret,
+    out_ty: out_ty,
   };
 }
 fn try_impl_assoc_ty_ir(sig: tc.ImplSig, assoc: String) -> i32 {
@@ -305,11 +435,29 @@ fn gen_expr_await(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
   if !ar.ok { return ar; }
   g = ar.g;
 
-  let ai: AwaitPollInfo = await_poll_info(g, ar.ty);
+  let mut poll_val: ir.Value = ar.val;
+  let mut poll_ty: i32 = ar.ty;
+  let mut await_out_ty: i32 = -1;
+  let mut ai: AwaitPollInfo = await_poll_info(g, poll_ty);
   if !ai.ok {
-    return GenExprResult { ok: false, err: "internal: await operand is not Poll-like enum", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    let fr: AwaitFuturePollResult = gen_await_poll_from_future(g, poll_val, poll_ty);
+    if !fr.ok {
+      return GenExprResult { ok: false, err: fr.err, g: fr.g, val: ir.v_int(0), ty: fr.g.ctx.ty_bad };
+    }
+    g = fr.g;
+    poll_val = fr.poll_val;
+    poll_ty = fr.poll_ty;
+    await_out_ty = fr.out_ty;
+
+    ai = await_poll_info(g, poll_ty);
+    if !ai.ok {
+      return GenExprResult { ok: false, err: "internal: await Future::poll did not produce Poll-like enum", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+  } else {
+    await_out_ty = ai.ready_ty;
   }
-  if ai.ready_ty != out_ty {
+
+  if !tc.assignable_to(g.ctx, out_ty, await_out_ty) || !tc.assignable_to(g.ctx, await_out_ty, out_ty) {
     return GenExprResult { ok: false, err: "internal: await result type mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
   }
 
@@ -332,7 +480,7 @@ fn gen_expr_await(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
   let tr0: GenNewIdResult = gen_new_temp(g);
   g = tr0.g;
   let tag_tid: i32 = tr0.id;
-  g = gen_emit(g, ir.Instr.EnumTag(tag_tid, ar.val));
+  g = gen_emit(g, ir.Instr.EnumTag(tag_tid, poll_val));
 
   let tr1: GenNewIdResult = gen_new_temp(g);
   g = tr1.g;
@@ -344,7 +492,7 @@ fn gen_expr_await(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
   let tr2: GenNewIdResult = gen_new_temp(g);
   g = tr2.g;
   let ready_tid: i32 = tr2.id;
-  g = gen_emit(g, ir.Instr.EnumPayload(ready_tid, out_ty, ar.val, ai.ready_name, 0));
+  g = gen_emit(g, ir.Instr.EnumPayload(ready_tid, out_ty, poll_val, ai.ready_name, 0));
   g = gen_emit(g, ir.Instr.Store(out_slot, ir.v_temp(ready_tid)));
   g = gen_term(g, ir.Term.Br(g.blocks.get(end_idx_block).name));
 

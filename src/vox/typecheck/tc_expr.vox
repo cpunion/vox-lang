@@ -8,6 +8,7 @@ import "vox/ir" as ir
 pub struct ExprTyResult { pub ok: bool, pub ty: i32, pub err: TcError }
 struct TryContainerInfo { ok: bool, is_result: bool, ok_ty: i32, residual_ty: i32 }
 struct AwaitPollInfo { ok: bool, out_ty: i32 }
+struct AwaitFutureInfo { ok: bool, out_ty: i32 }
 struct VariantLookupFieldResult { found: bool, field_count: i32, field0: i32 }
 struct TryErrCompatResult { ok: bool, err: TcError }
 
@@ -74,22 +75,32 @@ fn tc_expr_await(
       err: type_error_at(sp, "await can only be used in async fn (D03)"),
     };
   }
+
   let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, -1);
   if !ar.ok { return ar; }
+
+  let mut out_ty: i32 = -1;
   let ai: AwaitPollInfo = await_poll_info(ctx, ar.ty);
-  if !ai.ok {
-    return ExprTyResult {
-      ok: false,
-      ty: ctx.ty_bad,
-      err: type_error_at(sp, "`await` requires Poll-like enum { Pending, Ready(T) } in current D03 scaffold"),
-    };
+  if ai.ok {
+    out_ty = ai.out_ty;
+  } else {
+    let afi: AwaitFutureInfo = await_future_info(ctx, ar.ty);
+    if afi.ok {
+      out_ty = afi.out_ty;
+    } else {
+      return ExprTyResult {
+        ok: false,
+        ty: ctx.ty_bad,
+        err: type_error_at(sp, "`await` requires Poll-like enum { Pending, Ready(T) } or std/async::Future impl (D03 scaffold)"),
+      };
+    }
   }
-  if expected != -1 && !assignable_to(ctx, expected, ai.out_ty) {
+
+  if expected != -1 && !assignable_to(ctx, expected, out_ty) {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
   }
-  return ExprTyResult { ok: true, ty: ai.out_ty, err: TcError.None };
+  return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
 }
-
 fn macro_callee_display_name(exprs: ast.ExprPool, callee: i32) -> String {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, callee);
   return match n {
@@ -161,6 +172,40 @@ fn await_poll_info(ctx: Ctx, ty0: i32) -> AwaitPollInfo {
   if !pending.found || !ready.found { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
   if pending.field_count != 0 || ready.field_count != 1 { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
   return AwaitPollInfo { ok: true, out_ty: ready.field0 };
+}
+
+fn await_future_info(ctx: Ctx, ty0: i32) -> AwaitFutureInfo {
+  let recv_ty: i32 = strip_range(ctx, ty0);
+  let fi: FindImplForTyResult = find_impl_for_ty(ctx, "std/async", "Future", recv_ty);
+  if fi.ambiguous || !fi.found {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+
+  let ur: UnifyResult = unify_ty(ctx, fi.sig.for_ty, recv_ty, Vec());
+  if !ur.ok {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+  let subs: Vec[TySub] = ur.subs;
+
+  let out0: i32 = try_impl_assoc_ty(fi.sig, "Output");
+  if out0 == -1 {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+  let out_ty: i32 = subst_ty(ctx, out0, subs);
+
+  let im: FindImplMethodResult = find_impl_method(fi.sig, "poll");
+  if !im.found {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+  let poll_ret: i32 = subst_ty(ctx, im.m.sig.ret, subs);
+  let pi: AwaitPollInfo = await_poll_info(ctx, poll_ret);
+  if !pi.ok {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+  if !assignable_to(ctx, out_ty, pi.out_ty) || !assignable_to(ctx, pi.out_ty, out_ty) {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+  return AwaitFutureInfo { ok: true, out_ty: out_ty };
 }
 fn try_impl_assoc_ty(sig: ImplSig, assoc: String) -> i32 {
   let mut i: i32 = 0;
