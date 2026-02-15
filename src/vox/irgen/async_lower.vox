@@ -1,6 +1,7 @@
 import "vox/ast" as ast
 import "vox/typecheck" as tc
 import "vox/async_norm" as an
+import "vox/async_cfg" as ac
 
 struct SynthResult {
   ok: bool,
@@ -545,78 +546,54 @@ fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd
   p = nr.exprs;
   let body0: ast.Block = nr.body;
 
-  let aps: Vec[AwaitPoint] = find_await_points(p, body0.stmts);
+  let cfg: ac.BuildResult = ac.build(p, body0);
+  if !cfg.ok {
+    return SynthResult { ok: false, err: cfg.err, exprs: p, body: ast.Block { stmts: Vec() } };
+  }
 
   let r_true: ast.AddExprResult = add_bool(p, sp, true);
   p = r_true.pool;
-
   let mut loop_body: Vec[ast.Stmt] = Vec();
 
-  let mut st_k: i32 = 0;
-  while st_k <= aps.len() {
+  let mut bi: i32 = 0;
+  while bi < cfg.blocks.len() {
+    let blk: ac.Block = cfg.blocks.get(bi);
+
+    // if __frame.state == <id> { ... }
     let r_fx0: ast.AddExprResult = add_ident(p, sp, frame_var);
     p = r_fx0.pool;
     let r_state0: ast.AddExprResult = add_member(p, sp, r_fx0.id, "state");
     p = r_state0.pool;
-    let r_k: ast.AddExprResult = add_int(p, sp, st_k.to_string());
+    let r_k: ast.AddExprResult = add_int(p, sp, blk.id.to_string());
     p = r_k.pool;
     let r_eq: ast.AddExprResult = add_binary(p, sp, ast.BinaryOp.Eq, r_state0.id, r_k.id);
     p = r_eq.pool;
 
-    let mut then_ss: Vec[ast.Stmt] = Vec();
+    let mut raw: Vec[ast.Stmt] = Vec();
 
-    if aps.len() == 0 {
-      // No await: run the body once under state==0.
-      let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, body0.stmts);
-      if !r_body.ok { return r_body; }
-      p = r_body.exprs;
-      let r_caps: SynthResult = inject_capture_stores(p, frame_var, captures, r_body.body.stmts);
-      if !r_caps.ok { return r_caps; }
-      p = r_caps.exprs;
-      let mut j: i32 = 0;
-      while j < r_caps.body.stmts.len() { then_ss.push(r_caps.body.stmts.get(j)); j = j + 1; }
-      loop_body.push(ast.Stmt.IfStmt(sp, r_eq.id, ast.Block { stmts: then_ss }, false, ast.Block { stmts: Vec() }));
-      st_k = 1;
-      continue;
-    }
+    // Block body.
+    let mut si: i32 = 0;
+    while si < blk.stmts.len() { raw.push(blk.stmts.get(si)); si = si + 1; }
 
-    if st_k == 0 {
-      // pre0: stmts before first await, then store a0 and advance to state 1.
-      let mut pre_user: Vec[ast.Stmt] = Vec();
-      let mut si: i32 = 0;
-      while si < aps.get(0).stmt_idx { pre_user.push(body0.stmts.get(si)); si = si + 1; }
-      let r_pre: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, pre_user);
-      if !r_pre.ok { return r_pre; }
-      p = r_pre.exprs;
-      let r_pre2: SynthResult = inject_capture_stores(p, frame_var, captures, r_pre.body.stmts);
-      if !r_pre2.ok { return r_pre2; }
-      p = r_pre2.exprs;
-      si = 0;
-      while si < r_pre2.body.stmts.len() { then_ss.push(r_pre2.body.stmts.get(si)); si = si + 1; }
-
-      let op0: i32 = aps.get(0).operand;
-      let rop: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, fd.ret, op0);
-      if !rop.ok { return SynthResult { ok: false, err: rop.err, exprs: rop.exprs, body: ast.Block { stmts: Vec() } }; }
-      p = rop.exprs;
-      then_ss.push(ast.Stmt.AssignField(sp, frame_var, "a0", rop.id));
-      let r_one: ast.AddExprResult = add_int(p, sp, "1");
-      p = r_one.pool;
-      then_ss.push(ast.Stmt.AssignField(sp, frame_var, "state", r_one.id));
-      then_ss.push(ast.Stmt.Continue(sp));
-    } else {
-      let ap: AwaitPoint = aps.get(st_k - 1);
-      let st0: ast.Stmt = body0.stmts.get(ap.stmt_idx);
+    // Payload lowering.
+    if match blk.payload { ac.Payload.AwaitInit(_k, _op, _poll) => true, _ => false } {
+      let await_idx: i32 = match blk.payload { ac.Payload.AwaitInit(k0, _op0, _p0) => k0, _ => -1 };
+      let operand: i32 = match blk.payload { ac.Payload.AwaitInit(_k0, op0, _p0) => op0, _ => -1 };
+      raw.push(ast.Stmt.AssignField(sp, frame_var, "a".concat(await_idx.to_string()), operand));
+    } else if match blk.payload { ac.Payload.AwaitPoll(_k, _st, _is_try, _n, _h) => true, _ => false } {
+      let await_idx: i32 = match blk.payload { ac.Payload.AwaitPoll(k0, _st0, _t0, _n0, _h0) => k0, _ => -1 };
+      let st0: ast.Stmt = match blk.payload { ac.Payload.AwaitPoll(_k0, s0, _t0, _n0, _h0) => s0, _ => ast.Stmt.Break(sp) };
+      let is_try: bool = match blk.payload { ac.Payload.AwaitPoll(_k0, _s0, t0, _n0, _h0) => t0, _ => false };
       let sp1: ast.Span = stmt_span(st0);
 
-      // Rewrite await statement to await the stored frame field: `__frame.aN.await` (or `...await?`).
       let r_fx: ast.AddExprResult = add_ident(p, sp1, frame_var);
       p = r_fx.pool;
-      let r_a: ast.AddExprResult = add_member(p, sp1, r_fx.id, "a".concat((st_k - 1).to_string()));
+      let r_a: ast.AddExprResult = add_member(p, sp1, r_fx.id, "a".concat(await_idx.to_string()));
       p = r_a.pool;
       let r_aw: ast.AddExprResult = add_expr(p, ast.ExprNode.Await(r_a.id), sp1);
       p = r_aw.pool;
       let new_eid: i32 =
-        if ap.is_try {
+        if is_try {
           let r_tr: ast.AddExprResult = add_expr(p, ast.ExprNode.Try(r_aw.id), sp1);
           p = r_tr.pool;
           r_tr.id
@@ -635,52 +612,56 @@ fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd
         let has0: bool = match st0 { ast.Stmt.ReturnStmt(_sp, h0, _e) => h0, _ => false };
         await_stmt = ast.Stmt.ReturnStmt(sp1, has0, new_eid);
       }
-
-      let mut ss_await: Vec[ast.Stmt] = Vec();
-      ss_await.push(await_stmt);
-      let r_await: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, ss_await);
-      if !r_await.ok { return r_await; }
-      p = r_await.exprs;
-      let r_await2: SynthResult = inject_capture_stores(p, frame_var, captures, r_await.body.stmts);
-      if !r_await2.ok { return r_await2; }
-      p = r_await2.exprs;
-      let mut j0: i32 = 0;
-      while j0 < r_await2.body.stmts.len() { then_ss.push(r_await2.body.stmts.get(j0)); j0 = j0 + 1; }
-
-      // Between segment: stmts after this await up to next await (or tail).
-      let start: i32 = ap.stmt_idx + 1;
-      let end: i32 = if st_k < aps.len() { aps.get(st_k).stmt_idx } else { body0.stmts.len() };
-      let mut seg: Vec[ast.Stmt] = Vec();
-      let mut si: i32 = start;
-      while si < end { seg.push(body0.stmts.get(si)); si = si + 1; }
-
-      let r_seg: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, seg);
-      if !r_seg.ok { return r_seg; }
-      p = r_seg.exprs;
-      let r_seg2: SynthResult = inject_capture_stores(p, frame_var, captures, r_seg.body.stmts);
-      if !r_seg2.ok { return r_seg2; }
-      p = r_seg2.exprs;
-      si = 0;
-      while si < r_seg2.body.stmts.len() { then_ss.push(r_seg2.body.stmts.get(si)); si = si + 1; }
-
-      if st_k < aps.len() {
-        // Initialize next awaited operand aK and advance to state K+1.
-        let opk: i32 = aps.get(st_k).operand;
-        let rop: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, fd.ret, opk);
-        if !rop.ok { return SynthResult { ok: false, err: rop.err, exprs: rop.exprs, body: ast.Block { stmts: Vec() } }; }
-        p = rop.exprs;
-        then_ss.push(ast.Stmt.AssignField(sp, frame_var, "a".concat(st_k.to_string()), rop.id));
-        let r_next: ast.AddExprResult = add_int(p, sp, (st_k + 1).to_string());
-        p = r_next.pool;
-        then_ss.push(ast.Stmt.AssignField(sp, frame_var, "state", r_next.id));
-        then_ss.push(ast.Stmt.Continue(sp));
-      } else {
-        // Tail state ends via rewritten returns (Ready + mark done).
-      }
+      raw.push(await_stmt);
     }
 
-    loop_body.push(ast.Stmt.IfStmt(sp, r_eq.id, ast.Block { stmts: then_ss }, false, ast.Block { stmts: Vec() }));
-    st_k = st_k + 1;
+    // Term lowering.
+    if match blk.term { ac.Term.Goto(_t) => true, _ => false } {
+      let tgt: i32 = match blk.term { ac.Term.Goto(t0) => t0, _ => -1 };
+      let r_t: ast.AddExprResult = add_int(p, sp, tgt.to_string());
+      p = r_t.pool;
+      raw.push(ast.Stmt.AssignField(sp, frame_var, "state", r_t.id));
+      raw.push(ast.Stmt.Continue(sp));
+    } else if match blk.term { ac.Term.If(_c, _t, _e) => true, _ => false } {
+      let cond: i32 = match blk.term { ac.Term.If(c0, _t0, _e0) => c0, _ => -1 };
+      let then_id: i32 = match blk.term { ac.Term.If(_c0, t0, _e0) => t0, _ => -1 };
+      let else_id: i32 = match blk.term { ac.Term.If(_c0, _t0, e0) => e0, _ => -1 };
+
+      let r_t1: ast.AddExprResult = add_int(p, sp, then_id.to_string());
+      p = r_t1.pool;
+      let r_t2: ast.AddExprResult = add_int(p, sp, else_id.to_string());
+      p = r_t2.pool;
+      let mut then_ss: Vec[ast.Stmt] = Vec();
+      then_ss.push(ast.Stmt.AssignField(sp, frame_var, "state", r_t1.id));
+      then_ss.push(ast.Stmt.Continue(sp));
+      let mut else_ss: Vec[ast.Stmt] = Vec();
+      else_ss.push(ast.Stmt.AssignField(sp, frame_var, "state", r_t2.id));
+      else_ss.push(ast.Stmt.Continue(sp));
+      raw.push(ast.Stmt.IfStmt(sp, cond, ast.Block { stmts: then_ss }, true, ast.Block { stmts: else_ss }));
+    } else if match blk.term { ac.Term.Panic => true, _ => false } {
+      let r_panic2: ast.AddExprResult = add_ident(p, sp, "panic");
+      p = r_panic2.pool;
+      let r_msg2: ast.AddExprResult = add_str(p, sp, "unreachable async state");
+      p = r_msg2.pool;
+      let mut pargs2: Vec[i32] = Vec();
+      pargs2.push(r_msg2.id);
+      let r_call2: ast.AddExprResult = add_call(p, sp, r_panic2.id, pargs2);
+      p = r_call2.pool;
+      raw.push(ast.Stmt.ExprStmt(sp, r_call2.id));
+      raw.push(ast.Stmt.Continue(sp));
+    } else {
+      // Return: the return statement is part of raw stmts (normal return, or await poll return).
+    }
+
+    let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, raw);
+    if !r_body.ok { return r_body; }
+    p = r_body.exprs;
+    let r_caps: SynthResult = inject_capture_stores(p, frame_var, captures, r_body.body.stmts);
+    if !r_caps.ok { return r_caps; }
+    p = r_caps.exprs;
+    loop_body.push(ast.Stmt.IfStmt(sp, r_eq.id, ast.Block { stmts: r_caps.body.stmts }, false, ast.Block { stmts: Vec() }));
+
+    bi = bi + 1;
   }
 
   // invalid state => panic
@@ -703,15 +684,15 @@ fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd
 
   // Satisfy the IRGen "missing return" check: the loop above is infinite by construction,
   // but the current IRGen does not prove it. This is unreachable.
-  let r_panic3: ast.AddExprResult = add_ident(p, sp, "panic");
-  p = r_panic3.pool;
-  let r_msg3: ast.AddExprResult = add_str(p, sp, "unreachable: async poll fell through");
-  p = r_msg3.pool;
-  let mut pargs3: Vec[i32] = Vec();
-  pargs3.push(r_msg3.id);
-  let r_call3: ast.AddExprResult = add_call(p, sp, r_panic3.id, pargs3);
-  p = r_call3.pool;
-  out.push(ast.Stmt.ExprStmt(sp, r_call3.id));
+  let r_panic4: ast.AddExprResult = add_ident(p, sp, "panic");
+  p = r_panic4.pool;
+  let r_msg4: ast.AddExprResult = add_str(p, sp, "unreachable: async poll fell through");
+  p = r_msg4.pool;
+  let mut pargs4: Vec[i32] = Vec();
+  pargs4.push(r_msg4.id);
+  let r_call4: ast.AddExprResult = add_call(p, sp, r_panic4.id, pargs4);
+  p = r_call4.pool;
+  out.push(ast.Stmt.ExprStmt(sp, r_call4.id));
 
   return SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: out } };
 }
