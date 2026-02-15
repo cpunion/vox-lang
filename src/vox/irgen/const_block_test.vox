@@ -1,0 +1,138 @@
+import "std/testing" as t
+import "vox/typecheck" as tc
+import "vox/irgen" as g
+import "vox/ir" as ir
+
+fn test_irgen_const_block_expr_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "const N: i32 = { let a: i32 = 2; let b: i32 = a + 3; b * 2 }\nfn main() -> i32 { return N; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 10"));
+}
+fn test_irgen_const_block_shadowing_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "const N: i32 = { let x: i32 = 1; let x: i32 = 2; x }\nfn main() -> i32 { return N; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 2"));
+}
+fn test_irgen_const_block_if_stmt_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "const N: i32 = { let x: i32 = 1; if true { let y: i32 = 2; } else { let z: i32 = 3; }; x + 4 }\nfn main() -> i32 { return N; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 5"));
+}
+fn test_irgen_const_block_while_break_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "const N: i32 = { while true { break; } 7 }\nfn main() -> i32 { return N; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_block_return_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "const N: i32 = { return 9; 1 }\nfn main() -> i32 { return N; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 9"));
+}
+fn test_irgen_const_block_assign_field_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    struct P { x: i32 }
+    const N: i32 = { let mut p: P = P { x: 1 }; p.x = 7; p.x }
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_block_assign_nested_field_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    struct I { x: i32 }
+    struct O { i: I }
+    const N: i32 = { let mut o: O = O { i: I { x: 1 } }; o.i.x = 9; o.i.x }
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 9"));
+}
+fn test_irgen_const_block_compound_assign_nested_field_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    struct I { x: i32 }
+    struct O { i: I }
+    const N: i32 = { let mut o: O = O { i: I { x: 1 } }; o.i.x += 2; o.i.x }
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 3"));
+}
+fn test_irgen_const_block_compound_assign_nested_field_all_ops_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    struct I { x: i32 }
+    struct O { i: I }
+    const N: i32 = {
+      let mut o: O = O { i: I { x: 255 } };
+      o.i.x += 1;
+      o.i.x -= 2;
+      o.i.x *= 3;
+      o.i.x /= 4;
+      o.i.x %= 5;
+      o.i.x &= 6;
+      o.i.x |= 7;
+      o.i.x ^= 8;
+      o.i.x <<= 1;
+      o.i.x >>= 2;
+      o.i.x
+    }
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_block_assign_nested_string_field_with_codec_chars_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    struct I { s: String }
+    struct O { i: I }
+    const N: i32 = { let mut o: O = O { i: I { s: "a#|b" } }; o.i.s = "q#|w"; o.i.s.len() }
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 4"));
+}
+fn test_irgen_const_block_branch_assign_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    const N: i32 = { let mut x: i32 = 1; if true { x = 3; } else { x = 4; }; x }
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32"));
+}

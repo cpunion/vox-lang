@@ -1,0 +1,212 @@
+import "std/testing" as t
+import "vox/typecheck" as tc
+import "vox/irgen" as g
+import "vox/ir" as ir
+
+fn test_irgen_union_type_alias_match_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "type Value = I32: i32 | Str: String\nfn main(x: Value) -> i32 { return match x { .I32(v) => v, .Str(_s) => 0 }; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "enum_tag"));
+  t.assert(contains(s, "enum_payload"));
+}
+fn test_irgen_bitwise_and_shift_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 {\n  let a: i32 = 6 & 3;\n  let b: i32 = 1 << 4;\n  let c: i32 = b >> 2;\n  return (a | c) ^ 1;\n}";
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "bitand i32"));
+  t.assert(contains(s, "bitor i32"));
+  t.assert(contains(s, "bitxor i32"));
+  t.assert(contains(s, "shl i32"));
+  t.assert(contains(s, "shr i32"));
+}
+fn test_irgen_bool_bitwise_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> bool { let a: bool = true; let b: bool = false; return (a ^ b) | (a & b); }";
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "bitand bool"));
+  t.assert(contains(s, "bitor bool"));
+  t.assert(contains(s, "bitxor bool"));
+}
+fn test_irgen_unary_not_int_lowers_to_bitxor() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 { let x: i32 = !1; return x; }";
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 -1"));
+  t.assert(contains(s, "bitxor i32"));
+}
+fn test_irgen_unary_plus_noop_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 { let x: i32 = +1; return x; }";
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 1"));
+}
+fn test_irgen_string_ordered_compare_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main(a: String, b: String) -> i32 { if a < b { return 1; } return 0; }";
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "cmp_lt str"));
+}
+fn test_irgen_float_to_string_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 {\n  let x: f64 = 1.25;\n  let s: String = x.to_string();\n  return s.len();\n}";
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "f64_to_str"));
+}
+fn test_irgen_string_to_string_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 {\n  let s: String = \"vox\";\n  let t2: String = s.to_string();\n  return t2.len();\n}";
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+}
+fn test_irgen_string_is_empty_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn main() -> i32 {
+      let s0: String = "";
+      if s0.is_empty() { return 1; }
+      return 0;
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "str_len"));
+  t.assert(contains(s, "cmp_eq i32"));
+}
+fn test_irgen_string_predicate_methods_lower() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn main() -> i32 {
+      let s: String = "vox-lang";
+      if s.starts_with("vox") && s.ends_with("lang") && s.contains("-") { return 1; }
+      return 0;
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "str_starts_with"));
+  t.assert(contains(s, "str_ends_with"));
+  t.assert(contains(s, "str_contains"));
+}
+fn test_irgen_string_index_methods_lower() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn main() -> i32 {
+      let s: String = "vox-lang-vox";
+      let i0: i32 = s.index_of("vox");
+      let i1: i32 = s.last_index_of("vox");
+      return i0 + i1;
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "str_index_of"));
+  t.assert(contains(s, "str_last_index_of"));
+}
+fn test_irgen_float_cast_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 {\n  let x: f64 = 1.5;\n  let y: f32 = x as f32;\n  let z: f64 = y as f64;\n  if z > 0.0 { return 1; }\n  return 0;\n}";
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "float_cast f32 f64"));
+  t.assert(contains(s, "float_cast f64 f32"));
+}
+fn test_irgen_int_float_cast_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = "fn main() -> i32 {\n  let x: i32 = 7;\n  let y: f64 = x as f64;\n  let z: i32 = y as i32;\n  return z;\n}";
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "float_cast f64 i32"));
+  t.assert(contains(s, "int_cast_checked i32 f64"));
+}
+fn test_irgen_enum_unit_equality_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    enum E { A(i32), None }
+    fn main() -> i32 {
+      let x: E = E.A(1);
+      if x == E.None { return 1; }
+      return 0;
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+}
+fn test_irgen_enum_payload_equality_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    enum E { A(i32), None }
+    fn main() -> i32 {
+      let a: E = E.A(1);
+      let b: E = E.A(1);
+      return if a == b { 1 } else { 0 };
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "cmp_eq enum(main::E)"));
+}
+fn test_irgen_struct_equality_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    struct S { a: i32, b: String }
+    fn main() -> i32 {
+      let x: S = S { a: 1, b: "x" };
+      let y: S = S { a: 1, b: "x" };
+      return if x == y { 1 } else { 0 };
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "cmp_eq struct(main::S)"));
+}
+fn test_irgen_rejects_return_without_expr_in_i32_fn() -> () {
+  let mut w: tc.World = tc.world();
+  // Put the error at a stable location: line 2, col 1.
+  w = add_mod(w, "main", "fn main() -> i32 {\nreturn;\n}");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(starts_with(r.err, "src/main.vox:2:1:"));
+}

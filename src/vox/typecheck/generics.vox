@@ -547,6 +547,146 @@ pub fn ty_inst_str(ctx: Ctx, ty_idx: i32) -> String {
   return "<bad>";
 }
 
+fn hex_val(c: i32) -> i32 {
+  if c >= 48 && c <= 57 { return c - 48; } // 0-9
+  if c >= 97 && c <= 102 { return 10 + (c - 97); } // a-f
+  return -1;
+}
+
+fn is_hex_escape_byte(s: String, i: i32, want: i32) -> bool {
+  if s.byte_at(i) != 95 { return false; } // '_'
+  if (i + 2) >= s.len() { return false; }
+  let hi: i32 = hex_val(s.byte_at(i + 1));
+  let lo: i32 = hex_val(s.byte_at(i + 2));
+  if hi == -1 || lo == -1 { return false; }
+  return (hi * 16 + lo) == want;
+}
+
+fn inst_text_pretty(s0: String) -> String {
+  // Convert `Name$gT_3di32` -> `Name[i32]` for diagnostics.
+  let mut i: i32 = 0;
+  while i < s0.len() {
+    if s0.byte_at(i) == 36 { // '$'
+      let base: String = s0.slice(0, i);
+      let mut suf: String = s0.slice(i + 1, s0.len());
+      if suf.len() > 0 && suf.byte_at(0) == 103 { // 'g'
+        suf = suf.slice(1, suf.len());
+      }
+      // Parse mangled raw `A_3dTy_2cB_3d3_3ai32` => values [Ty, 3].
+      let mut vals: Vec[String] = Vec();
+      let mut j: i32 = 0;
+      while j < suf.len() {
+        // Scan to '=' escape.
+        let mut eq_at: i32 = -1;
+        let mut k: i32 = j;
+        while k < suf.len() {
+          if is_hex_escape_byte(suf, k, 61) { // '='
+            eq_at = k;
+            k = suf.len();
+          } else if is_hex_escape_byte(suf, k, 44) { // ',' (malformed segment)
+            k = suf.len();
+          } else if suf.byte_at(k) == 95 && (k + 2) < suf.len() {
+            k = k + 3;
+          } else {
+            k = k + 1;
+          }
+        }
+        if eq_at == -1 { j = suf.len(); continue; }
+        let rhs_start: i32 = eq_at + 3;
+
+        // rhs ends at ',' or ':' escape or end.
+        let mut rhs_end: i32 = rhs_start;
+        while rhs_end < suf.len() {
+          if is_hex_escape_byte(suf, rhs_end, 44) { break; } // ','
+          if is_hex_escape_byte(suf, rhs_end, 58) { break; } // ':'
+          if suf.byte_at(rhs_end) == 95 && (rhs_end + 2) < suf.len() {
+            rhs_end = rhs_end + 3;
+          } else {
+            rhs_end = rhs_end + 1;
+          }
+        }
+        if rhs_start <= rhs_end && rhs_end <= suf.len() {
+          let rhs: String = suf.slice(rhs_start, rhs_end);
+          vals.push(inst_text_pretty(rhs));
+        }
+
+        // Advance to next segment: skip until ',' escape (if any), then consume it.
+        let mut next: i32 = rhs_end;
+        while next < suf.len() && !is_hex_escape_byte(suf, next, 44) {
+          if suf.byte_at(next) == 95 && (next + 2) < suf.len() { next = next + 3; } else { next = next + 1; }
+        }
+        if next < suf.len() && is_hex_escape_byte(suf, next, 44) { next = next + 3; }
+        j = next;
+      }
+      if vals.len() == 0 { return base; }
+      let mut args: String = "";
+      let mut vi: i32 = 0;
+      while vi < vals.len() {
+        if vi != 0 { args = args.concat(", "); }
+        args = args.concat(vals.get(vi));
+        vi = vi + 1;
+      }
+      return base.concat("[").concat(args).concat("]");
+    }
+    i = i + 1;
+  }
+  return s0;
+}
+
+pub fn ty_user_str(ctx: Ctx, ty_idx: i32) -> String {
+  // User-facing type text for diagnostics: demangles generic instantiation
+  // suffixes produced by inst_name_ex().
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty_idx);
+  if t.kind == ir.TyKind.Unit { return "()"; }
+  if t.kind == ir.TyKind.Bool { return "bool"; }
+  if t.kind == ir.TyKind.I8 { return "i8"; }
+  if t.kind == ir.TyKind.U8 { return "u8"; }
+  if t.kind == ir.TyKind.I16 { return "i16"; }
+  if t.kind == ir.TyKind.U16 { return "u16"; }
+  if t.kind == ir.TyKind.I32 { return "i32"; }
+  if t.kind == ir.TyKind.U32 { return "u32"; }
+  if t.kind == ir.TyKind.I64 { return "i64"; }
+  if t.kind == ir.TyKind.U64 { return "u64"; }
+  if t.kind == ir.TyKind.ISize { return "isize"; }
+  if t.kind == ir.TyKind.USize { return "usize"; }
+  if t.kind == ir.TyKind.F32 { return "f32"; }
+  if t.kind == ir.TyKind.F64 { return "f64"; }
+  if t.kind == ir.TyKind.String { return "String"; }
+  if t.kind == ir.TyKind.Ref {
+    let et: ir.Ty = ir.ty_pool_get(ctx.pool, t.elem);
+    let base: String = if et.kind == ir.TyKind.String && !ir.ty_ref_is_mut(t) { "str" } else { ty_user_str(ctx, t.elem) };
+    if ir.ty_ref_is_mut(t) && ir.ty_ref_is_static(t) { return "&'static mut ".concat(base); }
+    if ir.ty_ref_is_mut(t) { return "&mut ".concat(base); }
+    if ir.ty_ref_is_static(t) { return "&'static ".concat(base); }
+    return "&".concat(base);
+  }
+  if t.kind == ir.TyKind.Param { return t.name; }
+  if t.kind == ir.TyKind.Vec { return "Vec[".concat(ty_user_str(ctx, t.elem)).concat("]"); }
+  if t.kind == ir.TyKind.Range {
+    return "@range(".
+      concat(t.lo.to_string()).
+      concat("..=").
+      concat(t.hi.to_string()).
+      concat(") ").
+      concat(ty_user_str(ctx, t.elem));
+  }
+  if t.kind == ir.TyKind.Struct || t.kind == ir.TyKind.Enum {
+    // Use `mod::Name` with '/' normalized to '.' for readability.
+    let mut base: String = "";
+    if t.mod_path == "" || t.mod_path == "main" { base = t.name; } else {
+      let mut s: String = t.mod_path;
+      let mut i: i32 = 0;
+      while i < s.len() {
+        if s.byte_at(i) == 47 { s = s.slice(0, i).concat(".").concat(s.slice(i + 1, s.len())); }
+        i = i + 1;
+      }
+      base = s.concat("::").concat(t.name);
+    }
+    return inst_text_pretty(base);
+  }
+  return "<bad>";
+}
+
 fn hex2(b: i32) -> String {
   let hex: String = "0123456789abcdef";
   let hi: i32 = b / 16;

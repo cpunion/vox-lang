@@ -1,0 +1,708 @@
+import "std/testing" as t
+import "vox/compile" as c
+import "vox/loader" as ld
+import "vox/codegen" as cg
+
+fn test_compile_release_stmt_requires_rebind() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+      impl[T] Release for Vec[T] { fn release(x: Vec[T]) -> Vec[T] { return Vec(); } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/std/string/string.vox",
+    text: "pub fn release(s: String) -> String { return Release.release(s); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/string" as s
+      fn main() -> i32 {
+        let a: String = "x";
+        s.release(a);
+        return 0;
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "release call result must be assigned back"), r.err);
+}
+fn test_compile_release_move_use_after_release_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/std/string/string.vox",
+    text: "pub fn release(s: String) -> String { return Release.release(s); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/string" as s
+      fn main() -> i32 {
+        let mut a: String = "x";
+        let _b: String = s.release(a);
+        return a.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(!r.ok, r.err);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_release_move_self_rebind_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/std/string/string.vox",
+    text: "pub fn release(s: String) -> String { return Release.release(s); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/string" as s
+      fn main() -> i32 {
+        let mut a: String = "x";
+        a = s.release(a);
+        return a.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_release_method_stmt_requires_rebind() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn main() -> i32 {
+        let a: String = "x";
+        a.release();
+        return 0;
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "release call result must be assigned back"), r.err);
+}
+fn test_compile_release_method_move_use_after_release_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn main() -> i32 {
+        let mut a: String = "x";
+        let _b: String = a.release();
+        return a.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_release_move_if_branch_possible_use_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/std/string/string.vox",
+    text: "pub fn release(s: String) -> String { return Release.release(s); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/string" as s
+      fn main(flag: bool) -> i32 {
+        let mut a: String = "x";
+        if flag {
+          let _b: String = s.release(a);
+        }
+        return a.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_release_move_if_both_branches_rebind_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/std/string/string.vox",
+    text: "pub fn release(s: String) -> String { return Release.release(s); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/string" as s
+      fn main(flag: bool) -> i32 {
+        let mut a: String = "x";
+        if flag {
+          a = s.release(a);
+        } else {
+          a = s.release(a);
+        }
+        return a.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_release_move_member_arg_marks_root_moved() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/std/string/string.vox",
+    text: "pub fn release(s: String) -> String { return Release.release(s); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/string" as s
+      struct S { text: String, n: i32 }
+      fn main() -> i32 {
+        let mut a: S = S { text: "x", n: 1 };
+        let _b: String = s.release(a.text);
+        let _c: S = a;
+      return 0;
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_release_method_member_marks_root_moved() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      struct S { text: String, n: i32 }
+      fn main() -> i32 {
+        let mut a: S = S { text: "x", n: 1 };
+        let _b: String = a.text.release();
+        let _c: S = a;
+      return 0;
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_release_move_member_chain_use_after_release_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/std/string/string.vox",
+    text: "pub fn release(s: String) -> String { return Release.release(s); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/string" as s
+      struct S { text: String }
+      fn main() -> i32 {
+        let mut a: S = S { text: "x" };
+        let _b: String = s.release(a.text);
+        return a.text.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_release_method_member_chain_use_after_release_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      struct S { text: String }
+      fn main() -> i32 {
+        let mut a: S = S { text: "x" };
+        let _b: String = a.text.release();
+        return a.text.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_release_move_if_expr_marks_source_moved() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/std/string/string.vox",
+    text: "pub fn release(s: String) -> String { return Release.release(s); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/string" as s
+      fn main(flag: bool) -> i32 {
+        let mut a: String = "x";
+        let _b: String = if flag { s.release(a) } else { "y" };
+        return a.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_release_move_block_expr_marks_source_moved() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/std/string/string.vox",
+    text: "pub fn release(s: String) -> String { return Release.release(s); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/string" as s
+      fn main() -> i32 {
+        let mut a: String = "x";
+        let _b: String = { let t: String = s.release(a); t };
+        return a.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_release_trait_ufcs_move_use_after_release_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn main() -> i32 {
+        let mut a: String = "x";
+        let _b: String = Release.release(a);
+        return a.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_release_trait_ufcs_self_rebind_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn main() -> i32 {
+        let mut a: String = "x";
+        a = Release.release(a);
+        return a.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_release_move_multi_args_marks_all_sources() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/std/string/string.vox",
+    text: "pub fn release(s: String) -> String { return Release.release(s); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/string" as s
+      fn pick(a: String, b: String) -> String { return a; }
+      fn main() -> i32 {
+        let mut a: String = "x";
+        let mut b: String = "y";
+        let _c: String = pick(s.release(a), s.release(b));
+        return b.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: b"), r.err);
+}
+fn test_compile_release_move_assign_field_marks_source() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/prelude/prelude.vox",
+    text: """
+      pub trait Release { fn release(x: Self) -> Self; }
+      impl Release for String { fn release(x: String) -> String { return ""; } }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/std/string/string.vox",
+    text: "pub fn release(s: String) -> String { return Release.release(s); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/string" as s
+      struct Holder { text: String }
+      fn main() -> i32 {
+        let mut h: Holder = Holder { text: "t" };
+        let mut a: String = "x";
+        h.text = s.release(a);
+        return a.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_move_call_by_value_use_after_call_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      struct S { text: String }
+      fn take(x: S) -> i32 { return x.text.len(); }
+      fn main() -> i32 {
+        let a: S = S { text: "x" };
+        let _n: i32 = take(a);
+        return a.text.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_move_call_by_borrow_keeps_value_available() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      struct S { text: String }
+      fn peek(x: &S) -> i32 { return x.text.len(); }
+      fn main() -> i32 {
+        let a: S = S { text: "x" };
+        let _n: i32 = peek(a);
+        return a.text.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_move_call_i32_copy_not_moved() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn id(x: i32) -> i32 { return x; }
+      fn main() -> i32 {
+        let a: i32 = 7;
+        let _n: i32 = id(a);
+        return a;
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_move_trait_method_by_value_receiver_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Take { fn take(x: Self) -> i32; }
+      struct S { text: String }
+      impl Take for S { fn take(x: S) -> i32 { return x.text.len(); } }
+      fn main() -> i32 {
+        let a: S = S { text: "x" };
+        let _n: i32 = a.take();
+        return a.text.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert(!r.ok);
+  t.assert_with(contains(r.err, "use of moved value: a"), r.err);
+}
+fn test_compile_move_trait_method_by_borrow_receiver_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Peek { fn peek(x: &Self) -> i32; }
+      struct S { n: i32 }
+      impl Peek for S { fn peek(x: &S) -> i32 { return x.n; } }
+      fn main() -> i32 {
+        let a: S = S { n: 7 };
+        let _n: i32 = a.peek();
+        return a.n;
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_move_call_member_arg_keeps_root_available() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn take(x: String) -> i32 { return x.len(); }
+      struct H { text: String }
+      fn main() -> i32 {
+        let a: H = H { text: "x" };
+        let _n: i32 = take(a.text);
+        return a.text.len();
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}

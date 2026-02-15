@@ -187,9 +187,57 @@ fn test_parse_ref_named_lifetime_rejected() -> () {
   let src: String = "fn bad(s: &'a str) -> i32 { return s.len(); }";
   let r: p.ParseResult = p.parse_text(src);
   t.assert(!ok(r.err));
-  t.assert(match r.err { p.ParseError.InvalidType(_at, _why) => true, _ => false });
+  t.assert_with(match r.err { p.ParseError.InvalidType(_at, _why) => true, _ => false }, p.parse_error_to_string(r.err));
   let msg: String = p.parse_error_to_string(r.err);
   t.assert(contains(msg, "only 'static is allowed"));
+}
+
+fn tn_is_ident(tn: ast.TypeName, name: String) -> bool {
+  return tn.parts.len() == 1 && tn.parts.get(0) == name && tn.args.len() == 0;
+}
+
+fn tn_is_const(tn: ast.TypeName, text: String) -> bool {
+  return tn.parts.len() == 2 && tn.parts.get(0) == "@const" && tn.parts.get(1) == text && tn.args.len() == 0;
+}
+
+fn test_parse_generic_call_with_type_and_const_args_smoke() -> () {
+  let src: String = """
+    fn take[T, const N: i32](head: T, tail: T...) -> T { return head; }
+    fn main() -> i32 {
+      let mut xs: Vec[i32] = Vec();
+      xs.push(8);
+      xs.push(9);
+      let b: i32 = take[i32, 3](7, xs);
+      return b;
+    }
+  """;
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert_with(ok(r.err), p.parse_error_to_string(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(1);
+  let st: ast.Stmt = f.body.stmts.get(3);
+  let init: i32 = match st { ast.Stmt.Let(_sp, _mut0, _name, _ha, _ann, ex) => ex, _ => -1 };
+  t.assert(init != -1);
+
+  let exprs: ast.ExprPool = r.prog.exprs;
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, init);
+  let ok_call: bool =
+    match n {
+      ast.ExprNode.Call(callee, targs, _args) =>
+        if targs.len() == 2 {
+          tn_is_ident(targs.get(0), "i32") && tn_is_const(targs.get(1), "3")
+        } else if targs.len() == 0 {
+          match ast.expr_pool_get(exprs, callee) {
+            ast.ExprNode.Call(_c2, t2, a2) =>
+              a2.len() == 0 && t2.len() == 2 && tn_is_ident(t2.get(0), "i32") && tn_is_const(t2.get(1), "3"),
+            _ => false,
+          }
+        } else {
+          false
+        },
+      _ => false,
+    };
+  t.assert_with(ok_call, "expected call targs to contain [i32, @const(3)] either on call or on callee");
 }
 
 

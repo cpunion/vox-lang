@@ -1,0 +1,241 @@
+import "std/testing" as t
+import "vox/compile" as c
+import "vox/loader" as ld
+import "vox/codegen" as cg
+
+fn test_compile_const_fn_call_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile { path: "src/main.vox", text: "fn add2(x: i32) -> i32 { return x + 2; }\nconst N: i32 = add2(5)\nfn main() -> i32 { return N; }" });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+fn test_compile_const_fn_call_named_import_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile { path: "dep/src/dep.vox", text: "pub fn plus(a: i32, b: i32) -> i32 { return a + b; }" });
+  fs.push(ld.SourceFile { path: "src/main.vox", text: "import { plus } from \"dep\"\nconst N: i32 = plus(3, 4)\nfn main() -> i32 { return N; }" });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+fn test_compile_const_fn_call_generic_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile { path: "src/main.vox", text: "fn id[T](x: T) -> T { return x; }\nconst N: i32 = id(7)\nfn main() -> i32 { return N; }" });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+fn test_compile_const_fn_call_const_generic_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile { path: "src/main.vox", text: "fn addn[const N: i32](x: i32) -> i32 { return x + N; }\nconst M: i32 = addn[3](4)\nfn main() -> i32 { return M; }" });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+fn test_compile_const_fn_call_generic_trait_bound_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Eq { fn eq(a: Self, b: Self) -> bool; }
+      impl Eq for i32 { fn eq(a: i32, b: i32) -> bool { return a == b; } }
+      fn id[T: Eq](x: T) -> T { return x; }
+      const N: i32 = id(7)
+      fn main() -> i32 { return N; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+fn test_compile_const_fn_call_generic_trait_bound_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Eq { fn eq(a: Self, b: Self) -> bool; }
+      impl Eq for i32 { fn eq(a: i32, b: i32) -> bool { return a == b; } }
+      fn id[T: Eq](x: T) -> T { return x; }
+      const S: String = id("x")
+      fn main() -> i32 { return 0; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(!r.ok, r.err);
+  t.assert(!r.ok);
+}
+fn test_compile_const_fn_call_generic_type_mismatch_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile { path: "src/main.vox", text: "fn id[T](x: T) -> T { return x; }\nconst N: i32 = id[String](7)\nfn main() -> i32 { return N; }" });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(!r.ok, r.err);
+  t.assert(!r.ok);
+}
+fn test_compile_const_fn_call_with_pure_member_methods_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn calc() -> i32 {
+        let s: String = "abcd";
+        let t2: String = s.slice(1, 3).concat("x");
+        let n: String = 42.to_string();
+        let b: String = true.to_string();
+        return t2.len() + t2.byte_at(0) + n.len() + b.len();
+      }
+      const N: i32 = calc()
+      fn main() -> i32 { return N; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(contains(r.c, "107"));
+}
+fn test_compile_const_fn_call_with_escape_and_float_to_string_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn calc() -> i32 {
+        let e: String = "\n".escape_c();
+        let f: String = 1.5.to_string();
+        let g: String = 2.0.to_string();
+        return e.len() + f.len() + g.len();
+      }
+      const N: i32 = calc()
+      fn main() -> i32 { return N; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(contains(r.c, "6"));
+}
+fn test_compile_const_fn_call_with_string_predicate_methods_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn calc() -> i32 {
+        let s: String = "ab_cd";
+        let b0: bool = s.starts_with("ab");
+        let b1: bool = s.ends_with("cd");
+        let b2: bool = s.contains("_");
+        return if b0 && b1 && b2 { 1 } else { 0 };
+      }
+      const N: i32 = calc()
+      fn main() -> i32 { return N; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(contains(r.c, "1"));
+}
+fn test_compile_const_fn_call_with_string_is_empty_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn calc() -> i32 {
+        let s0: String = "";
+        let s1: String = "x";
+        return if s0.is_empty() && !s1.is_empty() { 1 } else { 0 };
+      }
+      const N: i32 = calc()
+      fn main() -> i32 { return N; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(contains(r.c, "1"));
+}
+fn test_compile_const_fn_call_with_string_index_methods_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn calc() -> i32 {
+        let s: String = "ab_cd_ab";
+        let i0: i32 = s.index_of("ab");
+        let i1: i32 = s.last_index_of("ab");
+        let i2: i32 = s.index_of("zz");
+        return i0 + i1 + i2;
+      }
+      const N: i32 = calc()
+      fn main() -> i32 { return N; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(contains(r.c, "5"));
+}
+fn test_compile_const_fn_call_member_method_oob_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      fn bad() -> i32 {
+        let s: String = "ab";
+        return s.byte_at(2);
+      }
+      const N: i32 = bad()
+      fn main() -> i32 { return N; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "string index out of bounds"));
+}
+fn test_compile_const_fn_call_type_param_pack_same_type_args_with_const_suffix_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn f[T..., const N: i32](x: T) -> T { return x; }\nconst X: i32 = f[i32, i32, 3](7)\nfn main() -> i32 { return X; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_const_fn_call_type_param_pack_extra_type_args_with_const_suffix_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn f[T..., const N: i32](x: T) -> T { return x; }\nconst X: i32 = f[i32, i64, 3](7)\nfn main() -> i32 { return X; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  let ok_msg: bool = contains(r.err, "const fn call type arg mismatch") || contains(r.err, "const fn return type mismatch");
+  t.assert_with(ok_msg, r.err);
+}
+fn test_compile_const_fn_call_type_param_pack_unused_allows_heterogeneous_type_args_with_const_suffix_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn keep[T..., const N: i32]() -> i32 { return N; }\nconst X: i32 = keep[i32, String, 9]()\nfn main() -> i32 { return X; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_const_fn_call_type_param_pack_heterogeneous_comptime_where_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn keep[T..., const N: i32]() -> i32 where comptime @size_of(T) <= 8 { return N; }\nconst X: i32 = keep[i32, u64, 9]()\nfn main() -> i32 { return X; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_const_fn_call_type_param_pack_heterogeneous_comptime_where_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "struct Big { a: i64, b: i64 }\nfn keep[T..., const N: i32]() -> i32 where comptime @size_of(T) <= 8 { return N; }\nconst X: i32 = keep[i32, Big, 9]()\nfn main() -> i32 { return X; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  let ok_msg: bool = contains(r.err, "comptime where") || contains(r.err, "comptime generic constraint failed");
+  t.assert_with(ok_msg, r.err);
+}

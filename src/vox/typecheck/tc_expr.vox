@@ -541,14 +541,17 @@ fn tc_expr_int(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyRes
   // - if expected is an integer scalar type, constrain to that type with range check
   // - otherwise, pick i32 if it fits, else i64 if it fits.
   if expected != -1 {
+    // Allow implicit deref of `&i32` etc for numeric contexts. Borrow/place
+    // requirements are enforced at call/let sites.
+    let expected0: i32 = strip_ref(ctx, expected);
     // Range types require an explicit `as` cast.
-    let eb: i32 = strip_range(ctx, expected);
-    if eb != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal requires expected scalar int") }; }
+    let eb: i32 = strip_range_only(ctx, expected0);
+    if eb != expected0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal requires expected scalar int") }; }
 
-    if expected == ctx.ty_u64 || expected == ctx.ty_usize {
+    if expected0 == ctx.ty_u64 || expected0 == ctx.ty_usize {
       let pru: ParseU64DecResult = parse_u64_dec(text);
       if !pru.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal out of range") }; }
-      if expected == ctx.ty_u64 { return ExprTyResult { ok: true, ty: ctx.ty_u64, err: TcError.None }; }
+      if expected0 == ctx.ty_u64 { return ExprTyResult { ok: true, ty: ctx.ty_u64, err: TcError.None }; }
       return ExprTyResult { ok: true, ty: ctx.ty_usize, err: TcError.None };
     }
 
@@ -556,34 +559,34 @@ fn tc_expr_int(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyRes
     if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal out of range") }; }
     let v: i64 = pr.val;
 
-    if expected == ctx.ty_i8 {
+    if expected0 == ctx.ty_i8 {
       if v < -128 || v > 127 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i8 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_i8, err: TcError.None };
     }
-    if expected == ctx.ty_u8 {
+    if expected0 == ctx.ty_u8 {
       if v < 0 || v > 255 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "u8 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_u8, err: TcError.None };
     }
-    if expected == ctx.ty_i16 {
+    if expected0 == ctx.ty_i16 {
       if v < -32768 || v > 32767 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i16 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_i16, err: TcError.None };
     }
-    if expected == ctx.ty_u16 {
+    if expected0 == ctx.ty_u16 {
       if v < 0 || v > 65535 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "u16 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_u16, err: TcError.None };
     }
-    if expected == ctx.ty_i32 {
+    if expected0 == ctx.ty_i32 {
       if v < -2147483648 || v > 2147483647 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i32 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
     }
-    if expected == ctx.ty_u32 {
+    if expected0 == ctx.ty_u32 {
       if v < 0 || v > 4294967295 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "u32 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_u32, err: TcError.None };
     }
-    if expected == ctx.ty_i64 {
+    if expected0 == ctx.ty_i64 {
       return ExprTyResult { ok: true, ty: ctx.ty_i64, err: TcError.None };
     }
-    if expected == ctx.ty_isize {
+    if expected0 == ctx.ty_isize {
       return ExprTyResult { ok: true, ty: ctx.ty_isize, err: TcError.None };
     }
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal requires expected scalar int") };
@@ -605,8 +608,9 @@ fn tc_expr_float(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyR
   if suf == 32 || suf == 64 {
     let lit_ty: i32 = if suf == 32 { ctx.ty_f32 } else { ctx.ty_f64 };
     if expected != -1 {
-      let eb: i32 = strip_range(ctx, expected);
-      if eb != expected || !is_float_ty(ctx, eb) {
+      let expected0: i32 = strip_ref(ctx, expected);
+      let eb: i32 = strip_range_only(ctx, expected0);
+      if eb != expected0 || !is_float_ty(ctx, eb) {
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "float literal requires expected f32/f64") };
       }
       if eb != lit_ty {
@@ -616,15 +620,16 @@ fn tc_expr_float(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyR
     return ExprTyResult { ok: true, ty: lit_ty, err: TcError.None };
   }
   if expected != -1 {
-    if expected == ctx.ty_f32 { return ExprTyResult { ok: true, ty: ctx.ty_f32, err: TcError.None }; }
-    if expected == ctx.ty_f64 { return ExprTyResult { ok: true, ty: ctx.ty_f64, err: TcError.None }; }
+    let expected0: i32 = strip_ref(ctx, expected);
+    if expected0 == ctx.ty_f32 { return ExprTyResult { ok: true, ty: ctx.ty_f32, err: TcError.None }; }
+    if expected0 == ctx.ty_f64 { return ExprTyResult { ok: true, ty: ctx.ty_f64, err: TcError.None }; }
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "float literal requires expected f32/f64") };
   }
   return ExprTyResult { ok: true, ty: ctx.ty_f64, err: TcError.None };
 }
 
 fn tc_expr_str(ctx: Ctx, expected: i32) -> ExprTyResult {
-  if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if expected != -1 && strip_ref(ctx, expected) != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
 }
 
@@ -651,8 +656,12 @@ fn tc_expr_ident(ctx: Ctx, sp: ast.Span, mod_path: String, imps: Imports, l0: Lo
   let want_mod: String = if ni.local != "" { ni.mod_path } else { mod_path };
   let want_name: String = if ni.local != "" { ni.name } else { name };
   let cs: ConstSig = find_const(ctx, want_mod, want_name);
-  if cs.name == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  if !vis_allows(cs.vis, want_mod, mod_path) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if cs.name == "" {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "unknown name: ".concat(name)) };
+  }
+  if !vis_allows(cs.vis, want_mod, mod_path) {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "const is private: ".concat(name)) };
+  }
   if expected != -1 && !assignable_to(ctx, expected, cs.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: cs.ty, err: TcError.None };
 }

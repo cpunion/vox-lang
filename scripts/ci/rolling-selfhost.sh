@@ -195,7 +195,13 @@ fi
 
 RUN_GLOB="${VOX_TEST_RUN:-*std_sync_runtime_generic_api_smoke}"
 JOBS="${VOX_TEST_JOBS:-8}"
-TEST_OUT_REL="${VOX_TEST_OUT:-target/debug/vox.test}"
+TEST_OUT_REL="${VOX_TEST_OUT:-}"
+if [[ -z "$TEST_OUT_REL" ]]; then
+  # Default output path is derived from the run glob to avoid cache races when
+  # multiple test-pkg invocations run concurrently.
+  TEST_HASH="$(printf '%s' "$RUN_GLOB" | sha256_text | cut -c1-12)"
+  TEST_OUT_REL="target/debug/vox.test.${TEST_HASH}"
+fi
 
 echo "[selfhost] test-pkg: run=$RUN_GLOB jobs=$JOBS"
 (
