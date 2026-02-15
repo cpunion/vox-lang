@@ -98,6 +98,45 @@ fn expr_contains_try(exprs: ast.ExprPool, eid: i32) -> bool {
   return false;
 }
 
+fn ty_has_forbidden_borrow(ctx: Ctx, ty0: i32) -> bool {
+  let ty: i32 = strip_range_only(ctx, ty0);
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Ref {
+    // Only allow `&'static T` (immutable) to live across await.
+    if ir.ty_ref_is_mut(t) { return true; }
+    if !ir.ty_ref_is_static(t) { return true; }
+    return ty_has_forbidden_borrow(ctx, t.elem);
+  }
+  if t.kind == ir.TyKind.Vec { return ty_has_forbidden_borrow(ctx, t.elem); }
+  if t.kind == ir.TyKind.Range { return ty_has_forbidden_borrow(ctx, t.elem); }
+  if t.kind == ir.TyKind.Struct {
+    let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
+    if !fs.found { return false; }
+    let mut i: i32 = 0;
+    while i < fs.sig.fields.len() {
+      if ty_has_forbidden_borrow(ctx, fs.sig.fields.get(i).ty) { return true; }
+      i = i + 1;
+    }
+    return false;
+  }
+  if t.kind == ir.TyKind.Enum {
+    let fe: FindEnumResult = find_enum(ctx, t.mod_path, t.name);
+    if !fe.found { return false; }
+    let mut vi: i32 = 0;
+    while vi < fe.sig.vars.len() {
+      let v: EnumVariantSig = fe.sig.vars.get(vi);
+      let mut fi: i32 = 0;
+      while fi < v.fields.len() {
+        if ty_has_forbidden_borrow(ctx, v.fields.get(fi)) { return true; }
+        fi = fi + 1;
+      }
+      vi = vi + 1;
+    }
+    return false;
+  }
+  return false;
+}
+
 fn expr_uses_name(exprs: ast.ExprPool, eid: i32, name: String) -> bool {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
   if match n { ast.ExprNode.Ident(_s) => true, _ => false } {
@@ -431,7 +470,11 @@ fn collect_async_one(ctx0: Ctx, w: World, mod_path: String, prog_imports: Vec[as
         let msg: String = "failed to typecheck await operand: ".concat(tc_error_to_string(er_op.err));
         return CollectAsyncOneResult { ok: false, err: type_error_at(stmt_span(st0), msg), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" };
       }
-      await_operand_tys.push(strip_range_only(c, er_op.ty));
+      let op_ty: i32 = strip_range_only(c, er_op.ty);
+      if ty_has_forbidden_borrow(c, op_ty) {
+        return CollectAsyncOneResult { ok: false, err: type_error_at(stmt_span(st0), "await operand cannot contain non-static borrow"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" };
+      }
+      await_operand_tys.push(op_ty);
       ap_i = ap_i + 1;
     }
 
@@ -486,11 +529,8 @@ fn collect_async_one(ctx0: Ctx, w: World, mod_path: String, prog_imports: Vec[as
     let nm: String = captures.get(ci0);
     let ld: AsyncLocalDecl = local_decl_find(locals, nm);
     if ld.name == "" { return CollectAsyncOneResult { ok: false, err: type_error_at(fd.sp, "internal: missing capture local decl"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" }; }
-    if is_ref_ty(c, ld.ty) {
-      let rt: ir.Ty = ir.ty_pool_get(c.pool, ld.ty);
-      if ir.ty_ref_is_mut(rt) || !ir.ty_ref_is_static(rt) {
-        return CollectAsyncOneResult { ok: false, err: type_error_at(fd.sp, "borrowed local cannot live across await: ".concat(nm)), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" };
-      }
+    if ty_has_forbidden_borrow(c, ld.ty) {
+      return CollectAsyncOneResult { ok: false, err: type_error_at(fd.sp, "borrowed local cannot live across await: ".concat(nm)), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" };
     }
     fs.push(StructFieldSig { name: "l_".concat(nm), ty: ld.ty, vis: ast.vis_private(), is_pub: false });
     ci0 = ci0 + 1;
