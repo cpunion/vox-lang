@@ -395,147 +395,69 @@ struct CollectAsyncOneResult {
   poll_lowered: String,
 }
 
-fn collect_async_one(ctx0: Ctx, w: World, mod_path: String, prog_imports: Vec[ast.ImportDecl], exprs_mod: ast.ExprPool, fd: ast.FuncDecl, lowered: String) -> CollectAsyncOneResult {
+struct CollectAsyncPrepareOneResult {
+  ok: bool,
+  err: TcError,
+  ctx: Ctx,
+  frame_name: String,
+  frame_ty: i32,
+  poll_lowered: String,
+  output_ty: i32,
+}
+
+struct CollectAsyncFinalizeOneResult { ok: bool, err: TcError, ctx: Ctx }
+
+fn structs_replace_by_name(ctx0: Ctx, mod_path: String, name: String, sig: StructSig) -> Ctx {
+  let mut ctx: Ctx = ctx0;
+  let mut out: Vec[StructSig] = Vec();
+  let mut replaced: bool = false;
+  let mut i: i32 = 0;
+  while i < ctx.structs.len() {
+    let s0: StructSig = ctx.structs.get(i);
+    if s0.mod_path == mod_path && s0.name == name {
+      out.push(sig);
+      replaced = true;
+    } else {
+      out.push(s0);
+    }
+    i = i + 1;
+  }
+  if !replaced { out.push(sig); }
+  ctx.structs = out;
+  return ctx;
+}
+
+fn collect_async_prepare_one(ctx0: Ctx, w: World, mod_path: String, prog_imports: Vec[ast.ImportDecl], exprs_mod: ast.ExprPool, fd: ast.FuncDecl, lowered: String) -> CollectAsyncPrepareOneResult {
   let mut c: Ctx = ctx0;
 
   let fidx: i32 = find_func_sym_idx(c, mod_path, lowered);
   if fidx == -1 {
-    return CollectAsyncOneResult { ok: false, err: type_error_at(fd.sp, "missing fn sig"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" };
+    return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "missing fn sig"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
   }
   let fsym0: FuncSym = c.funcs.get(fidx);
   let output_ty: i32 = fsym0.sig.ret;
   if fsym0.sig.type_params.len() != 0 || fsym0.sig.const_params.len() != 0 {
-    return CollectAsyncOneResult { ok: false, err: type_error_at(fd.sp, "async fn with generics is not supported yet"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" };
+    return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "async fn with generics is not supported yet"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
   }
 
   let ir0: ImportsResult = build_imports(w, mod_path, prog_imports, fd.file);
-  if !ir0.ok { return CollectAsyncOneResult { ok: false, err: ir0.err, ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" }; }
+  if !ir0.ok { return CollectAsyncPrepareOneResult { ok: false, err: ir0.err, ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad }; }
   let base_imps: Imports = ir0.imps;
   let async_alias: String = fresh_internal_async_alias(base_imps);
   let imps2: Imports = imps_add_alias(base_imps, async_alias, "std/async");
-
-  let nr: an.NormalizeResult = an.normalize_async_block(exprs_mod, fd.body);
-  if !nr.ok { return CollectAsyncOneResult { ok: false, err: type_error_at(fd.sp, nr.err), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" }; }
-  let exprs: ast.ExprPool = nr.exprs;
-  let body: ast.Block = nr.body;
-  let aps: Vec[an.AwaitPoint] = an.find_await_points(exprs, body.stmts);
-
-  // Typecheck in order: let bindings and await operands.
-  let mut locals: Vec[AsyncLocalDecl] = Vec();
-  let mut await_operand_tys: Vec[i32] = Vec();
-  let mut l_cur: Locals = locals_new();
-  l_cur.fn_is_async = true;
-
-  let mut pi0: i32 = 0;
-  while pi0 < fd.params.len() {
-    let pty0: i32 = strip_range_only(c, fsym0.sig.params.get(pi0));
-    let p: ast.Param = fd.params.get(pi0);
-    l_cur = locals_decl(l_cur, p.name, pty0, false);
-    pi0 = pi0 + 1;
-  }
-
-  let mut ap_i: i32 = 0;
-  let mut si0: i32 = 0;
-  while si0 < body.stmts.len() {
-    let st0: ast.Stmt = body.stmts.get(si0);
-    if match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
-      let sp0: ast.Span = stmt_span(st0);
-      let is_mut: bool = match st0 { ast.Stmt.Let(_sp, m0, _n, _ha, _ann, _e) => m0, _ => false };
-      let name0: String = match st0 { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
-      let has_ann: bool = match st0 { ast.Stmt.Let(_sp, _m, _n, ha0, _ann, _e) => ha0, _ => false };
-      let ann0: ast.TypeName = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, an0, _e) => an0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
-      let init0: i32 = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e0) => e0, _ => -1 };
-      let mut vty: i32 = -1;
-      if has_ann {
-        let tr0: ResolveTyResult = resolve_type(c, w, mod_path, base_imps, l_cur.type_params, ann0);
-        c = tr0.ctx;
-        if !tr0.ok { return CollectAsyncOneResult { ok: false, err: type_error_at(sp0, "let annotation type resolve failed"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" }; }
-        vty = strip_range_only(c, tr0.idx);
-      } else {
-        let er0: ExprTyResult = tc_expr(c, w, mod_path, base_imps, exprs, l_cur, init0, -1);
-        if !er0.ok {
-          let msg: String = "failed to typecheck let init in async fn: ".concat(tc_error_to_string(er0.err));
-          return CollectAsyncOneResult { ok: false, err: type_error_at(sp0, msg), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" };
-        }
-        vty = strip_range_only(c, er0.ty);
-      }
-      l_cur = locals_decl(l_cur, name0, vty, is_mut);
-      locals.push(AsyncLocalDecl { name: name0, ty: vty, mutable: is_mut, stmt_idx: si0 });
-    }
-
-    if ap_i < aps.len() && aps.get(ap_i).stmt_idx == si0 {
-      let op: i32 = aps.get(ap_i).operand;
-      let er_op: ExprTyResult = tc_expr(c, w, mod_path, base_imps, exprs, l_cur, op, -1);
-      if !er_op.ok {
-        let msg: String = "failed to typecheck await operand: ".concat(tc_error_to_string(er_op.err));
-        return CollectAsyncOneResult { ok: false, err: type_error_at(stmt_span(st0), msg), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" };
-      }
-      let op_ty: i32 = strip_range_only(c, er_op.ty);
-      if ty_has_forbidden_borrow(c, op_ty) {
-        return CollectAsyncOneResult { ok: false, err: type_error_at(stmt_span(st0), "await operand cannot contain non-static borrow"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" };
-      }
-      await_operand_tys.push(op_ty);
-      ap_i = ap_i + 1;
-    }
-
-    si0 = si0 + 1;
-  }
-
-  // Determine captures: locals used after any await statement.
-  let mut await_stmt_idxs: Vec[i32] = Vec();
-  ap_i = 0;
-  while ap_i < aps.len() { await_stmt_idxs.push(aps.get(ap_i).stmt_idx); ap_i = ap_i + 1; }
-  let mut captures: Vec[String] = Vec();
-  let mut li0: i32 = 0;
-  while li0 < locals.len() {
-    let ld: AsyncLocalDecl = locals.get(li0);
-    let mut ai1: i32 = 0;
-    while ai1 < await_stmt_idxs.len() {
-      let aidx: i32 = await_stmt_idxs.get(ai1);
-      if ld.stmt_idx < aidx {
-        let mut sj: i32 = aidx + 1;
-        while sj < body.stmts.len() {
-          let stj: ast.Stmt = body.stmts.get(sj);
-          if stmt_uses_name(exprs, stj, ld.name) {
-            if !string_vec_contains(captures, ld.name) { captures.push(ld.name); }
-            sj = body.stmts.len();
-            ai1 = await_stmt_idxs.len();
-          }
-          sj = sj + 1;
-        }
-      }
-      ai1 = ai1 + 1;
-    }
-    li0 = li0 + 1;
-  }
 
   // Synthesize frame struct.
   let frame_name: String = async_frame_fresh_name(c, mod_path, lowered);
   let irs: ResolveTyResult = nominal_intern_struct(c, mod_path, frame_name);
   c = irs.ctx;
   if !irs.ok {
-    return CollectAsyncOneResult { ok: false, err: type_error_at(fd.sp, "failed to intern async frame type"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" };
+    return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "failed to intern async frame type"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
   }
   let frame_ty: i32 = irs.idx;
 
-  let mut fs: Vec[StructFieldSig] = async_frame_fields(c, fd, fsym0.sig);
-  let mut ak: i32 = 0;
-  while ak < await_operand_tys.len() {
-    fs.push(StructFieldSig { name: "a".concat(ak.to_string()), ty: await_operand_tys.get(ak), vis: ast.vis_private(), is_pub: false });
-    ak = ak + 1;
-  }
-  let mut ci0: i32 = 0;
-  while ci0 < captures.len() {
-    let nm: String = captures.get(ci0);
-    let ld: AsyncLocalDecl = local_decl_find(locals, nm);
-    if ld.name == "" { return CollectAsyncOneResult { ok: false, err: type_error_at(fd.sp, "internal: missing capture local decl"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" }; }
-    if ty_has_forbidden_borrow(c, ld.ty) {
-      return CollectAsyncOneResult { ok: false, err: type_error_at(fd.sp, "borrowed local cannot live across await: ".concat(nm)), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" };
-    }
-    fs.push(StructFieldSig { name: "l_".concat(nm), ty: ld.ty, vis: ast.vis_private(), is_pub: false });
-    ci0 = ci0 + 1;
-  }
-  c = ctx_add_struct_sig(c, StructSig { mod_path: mod_path, name: frame_name, base_name: frame_name, vis: ast.vis_private(), is_pub: false, fields: fs });
+  // Prepare with base fields only; await operands + captures are filled in finalize pass.
+  let fs_base: Vec[StructFieldSig] = async_frame_fields(c, fd, fsym0.sig);
+  c = ctx_add_struct_sig(c, StructSig { mod_path: mod_path, name: frame_name, base_name: frame_name, vis: ast.vis_private(), is_pub: false, fields: fs_base });
 
   // Future impl lowered poll name and signature.
   let poll_lowered: String = async_poll_fresh_lowered(c, mod_path, lowered);
@@ -547,7 +469,7 @@ fn collect_async_one(ctx0: Ctx, w: World, mod_path: String, prog_imports: Vec[as
   let poll_tn: ast.TypeName = ast.TypeName { parts: poll_parts, args: poll_args };
   let pr: ResolveTyResult = resolve_type(c, w, mod_path, imps2, Vec(), poll_tn);
   c = pr.ctx;
-  if !pr.ok { return CollectAsyncOneResult { ok: false, err: type_error_at(fd.sp, "failed to resolve std/async::Poll for async lowering"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" }; }
+  if !pr.ok { return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "failed to resolve std/async::Poll for async lowering"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad }; }
 
   let mut ctx_parts: Vec[String] = Vec();
   ctx_parts.push(async_alias);
@@ -555,7 +477,7 @@ fn collect_async_one(ctx0: Ctx, w: World, mod_path: String, prog_imports: Vec[as
   let ctx_tn: ast.TypeName = ast.TypeName { parts: ctx_parts, args: Vec() };
   let cr: ResolveTyResult = resolve_type(c, w, mod_path, imps2, Vec(), ctx_tn);
   c = cr.ctx;
-  if !cr.ok { return CollectAsyncOneResult { ok: false, err: type_error_at(fd.sp, "failed to resolve std/async::Context for async lowering"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "" }; }
+  if !cr.ok { return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "failed to resolve std/async::Context for async lowering"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad }; }
   let ctx_ty: i32 = cr.idx;
 
   let poll_sig: FuncSig = FuncSig {
@@ -609,7 +531,144 @@ fn collect_async_one(ctx0: Ctx, w: World, mod_path: String, prog_imports: Vec[as
   // Record metadata for typechecking async bodies and for IRGen lowering.
   c = ctx_add_async_fn_sig(c, AsyncFnSig { mod_path: mod_path, name: lowered, output_ty: output_ty, frame_name: frame_name, frame_ty: frame_ty, poll_lowered: poll_lowered });
 
-  return CollectAsyncOneResult { ok: true, err: TcError.None, ctx: c, frame_name: frame_name, frame_ty: frame_ty, poll_lowered: poll_lowered };
+  return CollectAsyncPrepareOneResult { ok: true, err: TcError.None, ctx: c, frame_name: frame_name, frame_ty: frame_ty, poll_lowered: poll_lowered, output_ty: output_ty };
+}
+
+fn collect_async_finalize_one(ctx0: Ctx, w: World, mod_path: String, prog_imports: Vec[ast.ImportDecl], exprs_mod: ast.ExprPool, fd: ast.FuncDecl, lowered: String) -> CollectAsyncFinalizeOneResult {
+  let mut c: Ctx = ctx0;
+
+  let ar: FindAsyncFnResult = find_async_fn(c, mod_path, lowered);
+  if !ar.found {
+    return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "missing async fn lowering metadata"), ctx: c };
+  }
+  let frame_name: String = ar.sig.frame_name;
+
+  let fidx: i32 = find_func_sym_idx(c, mod_path, lowered);
+  if fidx == -1 {
+    return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "missing fn sig"), ctx: c };
+  }
+  let fsym0: FuncSym = c.funcs.get(fidx);
+
+  let ir0: ImportsResult = build_imports(w, mod_path, prog_imports, fd.file);
+  if !ir0.ok { return CollectAsyncFinalizeOneResult { ok: false, err: ir0.err, ctx: c }; }
+  let base_imps: Imports = ir0.imps;
+
+  let nr: an.NormalizeResult = an.normalize_async_block(exprs_mod, fd.body);
+  if !nr.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, nr.err), ctx: c }; }
+  let exprs: ast.ExprPool = nr.exprs;
+  let body: ast.Block = nr.body;
+  let aps: Vec[an.AwaitPoint] = an.find_await_points(exprs, body.stmts);
+
+  // Typecheck in order: let bindings and await operands.
+  let mut locals: Vec[AsyncLocalDecl] = Vec();
+  let mut await_operand_tys: Vec[i32] = Vec();
+  let mut l_cur: Locals = locals_new();
+  l_cur.fn_is_async = true;
+
+  let mut pi0: i32 = 0;
+  while pi0 < fd.params.len() {
+    let pty0: i32 = strip_range_only(c, fsym0.sig.params.get(pi0));
+    let p: ast.Param = fd.params.get(pi0);
+    l_cur = locals_decl(l_cur, p.name, pty0, false);
+    pi0 = pi0 + 1;
+  }
+
+  let mut ap_i: i32 = 0;
+  let mut si0: i32 = 0;
+  while si0 < body.stmts.len() {
+    let st0: ast.Stmt = body.stmts.get(si0);
+    if match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+      let sp0: ast.Span = stmt_span(st0);
+      let is_mut: bool = match st0 { ast.Stmt.Let(_sp, m0, _n, _ha, _ann, _e) => m0, _ => false };
+      let name0: String = match st0 { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
+      let has_ann: bool = match st0 { ast.Stmt.Let(_sp, _m, _n, ha0, _ann, _e) => ha0, _ => false };
+      let ann0: ast.TypeName = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, an0, _e) => an0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+      let init0: i32 = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e0) => e0, _ => -1 };
+      let mut vty: i32 = -1;
+      if has_ann {
+        let tr0: ResolveTyResult = resolve_type(c, w, mod_path, base_imps, l_cur.type_params, ann0);
+        c = tr0.ctx;
+        if !tr0.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(sp0, "let annotation type resolve failed"), ctx: c }; }
+        vty = strip_range_only(c, tr0.idx);
+      } else {
+        let er0: ExprTyResult = tc_expr(c, w, mod_path, base_imps, exprs, l_cur, init0, -1);
+        if !er0.ok {
+          let msg: String = "failed to typecheck let init in async fn: ".concat(tc_error_to_string(er0.err));
+          return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(sp0, msg), ctx: c };
+        }
+        vty = strip_range_only(c, er0.ty);
+      }
+      l_cur = locals_decl(l_cur, name0, vty, is_mut);
+      locals.push(AsyncLocalDecl { name: name0, ty: vty, mutable: is_mut, stmt_idx: si0 });
+    }
+
+    if ap_i < aps.len() && aps.get(ap_i).stmt_idx == si0 {
+      let op: i32 = aps.get(ap_i).operand;
+      let er_op: ExprTyResult = tc_expr(c, w, mod_path, base_imps, exprs, l_cur, op, -1);
+      if !er_op.ok {
+        let msg: String = "failed to typecheck await operand: ".concat(tc_error_to_string(er_op.err));
+        return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(stmt_span(st0), msg), ctx: c };
+      }
+      let op_ty: i32 = strip_range_only(c, er_op.ty);
+      if ty_has_forbidden_borrow(c, op_ty) {
+        return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(stmt_span(st0), "await operand cannot contain non-static borrow"), ctx: c };
+      }
+      await_operand_tys.push(op_ty);
+      ap_i = ap_i + 1;
+    }
+
+    si0 = si0 + 1;
+  }
+
+  // Determine captures: locals used after any await statement.
+  let mut await_stmt_idxs: Vec[i32] = Vec();
+  ap_i = 0;
+  while ap_i < aps.len() { await_stmt_idxs.push(aps.get(ap_i).stmt_idx); ap_i = ap_i + 1; }
+  let mut captures: Vec[String] = Vec();
+  let mut li0: i32 = 0;
+  while li0 < locals.len() {
+    let ld: AsyncLocalDecl = locals.get(li0);
+    let mut ai1: i32 = 0;
+    while ai1 < await_stmt_idxs.len() {
+      let aidx: i32 = await_stmt_idxs.get(ai1);
+      if ld.stmt_idx < aidx {
+        let mut sj: i32 = aidx + 1;
+        while sj < body.stmts.len() {
+          let stj: ast.Stmt = body.stmts.get(sj);
+          if stmt_uses_name(exprs, stj, ld.name) {
+            if !string_vec_contains(captures, ld.name) { captures.push(ld.name); }
+            sj = body.stmts.len();
+            ai1 = await_stmt_idxs.len();
+          }
+          sj = sj + 1;
+        }
+      }
+      ai1 = ai1 + 1;
+    }
+    li0 = li0 + 1;
+  }
+
+  // Update frame struct signature with await operand + capture fields.
+  let mut fs: Vec[StructFieldSig] = async_frame_fields(c, fd, fsym0.sig);
+  let mut ak: i32 = 0;
+  while ak < await_operand_tys.len() {
+    fs.push(StructFieldSig { name: "a".concat(ak.to_string()), ty: await_operand_tys.get(ak), vis: ast.vis_private(), is_pub: false });
+    ak = ak + 1;
+  }
+  let mut ci0: i32 = 0;
+  while ci0 < captures.len() {
+    let nm: String = captures.get(ci0);
+    let ld: AsyncLocalDecl = local_decl_find(locals, nm);
+    if ld.name == "" { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "internal: missing capture local decl"), ctx: c }; }
+    if ty_has_forbidden_borrow(c, ld.ty) {
+      return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "borrowed local cannot live across await: ".concat(nm)), ctx: c };
+    }
+    fs.push(StructFieldSig { name: "l_".concat(nm), ty: ld.ty, vis: ast.vis_private(), is_pub: false });
+    ci0 = ci0 + 1;
+  }
+  c = structs_replace_by_name(c, mod_path, frame_name, StructSig { mod_path: mod_path, name: frame_name, base_name: frame_name, vis: ast.vis_private(), is_pub: false, fields: fs });
+
+  return CollectAsyncFinalizeOneResult { ok: true, err: TcError.None, ctx: c };
 }
 
 // Collect and synthesize async fn lowering metadata:
@@ -619,22 +678,12 @@ fn collect_async_one(ctx0: Ctx, w: World, mod_path: String, prog_imports: Vec[as
 fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
   let mut c: Ctx = ctx0;
 
+  // Phase 1: prepare all async functions/methods so calls typecheck to frame future types
+  // during finalize (await operand typing).
   let mut mi: i32 = 0;
   while mi < w.mods.len() {
     let m: WorldModule = w.mods.get(mi);
     let exprs_mod: ast.ExprPool = m.prog.exprs;
-
-    // Module-level functions.
-    let mut fi: i32 = 0;
-    while fi < m.prog.funcs.len() {
-      let fd: ast.FuncDecl = m.prog.funcs.get(fi);
-      if fd.is_async {
-        let r: CollectAsyncOneResult = collect_async_one(c, w, m.path, m.prog.imports, exprs_mod, fd, fd.name);
-        if !r.ok { return TcCtxResult { ok: false, err: r.err, ctx: r.ctx }; }
-        c = r.ctx;
-      }
-      fi = fi + 1;
-    }
 
     // Impl methods.
     let mut ii: i32 = 0;
@@ -652,7 +701,7 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
           if !mf.found { return TcCtxResult { ok: false, err: type_error_at(md.sp, "missing impl method sig"), ctx: c }; }
           let lowered: String = mf.m.lowered_name;
 
-          let r: CollectAsyncOneResult = collect_async_one(c, w, m.path, m.prog.imports, exprs_mod, md, lowered);
+          let r: CollectAsyncPrepareOneResult = collect_async_prepare_one(c, w, m.path, m.prog.imports, exprs_mod, md, lowered);
           if !r.ok { return TcCtxResult { ok: false, err: r.err, ctx: r.ctx }; }
           c = r.ctx;
 
@@ -695,6 +744,63 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
       }
 
       ii = ii + 1;
+    }
+
+    // Module-level functions.
+    let mut fi: i32 = 0;
+    while fi < m.prog.funcs.len() {
+      let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+      if fd.is_async {
+        let r0: CollectAsyncPrepareOneResult = collect_async_prepare_one(c, w, m.path, m.prog.imports, exprs_mod, fd, fd.name);
+        if !r0.ok { return TcCtxResult { ok: false, err: r0.err, ctx: r0.ctx }; }
+        c = r0.ctx;
+      }
+      fi = fi + 1;
+    }
+
+    mi = mi + 1;
+  }
+
+  // Phase 2: finalize all async frames (await operand + capture fields) now that
+  // all async call signatures have been rewritten to frame future types.
+  mi = 0;
+  while mi < w.mods.len() {
+    let m2: WorldModule = w.mods.get(mi);
+    let exprs_mod2: ast.ExprPool = m2.prog.exprs;
+
+    let mut fi2: i32 = 0;
+    while fi2 < m2.prog.funcs.len() {
+      let fd2: ast.FuncDecl = m2.prog.funcs.get(fi2);
+      if fd2.is_async {
+        let r2: CollectAsyncFinalizeOneResult = collect_async_finalize_one(c, w, m2.path, m2.prog.imports, exprs_mod2, fd2, fd2.name);
+        if !r2.ok { return TcCtxResult { ok: false, err: r2.err, ctx: r2.ctx }; }
+        c = r2.ctx;
+      }
+      fi2 = fi2 + 1;
+    }
+
+    let mut ii2: i32 = 0;
+    while ii2 < m2.prog.impls.len() {
+      let id2: ast.ImplDecl = m2.prog.impls.get(ii2);
+      let impl_sig_idx2: i32 = find_impl_sig_idx_collect_async(c, m2.path, ii2);
+      if impl_sig_idx2 == -1 { return TcCtxResult { ok: false, err: type_error_at(id2.sp, "missing impl sig"), ctx: c }; }
+      let isig: ImplSig = c.impls.get(impl_sig_idx2);
+
+      let mut mdi2: i32 = 0;
+      while mdi2 < id2.methods.len() {
+        let md2: ast.FuncDecl = id2.methods.get(mdi2);
+        if md2.is_async {
+          let mf2: FindImplMethodResult = find_impl_method(isig, md2.name);
+          if !mf2.found { return TcCtxResult { ok: false, err: type_error_at(md2.sp, "missing impl method sig"), ctx: c }; }
+          let lowered2: String = mf2.m.lowered_name;
+          let r3: CollectAsyncFinalizeOneResult = collect_async_finalize_one(c, w, m2.path, m2.prog.imports, exprs_mod2, md2, lowered2);
+          if !r3.ok { return TcCtxResult { ok: false, err: r3.err, ctx: r3.ctx }; }
+          c = r3.ctx;
+        }
+        mdi2 = mdi2 + 1;
+      }
+
+      ii2 = ii2 + 1;
     }
 
     mi = mi + 1;
