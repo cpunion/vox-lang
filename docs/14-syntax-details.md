@@ -12,7 +12,7 @@
 
 `if else match for while loop break continue return await`
 
-说明：`async`/`await` 当前为保留关键字（见 `docs/09-async-model.md`，语义尚未开启）。
+说明：`async`/`await` 已启用（见 `docs/09-async-model.md`）。推荐语法为 `e.await`（也保留 `await e` 作为兼容）。
 
 绑定与可变性：
 

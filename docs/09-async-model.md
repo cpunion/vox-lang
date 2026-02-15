@@ -72,9 +72,13 @@ trait Future {
 3. lowering 语义：`Ready(v) => v`；`Pending` 时从 enclosing `poll` 返回 `Pending`，并通过 async frame（state + aN 字段）保留进度。
 4. `await` 只能出现在 async 上下文（`async fn`，`async` block 后续引入）。
 5. 当前 lowering 支持 `await` 出现在嵌套的语句块里（`if`/`while` 的 body 内），编译器会把控制流拆分成状态机分支/回边。
-6. 仍不支持的 `await` 位置（会报错）：`block` 表达式、`try` block 表达式、`if` 表达式、`match` 表达式、以及宏调用参数内部。
-7. 由于当前 capture rewrite 仍是基于名字（`l_<name>`）的实现细节，`async fn` 暂不支持局部变量 shadowing（同名 `let`）。
-8. 无生命周期标注的约束：`async fn` 会返回一个可逃逸的 Future/frame 值，因此其 **参数/输出类型中禁止出现非 `&'static` 的借用**（包括嵌套在 `Vec[...]`、struct/enum 字段中的借用）。否则借用将随 frame 逃逸，无法在类型系统中表达其有效期。
+6. 当前也支持有限的“表达式边界”归一化：
+   - `block` 表达式：`{ ...; expr_with_await }` 会被提升为当前语句列表中的前置语句序列。
+   - `if` 表达式：当它处在语句上下文（`let`/赋值/表达式语句/`return`）且需要 join 时，编译器会把它改写为语句级 `if` + 临时变量（通过内部 `@uninit()`）。
+   - `match` 表达式：允许出现在 async fn 中，但其内部仍要求不包含 `await`（否则报错）。
+7. 仍不支持的 `await` 位置（会报错）：`try` block 表达式、`match` 表达式内部、以及宏调用参数内部。
+8. 由于当前 capture rewrite 仍是基于名字（`l_<name>`）的实现细节，`async fn` 暂不支持局部变量 shadowing（同名 `let`）。
+9. 无生命周期标注的约束：`async fn` 会返回一个可逃逸的 Future/frame 值，因此其 **参数/输出类型中禁止出现非 `&'static` 的借用**（包括嵌套在 `Vec[...]`、struct/enum 字段中的借用）。否则借用将随 frame 逃逸，无法在类型系统中表达其有效期。
 
 目标阶段（D03-3b 之后）：
 
