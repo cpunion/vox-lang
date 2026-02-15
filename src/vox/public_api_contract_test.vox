@@ -7,6 +7,9 @@ import "vox/manifest" as mf
 import "vox/ir" as ir
 import "vox/typecheck" as tc
 import "vox/types" as tys
+import "vox/compile" as c
+import "vox/loader" as ld
+import "vox/codegen" as cg
 
 fn lex_err_none(e: lex.LexError) -> bool {
   return match e { lex.LexError.None => true, _ => false, };
@@ -130,4 +133,38 @@ fn test_public_api_types_smoke() -> () {
 
   let r: tys.CheckResult = tys.check_world(w);
   t.assert_with(r.ok, tys.error_string(r.err));
+}
+
+fn std_async_file() -> ld.SourceFile {
+  return ld.SourceFile {
+    path: "src/std/async/async.vox",
+    text: """
+      pub enum Poll[T] { Pending, Ready(T) }
+      pub struct Waker { pub token: i64 }
+      pub struct Context { pub waker: Waker }
+      pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+    """,
+  };
+}
+
+fn test_public_api_async_compile_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file());
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/async" as a
+
+      async fn inc(x: i32) -> i32 { return x + 1; }
+      async fn main() -> i32 { return inc(41).await; }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
 }
