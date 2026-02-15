@@ -92,7 +92,16 @@ fn remap_sig_for_body(ctx: Ctx, sig: FuncSig, src_method_tps: Vec[String]) -> Fu
   };
 }
 
-fn typecheck_fn_with_sig(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, fnc: ast.FuncDecl, sig: FuncSig) -> TcResult {
+fn typecheck_fn_with_sig(
+  ctx: Ctx,
+  w: World,
+  mod_path: String,
+  async_meta_mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  fnc: ast.FuncDecl,
+  sig: FuncSig
+) -> TcResult {
   if fnc.ffi_imports.len() != 0 {
     return TcResult { ok: true, err: TcError.None };
   }
@@ -103,7 +112,7 @@ fn typecheck_fn_with_sig(ctx: Ctx, w: World, mod_path: String, imps: Imports, ex
   l.fn_is_async = fnc.is_async;
   let mut body_ret: i32 = use_sig.ret;
   if fnc.is_async {
-    let ar: FindAsyncFnResult = find_async_fn(ctx, mod_path, fnc.name);
+    let ar: FindAsyncFnResult = find_async_fn(ctx, async_meta_mod_path, fnc.name);
     if !ar.found {
       return TcResult { ok: false, err: type_error_at(fnc.sp, "missing async fn lowering metadata") };
     }
@@ -137,7 +146,7 @@ fn typecheck_fn(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
   if !fr.found {
     return TcResult { ok: false, err: type_error_at(fnc.sp, "missing fn sig") };
   }
-  return typecheck_fn_with_sig(ctx, w, mod_path, imps, exprs, fnc, fr.sig);
+  return typecheck_fn_with_sig(ctx, w, mod_path, mod_path, imps, exprs, fnc, fr.sig);
 }
 
 struct TcStmtResult { ok: bool, err: TcError, ctx: Ctx, locals: Locals }
@@ -270,6 +279,9 @@ fn tc_stmt_let(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
     let berr: TcError = check_let_borrow_init(exprs, l0, ann, init);
     if berr != TcError.None { return TcStmtResult { ok: false, err: berr, ctx: c, locals: l0 }; }
   }
+  let pr0: PrepAsyncInstResult = prep_async_inst_in_expr(c, w, mod_path, imps, exprs, l0, init);
+  if !pr0.ok { return TcStmtResult { ok: false, err: pr0.err, ctx: pr0.ctx, locals: l0 }; }
+  c = pr0.ctx;
   let er: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l0, init, expected);
   if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: c, locals: l0 }; }
   let mut final_ty: i32 = er.ty;
@@ -294,11 +306,14 @@ fn tc_stmt_assign(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   let vr: LookupVarResult = locals_lookup(l0, name);
   if !vr.found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown var"), ctx: ctx, locals: l0 }; }
   if !vr.mutable { return TcStmtResult { ok: false, err: type_error_at(sp, "assign to immutable var"), ctx: ctx, locals: l0 }; }
-  let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, rhs, vr.ty);
-  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
-  if !assignable_to(ctx, vr.ty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "assign type mismatch"), ctx: ctx, locals: l0 }; }
-  let moved_names_release: Vec[String] = release_move_sources(ctx, l0, imps, exprs, rhs);
-  let moved_names_value: Vec[String] = expr_value_move_sources(ctx, w, mod_path, l0, imps, exprs, rhs);
+  let pr0: PrepAsyncInstResult = prep_async_inst_in_expr(ctx, w, mod_path, imps, exprs, l0, rhs);
+  if !pr0.ok { return TcStmtResult { ok: false, err: pr0.err, ctx: pr0.ctx, locals: l0 }; }
+  let ctx2: Ctx = pr0.ctx;
+  let er: ExprTyResult = tc_expr(ctx2, w, mod_path, imps, exprs, l0, rhs, vr.ty);
+  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx2, locals: l0 }; }
+  if !assignable_to(ctx2, vr.ty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "assign type mismatch"), ctx: ctx2, locals: l0 }; }
+  let moved_names_release: Vec[String] = release_move_sources(ctx2, l0, imps, exprs, rhs);
+  let moved_names_value: Vec[String] = expr_value_move_sources(ctx2, w, mod_path, l0, imps, exprs, rhs);
   let moved_names: Vec[String] = move_names_merge(moved_names_release, moved_names_value);
   let mut l1: Locals = locals_clear_moved(l0, name);
   let mut mi: i32 = 0;
@@ -307,7 +322,7 @@ fn tc_stmt_assign(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
     if mn != name { l1 = locals_mark_moved(l1, mn); }
     mi = mi + 1;
   }
-  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l1 };
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx2, locals: l1 };
 }
 
 fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, recv: String, field: String, rhs: i32) -> TcStmtResult {
@@ -349,11 +364,14 @@ fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exp
     pi = pi + 1;
   }
 
-  let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, rhs, fty);
-  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
-  if !assignable_to(ctx, fty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "assign type mismatch"), ctx: ctx, locals: l0 }; }
-  let moved_names_release: Vec[String] = release_move_sources(ctx, l0, imps, exprs, rhs);
-  let moved_names_value: Vec[String] = expr_value_move_sources(ctx, w, mod_path, l0, imps, exprs, rhs);
+  let pr0: PrepAsyncInstResult = prep_async_inst_in_expr(ctx, w, mod_path, imps, exprs, l0, rhs);
+  if !pr0.ok { return TcStmtResult { ok: false, err: pr0.err, ctx: pr0.ctx, locals: l0 }; }
+  let ctx2: Ctx = pr0.ctx;
+  let er: ExprTyResult = tc_expr(ctx2, w, mod_path, imps, exprs, l0, rhs, fty);
+  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx2, locals: l0 }; }
+  if !assignable_to(ctx2, fty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "assign type mismatch"), ctx: ctx2, locals: l0 }; }
+  let moved_names_release: Vec[String] = release_move_sources(ctx2, l0, imps, exprs, rhs);
+  let moved_names_value: Vec[String] = expr_value_move_sources(ctx2, w, mod_path, l0, imps, exprs, rhs);
   let moved_names: Vec[String] = move_names_merge(moved_names_release, moved_names_value);
   let mut l1: Locals = l0;
   let mut mi: i32 = 0;
@@ -361,7 +379,7 @@ fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exp
     l1 = locals_mark_moved(l1, moved_names.get(mi));
     mi = mi + 1;
   }
-  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l1 };
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx2, locals: l1 };
 }
 
 struct ReleaseMoveSourceResult { found: bool, name: String }
@@ -862,12 +880,15 @@ fn is_release_call_expr(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool
 }
 
 fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, eid: i32) -> TcStmtResult {
-  let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, eid, -1);
-  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
-  if er.ty != ctx.ty_unit && is_release_call_expr(ctx, l0, imps, exprs, eid) {
-    return TcStmtResult { ok: false, err: type_error_at(sp, "release call result must be assigned back"), ctx: ctx, locals: l0 };
+  let pr0: PrepAsyncInstResult = prep_async_inst_in_expr(ctx, w, mod_path, imps, exprs, l0, eid);
+  if !pr0.ok { return TcStmtResult { ok: false, err: pr0.err, ctx: pr0.ctx, locals: l0 }; }
+  let ctx2: Ctx = pr0.ctx;
+  let er: ExprTyResult = tc_expr(ctx2, w, mod_path, imps, exprs, l0, eid, -1);
+  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx2, locals: l0 }; }
+  if er.ty != ctx2.ty_unit && is_release_call_expr(ctx2, l0, imps, exprs, eid) {
+    return TcStmtResult { ok: false, err: type_error_at(sp, "release call result must be assigned back"), ctx: ctx2, locals: l0 };
   }
-  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx2, locals: l0 };
 }
 
 fn locals_join_if_moved(l0: Locals, then_in: Locals, has_else: bool, else_in: Locals) -> Locals {
@@ -911,33 +932,39 @@ fn locals_join_while_moved(l0: Locals, body_in: Locals) -> Locals {
 }
 
 fn tc_stmt_if(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, _sp: ast.Span, cond: i32, then_b: ast.Block, has_else: bool, else_b: ast.Block) -> TcStmtResult {
-  let cr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, cond, ctx.ty_bool);
-  if !cr.ok { return TcStmtResult { ok: false, err: cr.err, ctx: ctx, locals: l0 }; }
-  if cr.ty != ctx.ty_bool { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, cond), "if cond must be bool"), ctx: ctx, locals: l0 }; }
+  let pr0: PrepAsyncInstResult = prep_async_inst_in_expr(ctx, w, mod_path, imps, exprs, l0, cond);
+  if !pr0.ok { return TcStmtResult { ok: false, err: pr0.err, ctx: pr0.ctx, locals: l0 }; }
+  let ctx2: Ctx = pr0.ctx;
+  let cr: ExprTyResult = tc_expr(ctx2, w, mod_path, imps, exprs, l0, cond, ctx2.ty_bool);
+  if !cr.ok { return TcStmtResult { ok: false, err: cr.err, ctx: ctx2, locals: l0 }; }
+  if cr.ty != ctx2.ty_bool { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, cond), "if cond must be bool"), ctx: ctx2, locals: l0 }; }
 
-  let r1: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, locals_enter(l0), ret_ty, then_b);
+  let r1: TcStmtResult = tc_block(ctx2, w, mod_path, imps, exprs, locals_enter(l0), ret_ty, then_b);
   if !r1.ok { return r1; }
   let mut out: Locals = l0;
   if has_else {
-    let r2: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, locals_enter(l0), ret_ty, else_b);
+    let r2: TcStmtResult = tc_block(ctx2, w, mod_path, imps, exprs, locals_enter(l0), ret_ty, else_b);
     if !r2.ok { return r2; }
     out = locals_join_if_moved(l0, r1.locals, true, r2.locals);
   } else {
     out = locals_join_if_moved(l0, r1.locals, false, l0);
   }
-  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: out };
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx2, locals: out };
 }
 
 fn tc_stmt_while(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, _sp: ast.Span, cond: i32, body: ast.Block) -> TcStmtResult {
-  let cr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, cond, ctx.ty_bool);
-  if !cr.ok { return TcStmtResult { ok: false, err: cr.err, ctx: ctx, locals: l0 }; }
-  if cr.ty != ctx.ty_bool { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, cond), "while cond must be bool"), ctx: ctx, locals: l0 }; }
+  let pr0: PrepAsyncInstResult = prep_async_inst_in_expr(ctx, w, mod_path, imps, exprs, l0, cond);
+  if !pr0.ok { return TcStmtResult { ok: false, err: pr0.err, ctx: pr0.ctx, locals: l0 }; }
+  let ctx2: Ctx = pr0.ctx;
+  let cr: ExprTyResult = tc_expr(ctx2, w, mod_path, imps, exprs, l0, cond, ctx2.ty_bool);
+  if !cr.ok { return TcStmtResult { ok: false, err: cr.err, ctx: ctx2, locals: l0 }; }
+  if cr.ty != ctx2.ty_bool { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, cond), "while cond must be bool"), ctx: ctx2, locals: l0 }; }
   let mut lb: Locals = locals_enter(l0);
   lb.loop_depth = lb.loop_depth + 1;
-  let r1: TcStmtResult = tc_block(ctx, w, mod_path, imps, exprs, lb, ret_ty, body);
+  let r1: TcStmtResult = tc_block(ctx2, w, mod_path, imps, exprs, lb, ret_ty, body);
   if !r1.ok { return r1; }
   let out: Locals = locals_join_while_moved(l0, r1.locals);
-  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: out };
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx2, locals: out };
 }
 
 fn tc_stmt_return(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, ret_ty: i32, sp: ast.Span, has: bool, eid: i32) -> TcStmtResult {
@@ -945,8 +972,11 @@ fn tc_stmt_return(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
     if ret_ty != ctx.ty_unit { return TcStmtResult { ok: false, err: type_error_at(sp, "return type mismatch"), ctx: ctx, locals: l0 }; }
     return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
   }
-  let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, eid, ret_ty);
-  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx, locals: l0 }; }
-  if !assignable_to(ctx, ret_ty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, eid), "return type mismatch"), ctx: ctx, locals: l0 }; }
-  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 };
+  let pr0: PrepAsyncInstResult = prep_async_inst_in_expr(ctx, w, mod_path, imps, exprs, l0, eid);
+  if !pr0.ok { return TcStmtResult { ok: false, err: pr0.err, ctx: pr0.ctx, locals: l0 }; }
+  let ctx2: Ctx = pr0.ctx;
+  let er: ExprTyResult = tc_expr(ctx2, w, mod_path, imps, exprs, l0, eid, ret_ty);
+  if !er.ok { return TcStmtResult { ok: false, err: er.err, ctx: ctx2, locals: l0 }; }
+  if !assignable_to(ctx2, ret_ty, er.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, eid), "return type mismatch"), ctx: ctx2, locals: l0 }; }
+  return TcStmtResult { ok: true, err: TcError.None, ctx: ctx2, locals: l0 };
 }
