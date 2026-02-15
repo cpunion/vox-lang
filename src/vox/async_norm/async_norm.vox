@@ -345,14 +345,16 @@ fn lift_expr(exprs0: ast.ExprPool, eid: i32, tmp0: i32, sp: ast.Span, allow_root
 
 pub struct NormalizeResult { pub ok: bool, pub err: String, pub exprs: ast.ExprPool, pub body: ast.Block }
 
-pub fn normalize_async_block(exprs0: ast.ExprPool, b0: ast.Block) -> NormalizeResult {
+struct NormalizeInnerResult { ok: bool, err: String, exprs: ast.ExprPool, stmts: Vec[ast.Stmt], next_tmp: i32 }
+
+fn normalize_async_stmt_list(exprs0: ast.ExprPool, ss0: Vec[ast.Stmt], tmp0: i32) -> NormalizeInnerResult {
   let mut p: ast.ExprPool = exprs0;
   let mut out: Vec[ast.Stmt] = Vec();
-  let mut tmp: i32 = 0;
+  let mut tmp: i32 = tmp0;
 
   let mut i: i32 = 0;
-  while i < b0.stmts.len() {
-    let st: ast.Stmt = b0.stmts.get(i);
+  while i < ss0.len() {
+    let st: ast.Stmt = ss0.get(i);
     let sp: ast.Span = stmt_span(st);
 
     if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
@@ -363,7 +365,7 @@ pub fn normalize_async_block(exprs0: ast.ExprPool, b0: ast.Block) -> NormalizeRe
       let init0: i32 = match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e0) => e0, _ => -1 };
 
       let rn: LiftExprResult = lift_expr(p, init0, tmp, sp, true);
-      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      if !rn.ok { return NormalizeInnerResult { ok: false, err: rn.err, exprs: rn.exprs, stmts: Vec(), next_tmp: rn.next_tmp }; }
       p = rn.exprs;
       tmp = rn.next_tmp;
       let mut j: i32 = 0;
@@ -376,7 +378,7 @@ pub fn normalize_async_block(exprs0: ast.ExprPool, b0: ast.Block) -> NormalizeRe
     if match st { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
       let e0: i32 = match st { ast.Stmt.ExprStmt(_sp, e0) => e0, _ => -1 };
       let rn: LiftExprResult = lift_expr(p, e0, tmp, sp, true);
-      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      if !rn.ok { return NormalizeInnerResult { ok: false, err: rn.err, exprs: rn.exprs, stmts: Vec(), next_tmp: rn.next_tmp }; }
       p = rn.exprs;
       tmp = rn.next_tmp;
       let mut j: i32 = 0;
@@ -395,7 +397,7 @@ pub fn normalize_async_block(exprs0: ast.ExprPool, b0: ast.Block) -> NormalizeRe
         continue;
       }
       let rn: LiftExprResult = lift_expr(p, e0, tmp, sp, true);
-      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      if !rn.ok { return NormalizeInnerResult { ok: false, err: rn.err, exprs: rn.exprs, stmts: Vec(), next_tmp: rn.next_tmp }; }
       p = rn.exprs;
       tmp = rn.next_tmp;
       let mut j: i32 = 0;
@@ -409,7 +411,7 @@ pub fn normalize_async_block(exprs0: ast.ExprPool, b0: ast.Block) -> NormalizeRe
       let name0: String = match st { ast.Stmt.Assign(_sp, n0, _e) => n0, _ => "" };
       let e0: i32 = match st { ast.Stmt.Assign(_sp, _n, e0) => e0, _ => -1 };
       let rn: LiftExprResult = lift_expr(p, e0, tmp, sp, false);
-      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      if !rn.ok { return NormalizeInnerResult { ok: false, err: rn.err, exprs: rn.exprs, stmts: Vec(), next_tmp: rn.next_tmp }; }
       p = rn.exprs;
       tmp = rn.next_tmp;
       let mut j: i32 = 0;
@@ -424,7 +426,7 @@ pub fn normalize_async_block(exprs0: ast.ExprPool, b0: ast.Block) -> NormalizeRe
       let f: String = match st { ast.Stmt.AssignField(_sp, _r, f0, _e) => f0, _ => "" };
       let e0: i32 = match st { ast.Stmt.AssignField(_sp, _r, _f, e0) => e0, _ => -1 };
       let rn: LiftExprResult = lift_expr(p, e0, tmp, sp, false);
-      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      if !rn.ok { return NormalizeInnerResult { ok: false, err: rn.err, exprs: rn.exprs, stmts: Vec(), next_tmp: rn.next_tmp }; }
       p = rn.exprs;
       tmp = rn.next_tmp;
       let mut j: i32 = 0;
@@ -440,25 +442,48 @@ pub fn normalize_async_block(exprs0: ast.ExprPool, b0: ast.Block) -> NormalizeRe
       let has_else: bool = match st { ast.Stmt.IfStmt(_sp, _c, _t, h0, _e) => h0, _ => false };
       let else_b: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, _t, _h, e0) => e0, _ => ast.Block { stmts: Vec() } };
 
-      if block_has_await(p, then_b) || (has_else && block_has_await(p, else_b)) {
-        return NormalizeResult { ok: false, err: "await inside if statement body is not supported".concat(""), exprs: p, body: ast.Block { stmts: Vec() } };
-      }
       let rn: LiftExprResult = lift_expr(p, cond, tmp, sp, false);
-      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      if !rn.ok { return NormalizeInnerResult { ok: false, err: rn.err, exprs: rn.exprs, stmts: Vec(), next_tmp: rn.next_tmp }; }
       p = rn.exprs;
       tmp = rn.next_tmp;
       let mut j: i32 = 0;
       while j < rn.prefix.len() { out.push(rn.prefix.get(j)); j = j + 1; }
-      out.push(ast.Stmt.IfStmt(sp, rn.id, then_b, has_else, else_b));
+
+      let rt: NormalizeInnerResult = normalize_async_stmt_list(p, then_b.stmts, tmp);
+      if !rt.ok { return rt; }
+      p = rt.exprs;
+      tmp = rt.next_tmp;
+
+      let mut else_stmts: Vec[ast.Stmt] = Vec();
+      if has_else {
+        let re: NormalizeInnerResult = normalize_async_stmt_list(p, else_b.stmts, tmp);
+        if !re.ok { return re; }
+        p = re.exprs;
+        tmp = re.next_tmp;
+        else_stmts = re.stmts;
+      }
+
+      out.push(ast.Stmt.IfStmt(sp, rn.id, ast.Block { stmts: rt.stmts }, has_else, ast.Block { stmts: else_stmts }));
       i = i + 1;
       continue;
     }
 
     if match st { ast.Stmt.WhileStmt(_sp, _c, _b) => true, _ => false } {
-      if stmt_has_await_anywhere(p, st) {
-        return NormalizeResult { ok: false, err: "await inside while statement is not supported".concat(""), exprs: p, body: ast.Block { stmts: Vec() } };
-      }
-      out.push(st);
+      let cond: i32 = match st { ast.Stmt.WhileStmt(_sp, c0, _b) => c0, _ => -1 };
+      let body0: ast.Block = match st { ast.Stmt.WhileStmt(_sp, _c0, b0) => b0, _ => ast.Block { stmts: Vec() } };
+
+      let rn: LiftExprResult = lift_expr(p, cond, tmp, sp, false);
+      if !rn.ok { return NormalizeInnerResult { ok: false, err: rn.err, exprs: rn.exprs, stmts: Vec(), next_tmp: rn.next_tmp }; }
+      p = rn.exprs;
+      tmp = rn.next_tmp;
+      let mut j: i32 = 0;
+      while j < rn.prefix.len() { out.push(rn.prefix.get(j)); j = j + 1; }
+
+      let rb: NormalizeInnerResult = normalize_async_stmt_list(p, body0.stmts, tmp);
+      if !rb.ok { return rb; }
+      p = rb.exprs;
+      tmp = rb.next_tmp;
+      out.push(ast.Stmt.WhileStmt(sp, rn.id, ast.Block { stmts: rb.stmts }));
       i = i + 1;
       continue;
     }
@@ -472,11 +497,17 @@ pub fn normalize_async_block(exprs0: ast.ExprPool, b0: ast.Block) -> NormalizeRe
 
     // Unknown statement kind: preserve but reject if it contains await.
     if stmt_has_await_anywhere(p, st) {
-      return NormalizeResult { ok: false, err: "await in unsupported statement position".concat(""), exprs: p, body: ast.Block { stmts: Vec() } };
+      return NormalizeInnerResult { ok: false, err: "await in unsupported statement position".concat(""), exprs: p, stmts: Vec(), next_tmp: tmp };
     }
     out.push(st);
     i = i + 1;
   }
 
-  return NormalizeResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: out } };
+  return NormalizeInnerResult { ok: true, err: "", exprs: p, stmts: out, next_tmp: tmp };
+}
+
+pub fn normalize_async_block(exprs0: ast.ExprPool, b0: ast.Block) -> NormalizeResult {
+  let r: NormalizeInnerResult = normalize_async_stmt_list(exprs0, b0.stmts, 0);
+  if !r.ok { return NormalizeResult { ok: false, err: r.err, exprs: r.exprs, body: ast.Block { stmts: Vec() } }; }
+  return NormalizeResult { ok: true, err: "", exprs: r.exprs, body: ast.Block { stmts: r.stmts } };
 }

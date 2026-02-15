@@ -71,6 +71,9 @@ trait Future {
 2. `e.await` 的表达式类型为 `T`（或 `Future::Output`）。
 3. lowering 语义：`Ready(v) => v`；`Pending` 时从 enclosing `poll` 返回 `Pending`，并通过 async frame（state + aN 字段）保留进度。
 4. `await` 只能出现在 async 上下文（`async fn`，`async` block 后续引入）。
+5. 当前 lowering 支持 `await` 出现在嵌套的语句块里（`if`/`while` 的 body 内），编译器会把控制流拆分成状态机分支/回边。
+6. 仍不支持的 `await` 位置（会报错）：`block` 表达式、`try` block 表达式、`if` 表达式、`match` 表达式、以及宏调用参数内部。
+7. 由于当前 capture rewrite 仍是基于名字（`l_<name>`）的实现细节，`async fn` 暂不支持局部变量 shadowing（同名 `let`）。
 
 目标阶段（D03-3b 之后）：
 

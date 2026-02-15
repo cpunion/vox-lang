@@ -1,6 +1,7 @@
 import "vox/ast" as ast
 import "vox/ir" as ir
 import "vox/async_norm" as an
+import "vox/async_cfg" as ac
 
 // Async lowering metadata collection.
 
@@ -37,6 +38,153 @@ fn local_decl_find(xs: Vec[AsyncLocalDecl], name: String) -> AsyncLocalDecl {
     i = i + 1;
   }
   return AsyncLocalDecl { name: "", ty: -1, mutable: false, stmt_idx: -1 };
+}
+
+struct StmtAwaitInfo { ok: bool, operand: i32, is_try: bool }
+
+fn stmt_await_info(exprs: ast.ExprPool, st: ast.Stmt) -> StmtAwaitInfo {
+  let eid: i32 =
+    if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+      match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e) => e, _ => -1 }
+    } else if match st { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
+      match st { ast.Stmt.ExprStmt(_sp, e) => e, _ => -1 }
+    } else if match st { ast.Stmt.ReturnStmt(_sp, h, _e) => true, _ => false } {
+      let has0: bool = match st { ast.Stmt.ReturnStmt(_sp, h, _e) => h, _ => false };
+      if has0 { match st { ast.Stmt.ReturnStmt(_sp, _h, e) => e, _ => -1 } } else { -1 }
+    } else { -1 };
+  if eid == -1 { return StmtAwaitInfo { ok: false, operand: -1, is_try: false }; }
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
+  if match n { ast.ExprNode.Await(_x) => true, _ => false } {
+    let op: i32 = match n { ast.ExprNode.Await(x) => x, _ => -1 };
+    return StmtAwaitInfo { ok: true, operand: op, is_try: false };
+  }
+  if match n { ast.ExprNode.Try(_x) => true, _ => false } {
+    let x: i32 = match n { ast.ExprNode.Try(y) => y, _ => -1 };
+    let nx: ast.ExprNode = ast.expr_pool_get(exprs, x);
+    if match nx { ast.ExprNode.Await(_y) => true, _ => false } {
+      let op2: i32 = match nx { ast.ExprNode.Await(y) => y, _ => -1 };
+      return StmtAwaitInfo { ok: true, operand: op2, is_try: true };
+    }
+  }
+  return StmtAwaitInfo { ok: false, operand: -1, is_try: false };
+}
+
+struct WalkAsyncResult {
+  ok: bool,
+  err: TcError,
+  ctx: Ctx,
+  locals: Locals,
+  decls: Vec[AsyncLocalDecl],
+  await_operand_tys: Vec[i32],
+  seen_names: Vec[String],
+}
+
+fn walk_async_block(
+  ctx0: Ctx,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  b0: ast.Block,
+  l0: Locals,
+  decls0: Vec[AsyncLocalDecl],
+  await_operand_tys0: Vec[i32],
+  seen0: Vec[String],
+) -> WalkAsyncResult {
+  let mut c: Ctx = ctx0;
+  let mut l: Locals = l0;
+  let mut decls: Vec[AsyncLocalDecl] = decls0;
+  let mut await_tys: Vec[i32] = await_operand_tys0;
+  let mut seen: Vec[String] = seen0;
+
+  let mut si: i32 = 0;
+  while si < b0.stmts.len() {
+    let st0: ast.Stmt = b0.stmts.get(si);
+
+    if match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+      let sp0: ast.Span = stmt_span(st0);
+      let is_mut: bool = match st0 { ast.Stmt.Let(_sp, m0, _n, _ha, _ann, _e) => m0, _ => false };
+      let name0: String = match st0 { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
+      let has_ann: bool = match st0 { ast.Stmt.Let(_sp, _m, _n, ha0, _ann, _e) => ha0, _ => false };
+      let ann0: ast.TypeName = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, an0, _e) => an0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+      let init0: i32 = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e0) => e0, _ => -1 };
+
+      // Async capture rewrite is currently name-based; disallow shadowing to keep it correct.
+      if string_vec_contains(seen, name0) {
+        return WalkAsyncResult { ok: false, err: type_error_at(sp0, "async fn does not support shadowing yet: ".concat(name0)), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+      }
+      seen.push(name0);
+
+      let mut vty: i32 = -1;
+      if has_ann {
+        let tr0: ResolveTyResult = resolve_type(c, w, mod_path, imps, l.type_params, ann0);
+        c = tr0.ctx;
+        if !tr0.ok { return WalkAsyncResult { ok: false, err: type_error_at(sp0, "let annotation type resolve failed"), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen }; }
+        vty = strip_range_only(c, tr0.idx);
+      } else {
+        let er0: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l, init0, -1);
+        if !er0.ok {
+          let msg: String = "failed to typecheck let init in async fn: ".concat(tc_error_to_string(er0.err));
+          return WalkAsyncResult { ok: false, err: type_error_at(sp0, msg), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+        }
+        vty = strip_range_only(c, er0.ty);
+      }
+      l = locals_decl(l, name0, vty, is_mut);
+      decls.push(AsyncLocalDecl { name: name0, ty: vty, mutable: is_mut, stmt_idx: -1 });
+    }
+
+    // Await operand typing (statement-level await).
+    let ai: StmtAwaitInfo = stmt_await_info(exprs, st0);
+    if ai.ok {
+      let er_op: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l, ai.operand, -1);
+      if !er_op.ok {
+        let msg: String = "failed to typecheck await operand: ".concat(tc_error_to_string(er_op.err));
+        return WalkAsyncResult { ok: false, err: type_error_at(stmt_span(st0), msg), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+      }
+      let op_ty: i32 = strip_range_only(c, er_op.ty);
+      if ty_has_forbidden_borrow(c, op_ty) {
+        return WalkAsyncResult { ok: false, err: type_error_at(stmt_span(st0), "await operand cannot contain non-static borrow"), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+      }
+      await_tys.push(op_ty);
+    }
+
+    // Recurse into nested statement blocks with proper scoping.
+    if match st0 { ast.Stmt.IfStmt(_sp, _c, _t, _h, _e) => true, _ => false } {
+      let then_b: ast.Block = match st0 { ast.Stmt.IfStmt(_sp, _c, t0, _h, _e) => t0, _ => ast.Block { stmts: Vec() } };
+      let has_else: bool = match st0 { ast.Stmt.IfStmt(_sp, _c, _t, h0, _e) => h0, _ => false };
+      let else_b: ast.Block = match st0 { ast.Stmt.IfStmt(_sp, _c, _t, _h, e0) => e0, _ => ast.Block { stmts: Vec() } };
+
+      let rt: WalkAsyncResult = walk_async_block(c, w, mod_path, imps, exprs, then_b, locals_enter(l), decls, await_tys, seen);
+      if !rt.ok { return rt; }
+      c = rt.ctx;
+      decls = rt.decls;
+      await_tys = rt.await_operand_tys;
+      seen = rt.seen_names;
+
+      if has_else {
+        let re: WalkAsyncResult = walk_async_block(c, w, mod_path, imps, exprs, else_b, locals_enter(l), decls, await_tys, seen);
+        if !re.ok { return re; }
+        c = re.ctx;
+        decls = re.decls;
+        await_tys = re.await_operand_tys;
+        seen = re.seen_names;
+      }
+    }
+
+    if match st0 { ast.Stmt.WhileStmt(_sp, _c, _b) => true, _ => false } {
+      let body0: ast.Block = match st0 { ast.Stmt.WhileStmt(_sp, _c0, b0) => b0, _ => ast.Block { stmts: Vec() } };
+      let rb: WalkAsyncResult = walk_async_block(c, w, mod_path, imps, exprs, body0, locals_enter(l), decls, await_tys, seen);
+      if !rb.ok { return rb; }
+      c = rb.ctx;
+      decls = rb.decls;
+      await_tys = rb.await_operand_tys;
+      seen = rb.seen_names;
+    }
+
+    si = si + 1;
+  }
+
+  return WalkAsyncResult { ok: true, err: TcError.None, ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
 }
 
 fn expr_contains_try(exprs: ast.ExprPool, eid: i32) -> bool {
@@ -557,95 +705,49 @@ fn collect_async_finalize_one(ctx0: Ctx, w: World, mod_path: String, prog_import
   if !nr.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, nr.err), ctx: c }; }
   let exprs: ast.ExprPool = nr.exprs;
   let body: ast.Block = nr.body;
-  let aps: Vec[an.AwaitPoint] = an.find_await_points(exprs, body.stmts);
 
-  // Typecheck in order: let bindings and await operands.
+  // Typecheck in source order (nested if/while included): let bindings and await operands.
   let mut locals: Vec[AsyncLocalDecl] = Vec();
   let mut await_operand_tys: Vec[i32] = Vec();
   let mut l_cur: Locals = locals_new();
   l_cur.fn_is_async = true;
+  let mut seen_names: Vec[String] = Vec();
+  let mut exclude_names: Vec[String] = Vec();
 
   let mut pi0: i32 = 0;
   while pi0 < fd.params.len() {
     let pty0: i32 = strip_range_only(c, fsym0.sig.params.get(pi0));
     let p: ast.Param = fd.params.get(pi0);
     l_cur = locals_decl(l_cur, p.name, pty0, false);
+    // Params are already stored in the frame as p_<name>; do not capture them.
+    exclude_names.push(p.name);
+    seen_names.push(p.name);
     pi0 = pi0 + 1;
   }
 
-  let mut ap_i: i32 = 0;
-  let mut si0: i32 = 0;
-  while si0 < body.stmts.len() {
-    let st0: ast.Stmt = body.stmts.get(si0);
-    if match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
-      let sp0: ast.Span = stmt_span(st0);
-      let is_mut: bool = match st0 { ast.Stmt.Let(_sp, m0, _n, _ha, _ann, _e) => m0, _ => false };
-      let name0: String = match st0 { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
-      let has_ann: bool = match st0 { ast.Stmt.Let(_sp, _m, _n, ha0, _ann, _e) => ha0, _ => false };
-      let ann0: ast.TypeName = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, an0, _e) => an0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
-      let init0: i32 = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e0) => e0, _ => -1 };
-      let mut vty: i32 = -1;
-      if has_ann {
-        let tr0: ResolveTyResult = resolve_type(c, w, mod_path, base_imps, l_cur.type_params, ann0);
-        c = tr0.ctx;
-        if !tr0.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(sp0, "let annotation type resolve failed"), ctx: c }; }
-        vty = strip_range_only(c, tr0.idx);
-      } else {
-        let er0: ExprTyResult = tc_expr(c, w, mod_path, base_imps, exprs, l_cur, init0, -1);
-        if !er0.ok {
-          let msg: String = "failed to typecheck let init in async fn: ".concat(tc_error_to_string(er0.err));
-          return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(sp0, msg), ctx: c };
-        }
-        vty = strip_range_only(c, er0.ty);
-      }
-      l_cur = locals_decl(l_cur, name0, vty, is_mut);
-      locals.push(AsyncLocalDecl { name: name0, ty: vty, mutable: is_mut, stmt_idx: si0 });
-    }
+  let wr: WalkAsyncResult = walk_async_block(c, w, mod_path, base_imps, exprs, body, l_cur, locals, await_operand_tys, seen_names);
+  if !wr.ok { return CollectAsyncFinalizeOneResult { ok: false, err: wr.err, ctx: wr.ctx }; }
+  c = wr.ctx;
+  locals = wr.decls;
+  await_operand_tys = wr.await_operand_tys;
 
-    if ap_i < aps.len() && aps.get(ap_i).stmt_idx == si0 {
-      let op: i32 = aps.get(ap_i).operand;
-      let er_op: ExprTyResult = tc_expr(c, w, mod_path, base_imps, exprs, l_cur, op, -1);
-      if !er_op.ok {
-        let msg: String = "failed to typecheck await operand: ".concat(tc_error_to_string(er_op.err));
-        return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(stmt_span(st0), msg), ctx: c };
-      }
-      let op_ty: i32 = strip_range_only(c, er_op.ty);
-      if ty_has_forbidden_borrow(c, op_ty) {
-        return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(stmt_span(st0), "await operand cannot contain non-static borrow"), ctx: c };
-      }
-      await_operand_tys.push(op_ty);
-      ap_i = ap_i + 1;
-    }
-
-    si0 = si0 + 1;
+  // Determine captures via CFG liveness across await resume points.
+  let cfg: ac.BuildResult = ac.build(exprs, body);
+  if !cfg.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, cfg.err), ctx: c }; }
+  if cfg.await_count != await_operand_tys.len() {
+    return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "internal: async await count mismatch"), ctx: c };
   }
-
-  // Determine captures: locals used after any await statement.
-  let mut await_stmt_idxs: Vec[i32] = Vec();
-  ap_i = 0;
-  while ap_i < aps.len() { await_stmt_idxs.push(aps.get(ap_i).stmt_idx); ap_i = ap_i + 1; }
+  let cr: ac.CapturesResult = ac.captures(exprs, cfg, exclude_names);
+  if !cr.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, cr.err), ctx: c }; }
   let mut captures: Vec[String] = Vec();
-  let mut li0: i32 = 0;
-  while li0 < locals.len() {
-    let ld: AsyncLocalDecl = locals.get(li0);
-    let mut ai1: i32 = 0;
-    while ai1 < await_stmt_idxs.len() {
-      let aidx: i32 = await_stmt_idxs.get(ai1);
-      if ld.stmt_idx < aidx {
-        let mut sj: i32 = aidx + 1;
-        while sj < body.stmts.len() {
-          let stj: ast.Stmt = body.stmts.get(sj);
-          if stmt_uses_name(exprs, stj, ld.name) {
-            if !string_vec_contains(captures, ld.name) { captures.push(ld.name); }
-            sj = body.stmts.len();
-            ai1 = await_stmt_idxs.len();
-          }
-          sj = sj + 1;
-        }
-      }
-      ai1 = ai1 + 1;
+  let mut ci1: i32 = 0;
+  while ci1 < cr.captures.len() {
+    let nm: String = cr.captures.get(ci1);
+    let ld0: AsyncLocalDecl = local_decl_find(locals, nm);
+    if ld0.name != "" {
+      if !string_vec_contains(captures, nm) { captures.push(nm); }
     }
-    li0 = li0 + 1;
+    ci1 = ci1 + 1;
   }
 
   // Update frame struct signature with await operand + capture fields.
