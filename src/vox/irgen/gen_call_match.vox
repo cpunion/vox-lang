@@ -1283,11 +1283,16 @@ fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i
     if rr.ok && tc.is_vec_ty(g0.ctx, rr.ty) && is_vec_builtin_method(mname) {
       return gen_call_vec_method(g0, recv_id, rr.ty, mname, args, out_ty);
     }
-    if rr.ok && rr.ty == g0.ctx.ty_string && is_string_builtin_method(mname) {
+    // Allow `&str` to use String builtin methods (transition model: `&str` lowers
+    // to `Ref(String, ...)`).
+    if rr.ok && tc.strip_range(g0.ctx, rr.ty) == g0.ctx.ty_string && is_string_builtin_method(mname) {
       return gen_call_string_method(g0, recv_id, mname, args, out_ty);
     }
-    if rr.ok && mname == "to_string" && (rr.ty == g0.ctx.ty_bool || rr.ty == g0.ctx.ty_string || tc.is_int_like_ty(g0.ctx, rr.ty) || tc.is_float_ty(g0.ctx, rr.ty)) {
-      return gen_call_prim_method(g0, recv_id, rr.ty, mname, out_ty);
+    if rr.ok && mname == "to_string" {
+      let rb: i32 = tc.strip_range(g0.ctx, rr.ty);
+      if rb == g0.ctx.ty_bool || rb == g0.ctx.ty_string || tc.is_int_like_ty(g0.ctx, rb) || tc.is_float_ty(g0.ctx, rb) {
+        return gen_call_prim_method(g0, recv_id, rb, mname, out_ty);
+      }
     }
     if rr.ok {
       let inh: tc.FindInherentDispatchMethodResult = tc.find_inherent_dispatch_method(g0.ctx, tc.strip_range(g0.ctx, rr.ty), mname);
@@ -1560,8 +1565,21 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
       pack_mode = true;
     } else {
       let variadic_vec_ty: i32 = sig.params.get(fixed_n);
-      let probe: GenExprResult = gen_expr(g, args.get(fixed_n), variadic_vec_ty);
-      pack_mode = !probe.ok;
+      // Mirror typecheck's pack-vs-vec decision without emitting IR:
+      // If the last argument is a Vec, treat it as explicit-Vec mode; otherwise
+      // fall back to pack-mode.
+      let probe_last: tc.ExprTyResult =
+        tc.tc_expr(g.ctx, g.w, g.mod_path, g.imps, g.exprs, g.locals, args.get(fixed_n), -1);
+      if probe_last.ok {
+        if tc.is_vec_ty(g.ctx, tc.strip_range(g.ctx, probe_last.ty)) {
+          pack_mode = false;
+        } else {
+          let ur_probe: tc.UnifyResult = tc.unify_ty(g.ctx, variadic_vec_ty, probe_last.ty, Vec());
+          pack_mode = !ur_probe.ok;
+        }
+      } else {
+        pack_mode = true;
+      }
     }
   } else {
     if args.len() != sig.params.len() { return GenExprResult { ok: false, err: "arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }

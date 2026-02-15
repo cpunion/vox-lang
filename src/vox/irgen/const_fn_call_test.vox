@@ -1,0 +1,275 @@
+import "std/testing" as t
+import "vox/typecheck" as tc
+import "vox/irgen" as g
+import "vox/ir" as ir
+
+fn test_irgen_const_fn_call_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn add2(x: i32) -> i32 { return x + 2; }\nconst N: i32 = add2(5)\nfn main() -> i32 { return N; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_fn_call_named_import_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "dep", "pub fn plus(a: i32, b: i32) -> i32 { return a + b; }");
+  w = add_mod(w, "main", "import { plus } from \"dep\"\nconst N: i32 = plus(3, 4)\nfn main() -> i32 { return N; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_fn_call_generic_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn id[T](x: T) -> T { return x; }\nconst N: i32 = id(7)\nfn main() -> i32 { return N; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_fn_call_const_generic_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addn[const N: i32](x: i32) -> i32 { return x + N; }\nconst M: i32 = addn[3](4)\nfn main() -> i32 { return M; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_fn_call_with_pure_member_methods_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    fn calc() -> i32 {
+      let s: String = "abcd";
+      let t2: String = s.slice(1, 3).concat("x");
+      let n: String = 42.to_string();
+      let b: String = true.to_string();
+      return t2.len() + t2.byte_at(0) + n.len() + b.len();
+    }
+    const N: i32 = calc()
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 107"));
+}
+fn test_irgen_const_fn_call_with_escape_and_float_to_string_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    fn calc() -> i32 {
+      let e: String = "\n".escape_c();
+      let f: String = 1.5.to_string();
+      let g: String = 2.0.to_string();
+      return e.len() + f.len() + g.len();
+    }
+    const N: i32 = calc()
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 6"));
+}
+fn test_irgen_const_fn_call_with_string_predicate_methods_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    fn calc() -> i32 {
+      let s: String = "ab_cd";
+      let b0: bool = s.starts_with("ab");
+      let b1: bool = s.ends_with("cd");
+      let b2: bool = s.contains("_");
+      return if b0 && b1 && b2 { 1 } else { 0 };
+    }
+    const N: i32 = calc()
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 1"));
+}
+fn test_irgen_const_fn_call_with_string_is_empty_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    fn calc() -> i32 {
+      let s0: String = "";
+      let s1: String = "x";
+      return if s0.is_empty() && !s1.is_empty() { 1 } else { 0 };
+    }
+    const N: i32 = calc()
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 1"));
+}
+fn test_irgen_const_fn_call_with_string_index_methods_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    fn calc() -> i32 {
+      let s: String = "ab_cd_ab";
+      let i0: i32 = s.index_of("ab");
+      let i1: i32 = s.last_index_of("ab");
+      let i2: i32 = s.index_of("zz");
+      return i0 + i1 + i2;
+    }
+    const N: i32 = calc()
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 5"));
+}
+fn test_irgen_const_fn_call_member_method_oob_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    fn bad() -> i32 {
+      let s: String = "ab";
+      return s.byte_at(2);
+    }
+    const N: i32 = bad()
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "string index out of bounds"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addn[const N: i32](x: i32) -> i32 where comptime N > 0, comptime N <= 8 { return x + N; }\nconst M: i32 = addn[3](4)\nfn main() -> i32 { return M; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addn[const N: i32](x: i32) -> i32 where comptime N > 0, comptime N <= 8 { return x + N; }\nconst M: i32 = addn[0](4)\nfn main() -> i32 { return M; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "constraint failed"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_rhs_param_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addnm[const N: i32, const M: i32](x: i32) -> i32 where comptime N < M { return x + N; }\nconst V: i32 = addnm[3, 5](4)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_rhs_param_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addnm[const N: i32, const M: i32](x: i32) -> i32 where comptime N < M { return x + N; }\nconst V: i32 = addnm[5, 3](4)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "constraint failed"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_type_layout_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn fit[T](x: T) -> i32 where comptime @size_of(T) <= 8, comptime @align_of(T) <= 8 { return 7; }\nconst V: i32 = fit(3)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_type_layout_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "struct Big { a: i64, b: i64 }\nfn fit[T](x: T) -> i32 where comptime @size_of(T) <= 8 { return 7; }\nconst V: i32 = fit(Big { a: 1, b: 2 })\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "@size_of(T) <= 8"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_type_layout_rhs_param_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn fit[T, const LIM: i32](x: T) -> i32 where comptime @size_of(T) <= LIM { return 7; }\nconst V: i32 = fit[8](3)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_field_count_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "struct Pair { a: i32, b: i32 }\nfn fit[T](x: T) -> i32 where comptime @field_count(T) <= 2 { return 7; }\nconst P: Pair = Pair { a: 1, b: 2 }\nconst V: i32 = fit(P)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_field_count_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "struct Triple { a: i32, b: i32, c: i32 }\nfn fit[T](x: T) -> i32 where comptime @field_count(T) <= 2 { return 7; }\nconst X: Triple = Triple { a: 1, b: 2, c: 3 }\nconst V: i32 = fit(X)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "@field_count(T) <= 2"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_type_id_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn fit[T](x: T) -> i32 where comptime @type(T) > 0 { return 7; }\nconst V: i32 = fit(3)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_type_id_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn fit[T](x: T) -> i32 where comptime @type(T) < 0 { return 7; }\nconst V: i32 = fit(3)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "@type(T) < 0"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_rhs_reflect_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn fit[T, U](x: T, y: U) -> i32 where comptime @size_of(T) <= @align_of(U) { return 7; }\nconst Y: i64 = 0\nconst V: i32 = fit(3, Y)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}
+fn test_irgen_const_fn_call_const_generic_comptime_where_rhs_reflect_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn fit[T, U](x: T, y: U) -> i32 where comptime @size_of(T) <= @align_of(U) { return 7; }\nconst Y: u8 = 0\nconst X: i64 = 1\nconst V: i32 = fit(X, Y)\nfn main() -> i32 { return V; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "@size_of(T) <= @align_of(U)"));
+}
+fn test_irgen_const_fn_call_const_generic_default_violates_comptime_where_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn addn[const N: i32 = 0](x: i32) -> i32 where comptime N > 0 { return x + N; }\nconst M: i32 = 1\nfn main() -> i32 { return M; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "default violates comptime where"));
+}
+fn test_irgen_const_fn_call_generic_trait_bound_inlined() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    trait Eq { fn eq(a: Self, b: Self) -> bool; }
+    impl Eq for i32 { fn eq(a: i32, b: i32) -> bool { return a == b; } }
+    fn id[T: Eq](x: T) -> T { return x; }
+    const N: i32 = id(7)
+    fn main() -> i32 { return N; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "const i32 7"));
+}

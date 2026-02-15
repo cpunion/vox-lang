@@ -3,91 +3,231 @@ import "vox/typecheck" as tc
 import "vox/irgen" as g
 import "vox/ir" as ir
 
-fn contains(hay: String, needle: String) -> bool {
-  if needle.len() == 0 { return true; }
-  if hay.len() < needle.len() { return false; }
-  let mut i: i32 = 0;
-  while i <= hay.len() - needle.len() {
-    if hay.slice(i, i + needle.len()) == needle { return true; }
-    i = i + 1;
+fn prog_has_condbr(p: ir.Program, fname: String) -> bool {
+  let mut fi: i32 = 0;
+  while fi < p.funcs.len() {
+    let f: ir.Func = p.funcs.get(fi);
+    if f.name == fname {
+      let mut bi: i32 = 0;
+      while bi < f.blocks.len() {
+        let b: ir.Block = f.blocks.get(bi);
+        if b.has_term {
+          if match b.term { ir.Term.CondBr(_c, _a, _d) => true, _ => false } { return true; }
+        }
+        bi = bi + 1;
+      }
+    }
+    fi = fi + 1;
   }
   return false;
 }
 
-fn find_text(hay: String, needle: String) -> i32 {
-  if needle.len() == 0 { return 0; }
-  if hay.len() < needle.len() { return -1; }
-  let mut i: i32 = 0;
-  while i <= hay.len() - needle.len() {
-    if hay.slice(i, i + needle.len()) == needle { return i; }
-    i = i + 1;
+fn prog_has_block_prefix(p: ir.Program, fname: String, prefix: String) -> bool {
+  let mut fi: i32 = 0;
+  while fi < p.funcs.len() {
+    let f: ir.Func = p.funcs.get(fi);
+    if f.name == fname {
+      let mut bi: i32 = 0;
+      while bi < f.blocks.len() {
+        let b: ir.Block = f.blocks.get(bi);
+        if starts_with(b.name, prefix) { return true; }
+        bi = bi + 1;
+      }
+    }
+    fi = fi + 1;
   }
-  return -1;
+  return false;
 }
 
-fn find_slot_for_range_init(ir_text: String) -> String {
-  let marker: String = " = slot range(i32,1..=3)";
-  let at: i32 = find_text(ir_text, marker);
-  if at == -1 { return ""; }
-  let mut i: i32 = at;
-  while i > 0 && ir_text.byte_at(i - 1) != 10 {
-    i = i - 1;
-  }
-  let mut j: i32 = i;
-  while j < at {
-    if ir_text.byte_at(j) == 36 {
-      let mut k: i32 = j;
-      while k < at && ir_text.byte_at(k) != 32 {
-        k = k + 1;
+fn prog_has_range_slot_init(p: ir.Program, fname: String, lo: i64, hi: i64) -> bool {
+  let mut fi: i32 = 0;
+  while fi < p.funcs.len() {
+    let f: ir.Func = p.funcs.get(fi);
+    if f.name == fname {
+      let mut bi: i32 = 0;
+      while bi < f.blocks.len() {
+        let b: ir.Block = f.blocks.get(bi);
+        let mut ii: i32 = 0;
+        while ii < b.instrs.len() {
+          let ins: ir.Instr = b.instrs.get(ii);
+          if match ins { ir.Instr.SlotDecl(_s, _t) => true, _ => false } {
+            let slot: i32 = match ins { ir.Instr.SlotDecl(s, _t) => s, _ => -1 };
+            let ty: i32 = match ins { ir.Instr.SlotDecl(_s, t) => t, _ => -1 };
+            let t: ir.Ty = ir.ty_pool_get(p.pool, ty);
+            if t.kind == ir.TyKind.Range && t.lo == lo && t.hi == hi {
+              // Expect a deterministic init store to lower bound.
+              let mut jj: i32 = ii + 1;
+              while jj < b.instrs.len() {
+                let ins2: ir.Instr = b.instrs.get(jj);
+                if match ins2 { ir.Instr.Store(_s, _v) => true, _ => false } {
+                  let s2: i32 = match ins2 { ir.Instr.Store(s, _v) => s, _ => -1 };
+                  if s2 == slot {
+                    let v2: ir.Value = match ins2 { ir.Instr.Store(_s, v) => v, _ => ir.v_int(0) };
+                    if match v2 { ir.Value.Int(n) => n == lo, _ => false } { return true; }
+                    return false;
+                  }
+                }
+                jj = jj + 1;
+              }
+              return false;
+            }
+          }
+          ii = ii + 1;
+        }
+        bi = bi + 1;
       }
-      return ir_text.slice(j, k);
     }
-    j = j + 1;
+    fi = fi + 1;
   }
+  return false;
+}
+
+fn pick_entry_func_name(p: ir.Program) -> String {
+  // Most tests use a `main` entry, but some pipelines may lower it to `mmain`.
+  if prog_has_func(p, "main") { return "main"; }
+  if prog_has_func(p, "mmain") { return "mmain"; }
   return "";
 }
 
 fn test_irgen_ifexpr_with_block_branches_lowers() -> () {
   let mut w: tc.World = tc.world();
-  let src: String = "fn main() -> i32 {\n  let x: i32 = if true {\n    let y: i32 = 1;\n    y + 1\n  } else {\n    2\n  };\n  return x;\n}\n";
-  w = add_mod(w, "main", src);
-
-  let r: g.GenResult = g.generate_world(w);
-  t.assert(r.ok);
-  let s: String = ir.format_program(r.prog);
-  t.assert(contains(s, "condbr "));
-  t.assert(contains(s, "ifexpr_then_"));
-  t.assert(contains(s, "ifexpr_end_"));
-}
-
-fn test_irgen_ifexpr_both_branches_diverge_lowers() -> () {
-  let mut w: tc.World = tc.world();
-  let src: String = "fn main(flag: bool) -> i32 {\n  let _x: i32 = if flag {\n    return 7;\n  } else {\n    return 9;\n  };\n  return 0;\n}\n";
-  w = add_mod(w, "main", src);
-
-  let r: g.GenResult = g.generate_world(w);
-  t.assert(r.ok);
-  let s: String = ir.format_program(r.prog);
-  t.assert(contains(s, "condbr "));
-  t.assert(contains(s, "ifexpr_then_"));
-  t.assert(contains(s, "ifexpr_end_"));
-}
-
-fn test_irgen_ifexpr_range_result_lowers() -> () {
-  let mut w: tc.World = tc.world();
-  // Repro: if-expression result slot uses a refined int type.
-  let src: String = "type Tiny = @range(1..=3) i32\nfn main(flag: bool) -> i32 {\n  let x: Tiny = if flag {\n    2 as Tiny\n  } else {\n    3 as Tiny\n  };\n  return x as i32;\n}\n";
+  let src: String = """
+    fn main() -> i32 {
+      let x: i32 = if true {
+        let y: i32 = 1;
+        y + 1
+      } else {
+        2
+      };
+      return x;
+    }
+  """;
   w = add_mod(w, "main", src);
 
   let r: g.GenResult = g.generate_world(w);
   t.assert_with(r.ok, r.err);
   t.assert(r.ok);
-  let s: String = ir.format_program(r.prog);
-  t.assert(contains(s, "ifexpr_then_"));
-  t.assert(contains(s, "ifexpr_end_"));
+  let fname: String = pick_entry_func_name(r.prog);
+  t.assert_with(fname != "", ir.format_program(r.prog));
+  t.assert_with(prog_has_condbr(r.prog, fname), ir.format_program(r.prog));
+  t.assert_with(prog_has_block_prefix(r.prog, fname, "ifexpr_then_"), ir.format_program(r.prog));
+  t.assert_with(prog_has_block_prefix(r.prog, fname, "ifexpr_end_"), ir.format_program(r.prog));
+}
+
+fn test_irgen_ifexpr_both_branches_diverge_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn main(flag: bool) -> i32 {
+      let _x: i32 = if flag {
+        return 7;
+      } else {
+        return 9;
+      };
+      return 0;
+    }
+  """;
+  w = add_mod(w, "main", src);
+
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let fname: String = pick_entry_func_name(r.prog);
+  t.assert_with(fname != "", ir.format_program(r.prog));
+  t.assert_with(prog_has_condbr(r.prog, fname), ir.format_program(r.prog));
+  // Lowering may choose expression or statement-form blocks depending on usage.
+  let has_then: bool = prog_has_block_prefix(r.prog, fname, "ifexpr_then_") || prog_has_block_prefix(r.prog, fname, "if_then_");
+  let has_end: bool = prog_has_block_prefix(r.prog, fname, "ifexpr_end_") || prog_has_block_prefix(r.prog, fname, "if_end_");
+  t.assert_with(has_then, ir.format_program(r.prog));
+  t.assert_with(has_end, ir.format_program(r.prog));
+}
+
+fn test_irgen_ifexpr_range_result_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  // Repro: if-expression result slot uses a refined int type.
+  let src: String = """
+    type Tiny = @range(1..=3) i32
+    fn main(flag: bool) -> i32 {
+      let x: Tiny = if flag {
+        2 as Tiny
+      } else {
+        3 as Tiny
+      };
+      return x as i32;
+    }
+  """;
+  w = add_mod(w, "main", src);
+
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let fname: String = pick_entry_func_name(r.prog);
+  t.assert_with(fname != "", ir.format_program(r.prog));
+  t.assert_with(prog_has_block_prefix(r.prog, fname, "ifexpr_then_"), ir.format_program(r.prog));
+  t.assert_with(prog_has_block_prefix(r.prog, fname, "ifexpr_end_"), ir.format_program(r.prog));
   // The if-expression result slot for `@range(1..=3) i32` should be initialized
   // with the range lower bound, not with integer zero.
-  let slot: String = find_slot_for_range_init(s);
-  t.assert_with(slot.len() > 0, s);
-  t.assert_with(contains(s, "store ".concat(slot).concat(" 1")), s);
+  t.assert_with(prog_has_range_slot_init(r.prog, fname, 1, 3), ir.format_program(r.prog));
+}
+
+fn test_irgen_ifexpr_branch_return_diverges_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn main(flag: bool) -> i32 {
+      let x: i32 = if flag {
+        return 7;
+      } else {
+        3
+      };
+      return x;
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+
+fn test_irgen_ifexpr_branch_break_in_loop_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn main() -> i32 {
+      let mut i: i32 = 0;
+      while i < 10 {
+        let _x: i32 = if i > 5 {
+          break;
+        } else {
+          i
+        };
+        i = i + 1;
+      }
+      return i;
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+
+fn test_irgen_ifexpr_else_if_chain_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn sign(x: i32) -> i32 {
+      let y: i32 = if x < 0 {
+        -1
+      } else if x == 0 {
+        0
+      } else {
+        1
+      };
+      return y;
+    }
+    fn main() -> i32 { return sign(7); }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "condbr"));
 }

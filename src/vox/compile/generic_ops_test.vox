@@ -1,0 +1,116 @@
+import "std/testing" as t
+import "vox/compile" as c
+import "vox/loader" as ld
+import "vox/codegen" as cg
+
+
+fn test_compile_generic_eq_operator_with_struct_instantiation_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Eq { fn eq(a: Self, b: Self) -> bool; }
+      struct S { a: i32 }
+      impl Eq for S { fn eq(a: S, b: S) -> bool { return a.a == b.a; } }
+      fn same[T: Eq](a: T, b: T) -> bool { return a == b; }
+      fn main() -> i32 { let x: S = S { a: 1 }; let y: S = S { a: 1 }; return if same(x, y) { 1 } else { 0 }; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(r.ok);
+  t.assert(contains(r.c, "vox_struct_eq_"));
+}
+fn test_compile_generic_cmp_operator_with_ord_bound_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Ord { fn lt(a: Self, b: Self) -> bool; }
+      impl Ord for i32 { fn lt(a: i32, b: i32) -> bool { return a < b; } }
+      fn less[T: Ord](a: T, b: T) -> bool { return a < b; }
+      fn main() -> i32 { return if less(1, 2) { 1 } else { 0 }; }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+fn test_compile_generic_cmp_operator_without_ord_bound_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn less[T](a: T, b: T) -> bool { return a < b; }\nfn main() -> i32 { return 0; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+}
+fn test_compile_generic_nominal_instantiation_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      struct Pair[T] { a: T, b: T }
+      enum Option[T] { Some(T), None }
+      fn main() -> i32 {
+        let p: Pair[i32] = Pair { a: 1, b: 2 };
+        let o: Option[i32] = Option.Some(p.a + p.b);
+        return match o { Option.Some(v) => v, Option.None => 0 };
+      }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(contains(r.c, cg.c_struct_type_name("Pair$gT_3di32")));
+  t.assert(contains(r.c, cg.c_enum_type_name("Option$gT_3di32")));
+}
+fn test_compile_generic_fn_return_nominal_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      struct Boxed[T] { v: T }
+      fn mk[T](x: T) -> Boxed[T] { return Boxed { v: x }; }
+      fn main() -> i32 {
+        let b: Boxed[i32] = mk[i32](7);
+        return b.v;
+      }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(contains(r.c, cg.c_struct_type_name("Boxed$gT_3di32")));
+}
+fn test_compile_generic_nominal_struct_path_mismatch_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "struct Pair[T] { a: T, b: T }\nstruct Box[T] { a: T, b: T }\nfn main() -> i32 {\n  let _p: Pair[i32] = Box { a: 1, b: 2 };\n  return 0;\n}",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(!r.ok, r.err);
+  t.assert(!r.ok);
+}
+fn test_compile_generic_nominal_instantiation_with_typed_path_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      struct Pair[T] { a: T, b: T }
+      enum Option[T] { Some(T), None }
+      fn main() -> i32 {
+        let p = Pair[i32] { a: 1, b: 2 };
+        let o = Option[i32].Some(p.a + p.b);
+        let n = Option[i32].None;
+        let y: i32 = match n { Option.Some(v) => v, Option.None => 0 };
+        return match o { Option.Some(v) => v + y, Option.None => 0 };
+      }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(contains(r.c, cg.c_struct_type_name("Pair$gT_3di32")));
+  t.assert(contains(r.c, cg.c_enum_type_name("Option$gT_3di32")));
+}

@@ -538,6 +538,7 @@ fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, typ
     ast.ExprNode.Member(recv, _name) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, recv, owner_file),
     ast.ExprNode.TryBlock(bid) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, bid, owner_file),
     ast.ExprNode.Try(a) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, a, owner_file),
+    ast.ExprNode.Await(a) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, a, owner_file),
     ast.ExprNode.Call(callee, _targs, args) => {
       let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, callee, owner_file);
       if !r0.ok { r0 } else {
@@ -1082,6 +1083,103 @@ fn ffi_ty_allowed(ctx: Ctx, ty: i32) -> bool {
   };
 }
 
+struct ValidateFfiAttrsResult { ok: bool, err: TcError, ctx: Ctx }
+
+fn validate_ffi_attrs_ok(c: Ctx) -> ValidateFfiAttrsResult {
+  return ValidateFfiAttrsResult { ok: true, err: TcError.None, ctx: c };
+}
+
+fn validate_ffi_attrs_err(c: Ctx, err: TcError) -> ValidateFfiAttrsResult {
+  return ValidateFfiAttrsResult { ok: false, err: err, ctx: c };
+}
+
+fn validate_ffi_attrs(c0: Ctx, mod_path: String, fd: ast.FuncDecl, cps: Vec[ConstParamSig], has_variadic: bool, ps: Vec[i32], ret_ty: i32) -> ValidateFfiAttrsResult {
+  let mut c: Ctx = c0;
+  let has_ffi_import: bool = fd.ffi_imports.len() != 0;
+  let has_ffi_export: bool = fd.ffi_exports.len() != 0;
+
+  if fd.ffi_imports.len() > 1 {
+    return validate_ffi_attrs_err(c, type_error_at(fd.sp, "multiple ffi_import attributes on one function"));
+  }
+  if has_ffi_import && has_ffi_export {
+    return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi_import and ffi_export cannot coexist on one function"));
+  }
+
+  if has_ffi_import {
+    let imp: ast.FfiImportAttr = fd.ffi_imports.get(0);
+    if imp.target != "c" && imp.target != "wasm" {
+      return validate_ffi_attrs_err(c, type_error_at(imp.sp, "unsupported ffi import target"));
+    }
+    if imp.symbol == "" {
+      return validate_ffi_attrs_err(c, type_error_at(imp.sp, "ffi import symbol must not be empty"));
+    }
+    if imp.target == "wasm" && imp.module == "" {
+      return validate_ffi_attrs_err(c, type_error_at(imp.sp, "wasm ffi import module must not be empty"));
+    }
+    if fd.type_params.len() != 0 || cps.len() != 0 || has_variadic {
+      return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi import function cannot be generic/variadic"));
+    }
+  }
+
+  if has_ffi_export {
+    if !fd.is_pub {
+      return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi export function must be pub"));
+    }
+    if fd.type_params.len() != 0 || cps.len() != 0 || has_variadic {
+      return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi export function cannot be generic/variadic"));
+    }
+    let mut ei: i32 = 0;
+    while ei < fd.ffi_exports.len() {
+      let ex: ast.FfiExportAttr = fd.ffi_exports.get(ei);
+      if ex.target != "c" && ex.target != "wasm" {
+        return validate_ffi_attrs_err(c, type_error_at(ex.sp, "unsupported ffi export target"));
+      }
+      if ex.symbol == "" {
+        return validate_ffi_attrs_err(c, type_error_at(ex.sp, "ffi export symbol must not be empty"));
+      }
+      let mut sx: i32 = 0;
+      while sx < c.ffi_export_symbols.len() {
+        let prev: FfiExportSym = c.ffi_export_symbols.get(sx);
+        if prev.target == ex.target && prev.symbol == ex.symbol {
+          return validate_ffi_attrs_err(c, type_error_at(ex.sp, "duplicate ffi export symbol for target"));
+        }
+        sx = sx + 1;
+      }
+      let mut ej: i32 = 0;
+      while ej < ei {
+        if fd.ffi_exports.get(ej).target == ex.target {
+          return validate_ffi_attrs_err(c, type_error_at(ex.sp, "duplicate ffi export target on one function"));
+        }
+        ej = ej + 1;
+      }
+      ei = ei + 1;
+    }
+  }
+
+  if has_ffi_import || has_ffi_export {
+    if !ffi_ty_allowed(c, ret_ty) {
+      return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi return type not supported"));
+    }
+    let mut i: i32 = 0;
+    while i < ps.len() {
+      if !ffi_ty_allowed(c, ps.get(i)) {
+        return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi parameter type not supported"));
+      }
+      i = i + 1;
+    }
+  }
+
+  if has_ffi_export {
+    let mut i: i32 = 0;
+    while i < fd.ffi_exports.len() {
+      let ex2: ast.FfiExportAttr = fd.ffi_exports.get(i);
+      c.ffi_export_symbols.push(FfiExportSym { target: ex2.target, symbol: ex2.symbol, mod_path: mod_path, name: fd.name });
+      i = i + 1;
+    }
+  }
+
+  return validate_ffi_attrs_ok(c);
+}
 
 fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
   let mut c: Ctx = ctx;
@@ -1245,6 +1343,9 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       let fd: ast.FuncDecl = m.prog.funcs.get(fi);
       let vpr: ValidateTypeParamPacksResult = validate_type_param_packs(fd.sp, fd.type_params, fd.type_param_packs);
       if !vpr.ok { return TcCtxResult { ok: false, err: vpr.err, ctx: c }; }
+      // D03-3 scaffold:
+      // async fn enters normal typecheck/codegen pipeline.
+      // `await` is allowed in async fn only (lowering still deferred).
       if is_reserved_intrinsic_name(fd.name) {
         return TcCtxResult { ok: false, err: type_error_at(fd.sp, "reserved name: ".concat(fd.name)), ctx: c };
       }
@@ -1368,87 +1469,9 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       let has_variadic: bool = has_variadic_param_decl(fd.params);
       let variadic_elem: i32 = if has_variadic { vec_elem(c, ps.get(ps.len() - 1)) } else { -1 };
 
-      let has_ffi_import: bool = fd.ffi_imports.len() != 0;
-      let has_ffi_export: bool = fd.ffi_exports.len() != 0;
-      if fd.ffi_imports.len() > 1 {
-        return TcCtxResult { ok: false, err: type_error_at(fd.sp, "multiple ffi_import attributes on one function"), ctx: c };
-      }
-      if has_ffi_import && has_ffi_export {
-        return TcCtxResult { ok: false, err: type_error_at(fd.sp, "ffi_import and ffi_export cannot coexist on one function"), ctx: c };
-      }
-
-      if has_ffi_import {
-        let imp: ast.FfiImportAttr = fd.ffi_imports.get(0);
-        if imp.target != "c" && imp.target != "wasm" {
-          return TcCtxResult { ok: false, err: type_error_at(imp.sp, "unsupported ffi import target"), ctx: c };
-        }
-        if imp.symbol == "" {
-          return TcCtxResult { ok: false, err: type_error_at(imp.sp, "ffi import symbol must not be empty"), ctx: c };
-        }
-        if imp.target == "wasm" && imp.module == "" {
-          return TcCtxResult { ok: false, err: type_error_at(imp.sp, "wasm ffi import module must not be empty"), ctx: c };
-        }
-        if fd.type_params.len() != 0 || cps.len() != 0 || has_variadic {
-          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "ffi import function cannot be generic/variadic"), ctx: c };
-        }
-      }
-
-      if has_ffi_export {
-        if !fd.is_pub {
-          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "ffi export function must be pub"), ctx: c };
-        }
-        if fd.type_params.len() != 0 || cps.len() != 0 || has_variadic {
-          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "ffi export function cannot be generic/variadic"), ctx: c };
-        }
-        let mut ei: i32 = 0;
-        while ei < fd.ffi_exports.len() {
-          let ex: ast.FfiExportAttr = fd.ffi_exports.get(ei);
-          if ex.target != "c" && ex.target != "wasm" {
-            return TcCtxResult { ok: false, err: type_error_at(ex.sp, "unsupported ffi export target"), ctx: c };
-          }
-          if ex.symbol == "" {
-            return TcCtxResult { ok: false, err: type_error_at(ex.sp, "ffi export symbol must not be empty"), ctx: c };
-          }
-          let mut sx: i32 = 0;
-          while sx < c.ffi_export_symbols.len() {
-            let prev: FfiExportSym = c.ffi_export_symbols.get(sx);
-            if prev.target == ex.target && prev.symbol == ex.symbol {
-              return TcCtxResult { ok: false, err: type_error_at(ex.sp, "duplicate ffi export symbol for target"), ctx: c };
-            }
-            sx = sx + 1;
-          }
-          let mut ej: i32 = 0;
-          while ej < ei {
-            if fd.ffi_exports.get(ej).target == ex.target {
-              return TcCtxResult { ok: false, err: type_error_at(ex.sp, "duplicate ffi export target on one function"), ctx: c };
-            }
-            ej = ej + 1;
-          }
-          ei = ei + 1;
-        }
-      }
-
-      if has_ffi_import || has_ffi_export {
-        if !ffi_ty_allowed(c, rr.idx) {
-          return TcCtxResult { ok: false, err: type_error_at(fd.sp, "ffi return type not supported"), ctx: c };
-        }
-        let mut fpi: i32 = 0;
-        while fpi < ps.len() {
-          if !ffi_ty_allowed(c, ps.get(fpi)) {
-            return TcCtxResult { ok: false, err: type_error_at(fd.sp, "ffi parameter type not supported"), ctx: c };
-          }
-          fpi = fpi + 1;
-        }
-      }
-
-      if has_ffi_export {
-        let mut ei2: i32 = 0;
-        while ei2 < fd.ffi_exports.len() {
-          let ex2: ast.FfiExportAttr = fd.ffi_exports.get(ei2);
-          c.ffi_export_symbols.push(FfiExportSym { target: ex2.target, symbol: ex2.symbol, mod_path: m.path, name: fd.name });
-          ei2 = ei2 + 1;
-        }
-      }
+      let fvr: ValidateFfiAttrsResult = validate_ffi_attrs(c, m.path, fd, cps, has_variadic, ps, rr.idx);
+      if !fvr.ok { return TcCtxResult { ok: false, err: fvr.err, ctx: fvr.ctx }; }
+      c = fvr.ctx;
 
       let sig: FuncSig = FuncSig {
         params: ps,

@@ -34,6 +34,8 @@ make test          # test-active + examples smoke
 关键脚本：
 
 - `scripts/ci/rolling-selfhost.sh`
+  - 默认按源码内容 + bootstrap 指纹计算缓存键；缓存命中时跳过自举重编译，仅复用 `target/debug/vox_rolling`。
+  - 可通过 `VOX_SELFHOST_FORCE_REBUILD=1` 强制重建。
 - `scripts/ci/verify-p0p1.sh`
 
 ## 发布与滚动自举
