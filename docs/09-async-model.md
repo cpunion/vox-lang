@@ -14,7 +14,7 @@
 2. `async fn` 语法已接入 parser，AST 有 `FuncDecl.is_async`。
 3. 语义部分开启（D03-3 scaffold）：
    - `async fn`（无 `await`）已进入正常 typecheck/codegen 管线（当前行为仍等价同步函数）
-   - `await` 表达式已解析为 AST 节点（`ExprNode.Await`），并已接入 typecheck/irgen 脚手架：仅允许在 `async fn` 中使用；当前阶段要求操作数为 Poll-shaped 枚举 `{ Pending, Ready(T) }`，`await` 结果类型为 `T`，lowering 为 `Ready(v) => v`、`Pending => panic`（完整 Future 语义仍 deferred）
+   - `await` 表达式已解析为 AST 节点（`ExprNode.Await`），并已接入 typecheck/irgen 脚手架：仅允许在 `async fn` 中使用；推荐表面语法为 `e.await`（同时保留前缀 `await e` 兼容）；当前阶段要求操作数为 Poll-shaped 枚举 `{ Pending, Ready(T) }`，`await` 结果类型为 `T`，lowering 为 `Ready(v) => v`、`Pending => panic`（完整 Future 语义仍 deferred）
    - trait `async fn` 在 parser 报 `async trait method is deferred (D03)`
 
 ## 2. 为什么核心选 pull
@@ -51,7 +51,7 @@ trait Future {
 1. 编译器生成 frame 结构（局部变量 + 子 future + state tag）。
 2. 生成对应 `poll(frame, cx) -> Poll[T]`：
    - 从 `state` 恢复执行点。
-   - 遇到 `await e`：先确保子 future 已初始化，再 poll。
+   - 遇到 `e.await`：先确保子 future 已初始化，再 poll。
    - 子 future `Pending`：保存 state，返回 `Pending`。
    - 子 future `Ready(v)`：恢复并继续执行。
    - 函数返回：`Ready(ret)`。
@@ -60,15 +60,15 @@ trait Future {
 
 当前阶段（已落地，scaffold）：
 
-1. `await e` 只能用于 Poll-shaped 枚举 `{ Pending, Ready(T) }`。
-2. `await e` 的表达式类型为 `T`。
+1. `e.await`（或兼容语法 `await e`）只能用于 Poll-shaped 枚举 `{ Pending, Ready(T) }`。
+2. `e.await` 的表达式类型为 `T`。
 3. lowering 语义：`Ready(v) => v`，`Pending => panic`。
 4. `await` 只能出现在 async 上下文（`async fn`，`async` block 后续引入）。
 
 目标阶段（D03-3b 之后）：
 
-1. `await e` 要求 `e` 的类型实现 `Future`。
-2. `await e` 的表达式类型为该 `Future::Output`。
+1. `e.await` 要求 `e` 的类型实现 `Future`。
+2. `e.await` 的表达式类型为该 `Future::Output`。
 3. `Pending` 通过状态机挂起与唤醒，不再是 panic。
 
 ## 6. push 与 pull 的转换
