@@ -1,0 +1,174 @@
+import "std/testing" as t
+import "vox/typecheck" as tc
+import "vox/irgen" as g
+import "vox/ir" as ir
+
+fn test_irgen_generic_struct_comptime_where_type_layout_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "struct Small[T] where comptime @size_of(T) <= 8, comptime @align_of(T) <= 8 { v: T }\nfn main() -> i32 { let s: Small[i32] = Small[i32] { v: 7 }; return s.v; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+fn test_irgen_generic_struct_comptime_where_type_layout_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    struct Big { a: i64, b: i64 }
+    struct Small[T] where comptime @size_of(T) <= 8 { v: T }
+    const V: i32 = 0
+    fn main() -> i32 { let b: Big = Big { a: 1, b: 2 }; let s: Small[Big] = Small[Big] { v: b }; return V; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(!r.ok, r.err);
+  t.assert_with(contains(r.err, "type resolve failed in let annotation"), r.err);
+}
+fn test_irgen_generic_enum_comptime_where_type_layout_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "enum Tiny[T] where comptime @size_of(T) <= 8 { V(T) }\nfn main() -> i32 { let x: Tiny[i32] = Tiny[i32].V(7); return match x { Tiny.V(v) => v }; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+fn test_irgen_generic_enum_comptime_where_type_layout_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "struct Big { a: i64, b: i64 }\nenum Tiny[T] where comptime @size_of(T) <= 8 { V(T) }\nfn main() -> i32 { let b: Big = Big { a: 1, b: 2 }; let x: Tiny[Big] = Tiny[Big].V(b); return 0; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(!r.ok, r.err);
+  t.assert_with(contains(r.err, "type resolve failed in let annotation"), r.err);
+}
+fn test_irgen_monomorphizes_generic_call() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn id[T](x: T) -> T { return x; } fn main() -> i32 { return id(1); }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  // Emit main + the instantiated `id[T=i32]`.
+  t.assert_eq(r.prog.funcs.len(), 2);
+  t.assert(prog_has_func(r.prog, "main"));
+  t.assert(prog_has_func(r.prog, "id$gT_3di32"));
+  t.assert(!prog_has_func(r.prog, "id"));
+}
+fn test_irgen_monomorphizes_multiple_instantiations() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn id[T](x: T) -> T { return x; }\nfn main() -> i32 {\n  let a: i32 = id(1);\n  let b: i64 = id[i64](1);\n  return a;\n}\n");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  t.assert_eq(r.prog.funcs.len(), 3);
+  t.assert(prog_has_func(r.prog, "main"));
+  t.assert(prog_has_func(r.prog, "id$gT_3di32"));
+  t.assert(prog_has_func(r.prog, "id$gT_3di64"));
+}
+fn test_irgen_monomorphizes_generic_body_with_type_params() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn mk[T](x: T) -> Vec[T] {\n  let mut v: Vec[T] = Vec();\n  v.push(x);\n  return v;\n}\nfn main() -> i32 {\n  let v = mk(1);\n  return v.len();\n}\n");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  t.assert(prog_has_func(r.prog, "mk$gT_3di32"));
+}
+fn test_irgen_monomorphizes_const_generic_call() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    fn addn[const N: i32](x: i32) -> i32 { return x + N; }
+    fn main() -> i32 { return addn[3](1); }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert_eq(r.prog.funcs.len(), 2);
+  t.assert(prog_has_func(r.prog, "main"));
+  t.assert(prog_has_func(r.prog, "addn$gN_3d3_3ai32"));
+  t.assert(!prog_has_func(r.prog, "addn"));
+}
+fn test_irgen_monomorphizes_const_generic_default_arg_call() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    fn addn[const N: i32 = 3](x: i32) -> i32 { return x + N; }
+    fn main() -> i32 { return addn(1); }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(prog_has_func(r.prog, "addn$gN_3d3_3ai32"));
+}
+fn test_irgen_monomorphizes_const_generic_default_arg_override() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn addn[const N: i32 = 3](x: i32) -> i32 { return x + N; }
+    fn main() -> i32 {
+      let a: i32 = addn(1);
+      let b: i32 = addn[9](1);
+      return a + b;
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(prog_has_func(r.prog, "addn$gN_3d3_3ai32"));
+  t.assert(prog_has_func(r.prog, "addn$gN_3d9_3ai32"));
+}
+fn test_irgen_monomorphizes_const_generic_multiple_instantiations() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    fn addn[const N: i32](x: i32) -> i32 { return x + N; }
+    fn main() -> i32 {
+      let a: i32 = addn[1](1);
+      let b: i32 = addn[2](1);
+      return a + b;
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(prog_has_func(r.prog, "addn$gN_3d1_3ai32"));
+  t.assert(prog_has_func(r.prog, "addn$gN_3d2_3ai32"));
+}
+fn test_irgen_monomorphizes_generic_nominal_types() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    struct Pair[T] { a: T, b: T }
+    enum Option[T] { Some(T), None }
+    fn main() -> i32 {
+      let p: Pair[i32] = Pair { a: 1, b: 2 };
+      let o: Option[i32] = Option.Some(p.a + p.b);
+      return match o { Option.Some(v) => v, Option.None => 0 };
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(prog_has_struct(r.prog, "Pair$gT_3di32"));
+  t.assert(prog_has_enum(r.prog, "Option$gT_3di32"));
+}
+fn test_irgen_monomorphizes_typed_path_generic_nominal_types() -> () {
+  let mut w: tc.World = tc.world();
+  let src: String = """
+    struct Pair[T] { a: T, b: T }
+    enum Option[T] { Some(T), None }
+    fn main() -> i32 {
+      let p = Pair[i32] { a: 1, b: 2 };
+      let o = Option[i32].Some(p.a + p.b);
+      let n = Option[i32].None;
+      let y: i32 = match n { Option.Some(v) => v, Option.None => 0 };
+      return match o { Option.Some(v) => v + y, Option.None => 0 };
+    }
+  """;
+  w = add_mod(w, "main", src);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+  t.assert(prog_has_struct(r.prog, "Pair$gT_3di32"));
+  t.assert(prog_has_enum(r.prog, "Option$gT_3di32"));
+}
+fn test_irgen_generic_trait_bound_rejected() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    trait Eq { fn eq(a: Self, b: Self) -> bool; }
+    impl Eq for i32 { fn eq(a: i32, b: i32) -> bool { return a == b; } }
+    fn same[T: Eq](a: T, b: T) -> bool { return Eq.eq(a, b); }
+    fn main() -> i32 { return if same("a", "b") { 1 } else { 0 }; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(!r.ok);
+}

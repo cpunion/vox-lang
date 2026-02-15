@@ -1,0 +1,101 @@
+import "std/testing" as t
+import "vox/typecheck" as tc
+import "vox/irgen" as g
+import "vox/ir" as ir
+
+fn test_irgen_preserves_ref_types_in_func_signatures() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", "fn id(s: &'static str) -> &'static str { return s; }\nfn bump(x: &mut i32) -> i32 { return x + 1; }\nfn main() -> i32 { let mut v: i32 = 1; let s: &'static str = id(\"x\"); return bump(v) + s.len(); }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+
+  let mut saw_id: bool = false;
+  let mut saw_bump: bool = false;
+  let mut i: i32 = 0;
+  while i < r.prog.funcs.len() {
+    let f: ir.Func = r.prog.funcs.get(i);
+    if f.name == "id" {
+      saw_id = true;
+      t.assert_eq(f.params.len(), 1);
+      let p0: ir.Ty = ir.ty_pool_get(r.prog.pool, f.params.get(0).ty);
+      let rt: ir.Ty = ir.ty_pool_get(r.prog.pool, f.ret);
+      t.assert(p0.kind == ir.TyKind.Ref);
+      t.assert(rt.kind == ir.TyKind.Ref);
+      t.assert(ir.ty_ref_is_static(p0));
+      t.assert(!ir.ty_ref_is_mut(p0));
+      t.assert(ir.ty_ref_is_static(rt));
+      t.assert(!ir.ty_ref_is_mut(rt));
+    }
+    if f.name == "bump" {
+      saw_bump = true;
+      t.assert_eq(f.params.len(), 1);
+      let p1: ir.Ty = ir.ty_pool_get(r.prog.pool, f.params.get(0).ty);
+      t.assert(p1.kind == ir.TyKind.Ref);
+      t.assert(ir.ty_ref_is_mut(p1));
+      t.assert(!ir.ty_ref_is_static(p1));
+    }
+    i = i + 1;
+  }
+
+  t.assert(saw_id);
+  t.assert(saw_bump);
+
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "fn id(...) -> ref(static,str)"));
+}
+fn test_irgen_async_await_poll_ready_lowers_control_flow() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/async", """
+    pub enum Poll[T] { Pending, Ready(T) }
+    pub struct Waker { pub token: i64 }
+    pub struct Context { pub waker: Waker }
+    pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+  """);
+  w = add_mod(w, "main", """
+    enum Poll[T] { Pending, Ready(T) }
+    async fn inc(x: i32) -> i32 {
+      let p: Poll[i32] = .Ready(x);
+      let y: i32 = p.await;
+      return y + 1;
+    }
+    async fn main() -> i32 { return inc(1).await; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "enum_tag"));
+  t.assert(contains(s, "enum_payload"));
+  t.assert(contains(s, "await_pending_"));
+  t.assert(contains(s, "Pending"));
+  t.assert(!contains(s, "await on Pending is not supported yet (D03)"));
+}
+fn test_irgen_async_await_future_impl_lowers_poll_call() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/async", """
+    pub enum Poll[T] { Pending, Ready(T) }
+    pub struct Waker { pub token: i64 }
+    pub struct Context { pub waker: Waker }
+    pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+  """);
+  w = add_mod(w, "main", """
+    import "std/async" as a
+    struct C { n: i32 }
+    impl a.Future for C {
+      type Output = i32;
+      fn poll(x: &mut C, _cx: &a.Context) -> a.Poll[i32] { return .Ready(x.n); }
+    }
+    async fn main() -> i32 {
+      let c: C = C { n: 1 };
+      let x: i32 = c.await;
+      return x + 1;
+    }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "struct_init"));
+  t.assert(contains(s, "impl$std.async$Future$poll"));
+  t.assert(contains(s, "await_pending_"));
+}

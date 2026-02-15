@@ -1,0 +1,47 @@
+import "std/testing" as t
+import "vox/typecheck" as tc
+import "vox/irgen" as g
+import "vox/ir" as ir
+
+
+fn test_irgen_prelude_trait_fallback_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", """
+    pub trait Eq { fn eq(a: Self, b: Self) -> bool; }
+    impl Eq for i32 { fn eq(a: i32, b: i32) -> bool { return a == b; } }
+  """);
+  w = add_mod(w, "main", "fn main() -> i32 { return if Eq.eq(1, 1) { 1 } else { 0 }; }");
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "std.prelude::impl$std.prelude$Eq$eq"));
+}
+fn test_irgen_prelude_trait_default_method_fallback_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", """
+    fn tag() -> String { return "pre"; }
+    pub trait Show { fn show(x: Self) -> String { return tag(); } }
+  """);
+  w = add_mod(w, "main", """
+    struct I { v: i32 }
+    impl Show for I {}
+    fn main() -> i32 { let s: String = I { v: 1 }.show(); return s.len(); }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "std.prelude::tag"));
+  t.assert(contains(s, "impl$std.prelude$Show$show"));
+}
+fn test_irgen_inherent_impl_method_call_lowers() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "main", """
+    struct I { v: i32 }
+    impl I { fn inc(x: I) -> i32 { return x.v + 1; } }
+    fn main() -> i32 { return I { v: 1 }.inc(); }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert(r.ok);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "impl$inherent$inc$"));
+}

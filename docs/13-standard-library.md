@@ -10,6 +10,7 @@
 - `std::process`：最小进程能力（args/exec/exe_path/getenv；用于 编译器工具链自举）
 - `std::time`：最小时钟能力（`now_ns`；用于测试与工具链计时）
 - `std::sync`：并发原语（`Mutex[T]/Atomic[T]` 泛型 API）
+- `std::async`：pull 模型异步核心（`Poll[T]`、`Future`、`Context`、`Waker`）
 - `std::collections`：`Vec`、`Map` 等
 - `std::io`：输出 + 最小文件抽象 + 最小 TCP 抽象
 
@@ -23,7 +24,7 @@
   - 匹配/查找 API：
     - `String` 参数版本：`starts_with`、`ends_with`、`contains`、`index_of`、`last_index_of`、`equals`、`compare`
     - `StrView` 参数版本：`starts_with_view`、`ends_with_view`、`contains_view`、`index_of_view`、`last_index_of_view`、`equals_view`、`compare_view`
-  - 语言层当前不支持裸 `str`（会报错）；请使用 `String`（拥有）或 `&str`/`&'static str`（借用）。同时支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法（当前过渡语义映射到 `T`，`&'a T` 这类命名 lifetime 在 parser 阶段拒绝）。
+  - 语言层当前不支持裸 `str`（会报错）；请使用 `String`（拥有）或 `&str`/`&'static str`（借用）。同时支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法（借用形状在类型系统/IR 中保留为 `Ref`，`&'a T` 这类命名 lifetime 在 parser 阶段拒绝）。
   - 显式释放基线：`release(s: String) -> String`，返回空字符串并断开当前值（不触发别名 UAF）。该调用必须接收返回值（例如 `s = release(s)`），裸表达式语句会报错；被释放变量后续读取会报 `use of moved value`（除非先重绑定）。
 - `std::collections` 已提供 `Slice[T]`（拥有型 `Vec[T]` 视图）。
   - 基础 API：`view_all`、`view_range`、`sub`、`len`、`is_empty`、`get`、`to_vec`。

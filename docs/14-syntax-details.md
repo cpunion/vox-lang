@@ -6,11 +6,13 @@
 
 声明：
 
-`fn struct enum trait impl type const static`
+`fn struct enum trait impl type const static async`
 
 控制流：
 
-`if else match for while loop break continue return`
+`if else match for while loop break continue return await`
+
+说明：`async`/`await` 当前为保留关键字（见 `docs/09-async-model.md`，语义尚未开启）。
 
 绑定与可变性：
 
@@ -273,7 +275,7 @@ type Value = I32: i32 | Str: String;
 - 语言设计草案倾向将 `"..."` 视为 `&'static str`（可按 `&str` 使用）。
 - Stage0/Stage1/Stage2 当前实现中，字符串字面量仍视为 `String`（后端以 `const char*` 表示）。
 - Stage2 当前不支持裸 `str` 类型；请使用 `String`（拥有）或 `&str`/`&'static str`（借用）。
-- Stage2 已支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法，但当前仍是过渡语义：类型检查阶段擦除为 `T`；命名 lifetime（如 `&'a T`）在语法阶段直接拒绝。
+- Stage2 已支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法；借用形状在类型系统/IR 中保留（`Ref`）；命名 lifetime（如 `&'a T`）在语法阶段直接拒绝。
 - 过渡到切片方向的当前落地是 `std/string` 的 `StrView { owner: String, lo, hi }`（拥有型视图），用于“可长期保存的子串视图”；推荐优先使用 view-first API（如 `sub`、`take_prefix`、`take_suffix`、`drop_prefix`、`drop_suffix`）并尽量延后 `to_string` 物化。
 
 ## 范围类型语法（已定，草案）
@@ -462,7 +464,7 @@ match x {
 为配合“临时借用”规则：
 
 - 非 `&'static` 的 `&T` / `&mut T` 不允许出现在 struct 字段与返回类型中（详见 `docs/07-memory-management.md`）
-- Stage2 当前为过渡实现，`&T` 在类型层先擦除为 `T`，所以暂未强制上述位置约束。
+- Stage2 当前已在 typecheck 强制上述位置约束；借用形状在类型系统/IR 中保留为 `Ref`。
 
 ## 成员访问（`.`）
 

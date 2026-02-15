@@ -1151,6 +1151,7 @@ fn empty_func_decl() -> ast.FuncDecl {
     sp: ast.span0(),
     vis: ast.vis_pub(),
     is_pub: false,
+    is_async: false,
     name: "",
     type_params: Vec(),
     type_param_packs: Vec(),
@@ -1208,6 +1209,20 @@ fn const_struct_path_matches_expected(ctx: Ctx, cur_mod: String, imps: Imports, 
   return struct_name == fs.sig.base_name || struct_name == fs.sig.name;
 }
 
+fn ty_inst_bracket_suffix(ctx: Ctx, ty: i32) -> String {
+  // Best-effort: reuse expected inst's `[T, ...]` suffix for diagnostics when we
+  // don't have a concrete instantiated type id for the "got" side.
+  let s: String = ty_user_str(ctx, ty);
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if s.byte_at(i) == 91 { // '['
+      return s.slice(i, s.len());
+    }
+    i = i + 1;
+  }
+  return "";
+}
+
 fn const_resolve_enum_ctor(ctx: Ctx, w: World, cur_mod: String, imps: Imports, parts: Vec[String], enum_targs: Vec[ast.TypeName], expected: i32) -> ConstResolveEnumCtorResult {
   if enum_targs.len() != 0 {
     if parts.len() < 2 || parts.len() > 3 {
@@ -1235,7 +1250,11 @@ fn const_resolve_enum_ctor(ctx: Ctx, w: World, cur_mod: String, imps: Imports, p
       return ConstResolveEnumCtorResult { ok: false, err: "const typed path requires enum type", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
     }
     if expected != -1 && strip_range(c2, expected) != eb_t {
-      return ConstResolveEnumCtorResult { ok: false, err: "const enum ctor type mismatch", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+      let msg: String = "enum ctor result type mismatch: expected "
+        .concat(ty_user_str(c2, expected))
+        .concat(", got ")
+        .concat(ty_user_str(c2, eb_t));
+      return ConstResolveEnumCtorResult { ok: false, err: msg, enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
     }
     let fv_t: ConstFindVariantResult = const_find_enum_variant(c2, eb_t, vname_t);
     if !fv_t.ok {
@@ -1292,7 +1311,12 @@ fn const_resolve_enum_ctor(ctx: Ctx, w: World, cur_mod: String, imps: Imports, p
   }
   let base_name: String = fe_want.sig.base_name;
   if enum_mod != want_mod || (enum_name != want_name && enum_name != base_name) {
-    return ConstResolveEnumCtorResult { ok: false, err: "const enum ctor type mismatch", enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
+    let got: String = enum_name.concat(ty_inst_bracket_suffix(ctx, expected));
+    let msg: String = "enum ctor result type mismatch: expected "
+      .concat(ty_user_str(ctx, expected))
+      .concat(", got ")
+      .concat(got);
+    return ConstResolveEnumCtorResult { ok: false, err: msg, enum_ty: ctx.ty_bad, variant: "", vidx: -1, fields: Vec() };
   }
 
   let fe2: FindEnumResult = find_enum(ctx, enum_mod, enum_name);

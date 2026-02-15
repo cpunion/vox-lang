@@ -1,0 +1,114 @@
+import "std/testing" as t
+import "vox/compile" as c
+import "vox/loader" as ld
+import "vox/codegen" as cg
+
+fn std_async_file() -> ld.SourceFile {
+  return ld.SourceFile {
+    path: "src/std/async/async.vox",
+    text: """
+      pub enum Poll[T] { Pending, Ready(T) }
+      pub struct Waker { pub token: i64 }
+      pub struct Context { pub waker: Waker }
+      pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+    """,
+  };
+}
+
+fn test_compile_async_fn_without_await_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file());
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      async fn inc(x: i32) -> i32 { return x + 1; }
+      async fn main() -> i32 { return inc(41).await; }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    // Driver main is sync; async entrypoints are deferred to stage2 runtime/executor integration.
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_async_fn_with_await_poll_ready_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file());
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      enum Poll[T] { Pending, Ready(T) }
+      async fn inc(x: i32) -> i32 {
+        let p: Poll[i32] = .Ready(x);
+        let y: i32 = p.await;
+        return y + 1;
+      }
+      async fn main() -> i32 { return inc(41).await; }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_async_fn_with_await_future_impl_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file());
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/async" as a
+      struct C { n: i32 }
+      impl a.Future for C {
+        type Output = i32;
+        fn poll(x: &mut C, _cx: &a.Context) -> a.Poll[i32] { return .Ready(x.n); }
+      }
+      async fn main() -> i32 {
+        let c: C = C { n: 1 };
+        let x: i32 = c.await;
+        return x + 1;
+      }
+  """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}
+fn test_compile_async_fn_allows_postfix_await_then_try_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file());
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      enum Result[T, E] { Ok(T), Err(E) }
+      enum Poll[T] { Pending, Ready(T) }
+      async fn main() -> Result[i32, i32] {
+        let p: Poll[Result[i32, i32]] = .Ready(.Ok(1));
+        let x: i32 = p.await?;
+        return .Ok(x + 1);
+      }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    // Driver main only supports primitive returns; we only need compile+typecheck here.
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}

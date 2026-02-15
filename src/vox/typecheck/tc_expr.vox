@@ -7,6 +7,8 @@ import "vox/ir" as ir
 
 pub struct ExprTyResult { pub ok: bool, pub ty: i32, pub err: TcError }
 struct TryContainerInfo { ok: bool, is_result: bool, ok_ty: i32, residual_ty: i32 }
+struct AwaitPollInfo { ok: bool, out_ty: i32 }
+struct AwaitFutureInfo { ok: bool, out_ty: i32 }
 struct VariantLookupFieldResult { found: bool, field_count: i32, field0: i32 }
 struct TryErrCompatResult { ok: bool, err: TcError }
 
@@ -42,6 +44,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
     ast.ExprNode.MacroCall(callee, _targs, _args) => tc_expr_macro_call(ctx, exprs, callee, ast.expr_pool_span(exprs, id)),
     ast.ExprNode.TryBlock(bid) => tc_expr_try_block(ctx, w, mod_path, imps, exprs, l0, id, bid, expected),
     ast.ExprNode.Try(a) => tc_expr_try(ctx, w, mod_path, imps, exprs, l0, id, a, expected),
+    ast.ExprNode.Await(a) => tc_expr_await(ctx, w, mod_path, imps, exprs, l0, id, a, expected),
     ast.ExprNode.StructLit(ty_expr, fields) => tc_expr_struct_lit(ctx, w, mod_path, imps, exprs, l0, ty_expr, fields, expected),
     ast.ExprNode.Match(scrut, arms) => tc_expr_match(ctx, w, mod_path, imps, exprs, l0, scrut, arms, expected),
   };
@@ -53,6 +56,51 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
   return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "typecheck failed") };
 }
 
+fn tc_expr_await(
+  ctx: Ctx,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  id: i32,
+  a: i32,
+  expected: i32
+) -> ExprTyResult {
+  let sp: ast.Span = ast.expr_pool_span(exprs, id);
+  if !l0.fn_is_async {
+    return ExprTyResult {
+      ok: false,
+      ty: ctx.ty_bad,
+      err: type_error_at(sp, "await can only be used in async fn (D03)"),
+    };
+  }
+
+  let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, a, -1);
+  if !ar.ok { return ar; }
+
+  let mut out_ty: i32 = -1;
+  let ai: AwaitPollInfo = await_poll_info(ctx, ar.ty);
+  if ai.ok {
+    out_ty = ai.out_ty;
+  } else {
+    let afi: AwaitFutureInfo = await_future_info(ctx, ar.ty);
+    if afi.ok {
+      out_ty = afi.out_ty;
+    } else {
+      return ExprTyResult {
+        ok: false,
+        ty: ctx.ty_bad,
+        err: type_error_at(sp, "`await` requires Poll-like enum { Pending, Ready(T) } or std/async::Future impl (D03 scaffold)"),
+      };
+    }
+  }
+
+  if expected != -1 && !assignable_to(ctx, expected, out_ty) {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+  }
+  return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
+}
 fn macro_callee_display_name(exprs: ast.ExprPool, callee: i32) -> String {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, callee);
   return match n {
@@ -109,6 +157,56 @@ fn try_container_info(ctx: Ctx, ty0: i32) -> TryContainerInfo {
   return TryContainerInfo { ok: false, is_result: false, ok_ty: ctx.ty_bad, residual_ty: ctx.ty_bad };
 }
 
+
+fn await_poll_info(ctx: Ctx, ty0: i32) -> AwaitPollInfo {
+  let ty: i32 = strip_range(ctx, ty0);
+  if ty < 0 || ty >= ctx.pool.tys.len() { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind != ir.TyKind.Enum { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
+  let fe: FindEnumResult = find_enum(ctx, ty_mod(t), ty_name(t));
+  if !fe.found { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
+  let es: EnumSig = fe.sig;
+
+  let pending: VariantLookupFieldResult = find_enum_variant_field(es, "Pending");
+  let ready: VariantLookupFieldResult = find_enum_variant_field(es, "Ready");
+  if !pending.found || !ready.found { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
+  if pending.field_count != 0 || ready.field_count != 1 { return AwaitPollInfo { ok: false, out_ty: ctx.ty_bad }; }
+  return AwaitPollInfo { ok: true, out_ty: ready.field0 };
+}
+
+fn await_future_info(ctx: Ctx, ty0: i32) -> AwaitFutureInfo {
+  let recv_ty: i32 = strip_range(ctx, ty0);
+  let fi: FindImplForTyResult = find_impl_for_ty(ctx, "std/async", "Future", recv_ty);
+  if fi.ambiguous || !fi.found {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+
+  let ur: UnifyResult = unify_ty(ctx, fi.sig.for_ty, recv_ty, Vec());
+  if !ur.ok {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+  let subs: Vec[TySub] = ur.subs;
+
+  let out0: i32 = try_impl_assoc_ty(fi.sig, "Output");
+  if out0 == -1 {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+  let out_ty: i32 = subst_ty(ctx, out0, subs);
+
+  let im: FindImplMethodResult = find_impl_method(fi.sig, "poll");
+  if !im.found {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+  let poll_ret: i32 = subst_ty(ctx, im.m.sig.ret, subs);
+  let pi: AwaitPollInfo = await_poll_info(ctx, poll_ret);
+  if !pi.ok {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+  if !assignable_to(ctx, out_ty, pi.out_ty) || !assignable_to(ctx, pi.out_ty, out_ty) {
+    return AwaitFutureInfo { ok: false, out_ty: ctx.ty_bad };
+  }
+  return AwaitFutureInfo { ok: true, out_ty: out_ty };
+}
 fn try_impl_assoc_ty(sig: ImplSig, assoc: String) -> i32 {
   let mut i: i32 = 0;
   while i < sig.assoc_types.len() {
@@ -245,11 +343,26 @@ fn tc_expr_try(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
   if !src.ok {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "`?` requires Result[T, E] or Option[T]") };
   }
-  let target: i32 = if l0.try_ret_ty != -1 { l0.try_ret_ty } else { l0.fn_ret_ty };
+  let mut target: i32 = if l0.try_ret_ty != -1 { l0.try_ret_ty } else { l0.fn_ret_ty };
   if target == -1 {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "`?` can only be used inside function/try block") };
   }
-  let dst: TryContainerInfo = try_container_info(ctx, target);
+
+  // Allow `?` to propagate through a Poll-like wrapper:
+  // `fn ... -> Poll[Result[T, E]] { ... x? ... }` should be valid and will lower
+  // to returning `.Ready(.Err(..))` in the poll state machine.
+  let mut dst: TryContainerInfo = try_container_info(ctx, target);
+  if !dst.ok {
+    let pi: AwaitPollInfo = await_poll_info(ctx, target);
+    if pi.ok {
+      let d2: TryContainerInfo = try_container_info(ctx, pi.out_ty);
+      if d2.ok {
+        target = pi.out_ty;
+        dst = d2;
+      }
+    }
+  }
+
   if !dst.ok {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "propagation target type must be Result[T, E] or Option[T] when using `?`") };
   }
@@ -443,14 +556,17 @@ fn tc_expr_int(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyRes
   // - if expected is an integer scalar type, constrain to that type with range check
   // - otherwise, pick i32 if it fits, else i64 if it fits.
   if expected != -1 {
+    // Allow implicit deref of `&i32` etc for numeric contexts. Borrow/place
+    // requirements are enforced at call/let sites.
+    let expected0: i32 = strip_ref(ctx, expected);
     // Range types require an explicit `as` cast.
-    let eb: i32 = strip_range(ctx, expected);
-    if eb != expected { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal requires expected scalar int") }; }
+    let eb: i32 = strip_range_only(ctx, expected0);
+    if eb != expected0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal requires expected scalar int") }; }
 
-    if expected == ctx.ty_u64 || expected == ctx.ty_usize {
+    if expected0 == ctx.ty_u64 || expected0 == ctx.ty_usize {
       let pru: ParseU64DecResult = parse_u64_dec(text);
       if !pru.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal out of range") }; }
-      if expected == ctx.ty_u64 { return ExprTyResult { ok: true, ty: ctx.ty_u64, err: TcError.None }; }
+      if expected0 == ctx.ty_u64 { return ExprTyResult { ok: true, ty: ctx.ty_u64, err: TcError.None }; }
       return ExprTyResult { ok: true, ty: ctx.ty_usize, err: TcError.None };
     }
 
@@ -458,34 +574,34 @@ fn tc_expr_int(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyRes
     if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal out of range") }; }
     let v: i64 = pr.val;
 
-    if expected == ctx.ty_i8 {
+    if expected0 == ctx.ty_i8 {
       if v < -128 || v > 127 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i8 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_i8, err: TcError.None };
     }
-    if expected == ctx.ty_u8 {
+    if expected0 == ctx.ty_u8 {
       if v < 0 || v > 255 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "u8 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_u8, err: TcError.None };
     }
-    if expected == ctx.ty_i16 {
+    if expected0 == ctx.ty_i16 {
       if v < -32768 || v > 32767 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i16 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_i16, err: TcError.None };
     }
-    if expected == ctx.ty_u16 {
+    if expected0 == ctx.ty_u16 {
       if v < 0 || v > 65535 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "u16 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_u16, err: TcError.None };
     }
-    if expected == ctx.ty_i32 {
+    if expected0 == ctx.ty_i32 {
       if v < -2147483648 || v > 2147483647 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "i32 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
     }
-    if expected == ctx.ty_u32 {
+    if expected0 == ctx.ty_u32 {
       if v < 0 || v > 4294967295 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "u32 literal out of range") }; }
       return ExprTyResult { ok: true, ty: ctx.ty_u32, err: TcError.None };
     }
-    if expected == ctx.ty_i64 {
+    if expected0 == ctx.ty_i64 {
       return ExprTyResult { ok: true, ty: ctx.ty_i64, err: TcError.None };
     }
-    if expected == ctx.ty_isize {
+    if expected0 == ctx.ty_isize {
       return ExprTyResult { ok: true, ty: ctx.ty_isize, err: TcError.None };
     }
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "integer literal requires expected scalar int") };
@@ -507,8 +623,9 @@ fn tc_expr_float(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyR
   if suf == 32 || suf == 64 {
     let lit_ty: i32 = if suf == 32 { ctx.ty_f32 } else { ctx.ty_f64 };
     if expected != -1 {
-      let eb: i32 = strip_range(ctx, expected);
-      if eb != expected || !is_float_ty(ctx, eb) {
+      let expected0: i32 = strip_ref(ctx, expected);
+      let eb: i32 = strip_range_only(ctx, expected0);
+      if eb != expected0 || !is_float_ty(ctx, eb) {
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "float literal requires expected f32/f64") };
       }
       if eb != lit_ty {
@@ -518,15 +635,16 @@ fn tc_expr_float(ctx: Ctx, sp: ast.Span, text: String, expected: i32) -> ExprTyR
     return ExprTyResult { ok: true, ty: lit_ty, err: TcError.None };
   }
   if expected != -1 {
-    if expected == ctx.ty_f32 { return ExprTyResult { ok: true, ty: ctx.ty_f32, err: TcError.None }; }
-    if expected == ctx.ty_f64 { return ExprTyResult { ok: true, ty: ctx.ty_f64, err: TcError.None }; }
+    let expected0: i32 = strip_ref(ctx, expected);
+    if expected0 == ctx.ty_f32 { return ExprTyResult { ok: true, ty: ctx.ty_f32, err: TcError.None }; }
+    if expected0 == ctx.ty_f64 { return ExprTyResult { ok: true, ty: ctx.ty_f64, err: TcError.None }; }
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "float literal requires expected f32/f64") };
   }
   return ExprTyResult { ok: true, ty: ctx.ty_f64, err: TcError.None };
 }
 
 fn tc_expr_str(ctx: Ctx, expected: i32) -> ExprTyResult {
-  if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if expected != -1 && strip_ref(ctx, expected) != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
 }
 
@@ -553,8 +671,12 @@ fn tc_expr_ident(ctx: Ctx, sp: ast.Span, mod_path: String, imps: Imports, l0: Lo
   let want_mod: String = if ni.local != "" { ni.mod_path } else { mod_path };
   let want_name: String = if ni.local != "" { ni.name } else { name };
   let cs: ConstSig = find_const(ctx, want_mod, want_name);
-  if cs.name == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  if !vis_allows(cs.vis, want_mod, mod_path) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if cs.name == "" {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "unknown name: ".concat(name)) };
+  }
+  if !vis_allows(cs.vis, want_mod, mod_path) {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "const is private: ".concat(name)) };
+  }
   if expected != -1 && !assignable_to(ctx, expected, cs.ty) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
   return ExprTyResult { ok: true, ty: cs.ty, err: TcError.None };
 }

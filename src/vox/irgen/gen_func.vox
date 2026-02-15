@@ -40,11 +40,13 @@ fn gen_func_impl(
     loops: Vec(),
     tries: Vec(),
     ret_ty: tc.strip_range_only(ctx, sig.ret),
+    inout_params: Vec(),
     pending: Vec(),
     type_subs: type_subs,
     const_subs: const_subs,
   };
   let mut l0: tc.Locals = g.locals;
+  l0.fn_is_async = fd.is_async;
   l0.fn_ret_ty = tc.strip_range_only(g.ctx, sig.ret);
   let mut ci: i32 = 0;
   while ci < sig.const_params.len() {
@@ -71,22 +73,51 @@ fn gen_func_impl(
   while pi < fd.params.len() {
     let p: ast.Param = fd.params.get(pi);
     let pty: i32 = tc.strip_range_only(g.ctx, sig.params.get(pi));
-    f.params.push(ir.Param { name: p.name, ty: pty });
+    let pbk: i32 = if pi < sig.param_borrow_kinds.len() { sig.param_borrow_kinds.get(pi) } else { tc.param_borrow_none() };
 
-    let rs: GenNewIdResult = gen_new_slot(g);
-    g = rs.g;
-    let sid: i32 = rs.id;
-    g = gen_emit(g, ir.Instr.SlotDecl(sid, pty));
-    g = gen_emit(g, ir.Instr.Store(sid, ir.v_param(pi)));
-    g.slots = slots_decl(g.slots, p.name, sid, pty, false);
-    g.locals = tc.locals_decl(g.locals, p.name, pty, false);
+    if tc.param_borrow_is_mut(pbk) {
+      let static0: bool = pbk == tc.param_borrow_ref_static_mut();
+      let rr: tc.ResolveTyResult = tc.intern_ref(g.ctx, pty, true, static0);
+      g.ctx = rr.ctx;
+      if !rr.ok { return GenFuncResult { ok: false, err: "failed to intern &mut param type", ctx: g.ctx, f: f, extras: Vec(), pending: Vec() }; }
+      let ref_ty: i32 = rr.idx;
+      f.params.push(ir.Param { name: p.name, ty: ref_ty });
+
+      // Copy-in: slot = *param_ptr
+      let rs: GenNewIdResult = gen_new_slot(g);
+      g = rs.g;
+      let sid: i32 = rs.id;
+      g = gen_emit(g, ir.Instr.SlotDecl(sid, pty));
+      let nt: GenNewIdResult = gen_new_temp(g);
+      g = nt.g;
+      let tid: i32 = nt.id;
+      g = gen_emit(g, ir.Instr.RefLoad(tid, pty, ir.v_param(pi)));
+      g = gen_emit(g, ir.Instr.Store(sid, ir.v_temp(tid)));
+
+      // Pointee is mutable even if the binding is not.
+      g.slots = slots_decl(g.slots, p.name, sid, pty, true);
+      g.locals = tc.locals_decl(g.locals, p.name, pty, true);
+      let mut ips: Vec[InoutParam] = g.inout_params;
+      ips.push(InoutParam { param_idx: pi, slot: sid, elem_ty: pty });
+      g.inout_params = ips;
+    } else {
+      f.params.push(ir.Param { name: p.name, ty: pty });
+
+      let rs: GenNewIdResult = gen_new_slot(g);
+      g = rs.g;
+      let sid: i32 = rs.id;
+      g = gen_emit(g, ir.Instr.SlotDecl(sid, pty));
+      g = gen_emit(g, ir.Instr.Store(sid, ir.v_param(pi)));
+      g.slots = slots_decl(g.slots, p.name, sid, pty, false);
+      g.locals = tc.locals_decl(g.locals, p.name, pty, false);
+    }
     pi = pi + 1;
   }
 
   // Body.
   let rb: GenStmtResult = gen_block(g, fd.body);
   if !rb.ok {
-    return GenFuncResult { ok: false, err: rb.err, ctx: g.ctx, f: f, pending: Vec() };
+    return GenFuncResult { ok: false, err: rb.err, ctx: g.ctx, f: f, extras: Vec(), pending: Vec() };
   }
   g = rb.g;
 
@@ -94,19 +125,97 @@ fn gen_func_impl(
   let cur_blk: ir.Block = g.blocks.get(g.cur);
   if !cur_blk.has_term {
     if g.ret_ty == ctx.ty_unit {
+      g = gen_flush_inout_params(g);
       g = gen_term(g, ir.Term.Ret(false, ir.v_int(0)));
     } else {
-      return GenFuncResult { ok: false, err: tc.irgen_error_at(fd.sp, "missing return"), ctx: g.ctx, f: f, pending: Vec() };
+      return GenFuncResult { ok: false, err: tc.irgen_error_at(fd.sp, "missing return"), ctx: g.ctx, f: f, extras: Vec(), pending: Vec() };
     }
   }
 
   f.blocks = g.blocks;
-  return GenFuncResult { ok: true, err: "", ctx: g.ctx, f: f, pending: g.pending };
+  return GenFuncResult { ok: true, err: "", ctx: g.ctx, f: f, extras: Vec(), pending: g.pending };
 }
 
 fn gen_func(ctx: tc.Ctx, w: tc.World, mod_path: String, imps: tc.Imports, exprs: ast.ExprPool, fd: ast.FuncDecl) -> GenFuncResult {
   let fr: tc.FindFuncResult = tc.find_func(ctx, mod_path, fd.name);
-  if !fr.found { return GenFuncResult { ok: false, err: "missing fn sig", ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, pending: Vec() }; }
+  if !fr.found { return GenFuncResult { ok: false, err: "missing fn sig", ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, extras: Vec(), pending: Vec() }; }
+  if fd.is_async {
+    let ar: tc.FindAsyncFnResult = tc.find_async_fn(ctx, mod_path, fd.name);
+    if !ar.found {
+      return GenFuncResult { ok: false, err: "missing async lowering metadata", ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, extras: Vec(), pending: Vec() };
+    }
+
+    // Constructor: `fn f(args) -> Frame { return Frame { state: 0, p_arg: arg, ... }; }`
+    let sr_ctor: SynthResult = synth_async_ctor_body(exprs, fd, ar.sig.frame_name);
+    if !sr_ctor.ok {
+      return GenFuncResult { ok: false, err: sr_ctor.err, ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, extras: Vec(), pending: Vec() };
+    }
+    let fd_ctor: ast.FuncDecl = ast.FuncDecl {
+      file: fd.file,
+      sp: fd.sp,
+      vis: fd.vis,
+      is_pub: fd.is_pub,
+      is_async: false,
+      name: fd.name,
+      type_params: Vec(),
+      type_param_packs: Vec(),
+      const_params: Vec(),
+      type_param_bounds: Vec(),
+      const_where_bounds: Vec(),
+      params: fd.params,
+      ret: fd.ret,
+      ffi_imports: Vec(),
+      ffi_exports: Vec(),
+      body: sr_ctor.body,
+    };
+    let rc: GenFuncResult = gen_func_impl(ctx, w, mod_path, mod_path, imps, sr_ctor.exprs, fd_ctor, fd.name, fr.sig, Vec(), Vec());
+    if !rc.ok { return rc; }
+
+    // Poll: `fn poll(x: &mut Frame, cx: &Context) -> Poll[Output] { ... }`
+    let pr: tc.FindFuncResult = tc.find_func(rc.ctx, mod_path, ar.sig.poll_lowered);
+    if !pr.found {
+      return GenFuncResult { ok: false, err: "missing synthesized async poll sig", ctx: rc.ctx, f: rc.f, extras: Vec(), pending: Vec() };
+    }
+    let frame_var: String = "__frame";
+    let sr_poll: SynthResult = synth_async_poll_body(sr_ctor.exprs, fd, frame_var);
+    if !sr_poll.ok {
+      return GenFuncResult { ok: false, err: sr_poll.err, ctx: rc.ctx, f: rc.f, extras: Vec(), pending: Vec() };
+    }
+    let mut ps: Vec[ast.Param] = Vec();
+    ps.push(ast.Param { name: frame_var, ty: dummy_type_name() });
+    ps.push(ast.Param { name: "cx", ty: dummy_type_name() });
+    let fd_poll: ast.FuncDecl = ast.FuncDecl {
+      file: fd.file,
+      sp: fd.sp,
+      vis: ast.vis_private(),
+      is_pub: false,
+      is_async: true, // allow lowering `.await` scaffolds within the poll body
+      name: ar.sig.poll_lowered,
+      type_params: Vec(),
+      type_param_packs: Vec(),
+      const_params: Vec(),
+      type_param_bounds: Vec(),
+      const_where_bounds: Vec(),
+      params: ps,
+      ret: dummy_type_name(),
+      ffi_imports: Vec(),
+      ffi_exports: Vec(),
+      body: sr_poll.body,
+    };
+    let rp: GenFuncResult = gen_func_impl(rc.ctx, w, mod_path, mod_path, imps, sr_poll.exprs, fd_poll, ar.sig.poll_lowered, pr.sig, Vec(), Vec());
+    if !rp.ok { return rp; }
+
+    // Merge pending instantiations from both bodies.
+    let mut pend: Vec[PendingInst] = Vec();
+    let mut i: i32 = 0;
+    while i < rc.pending.len() { pend.push(rc.pending.get(i)); i = i + 1; }
+    i = 0;
+    while i < rp.pending.len() { pend.push(rp.pending.get(i)); i = i + 1; }
+    let mut extras: Vec[ir.Func] = Vec();
+    extras.push(rp.f);
+    return GenFuncResult { ok: true, err: "", ctx: rp.ctx, f: rc.f, extras: extras, pending: pend };
+  }
+
   return gen_func_impl(ctx, w, mod_path, mod_path, imps, exprs, fd, fd.name, fr.sig, Vec(), Vec());
 }
 
