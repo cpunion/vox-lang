@@ -239,7 +239,7 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
           ffi_exports: md.ffi_exports,
           body: md.body,
         };
-        let tr: TcResult = typecheck_fn_with_sig(c, w, m2.path, imps0, m2.prog.exprs, md2, mf.m.sig);
+        let tr: TcResult = typecheck_fn_with_sig(c, w, m2.path, m2.path, imps0, m2.prog.exprs, md2, mf.m.sig);
         if !tr.ok { return tr; }
         mdi = mdi + 1;
       }
@@ -249,6 +249,14 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
       while mi3 < fr0.sig.methods.len() {
         let ms: ImplMethodSig = fr0.sig.methods.get(mi3);
         if ms.from_default {
+          let mut is_async: bool = false;
+          if !fr0.sig.is_inherent {
+            let tf: FindTraitResult = find_trait(c, fr0.sig.trait_mod_path, fr0.sig.trait_name);
+            if tf.found {
+              let tmf: FindTraitMethodResult = find_trait_method(tf.sig, ms.name);
+              if tmf.found { is_async = tmf.m.is_async; }
+            }
+          }
           let fmd: FindModResult = find_mod(w, ms.default_mod_path);
           if !fmd.found { return TcResult { ok: false, err: type_error_at(id.sp, "missing default trait method module") }; }
           let mdm: WorldModule = w.mods.get(fmd.idx);
@@ -260,8 +268,8 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
             sp: ast.span0(),
             vis: ast.vis_private(),
             is_pub: false,
-            is_async: false,
-            name: ms.name,
+            is_async: is_async,
+            name: ms.lowered_name,
             type_params: Vec(),
             type_param_packs: Vec(),
             const_params: Vec(),
@@ -273,7 +281,10 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
             ffi_exports: Vec(),
             body: ms.default_body,
           };
-          let tr2: TcResult = typecheck_fn_with_sig(c, w, mdm.path, impsd, mdm.prog.exprs, fd, ms.sig);
+          // Default method bodies resolve names using their defining module context (mdm.path),
+          // but async lowering metadata is keyed by the lowered impl symbol (in impl mod m2.path).
+          let async_meta_mod: String = if is_async { m2.path } else { mdm.path };
+          let tr2: TcResult = typecheck_fn_with_sig(c, w, mdm.path, async_meta_mod, impsd, mdm.prog.exprs, fd, ms.sig);
           if !tr2.ok { return tr2; }
         }
         mi3 = mi3 + 1;

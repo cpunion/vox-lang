@@ -137,12 +137,13 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
           let ms: tc.ImplMethodSig = isg.methods.get(mi);
           if ms.lowered_name == name && (ms.sig.type_params.len() != 0 || ms.sig.const_params.len() != 0) {
             if ms.from_default {
+              let ar0: tc.FindAsyncFnResult = tc.find_async_fn(ctx, m.path, ms.lowered_name);
               let fd0: ast.FuncDecl = ast.FuncDecl {
                 file: ms.default_file,
                 sp: ast.span0(),
                 vis: ast.vis_private(),
                 is_pub: false,
-                is_async: false,
+                is_async: ar0.found,
                 name: ms.lowered_name,
                 type_params: ms.sig.type_params,
                 type_param_packs: Vec(),
@@ -454,6 +455,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
       let mut body_imports: Vec[ast.ImportDecl] = m2.prog.imports;
       let mut file_for_imports: String = "";
       if t.impl_from_default {
+        let ar1: tc.FindAsyncFnResult = tc.find_async_fn(ctx, t.mod_path, t.impl_name);
         body_mod_path = t.impl_default_mod_path;
         let fmd: FindModResult = find_mod(w, t.impl_default_mod_path);
         if !fmd.found { return err0(p, "missing default trait method module"); }
@@ -465,7 +467,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
           sp: ast.span0(),
           vis: ast.vis_private(),
           is_pub: false,
-          is_async: false,
+          is_async: ar1.found,
           name: t.impl_name,
           type_params: Vec(),
           type_param_packs: Vec(),
@@ -489,16 +491,14 @@ pub fn generate_world(w: tc.World) -> GenResult {
       want_name = qname(t.mod_path, t.impl_name);
       if has_str(emitted, want_name) { ti = ti + 1; continue; }
       if md.is_async {
-        // Async impl methods are lowered like normal async fns, but their symbol name is the lowered name.
-        if t.impl_from_default {
-          return err0(p, "async default trait methods are not supported yet");
-        }
+        // Lower async impl methods (including from-default) through the instantiation path
+        // so body module and target symbol module can differ.
         let md2: ast.FuncDecl = ast.FuncDecl {
           file: md.file,
           sp: md.sp,
           vis: md.vis,
           is_pub: md.is_pub,
-          is_async: md.is_async,
+          is_async: true,
           name: t.impl_name,
           type_params: md.type_params,
           type_param_packs: md.type_param_packs,
@@ -511,7 +511,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
           ffi_exports: md.ffi_exports,
           body: md.body,
         };
-        r = gen_func(ctx, w, t.mod_path, imps, body_exprs, md2);
+        r = gen_func_inst(ctx, w, body_mod_path, t.mod_path, imps, body_exprs, md2, t.impl_name, t.impl_sig, Vec(), Vec());
       } else {
         r = gen_func_impl(ctx, w, body_mod_path, t.mod_path, imps, body_exprs, md, t.impl_name, t.impl_sig, Vec(), Vec());
       }
@@ -530,7 +530,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
       imps = ar.imps;
       want_name = qname(t.mod_path, t.inst_name);
       if has_str(emitted, want_name) { ti = ti + 1; continue; }
-      r = gen_func_impl(ctx, w, bmod.path, t.mod_path, imps, bmod.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs, t.const_subs);
+      r = gen_func_inst(ctx, w, bmod.path, t.mod_path, imps, bmod.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs, t.const_subs);
     }
 
     if !r.ok { return err0(p, r.err); }

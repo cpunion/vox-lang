@@ -174,3 +174,52 @@ fn test_irgen_async_await_in_if_and_while_body_is_supported() -> () {
   // D03: `z` is defined after await resume; it should not be captured.
   t.assert(!contains(s, ".l_z"));
 }
+
+fn test_irgen_async_generic_fn_with_explicit_type_arg_is_supported() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/async", """
+    pub enum Poll[T] { Pending, Ready(T) }
+    pub struct Waker { pub token: i64 }
+    pub struct Context { pub waker: Waker }
+    pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+  """);
+  w = add_mod(w, "main", """
+    async fn id[T](x: T) -> T { return x; }
+    async fn main() -> i32 { return id[i32](1).await; }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+
+  let s: String = ir.format_program(r.prog);
+  // Generic instantiations use mangled `$g...` suffixes.
+  t.assert(contains(s, "fn id$g"));
+  // Async lowering should synthesize an instantiated poll function.
+  t.assert(contains(s, "async$poll$"));
+  t.assert(contains(s, "__async_frame$"));
+}
+
+fn test_irgen_async_trait_method_default_body_is_supported() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/async", """
+    pub enum Poll[T] { Pending, Ready(T) }
+    pub struct Waker { pub token: i64 }
+    pub struct Context { pub waker: Waker }
+    pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+  """);
+  w = add_mod(w, "main", """
+    trait AddOne { async fn add_one(x: Self, v: i32) -> i32 { return v + 1; } }
+    struct S { n: i32 }
+    impl AddOne for S {}
+
+    async fn main() -> i32 {
+      let s: S = S { n: 0 };
+      return s.add_one(1).await;
+    }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+  let s: String = ir.format_program(r.prog);
+  t.assert(contains(s, "impl$main$AddOne$add_one"));
+  t.assert(contains(s, "async$poll$"));
+  t.assert(contains(s, "__async_frame$"));
+}

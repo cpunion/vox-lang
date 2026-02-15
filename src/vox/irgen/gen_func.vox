@@ -219,8 +219,97 @@ fn gen_func(ctx: tc.Ctx, w: tc.World, mod_path: String, imps: tc.Imports, exprs:
   return gen_func_impl(ctx, w, mod_path, mod_path, imps, exprs, fd, fd.name, fr.sig, Vec(), Vec());
 }
 
-fn gen_func_inst(ctx: tc.Ctx, w: tc.World, mod_path: String, imps: tc.Imports, exprs: ast.ExprPool, fd: ast.FuncDecl, inst_name: String, inst_sig: tc.FuncSig, subs: Vec[tc.TySub]) -> GenFuncResult {
-  return gen_func_impl(ctx, w, mod_path, mod_path, imps, exprs, fd, inst_name, inst_sig, subs, Vec());
+fn gen_func_inst(
+  ctx: tc.Ctx,
+  w: tc.World,
+  body_mod_path: String,
+  target_mod_path: String,
+  imps: tc.Imports,
+  exprs: ast.ExprPool,
+  fd: ast.FuncDecl,
+  inst_name: String,
+  inst_sig: tc.FuncSig,
+  subs: Vec[tc.TySub],
+  const_subs: Vec[tc.ConstSub]
+) -> GenFuncResult {
+  if fd.is_async {
+    let ar: tc.FindAsyncFnResult = tc.find_async_fn(ctx, target_mod_path, inst_name);
+    if !ar.found {
+      return GenFuncResult { ok: false, err: "missing async lowering metadata for inst", ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, extras: Vec(), pending: Vec() };
+    }
+
+    // Constructor: `fn f$inst(args) -> Frame$inst { ... }`
+    let sr_ctor: SynthResult = synth_async_ctor_body(exprs, fd, ar.sig.frame_name);
+    if !sr_ctor.ok {
+      return GenFuncResult { ok: false, err: sr_ctor.err, ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, extras: Vec(), pending: Vec() };
+    }
+    let fd_ctor: ast.FuncDecl = ast.FuncDecl {
+      file: fd.file,
+      sp: fd.sp,
+      vis: fd.vis,
+      is_pub: fd.is_pub,
+      is_async: false,
+      name: inst_name,
+      type_params: Vec(),
+      type_param_packs: Vec(),
+      const_params: Vec(),
+      type_param_bounds: Vec(),
+      const_where_bounds: Vec(),
+      params: fd.params,
+      ret: fd.ret,
+      ffi_imports: Vec(),
+      ffi_exports: Vec(),
+      body: sr_ctor.body,
+    };
+    let rc: GenFuncResult = gen_func_impl(ctx, w, body_mod_path, target_mod_path, imps, sr_ctor.exprs, fd_ctor, inst_name, inst_sig, subs, const_subs);
+    if !rc.ok { return rc; }
+
+    // Poll: `fn poll$inst(&mut Frame$inst, &Context) -> Poll[Output] { ... }`
+    let pr: tc.FindFuncResult = tc.find_func(rc.ctx, target_mod_path, ar.sig.poll_lowered);
+    if !pr.found {
+      return GenFuncResult { ok: false, err: "missing synthesized async poll sig for inst", ctx: rc.ctx, f: rc.f, extras: Vec(), pending: Vec() };
+    }
+    let frame_var: String = "__frame";
+    let sr_poll: SynthResult = synth_async_poll_body(rc.ctx, target_mod_path, sr_ctor.exprs, fd, frame_var, ar.sig.frame_name);
+    if !sr_poll.ok {
+      return GenFuncResult { ok: false, err: sr_poll.err, ctx: rc.ctx, f: rc.f, extras: Vec(), pending: Vec() };
+    }
+    let mut ps: Vec[ast.Param] = Vec();
+    ps.push(ast.Param { name: frame_var, ty: dummy_type_name() });
+    ps.push(ast.Param { name: "cx", ty: dummy_type_name() });
+    let fd_poll: ast.FuncDecl = ast.FuncDecl {
+      file: fd.file,
+      sp: fd.sp,
+      vis: ast.vis_private(),
+      is_pub: false,
+      is_async: true, // allow lowering `.await` scaffolds within the poll body
+      name: ar.sig.poll_lowered,
+      type_params: Vec(),
+      type_param_packs: Vec(),
+      const_params: Vec(),
+      type_param_bounds: Vec(),
+      const_where_bounds: Vec(),
+      params: ps,
+      ret: dummy_type_name(),
+      ffi_imports: Vec(),
+      ffi_exports: Vec(),
+      body: sr_poll.body,
+    };
+    let rp: GenFuncResult = gen_func_impl(rc.ctx, w, body_mod_path, target_mod_path, imps, sr_poll.exprs, fd_poll, ar.sig.poll_lowered, pr.sig, subs, const_subs);
+    if !rp.ok { return rp; }
+
+    // Merge pending instantiations from both bodies.
+    let mut pend: Vec[PendingInst] = Vec();
+    let mut i: i32 = 0;
+    while i < rc.pending.len() { pend.push(rc.pending.get(i)); i = i + 1; }
+    i = 0;
+    while i < rp.pending.len() { pend.push(rp.pending.get(i)); i = i + 1; }
+    let mut extras: Vec[ir.Func] = Vec();
+    extras.push(rp.f);
+    return GenFuncResult { ok: true, err: "", ctx: rp.ctx, f: rc.f, extras: extras, pending: pend };
+  }
+
+  return gen_func_impl(ctx, w, body_mod_path, target_mod_path, imps, exprs, fd, inst_name, inst_sig, subs, const_subs);
 }
 
 struct GenStmtResult { ok: bool, err: String, g: Gen }
