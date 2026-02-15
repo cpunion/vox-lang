@@ -74,6 +74,7 @@ trait Future {
 5. 当前 lowering 支持 `await` 出现在嵌套的语句块里（`if`/`while` 的 body 内），编译器会把控制流拆分成状态机分支/回边。
 6. 仍不支持的 `await` 位置（会报错）：`block` 表达式、`try` block 表达式、`if` 表达式、`match` 表达式、以及宏调用参数内部。
 7. 由于当前 capture rewrite 仍是基于名字（`l_<name>`）的实现细节，`async fn` 暂不支持局部变量 shadowing（同名 `let`）。
+8. 无生命周期标注的约束：`async fn` 会返回一个可逃逸的 Future/frame 值，因此其 **参数/输出类型中禁止出现非 `&'static` 的借用**（包括嵌套在 `Vec[...]`、struct/enum 字段中的借用）。否则借用将随 frame 逃逸，无法在类型系统中表达其有效期。
 
 目标阶段（D03-3b 之后）：
 

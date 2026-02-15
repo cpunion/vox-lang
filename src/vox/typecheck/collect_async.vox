@@ -297,6 +297,23 @@ fn ty_has_forbidden_borrow(ctx: Ctx, ty0: i32) -> bool {
   return false;
 }
 
+fn span_loc(sp: ast.Span) -> String {
+  if sp.file == "" { return "<unknown>"; }
+  return sp.file.concat(":").concat(sp.line.to_string()).concat(":").concat(sp.col.to_string());
+}
+
+struct CaptureUse { name: String, await_stmt_idx: i32, use_stmt_idx: i32 }
+
+fn capture_use_find(xs: Vec[CaptureUse], name: String) -> CaptureUse {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let x: CaptureUse = xs.get(i);
+    if x.name == name { return x; }
+    i = i + 1;
+  }
+  return CaptureUse { name: "", await_stmt_idx: -1, use_stmt_idx: -1 };
+}
+
 fn expr_uses_name(exprs: ast.ExprPool, eid: i32, name: String) -> bool {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
   if match n { ast.ExprNode.Ident(_s) => true, _ => false } {
@@ -636,6 +653,20 @@ fn collect_async_prepare_one(
   }
   let fsym0: FuncSym = c.funcs.get(fidx);
   let output_ty: i32 = fsym0.sig.ret;
+
+  // Async fn returns a Future value; without lifetimes in the language surface,
+  // forbid non-static borrows in params/output because they'd escape via the frame.
+  if ty_has_forbidden_borrow(c, strip_range_only(c, output_ty)) {
+    return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "async fn output cannot contain non-static borrow"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
+  }
+  let mut pi0: i32 = 0;
+  while pi0 < fsym0.sig.params.len() {
+    let pty0: i32 = strip_range_only(c, fsym0.sig.params.get(pi0));
+    if ty_has_forbidden_borrow(c, pty0) {
+      return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "async fn param cannot contain non-static borrow"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
+    }
+    pi0 = pi0 + 1;
+  }
 
   let ir0: ImportsResult = build_imports(w, body_mod_path, body_imports, fd.file);
   if !ir0.ok { return CollectAsyncPrepareOneResult { ok: false, err: ir0.err, ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad }; }

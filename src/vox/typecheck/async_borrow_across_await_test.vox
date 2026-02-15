@@ -1,0 +1,53 @@
+import "std/testing" as t
+import "vox/parse" as p
+import "vox/typecheck" as tc
+
+fn tc_src_path(src: String) -> tc.TcResult {
+  let pr: p.ParseResult = p.parse_text_with_path("src/main.vox", src);
+  t.assert(pr.err == p.ParseError.None);
+
+  let std_async_src: String = """
+    pub enum Poll[T] { Pending, Ready(T) }
+    pub struct Waker { pub token: i64 }
+    pub struct Context { pub waker: Waker }
+    pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+  """;
+  let pr_std: p.ParseResult = p.parse_text_with_path("src/std/async/async.vox", std_async_src);
+  t.assert(pr_std.err == p.ParseError.None);
+
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "std/async", pr_std.prog);
+  w = tc.world_add(w, "main", pr.prog);
+  return tc.typecheck_world(w);
+}
+
+fn test_typecheck_async_fn_rejects_param_nonstatic_borrow_error() -> () {
+  let src: String = """
+    async fn f(x: &i32) -> i32 { return 0; }
+  """;
+  let r: tc.TcResult = tc_src_path(src);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(contains(msg, "async fn param cannot contain non-static borrow"));
+}
+
+fn test_typecheck_async_fn_borrow_across_await_diag_mentions_decl_and_await() -> () {
+  let src: String = """
+    enum Poll[T] { Pending, Ready(T) }
+    fn use_ref(_x: &i32) -> i32 { return 0; }
+    async fn main() -> i32 {
+      let x: i32 = 1;
+      let r: &i32 = x;
+      let p0: Poll[i32] = .Ready(0);
+      let _y: i32 = p0.await;
+      return use_ref(r);
+    }
+  """;
+  let r: tc.TcResult = tc_src_path(src);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert(contains(msg, "borrowed local cannot live across await"));
+  t.assert(contains(msg, "declared at src/main.vox:"));
+  t.assert(contains(msg, "crosses await at src/main.vox:"));
+}
+
