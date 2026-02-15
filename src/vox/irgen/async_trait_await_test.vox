@@ -1,0 +1,196 @@
+import "std/testing" as t
+import "vox/ast" as ast
+import "vox/loader" as ld
+import "vox/macroexpand" as mx
+import "vox/typecheck" as tc
+import "vox/ir" as ir
+
+fn std_async_file() -> ld.SourceFile {
+  return ld.SourceFile {
+    path: "src/std/async/async.vox",
+    text: """
+      pub enum Poll[T] { Pending, Ready(T) }
+      pub struct Waker { pub token: i64 }
+      pub struct Context { pub waker: Waker }
+      pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+    """,
+  };
+}
+
+fn smoke_main_file() -> ld.SourceFile {
+  return ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/async" as a
+
+      trait I { async fn f(x: Self) -> i32; }
+
+      struct S { n: i32 }
+      impl I for S {
+        async fn f(x: S) -> i32 {
+          let p: a.Poll[i32] = .Ready(x.n);
+          let y: i32 = p.await;
+          return y + 1;
+        }
+      }
+
+      async fn inc(x: i32) -> i32 { return x + 1; }
+      async fn main() -> i32 {
+        let s: S = S { n: 1 };
+        let x: i32 = s.f().await;
+        return inc(x).await;
+      }
+    """,
+  };
+}
+
+fn find_mod_simple(w: tc.World, path: String) -> tc.WorldModule {
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(i);
+    if m.path == path { return m; }
+    i = i + 1;
+  }
+  return w.mods.get(0);
+}
+
+fn find_func_simple(m: tc.WorldModule, name: String) -> ast.FuncDecl {
+  let mut i: i32 = 0;
+  while i < m.prog.funcs.len() {
+    let f: ast.FuncDecl = m.prog.funcs.get(i);
+    if f.name == name { return f; }
+    i = i + 1;
+  }
+  return m.prog.funcs.get(0);
+}
+
+struct FindLetInitKindResult { found: bool, kind: String }
+
+fn expr_kind(n: ast.ExprNode) -> String {
+  return match n {
+    ast.ExprNode.Int(_) => "Int",
+    ast.ExprNode.Float(_) => "Float",
+    ast.ExprNode.Bool(_) => "Bool",
+    ast.ExprNode.Ident(_) => "Ident",
+    ast.ExprNode.Str(_) => "Str",
+    ast.ExprNode.DotIdent(_) => "DotIdent",
+    ast.ExprNode.Block(_) => "Block",
+    ast.ExprNode.If(_, _, _) => "If",
+    ast.ExprNode.Unary(_, _) => "Unary",
+    ast.ExprNode.As(_, _) => "As",
+    ast.ExprNode.Binary(_, _, _) => "Binary",
+    ast.ExprNode.Member(_, _) => "Member",
+    ast.ExprNode.Call(_, _, _) => "Call",
+    ast.ExprNode.MacroCall(_, _, _) => "MacroCall",
+    ast.ExprNode.TryBlock(_) => "TryBlock",
+    ast.ExprNode.Try(_) => "Try",
+    ast.ExprNode.Await(_) => "Await",
+    ast.ExprNode.StructLit(_, _) => "StructLit",
+    ast.ExprNode.Match(_, _) => "Match",
+  };
+}
+
+fn find_let_x_in_block(exprs: ast.ExprPool, b: ast.Block) -> FindLetInitKindResult {
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    let st: ast.Stmt = b.stmts.get(i);
+    if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+      let nm: String = match st { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
+      let init: i32 = match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e0) => e0, _ => -1 };
+      if nm == "x" && init != -1 {
+        let n0: ast.ExprNode = ast.expr_pool_get(exprs, init);
+        return FindLetInitKindResult { found: true, kind: expr_kind(n0) };
+      }
+    }
+    if match st { ast.Stmt.IfStmt(_sp, _c, _t, _h, _e) => true, _ => false } {
+      let tb: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, t0, _h, _e) => t0, _ => ast.Block { stmts: Vec() } };
+      let r0: FindLetInitKindResult = find_let_x_in_block(exprs, tb);
+      if r0.found { return r0; }
+      let has_else: bool = match st { ast.Stmt.IfStmt(_sp, _c, _t, h0, _e) => h0, _ => false };
+      if has_else {
+        let eb: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, _t, _h, e0) => e0, _ => ast.Block { stmts: Vec() } };
+        let r1: FindLetInitKindResult = find_let_x_in_block(exprs, eb);
+        if r1.found { return r1; }
+      }
+    }
+    if match st { ast.Stmt.WhileStmt(_sp, _c, _b) => true, _ => false } {
+      let wb: ast.Block = match st { ast.Stmt.WhileStmt(_sp, _c, b0) => b0, _ => ast.Block { stmts: Vec() } };
+      let r2: FindLetInitKindResult = find_let_x_in_block(exprs, wb);
+      if r2.found { return r2; }
+    }
+    i = i + 1;
+  }
+  return FindLetInitKindResult { found: false, kind: "" };
+}
+
+fn test_irgen_async_trait_method_await_poll_body_keeps_await() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file());
+  fs.push(smoke_main_file());
+
+  let lr: ld.LoadWorldResult = ld.world_from_files(fs);
+  t.assert_with(lr.ok, lr.err);
+  let xr: mx.ExpandResult = mx.expand_world(lr.world, mx.default_config());
+  t.assert_with(xr.ok, tc.tc_error_to_string(xr.err));
+
+  let br: tc.BuildCtxResult = tc.build_ctx(xr.world);
+  t.assert_with(br.ok, tc.tc_error_to_string(br.err));
+
+  let m: tc.WorldModule = find_mod_simple(xr.world, "main");
+  let fd: ast.FuncDecl = find_func_simple(m, "main");
+  t.assert(fd.is_async);
+
+  let ar: tc.FindAsyncFnResult = tc.find_async_fn(br.ctx, "main", "main");
+  t.assert(ar.found);
+
+  // The awaited operand in main is `s.f()`; the async frame field `a0` should
+  // have that operand type (the future frame), not the awaited output type.
+  let st1: ast.Stmt = fd.body.stmts.get(1);
+  let init: i32 = match st1 { ast.Stmt.Let(_sp, _m, _n, _ha, _ty, id) => id, _ => -1 };
+  let call_id: i32 =
+    match ast.expr_pool_get(m.prog.exprs, init) {
+      ast.ExprNode.Await(inner) => inner,
+      _ => -1,
+    };
+  t.assert_with(call_id != -1, "expected let x init to be Await(..) in source main");
+  let ir0: tc.ImportsResult = tc.build_imports(xr.world, "main", m.prog.imports, fd.file);
+  t.assert_with(ir0.ok, tc.tc_error_to_string(ir0.err));
+  // Minimal locals: `s: S` exists and we are in an async fn.
+  let mut s_ty: i32 = -1;
+  let mut ti: i32 = 0;
+  while ti < br.ctx.pool.tys.len() {
+    let ty: ir.Ty = ir.ty_pool_get(br.ctx.pool, ti);
+    if ty.kind == ir.TyKind.Struct && ty.mod_path == "main" && ty.name == "S" {
+      s_ty = ti;
+    }
+    ti = ti + 1;
+  }
+  t.assert_with(s_ty != -1, "failed to locate struct type S in ctx pool");
+  let mut l0: tc.Locals = tc.locals_new();
+  l0.fn_is_async = true;
+  l0.fn_ret_ty = br.ctx.ty_i32;
+  l0 = tc.locals_decl(l0, "s", s_ty, false);
+  let op_tr: tc.ExprTyResult = tc.tc_expr(br.ctx, xr.world, "main", ir0.imps, m.prog.exprs, l0, call_id, -1);
+  t.assert_with(op_tr.ok, tc.tc_error_to_string(op_tr.err));
+
+  let fr: tc.FindStructResult = tc.find_struct(br.ctx, "main", ar.sig.frame_name);
+  t.assert_with(fr.found, "failed to find async frame struct: ".concat(ar.sig.frame_name));
+  let mut a0_ty: i32 = -1;
+  let mut fi0: i32 = 0;
+  while fi0 < fr.sig.fields.len() {
+    let f0: tc.StructFieldSig = fr.sig.fields.get(fi0);
+    if f0.name == "a0" { a0_ty = f0.ty; }
+    fi0 = fi0 + 1;
+  }
+  t.assert_with(a0_ty != -1, "async frame is missing field a0");
+  t.assert_with(a0_ty == op_tr.ty, "async frame a0 type mismatch: a0=".concat(a0_ty.to_string()).concat(" operand=").concat(op_tr.ty.to_string()));
+
+  let sr_ctor: SynthResult = synth_async_ctor_body(m.prog.exprs, fd, ar.sig.frame_name);
+  t.assert_with(sr_ctor.ok, sr_ctor.err);
+  let sr_poll: SynthResult = synth_async_poll_body(br.ctx, "main", sr_ctor.exprs, fd, "__frame", ar.sig.frame_name);
+  t.assert_with(sr_poll.ok, sr_poll.err);
+
+  let r: FindLetInitKindResult = find_let_x_in_block(sr_poll.exprs, sr_poll.body);
+  t.assert_with(r.found, "did not find let x in synthesized poll body");
+  t.assert_with(r.kind == "Await", "expected let x init to be Await in synthesized poll body, got ".concat(r.kind));
+}

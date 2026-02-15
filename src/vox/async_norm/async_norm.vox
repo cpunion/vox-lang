@@ -1,0 +1,482 @@
+import "vox/ast" as ast
+
+// Async normalization helpers:
+// - lift nested `await`/`await?` out of expressions into standalone `let` statements
+// - keep evaluation order (left-to-right)
+// - keep await points at the current block level only
+//
+// This is intentionally conservative: it does NOT support `await` inside nested
+// blocks (if/while bodies, block expressions, match arms, try blocks). Those
+// would require full control-flow aware state-machine splitting.
+
+pub struct AwaitPoint { pub stmt_idx: i32, pub operand: i32, pub is_try: bool }
+
+fn stmt_expr_id(st: ast.Stmt) -> i32 {
+  if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+    return match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e) => e, _ => -1 };
+  }
+  if match st { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
+    return match st { ast.Stmt.ExprStmt(_sp, e) => e, _ => -1 };
+  }
+  if match st { ast.Stmt.ReturnStmt(_sp, h, _e) => true, _ => false } {
+    let has0: bool = match st { ast.Stmt.ReturnStmt(_sp, h, _e) => h, _ => false };
+    if has0 { return match st { ast.Stmt.ReturnStmt(_sp, _h, e) => e, _ => -1 }; }
+  }
+  return -1;
+}
+
+pub fn find_await_points(exprs: ast.ExprPool, ss: Vec[ast.Stmt]) -> Vec[AwaitPoint] {
+  let mut out: Vec[AwaitPoint] = Vec();
+  let mut i: i32 = 0;
+  while i < ss.len() {
+    let st: ast.Stmt = ss.get(i);
+    let eid: i32 = stmt_expr_id(st);
+    if eid != -1 {
+      let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
+      if match n { ast.ExprNode.Await(_x) => true, _ => false } {
+        out.push(AwaitPoint { stmt_idx: i, operand: match n { ast.ExprNode.Await(x) => x, _ => -1 }, is_try: false });
+      } else if match n { ast.ExprNode.Try(_x) => true, _ => false } {
+        let x: i32 = match n { ast.ExprNode.Try(y) => y, _ => -1 };
+        let nx: ast.ExprNode = ast.expr_pool_get(exprs, x);
+        if match nx { ast.ExprNode.Await(_y) => true, _ => false } {
+          out.push(AwaitPoint { stmt_idx: i, operand: match nx { ast.ExprNode.Await(y) => y, _ => -1 }, is_try: true });
+        }
+      }
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn stmt_span(st: ast.Stmt) -> ast.Span {
+  return match st {
+    ast.Stmt.Let(sp, _m, _n, _ha, _ann, _e) => sp,
+    ast.Stmt.Assign(sp, _n, _e) => sp,
+    ast.Stmt.AssignField(sp, _r, _f, _e) => sp,
+    ast.Stmt.ExprStmt(sp, _e) => sp,
+    ast.Stmt.IfStmt(sp, _c, _t, _h, _e) => sp,
+    ast.Stmt.WhileStmt(sp, _c, _b) => sp,
+    ast.Stmt.Break(sp) => sp,
+    ast.Stmt.Continue(sp) => sp,
+    ast.Stmt.ReturnStmt(sp, _h, _e) => sp,
+  };
+}
+
+fn add_expr(p0: ast.ExprPool, n: ast.ExprNode, sp: ast.Span) -> ast.AddExprResult {
+  return ast.expr_pool_add(p0, n, sp);
+}
+
+fn add_ident(p0: ast.ExprPool, sp: ast.Span, name: String) -> ast.AddExprResult {
+  return add_expr(p0, ast.ExprNode.Ident(name), sp);
+}
+
+fn expr_has_await(exprs: ast.ExprPool, eid: i32) -> bool {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
+  if match n { ast.ExprNode.Await(_x) => true, _ => false } { return true; }
+  return match n {
+    ast.ExprNode.Int(_v) => false,
+    ast.ExprNode.Float(_v) => false,
+    ast.ExprNode.Bool(_b) => false,
+    ast.ExprNode.Str(_s) => false,
+    ast.ExprNode.Ident(_s) => false,
+    ast.ExprNode.DotIdent(_s) => false,
+    ast.ExprNode.Unary(_op, a) => expr_has_await(exprs, a),
+    ast.ExprNode.As(a, _tn) => expr_has_await(exprs, a),
+    ast.ExprNode.Binary(_op, l, r) => expr_has_await(exprs, l) || expr_has_await(exprs, r),
+    ast.ExprNode.Member(recv, _f) => expr_has_await(exprs, recv),
+    ast.ExprNode.Call(callee, _targs, args) => {
+      if expr_has_await(exprs, callee) { true } else {
+        let mut i: i32 = 0;
+        while i < args.len() {
+          if expr_has_await(exprs, args.get(i)) { return true; }
+          i = i + 1;
+        }
+        false
+      }
+    },
+    ast.ExprNode.TryBlock(bid) => expr_has_await(exprs, bid),
+    ast.ExprNode.Try(a) => expr_has_await(exprs, a),
+    ast.ExprNode.Await(_a) => true,
+    ast.ExprNode.Block(_b) => true, // control-flow boundary
+    ast.ExprNode.StructLit(_t, fields) => {
+      let mut i: i32 = 0;
+      while i < fields.len() {
+        if expr_has_await(exprs, fields.get(i).expr) { return true; }
+        i = i + 1;
+      }
+      false
+    },
+    ast.ExprNode.If(c, t, e) => expr_has_await(exprs, c) || expr_has_await(exprs, t) || expr_has_await(exprs, e),
+    ast.ExprNode.Match(s, arms) => {
+      if expr_has_await(exprs, s) { true } else {
+        let mut i: i32 = 0;
+        while i < arms.len() {
+          if expr_has_await(exprs, arms.get(i).expr) { return true; }
+          i = i + 1;
+        }
+        false
+      }
+    },
+    ast.ExprNode.MacroCall(_c, _t, args) => {
+      let mut i: i32 = 0;
+      while i < args.len() {
+        if expr_has_await(exprs, args.get(i)) { return true; }
+        i = i + 1;
+      }
+      false
+    },
+  };
+}
+
+fn stmt_has_await_anywhere(exprs: ast.ExprPool, st: ast.Stmt) -> bool {
+  return match st {
+    ast.Stmt.Let(_sp, _m, _n, _ha, _ann, init) => expr_has_await(exprs, init),
+    ast.Stmt.Assign(_sp, _n, ex) => expr_has_await(exprs, ex),
+    ast.Stmt.AssignField(_sp, _r, _f, ex) => expr_has_await(exprs, ex),
+    ast.Stmt.ExprStmt(_sp, ex) => expr_has_await(exprs, ex),
+    ast.Stmt.IfStmt(_sp, cond, then_b, has_else, else_b) => {
+      if expr_has_await(exprs, cond) { true } else if block_has_await(exprs, then_b) { true } else if has_else { block_has_await(exprs, else_b) } else { false }
+    },
+    ast.Stmt.WhileStmt(_sp, cond, body) => expr_has_await(exprs, cond) || block_has_await(exprs, body),
+    ast.Stmt.Break(_sp) => false,
+    ast.Stmt.Continue(_sp) => false,
+    ast.Stmt.ReturnStmt(_sp, has_ex, ex) => if has_ex { expr_has_await(exprs, ex) } else { false },
+  };
+}
+
+fn block_has_await(exprs: ast.ExprPool, b: ast.Block) -> bool {
+  let mut i: i32 = 0;
+  while i < b.stmts.len() {
+    if stmt_has_await_anywhere(exprs, b.stmts.get(i)) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn tmp_name(n: i32) -> String { return "__await$".concat(n.to_string()); }
+
+struct LiftExprResult { exprs: ast.ExprPool, prefix: Vec[ast.Stmt], id: i32, next_tmp: i32, ok: bool, err: String }
+
+fn lift_ok(exprs: ast.ExprPool, prefix: Vec[ast.Stmt], id: i32, next_tmp: i32) -> LiftExprResult {
+  return LiftExprResult { exprs: exprs, prefix: prefix, id: id, next_tmp: next_tmp, ok: true, err: "" };
+}
+
+fn lift_err(exprs: ast.ExprPool, err: String, next_tmp: i32) -> LiftExprResult {
+  return LiftExprResult { exprs: exprs, prefix: Vec(), id: -1, next_tmp: next_tmp, ok: false, err: err };
+}
+
+fn lift_expr(exprs0: ast.ExprPool, eid: i32, tmp0: i32, sp: ast.Span, allow_root_await: bool) -> LiftExprResult {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs0, eid);
+
+  // Root await stays in place when allowed; otherwise lift into a temp.
+  if match n { ast.ExprNode.Await(_x) => true, _ => false } {
+    if allow_root_await {
+      // Still ensure operand doesn't contain another await (unsupported).
+      let op: i32 = match n { ast.ExprNode.Await(x) => x, _ => -1 };
+      if expr_has_await(exprs0, op) { return lift_err(exprs0, "await operand contains await (unsupported)".concat(""), tmp0); }
+      return lift_ok(exprs0, Vec(), eid, tmp0);
+    }
+    // Lift: let __await$N = <await-expr>; use __await$N
+    let nm: String = tmp_name(tmp0);
+    let r_id: ast.AddExprResult = add_ident(exprs0, sp, nm);
+    let mut p: ast.ExprPool = r_id.pool;
+    let mut pre: Vec[ast.Stmt] = Vec();
+    pre.push(ast.Stmt.Let(sp, false, nm, false, ast.TypeName { parts: Vec(), args: Vec() }, eid));
+    return lift_ok(p, pre, r_id.id, tmp0 + 1);
+  }
+
+  // Root try-await stays in place when allowed; otherwise lift into a temp.
+  if match n { ast.ExprNode.Try(_x) => true, _ => false } {
+    let x: i32 = match n { ast.ExprNode.Try(y) => y, _ => -1 };
+    let nx: ast.ExprNode = ast.expr_pool_get(exprs0, x);
+    if match nx { ast.ExprNode.Await(_y) => true, _ => false } {
+      if allow_root_await {
+        let op: i32 = match nx { ast.ExprNode.Await(y) => y, _ => -1 };
+        if expr_has_await(exprs0, op) { return lift_err(exprs0, "await operand contains await (unsupported)", tmp0); }
+        return lift_ok(exprs0, Vec(), eid, tmp0);
+      }
+      let nm: String = tmp_name(tmp0);
+      let r_id: ast.AddExprResult = add_ident(exprs0, sp, nm);
+      let mut p: ast.ExprPool = r_id.pool;
+      let mut pre: Vec[ast.Stmt] = Vec();
+      pre.push(ast.Stmt.Let(sp, false, nm, false, ast.TypeName { parts: Vec(), args: Vec() }, eid));
+      return lift_ok(p, pre, r_id.id, tmp0 + 1);
+    }
+  }
+
+  // No await: rewrite children and rebuild if needed.
+  // Avoid using `match` as an expression returning a struct here, because our
+  // current C backend can mis-generate such code.
+  if match n { ast.ExprNode.Int(_v) => true, _ => false } { return lift_ok(exprs0, Vec(), eid, tmp0); }
+  if match n { ast.ExprNode.Float(_v) => true, _ => false } { return lift_ok(exprs0, Vec(), eid, tmp0); }
+  if match n { ast.ExprNode.Bool(_b) => true, _ => false } { return lift_ok(exprs0, Vec(), eid, tmp0); }
+  if match n { ast.ExprNode.Str(_s) => true, _ => false } { return lift_ok(exprs0, Vec(), eid, tmp0); }
+  if match n { ast.ExprNode.Ident(_s) => true, _ => false } { return lift_ok(exprs0, Vec(), eid, tmp0); }
+  if match n { ast.ExprNode.DotIdent(_s) => true, _ => false } { return lift_ok(exprs0, Vec(), eid, tmp0); }
+
+  if match n { ast.ExprNode.Unary(_op, _a) => true, _ => false } {
+    let op: ast.UnaryOp = match n { ast.ExprNode.Unary(op0, _a0) => op0, _ => ast.UnaryOp.Pos };
+    let a: i32 = match n { ast.ExprNode.Unary(_op0, a0) => a0, _ => -1 };
+    let ra: LiftExprResult = lift_expr(exprs0, a, tmp0, sp, false);
+    if !ra.ok { return ra; }
+    if ra.prefix.len() == 0 && ra.id == a { return lift_ok(ra.exprs, Vec(), eid, ra.next_tmp); }
+    let r1: ast.AddExprResult = add_expr(ra.exprs, ast.ExprNode.Unary(op, ra.id), sp);
+    return lift_ok(r1.pool, ra.prefix, r1.id, ra.next_tmp);
+  }
+
+  if match n { ast.ExprNode.As(_a, _tn) => true, _ => false } {
+    let a: i32 = match n { ast.ExprNode.As(a0, _tn0) => a0, _ => -1 };
+    let tn: ast.TypeName = match n { ast.ExprNode.As(_a0, tn0) => tn0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+    let ra: LiftExprResult = lift_expr(exprs0, a, tmp0, sp, false);
+    if !ra.ok { return ra; }
+    if ra.prefix.len() == 0 && ra.id == a { return lift_ok(ra.exprs, Vec(), eid, ra.next_tmp); }
+    let r1: ast.AddExprResult = add_expr(ra.exprs, ast.ExprNode.As(ra.id, tn), sp);
+    return lift_ok(r1.pool, ra.prefix, r1.id, ra.next_tmp);
+  }
+
+  if match n { ast.ExprNode.Binary(_op, _l, _r) => true, _ => false } {
+    let op: ast.BinaryOp = match n { ast.ExprNode.Binary(op0, _l0, _r0) => op0, _ => ast.BinaryOp.Add };
+    let l: i32 = match n { ast.ExprNode.Binary(_op0, l0, _r0) => l0, _ => -1 };
+    let r: i32 = match n { ast.ExprNode.Binary(_op0, _l0, r0) => r0, _ => -1 };
+    let rl: LiftExprResult = lift_expr(exprs0, l, tmp0, sp, false);
+    if !rl.ok { return rl; }
+    let rr: LiftExprResult = lift_expr(rl.exprs, r, rl.next_tmp, sp, false);
+    if !rr.ok { return rr; }
+    let mut pre: Vec[ast.Stmt] = Vec();
+    let mut i: i32 = 0;
+    while i < rl.prefix.len() { pre.push(rl.prefix.get(i)); i = i + 1; }
+    i = 0;
+    while i < rr.prefix.len() { pre.push(rr.prefix.get(i)); i = i + 1; }
+    if pre.len() == 0 && rl.id == l && rr.id == r { return lift_ok(rr.exprs, Vec(), eid, rr.next_tmp); }
+    let r1: ast.AddExprResult = add_expr(rr.exprs, ast.ExprNode.Binary(op, rl.id, rr.id), sp);
+    return lift_ok(r1.pool, pre, r1.id, rr.next_tmp);
+  }
+
+  if match n { ast.ExprNode.Member(_recv, _f) => true, _ => false } {
+    let recv: i32 = match n { ast.ExprNode.Member(r0, _f0) => r0, _ => -1 };
+    let f: String = match n { ast.ExprNode.Member(_r0, f0) => f0, _ => "" };
+    let rr: LiftExprResult = lift_expr(exprs0, recv, tmp0, sp, false);
+    if !rr.ok { return rr; }
+    if rr.prefix.len() == 0 && rr.id == recv { return lift_ok(rr.exprs, Vec(), eid, rr.next_tmp); }
+    let r1: ast.AddExprResult = add_expr(rr.exprs, ast.ExprNode.Member(rr.id, f), sp);
+    return lift_ok(r1.pool, rr.prefix, r1.id, rr.next_tmp);
+  }
+
+  if match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.Call(c0, _t0, _a0) => c0, _ => -1 };
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c0, t0, _a0) => t0, _ => Vec() };
+    let args: Vec[i32] = match n { ast.ExprNode.Call(_c0, _t0, a0) => a0, _ => Vec() };
+    let rc: LiftExprResult = lift_expr(exprs0, callee, tmp0, sp, false);
+    if !rc.ok { return rc; }
+    let mut p: ast.ExprPool = rc.exprs;
+    let mut pre: Vec[ast.Stmt] = Vec();
+    let mut i: i32 = 0;
+    while i < rc.prefix.len() { pre.push(rc.prefix.get(i)); i = i + 1; }
+    let mut changed: bool = rc.id != callee;
+    let mut out_args: Vec[i32] = Vec();
+    let mut tmp: i32 = rc.next_tmp;
+    i = 0;
+    while i < args.len() {
+      let ra: LiftExprResult = lift_expr(p, args.get(i), tmp, sp, false);
+      if !ra.ok { return ra; }
+      p = ra.exprs;
+      tmp = ra.next_tmp;
+      let mut j: i32 = 0;
+      while j < ra.prefix.len() { pre.push(ra.prefix.get(j)); j = j + 1; }
+      if ra.id != args.get(i) { changed = true; }
+      out_args.push(ra.id);
+      i = i + 1;
+    }
+    if !changed && pre.len() == 0 { return lift_ok(p, Vec(), eid, tmp); }
+    let r1: ast.AddExprResult = add_expr(p, ast.ExprNode.Call(rc.id, targs, out_args), sp);
+    return lift_ok(r1.pool, pre, r1.id, tmp);
+  }
+
+  if match n { ast.ExprNode.StructLit(_tyex, _fields) => true, _ => false } {
+    let tyex: i32 = match n { ast.ExprNode.StructLit(t0, _fs0) => t0, _ => -1 };
+    let fields: Vec[ast.StructLitField] = match n { ast.ExprNode.StructLit(_t0, fs0) => fs0, _ => Vec() };
+    // Struct literals evaluate all field expressions eagerly; lift is safe.
+    let mut p: ast.ExprPool = exprs0;
+    let mut pre: Vec[ast.Stmt] = Vec();
+    let mut tmp: i32 = tmp0;
+    let mut changed: bool = false;
+    let mut out_fields: Vec[ast.StructLitField] = Vec();
+    let mut i: i32 = 0;
+    while i < fields.len() {
+      let f0: ast.StructLitField = fields.get(i);
+      let rf: LiftExprResult = lift_expr(p, f0.expr, tmp, sp, false);
+      if !rf.ok { return rf; }
+      p = rf.exprs;
+      tmp = rf.next_tmp;
+      let mut j: i32 = 0;
+      while j < rf.prefix.len() { pre.push(rf.prefix.get(j)); j = j + 1; }
+      if rf.id != f0.expr { changed = true; }
+      out_fields.push(ast.StructLitField { name: f0.name, expr: rf.id });
+      i = i + 1;
+    }
+    if !changed && pre.len() == 0 { return lift_ok(p, Vec(), eid, tmp); }
+    let r1: ast.AddExprResult = add_expr(p, ast.ExprNode.StructLit(tyex, out_fields), sp);
+    return lift_ok(r1.pool, pre, r1.id, tmp);
+  }
+
+  // Control-flow boundaries: do not lift awaits across them.
+  if match n { ast.ExprNode.Block(_b) => true, _ => false } {
+    return lift_err(exprs0, "await inside block expression is not supported".concat(""), tmp0);
+  }
+  if match n { ast.ExprNode.TryBlock(_bid) => true, _ => false } {
+    return lift_err(exprs0, "await inside try block expression is not supported", tmp0);
+  }
+  if match n { ast.ExprNode.If(_c, _t, _e) => true, _ => false } {
+    return lift_err(exprs0, "await inside if-expression is not supported", tmp0);
+  }
+  if match n { ast.ExprNode.Match(_s, _arms) => true, _ => false } {
+    return lift_err(exprs0, "await inside match-expression is not supported", tmp0);
+  }
+  if match n { ast.ExprNode.MacroCall(_c, _t, _args) => true, _ => false } {
+    return lift_err(exprs0, "await inside macro call is not supported", tmp0);
+  }
+
+  if match n { ast.ExprNode.Try(_a) => true, _ => false } { return lift_ok(exprs0, Vec(), eid, tmp0); }
+  if match n { ast.ExprNode.Await(_a) => true, _ => false } { return lift_ok(exprs0, Vec(), eid, tmp0); }
+
+  // Defensive fallback (should be unreachable if ExprNode is exhaustive).
+  return lift_ok(exprs0, Vec(), eid, tmp0);
+}
+
+pub struct NormalizeResult { pub ok: bool, pub err: String, pub exprs: ast.ExprPool, pub body: ast.Block }
+
+pub fn normalize_async_block(exprs0: ast.ExprPool, b0: ast.Block) -> NormalizeResult {
+  let mut p: ast.ExprPool = exprs0;
+  let mut out: Vec[ast.Stmt] = Vec();
+  let mut tmp: i32 = 0;
+
+  let mut i: i32 = 0;
+  while i < b0.stmts.len() {
+    let st: ast.Stmt = b0.stmts.get(i);
+    let sp: ast.Span = stmt_span(st);
+
+    if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+      let is_mut: bool = match st { ast.Stmt.Let(_sp, m0, _n, _ha, _ann, _e) => m0, _ => false };
+      let name0: String = match st { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
+      let has_ann: bool = match st { ast.Stmt.Let(_sp, _m, _n, ha0, _ann, _e) => ha0, _ => false };
+      let ann0: ast.TypeName = match st { ast.Stmt.Let(_sp, _m, _n, _ha, an0, _e) => an0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+      let init0: i32 = match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e0) => e0, _ => -1 };
+
+      let rn: LiftExprResult = lift_expr(p, init0, tmp, sp, true);
+      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = rn.exprs;
+      tmp = rn.next_tmp;
+      let mut j: i32 = 0;
+      while j < rn.prefix.len() { out.push(rn.prefix.get(j)); j = j + 1; }
+      out.push(ast.Stmt.Let(sp, is_mut, name0, has_ann, ann0, rn.id));
+      i = i + 1;
+      continue;
+    }
+
+    if match st { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
+      let e0: i32 = match st { ast.Stmt.ExprStmt(_sp, e0) => e0, _ => -1 };
+      let rn: LiftExprResult = lift_expr(p, e0, tmp, sp, true);
+      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = rn.exprs;
+      tmp = rn.next_tmp;
+      let mut j: i32 = 0;
+      while j < rn.prefix.len() { out.push(rn.prefix.get(j)); j = j + 1; }
+      out.push(ast.Stmt.ExprStmt(sp, rn.id));
+      i = i + 1;
+      continue;
+    }
+
+    if match st { ast.Stmt.ReturnStmt(_sp, _h, _e) => true, _ => false } {
+      let has0: bool = match st { ast.Stmt.ReturnStmt(_sp, h0, _e) => h0, _ => false };
+      let e0: i32 = match st { ast.Stmt.ReturnStmt(_sp, _h, e0) => e0, _ => -1 };
+      if !has0 {
+        out.push(st);
+        i = i + 1;
+        continue;
+      }
+      let rn: LiftExprResult = lift_expr(p, e0, tmp, sp, true);
+      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = rn.exprs;
+      tmp = rn.next_tmp;
+      let mut j: i32 = 0;
+      while j < rn.prefix.len() { out.push(rn.prefix.get(j)); j = j + 1; }
+      out.push(ast.Stmt.ReturnStmt(sp, true, rn.id));
+      i = i + 1;
+      continue;
+    }
+
+    if match st { ast.Stmt.Assign(_sp, _n, _e) => true, _ => false } {
+      let name0: String = match st { ast.Stmt.Assign(_sp, n0, _e) => n0, _ => "" };
+      let e0: i32 = match st { ast.Stmt.Assign(_sp, _n, e0) => e0, _ => -1 };
+      let rn: LiftExprResult = lift_expr(p, e0, tmp, sp, false);
+      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = rn.exprs;
+      tmp = rn.next_tmp;
+      let mut j: i32 = 0;
+      while j < rn.prefix.len() { out.push(rn.prefix.get(j)); j = j + 1; }
+      out.push(ast.Stmt.Assign(sp, name0, rn.id));
+      i = i + 1;
+      continue;
+    }
+
+    if match st { ast.Stmt.AssignField(_sp, _r, _f, _e) => true, _ => false } {
+      let recv: String = match st { ast.Stmt.AssignField(_sp, r0, _f, _e) => r0, _ => "" };
+      let f: String = match st { ast.Stmt.AssignField(_sp, _r, f0, _e) => f0, _ => "" };
+      let e0: i32 = match st { ast.Stmt.AssignField(_sp, _r, _f, e0) => e0, _ => -1 };
+      let rn: LiftExprResult = lift_expr(p, e0, tmp, sp, false);
+      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = rn.exprs;
+      tmp = rn.next_tmp;
+      let mut j: i32 = 0;
+      while j < rn.prefix.len() { out.push(rn.prefix.get(j)); j = j + 1; }
+      out.push(ast.Stmt.AssignField(sp, recv, f, rn.id));
+      i = i + 1;
+      continue;
+    }
+
+    if match st { ast.Stmt.IfStmt(_sp, _c, _t, _h, _e) => true, _ => false } {
+      let cond: i32 = match st { ast.Stmt.IfStmt(_sp, c0, _t, _h, _e) => c0, _ => -1 };
+      let then_b: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, t0, _h, _e) => t0, _ => ast.Block { stmts: Vec() } };
+      let has_else: bool = match st { ast.Stmt.IfStmt(_sp, _c, _t, h0, _e) => h0, _ => false };
+      let else_b: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, _t, _h, e0) => e0, _ => ast.Block { stmts: Vec() } };
+
+      if block_has_await(p, then_b) || (has_else && block_has_await(p, else_b)) {
+        return NormalizeResult { ok: false, err: "await inside if statement body is not supported".concat(""), exprs: p, body: ast.Block { stmts: Vec() } };
+      }
+      let rn: LiftExprResult = lift_expr(p, cond, tmp, sp, false);
+      if !rn.ok { return NormalizeResult { ok: false, err: rn.err, exprs: rn.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = rn.exprs;
+      tmp = rn.next_tmp;
+      let mut j: i32 = 0;
+      while j < rn.prefix.len() { out.push(rn.prefix.get(j)); j = j + 1; }
+      out.push(ast.Stmt.IfStmt(sp, rn.id, then_b, has_else, else_b));
+      i = i + 1;
+      continue;
+    }
+
+    if match st { ast.Stmt.WhileStmt(_sp, _c, _b) => true, _ => false } {
+      if stmt_has_await_anywhere(p, st) {
+        return NormalizeResult { ok: false, err: "await inside while statement is not supported".concat(""), exprs: p, body: ast.Block { stmts: Vec() } };
+      }
+      out.push(st);
+      i = i + 1;
+      continue;
+    }
+
+    // break/continue passthrough
+    if match st { ast.Stmt.Break(_sp) => true, ast.Stmt.Continue(_sp) => true, _ => false } {
+      out.push(st);
+      i = i + 1;
+      continue;
+    }
+
+    // Unknown statement kind: preserve but reject if it contains await.
+    if stmt_has_await_anywhere(p, st) {
+      return NormalizeResult { ok: false, err: "await in unsupported statement position".concat(""), exprs: p, body: ast.Block { stmts: Vec() } };
+    }
+    out.push(st);
+    i = i + 1;
+  }
+
+  return NormalizeResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: out } };
+}
