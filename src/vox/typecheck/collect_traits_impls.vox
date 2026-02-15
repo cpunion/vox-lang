@@ -1144,9 +1144,6 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         let mut ret_sig_ty: i32 = rr.idx;
         let mut async_output_ty: i32 = -1;
         if md.is_async {
-          if md.has_body {
-            return TcCtxResult { ok: false, err: type_error_at(md.sp, "async trait method default body is not supported yet"), ctx: c };
-          }
           // Desugar `async fn m(..) -> T` in trait into:
           // - add assoc type `__async$m`
           // - rewrite return type to `Self.__async$m`
@@ -1623,7 +1620,16 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           c = wr0.ctx;
           if !wr0.ok { return TcCtxResult { ok: false, err: type_error_at(id.sp, "trait method type substitution failed"), ctx: c }; }
           let want0: FuncSig = wr0.sig;
-          let emit0: FuncSig = impl_method_emit_sig(id.type_params, head_tpbs, want0);
+          let mut emit_want0: FuncSig = want0;
+          if tms.is_async {
+            if wr0.async_output_ty == -1 {
+              return TcCtxResult { ok: false, err: type_error_at(id.sp, "internal: missing async output type for trait method"), ctx: c };
+            }
+            // Before async lowering runs, store the declared output type in the lowered fn signature.
+            // collect_async_fns will later rewrite it to the synthesized frame future type.
+            emit_want0.ret = wr0.async_output_ty;
+          }
+          let emit0: FuncSig = impl_method_emit_sig(id.type_params, head_tpbs, emit_want0);
           let lowered0: String = fresh_impl_lowered_name(c, m.path, tf.sig, tms.name, c.impls.len() * 1000 + 500 + tm);
           c.funcs.push(FuncSym { mod_path: m.path, name: lowered0, sig: emit0 });
           ims.push(ImplMethodSig {

@@ -1,0 +1,537 @@
+import "vox/ast" as ast
+
+pub struct EnsureAsyncInstResult { pub ok: bool, pub err: TcError, pub ctx: Ctx, pub frame_ty: i32 }
+
+pub struct PrepAsyncInstResult { pub ok: bool, pub err: TcError, pub ctx: Ctx }
+fn prep_ok(c: Ctx) -> PrepAsyncInstResult { return PrepAsyncInstResult { ok: true, err: TcError.None, ctx: c }; }
+fn prep_err(c: Ctx, e: TcError) -> PrepAsyncInstResult { return PrepAsyncInstResult { ok: false, err: e, ctx: c }; }
+
+fn async_inst_req_has(reqs: Vec[AsyncInstReq], mod_path: String, inst_name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < reqs.len() {
+    let r: AsyncInstReq = reqs.get(i);
+    if r.mod_path == mod_path && r.inst_name == inst_name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn ctx_add_async_inst_req(ctx0: Ctx, req: AsyncInstReq) -> Ctx {
+  if async_inst_req_has(ctx0.async_inst_reqs, req.mod_path, req.inst_name) { return ctx0; }
+  let mut c: Ctx = ctx0;
+  let mut out: Vec[AsyncInstReq] = c.async_inst_reqs;
+  out.push(req);
+  c.async_inst_reqs = out;
+  return c;
+}
+
+fn find_poll_enum_template(ctx: Ctx) -> FindEnumResult {
+  // Any existing instantiation works as a template; async lowering itself
+  // ensures at least one std/async::Poll inst exists in the context.
+  let mut i: i32 = 0;
+  while i < ctx.enums.len() {
+    let e: EnumSig = ctx.enums.get(i);
+    if e.mod_path == "std/async" && e.base_name == "Poll" {
+      return FindEnumResult { found: true, sig: e };
+    }
+    i = i + 1;
+  }
+  return FindEnumResult { found: false, sig: EnumSig { mod_path: "", name: "", base_name: "", vis: ast.vis_private(), is_pub: false, vars: Vec() } };
+}
+
+fn structs_replace_by_name(ctx0: Ctx, mod_path: String, name: String, sig: StructSig) -> Ctx {
+  let mut ctx: Ctx = ctx0;
+  let mut out: Vec[StructSig] = Vec();
+  let mut replaced: bool = false;
+  let mut i: i32 = 0;
+  while i < ctx.structs.len() {
+    let s0: StructSig = ctx.structs.get(i);
+    if s0.mod_path == mod_path && s0.name == name {
+      out.push(sig);
+      replaced = true;
+    } else {
+      out.push(s0);
+    }
+    i = i + 1;
+  }
+  if !replaced { out.push(sig); }
+  ctx.structs = out;
+  return ctx;
+}
+
+fn funcs_replace_by_name(ctx0: Ctx, mod_path: String, name: String, sym: FuncSym) -> Ctx {
+  let mut ctx: Ctx = ctx0;
+  let mut out: Vec[FuncSym] = Vec();
+  let mut replaced: bool = false;
+  let mut i: i32 = 0;
+  while i < ctx.funcs.len() {
+    let s0: FuncSym = ctx.funcs.get(i);
+    if s0.mod_path == mod_path && s0.name == name {
+      out.push(sym);
+      replaced = true;
+    } else {
+      out.push(s0);
+    }
+    i = i + 1;
+  }
+  if !replaced { out.push(sym); }
+  ctx.funcs = out;
+  return ctx;
+}
+
+fn async_fns_has(ctx: Ctx, mod_path: String, name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < ctx.async_fns.len() {
+    let a: AsyncFnSig = ctx.async_fns.get(i);
+    if a.mod_path == mod_path && a.name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn impl_has(ctx: Ctx, trait_mod: String, trait_name: String, for_ty: i32) -> bool {
+  let mut i: i32 = 0;
+  while i < ctx.impls.len() {
+    let isg: ImplSig = ctx.impls.get(i);
+    if !isg.is_inherent && isg.trait_mod_path == trait_mod && isg.trait_name == trait_name && isg.for_ty == for_ty {
+      return true;
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn find_named_func_local(named: Vec[NamedFuncImport], local: String) -> NamedFuncImport {
+  let mut i: i32 = 0;
+  while i < named.len() {
+    let it: NamedFuncImport = named.get(i);
+    if it.local == local { return it; }
+    i = i + 1;
+  }
+  return NamedFuncImport { local: "", mod_path: "", name: "" };
+}
+
+fn ensure_std_async_poll_inst(ctx0: Ctx, out_ty: i32) -> ResolveTyResult {
+  let mut c: Ctx = ctx0;
+  let mut tps: Vec[String] = Vec();
+  tps.push("T");
+  let mut subs: Vec[TySub] = Vec();
+  subs.push(TySub { name: "T", ty: out_ty });
+  let inst: String = inst_name(c, "Poll", tps, subs);
+  let fe: FindEnumResult = find_enum(c, "std/async", inst);
+  if fe.found {
+    return nominal_intern_enum(c, "std/async", inst);
+  }
+
+  let ft: FindEnumResult = find_poll_enum_template(c);
+  if !ft.found {
+    return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
+  }
+
+  // Clone template and substitute T -> out_ty into variant fields.
+  let mut vars: Vec[EnumVariantSig] = Vec();
+  let mut vi: i32 = 0;
+  while vi < ft.sig.vars.len() {
+    let v: EnumVariantSig = ft.sig.vars.get(vi);
+    let mut ftys: Vec[i32] = Vec();
+    let mut fi: i32 = 0;
+    while fi < v.fields.len() {
+      let st: i32 = subst_ty(c, v.fields.get(fi), subs);
+      if st == c.ty_bad { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+      ftys.push(st);
+      fi = fi + 1;
+    }
+    vars.push(EnumVariantSig { name: v.name, fields: ftys });
+    vi = vi + 1;
+  }
+
+  c.enums.push(EnumSig { mod_path: "std/async", name: inst, base_name: "Poll", vis: ft.sig.vis, is_pub: ft.sig.is_pub, vars: vars });
+  return nominal_intern_enum(c, "std/async", inst);
+}
+
+fn frame_fields_subst(ctx: Ctx, fs: StructSig, subs: Vec[TySub]) -> Vec[StructFieldSig] {
+  let mut out: Vec[StructFieldSig] = Vec();
+  let mut i: i32 = 0;
+  while i < fs.fields.len() {
+    let f: StructFieldSig = fs.fields.get(i);
+    let st: i32 = subst_ty(ctx, f.ty, subs);
+    out.push(StructFieldSig { name: f.name, ty: st, vis: f.vis, is_pub: f.is_pub });
+    i = i + 1;
+  }
+  return out;
+}
+
+fn ensure_async_inst_impl_and_poll(
+  ctx0: Ctx,
+  w: World,
+  mod_path: String,
+  base_async: AsyncFnSig,
+  inst_func_name: String,
+  sig_use: FuncSig,
+  subs: Vec[TySub],
+  csubs: Vec[ConstSub]
+) -> EnsureAsyncInstResult {
+  let mut c: Ctx = ctx0;
+  let _w0: World = w;
+
+  // Derive inst names for frame + poll.
+  let frame_inst_name: String = inst_name_ex(c, base_async.frame_name, sig_use.type_params, sig_use.const_params, subs, csubs);
+  let poll_inst_name: String = inst_name_ex(c, base_async.poll_lowered, sig_use.type_params, sig_use.const_params, subs, csubs);
+
+  // Ensure instantiated frame struct signature exists (may be refined later).
+  let fs: FindStructResult = find_struct(c, mod_path, base_async.frame_name);
+  if !fs.found {
+    return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "internal: missing async frame struct sig"), ctx: c, frame_ty: c.ty_bad };
+  }
+  let fields0: Vec[StructFieldSig] = frame_fields_subst(c, fs.sig, subs);
+  let mut fi0: i32 = 0;
+  while fi0 < fields0.len() {
+    if fields0.get(fi0).ty == c.ty_bad {
+      return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "internal: async inst frame field substitution failed"), ctx: c, frame_ty: c.ty_bad };
+    }
+    fi0 = fi0 + 1;
+  }
+  // Insert/replace struct sig for the instantiated frame.
+  c = structs_replace_by_name(c, mod_path, frame_inst_name, StructSig { mod_path: mod_path, name: frame_inst_name, base_name: base_async.frame_name, vis: ast.vis_private(), is_pub: false, fields: fields0 });
+  let irs: ResolveTyResult = nominal_intern_struct(c, mod_path, frame_inst_name);
+  c = irs.ctx;
+  if !irs.ok {
+    return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "internal: failed to intern async inst frame type"), ctx: c, frame_ty: c.ty_bad };
+  }
+  let frame_ty: i32 = irs.idx;
+
+  // Inst poll signature: fn poll(&mut Frame, &Context) -> Poll[Output]
+  let out0: i32 = subst_ty(c, base_async.output_ty, subs);
+  if out0 == c.ty_bad {
+    return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "internal: async inst output type substitution failed"), ctx: c, frame_ty: c.ty_bad };
+  }
+  let pr: ResolveTyResult = ensure_std_async_poll_inst(c, out0);
+  c = pr.ctx;
+  if !pr.ok {
+    return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "internal: failed to materialize std/async::Poll inst"), ctx: c, frame_ty: c.ty_bad };
+  }
+  let poll_ret: i32 = pr.idx;
+  let cr: ResolveTyResult = nominal_intern_struct(c, "std/async", "Context");
+  c = cr.ctx;
+  if !cr.ok {
+    return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "internal: missing std/async::Context type"), ctx: c, frame_ty: c.ty_bad };
+  }
+  let ctx_ty: i32 = cr.idx;
+
+  let poll_sig: FuncSig = FuncSig {
+    params: vec2(frame_ty, ctx_ty),
+    param_borrow_kinds: vec2(param_borrow_ref_mut(), param_borrow_ref()),
+    ret: poll_ret,
+    has_variadic: false,
+    variadic_elem: -1,
+    vis: ast.vis_private(),
+    is_pub: false,
+    type_params: Vec(),
+    type_param_packs: Vec(),
+    const_params: Vec(),
+    type_param_bounds: Vec(),
+    const_where_bounds: Vec(),
+  };
+  c = funcs_replace_by_name(c, mod_path, poll_inst_name, FuncSym { mod_path: mod_path, name: poll_inst_name, sig: poll_sig });
+
+  // Future impl for instantiated frame type.
+  if !impl_has(c, "std/async", "Future", frame_ty) {
+    let mut assoc: Vec[ImplAssocTypeSig] = Vec();
+    assoc.push(ImplAssocTypeSig { name: "Output", ty: out0 });
+    let mut ms: Vec[ImplMethodSig] = Vec();
+    ms.push(ImplMethodSig {
+      name: "poll",
+      lowered_name: poll_inst_name,
+      sig: poll_sig,
+      from_default: false,
+      default_mod_path: "",
+      default_file: "",
+      default_params: Vec(),
+      default_body: ast.Block { stmts: Vec() },
+    });
+    c.impls.push(ImplSig {
+      mod_path: mod_path,
+      decl_idx: -1,
+      is_inherent: false,
+      trait_mod_path: "std/async",
+      trait_name: "Future",
+      for_ty: frame_ty,
+      head_type_params: Vec(),
+      head_type_param_bounds: Vec(),
+      assoc_types: assoc,
+      methods: ms,
+    });
+  }
+
+  // Async lowering metadata for the instantiated async function name.
+  if !async_fns_has(c, mod_path, inst_func_name) {
+    c.async_fns.push(AsyncFnSig {
+      mod_path: mod_path,
+      name: inst_func_name,
+      output_ty: out0,
+      frame_name: frame_inst_name,
+      frame_ty: frame_ty,
+      poll_lowered: poll_inst_name,
+    });
+  }
+
+  // Record for post-finalize frame layout refinement.
+  c = ctx_add_async_inst_req(c, AsyncInstReq { mod_path: mod_path, base_name: base_async.name, inst_name: inst_func_name, subs: subs, const_subs: csubs });
+  return EnsureAsyncInstResult { ok: true, err: TcError.None, ctx: c, frame_ty: frame_ty };
+}
+
+pub fn ensure_async_inst_for_generic_call(
+  ctx0: Ctx,
+  w: World,
+  mod_path: String,
+  base_mod: String,
+  base_name: String,
+  sig_use: FuncSig,
+  subs: Vec[TySub],
+  csubs: Vec[ConstSub]
+) -> EnsureAsyncInstResult {
+  let mut c: Ctx = ctx0;
+  let _mp0: String = mod_path;
+  if sig_use.type_param_packs.len() != 0 {
+    return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "async inst for type parameter pack is not supported yet"), ctx: c, frame_ty: c.ty_bad };
+  }
+  if sig_use.const_params.len() != 0 {
+    return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "async inst for const generics is not supported yet"), ctx: c, frame_ty: c.ty_bad };
+  }
+  let base_async_r: FindAsyncFnResult = find_async_fn(c, base_mod, base_name);
+  if !base_async_r.found {
+    return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "internal: missing async fn metadata for generic call"), ctx: c, frame_ty: c.ty_bad };
+  }
+  let inst_func_name: String = inst_name_ex(c, base_name, sig_use.type_params, sig_use.const_params, subs, csubs);
+  let inst_async_r: FindAsyncFnResult = find_async_fn(c, base_mod, inst_func_name);
+  if inst_async_r.found {
+    return EnsureAsyncInstResult { ok: true, err: TcError.None, ctx: c, frame_ty: inst_async_r.sig.frame_ty };
+  }
+  return ensure_async_inst_impl_and_poll(c, w, base_mod, base_async_r.sig, inst_func_name, sig_use, subs, csubs);
+}
+
+// After async analysis finalizes the base frame structs (await operands + captures),
+// re-materialize instantiated frame struct fields from the finalized base.
+pub fn async_inst_finalize_frames(ctx0: Ctx) -> Ctx {
+  let mut c: Ctx = ctx0;
+  let mut i: i32 = 0;
+  while i < c.async_inst_reqs.len() {
+    let req: AsyncInstReq = c.async_inst_reqs.get(i);
+    let base_ar: FindAsyncFnResult = find_async_fn(c, req.mod_path, req.base_name);
+    if base_ar.found {
+      let inst_ar: FindAsyncFnResult = find_async_fn(c, req.mod_path, req.inst_name);
+      if inst_ar.found {
+        let fs: FindStructResult = find_struct(c, req.mod_path, base_ar.sig.frame_name);
+        if fs.found {
+          let fields2: Vec[StructFieldSig] = frame_fields_subst(c, fs.sig, req.subs);
+          let mut ok_fields: bool = true;
+          let mut fi: i32 = 0;
+          while fi < fields2.len() {
+            if fields2.get(fi).ty == c.ty_bad { ok_fields = false; }
+            fi = fi + 1;
+          }
+          if ok_fields {
+            c = structs_replace_by_name(c, req.mod_path, inst_ar.sig.frame_name, StructSig {
+              mod_path: req.mod_path,
+              name: inst_ar.sig.frame_name,
+              base_name: base_ar.sig.frame_name,
+              vis: ast.vis_private(),
+              is_pub: false,
+              fields: fields2,
+            });
+          }
+        }
+      }
+    }
+    i = i + 1;
+  }
+  return c;
+}
+
+struct PrepCalleeResult { ok: bool, alias: String, name: String }
+
+fn prep_call_callee(exprs: ast.ExprPool, callee: i32) -> PrepCalleeResult {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+  if match n { ast.ExprNode.Ident(_s) => true, _ => false } {
+    let s: String = match n { ast.ExprNode.Ident(x) => x, _ => "" };
+    return PrepCalleeResult { ok: true, alias: "", name: s };
+  }
+  if match n { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+    let recv: i32 = match n { ast.ExprNode.Member(r, _nm) => r, _ => -1 };
+    let nm: String = match n { ast.ExprNode.Member(_r, x) => x, _ => "" };
+    let rn: ast.ExprNode = ast.expr_pool_get(exprs, recv);
+    if match rn { ast.ExprNode.Ident(_s) => true, _ => false } {
+      let a: String = match rn { ast.ExprNode.Ident(x) => x, _ => "" };
+      return PrepCalleeResult { ok: true, alias: a, name: nm };
+    }
+  }
+  return PrepCalleeResult { ok: false, alias: "", name: "" };
+}
+
+fn prep_async_inst_in_expr_inner(ctx0: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, id: i32) -> PrepAsyncInstResult {
+  let mut c: Ctx = ctx0;
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
+
+  // Recurse first.
+  if match n { ast.ExprNode.Unary(_op, _a) => true, _ => false } {
+    let a: i32 = match n { ast.ExprNode.Unary(_op, x) => x, _ => -1 };
+    return prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, a);
+  }
+  if match n { ast.ExprNode.Binary(_op, _a, _b) => true, _ => false } {
+    let a0: i32 = match n { ast.ExprNode.Binary(_op, x, _y) => x, _ => -1 };
+    let b0: i32 = match n { ast.ExprNode.Binary(_op, _x, y) => y, _ => -1 };
+    let r0: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, a0);
+    if !r0.ok { return r0; }
+    return prep_async_inst_in_expr_inner(r0.ctx, w, mod_path, imps, exprs, l0, b0);
+  }
+  if match n { ast.ExprNode.Member(_a, _nm) => true, _ => false } {
+    let a1: i32 = match n { ast.ExprNode.Member(x, _nm) => x, _ => -1 };
+    return prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, a1);
+  }
+  if match n { ast.ExprNode.As(_a, _tn) => true, _ => false } {
+    let a2: i32 = match n { ast.ExprNode.As(x, _tn) => x, _ => -1 };
+    return prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, a2);
+  }
+  if match n { ast.ExprNode.Await(_a) => true, _ => false } {
+    let a3: i32 = match n { ast.ExprNode.Await(x) => x, _ => -1 };
+    return prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, a3);
+  }
+  if match n { ast.ExprNode.Try(_a) => true, _ => false } {
+    let a4: i32 = match n { ast.ExprNode.Try(x) => x, _ => -1 };
+    return prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, a4);
+  }
+  if match n { ast.ExprNode.If(_c, _t, _e) => true, _ => false } {
+    let cnd: i32 = match n { ast.ExprNode.If(x, _t, _e) => x, _ => -1 };
+    let thn: i32 = match n { ast.ExprNode.If(_c, x, _e) => x, _ => -1 };
+    let els: i32 = match n { ast.ExprNode.If(_c, _t, x) => x, _ => -1 };
+    let r0: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, cnd);
+    if !r0.ok { return r0; }
+    let r1: PrepAsyncInstResult = prep_async_inst_in_expr_inner(r0.ctx, w, mod_path, imps, exprs, l0, thn);
+    if !r1.ok { return r1; }
+    return prep_async_inst_in_expr_inner(r1.ctx, w, mod_path, imps, exprs, l0, els);
+  }
+  if match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.Call(x, _t, _a) => x, _ => -1 };
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, t, _a) => t, _ => Vec() };
+    let args: Vec[i32] = match n { ast.ExprNode.Call(_c, _t, a) => a, _ => Vec() };
+    let r0: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, callee);
+    if !r0.ok { return r0; }
+    c = r0.ctx;
+    let mut ai: i32 = 0;
+    while ai < args.len() {
+      let r1: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, args.get(ai));
+      if !r1.ok { return r1; }
+      c = r1.ctx;
+      ai = ai + 1;
+    }
+
+    // Then, materialize async inst metadata for explicit generic async calls.
+    if targs.len() == 0 { return prep_ok(c); }
+    let cr: PrepCalleeResult = prep_call_callee(exprs, callee);
+    if !cr.ok { return prep_ok(c); }
+    let alias_or_empty: String = cr.alias;
+    let nm: String = cr.name;
+
+    let mut target_mod: String = mod_path;
+    let mut base_name: String = nm;
+    if alias_or_empty != "" {
+      let mp: String = find_alias(imps.aliases, alias_or_empty);
+      if mp == "" { return prep_ok(c); }
+      target_mod = mp;
+    } else {
+      let nf: NamedFuncImport = find_named_func_local(imps.named_funcs, base_name);
+      if nf.local != "" {
+        target_mod = nf.mod_path;
+        base_name = nf.name;
+      }
+    }
+
+    let fr: FindFuncResult = find_func(c, target_mod, base_name);
+    if !fr.found { return prep_ok(c); }
+    if fr.sig.type_params.len() == 0 && fr.sig.const_params.len() == 0 { return prep_ok(c); }
+    let ar: FindAsyncFnResult = find_async_fn(c, target_mod, base_name);
+    if !ar.found { return prep_ok(c); }
+    if fr.sig.type_param_packs.len() != 0 || fr.sig.const_params.len() != 0 { return prep_ok(c); }
+    if targs.len() != fr.sig.type_params.len() { return prep_ok(c); }
+
+    let mut subs0: Vec[TySub] = Vec();
+    let mut ti: i32 = 0;
+    while ti < targs.len() {
+      if is_const_generic_arg_tn_or_local(l0, targs.get(ti)) { return prep_ok(c); }
+      let rr: ResolveTyResult = resolve_type(c, w, mod_path, imps, l0.type_params, targs.get(ti));
+      c = rr.ctx;
+      if !rr.ok { return prep_ok(c); }
+      subs0.push(TySub { name: fr.sig.type_params.get(ti), ty: rr.idx });
+      ti = ti + 1;
+    }
+
+    let er: EnsureAsyncInstResult = ensure_async_inst_for_generic_call(c, w, mod_path, target_mod, base_name, fr.sig, subs0, Vec());
+    if !er.ok { return prep_err(er.ctx, er.err); }
+    return prep_ok(er.ctx);
+  }
+
+  if match n { ast.ExprNode.MacroCall(callee2, _targs2, _args2) => true, _ => false } {
+    let callee2: i32 = match n { ast.ExprNode.MacroCall(x, _t, _a) => x, _ => -1 };
+    let args2: Vec[i32] = match n { ast.ExprNode.MacroCall(_c, _t, a) => a, _ => Vec() };
+    let r0: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, callee2);
+    if !r0.ok { return r0; }
+    c = r0.ctx;
+    let mut ai2: i32 = 0;
+    while ai2 < args2.len() {
+      let r1: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, args2.get(ai2));
+      if !r1.ok { return r1; }
+      c = r1.ctx;
+      ai2 = ai2 + 1;
+    }
+    return prep_ok(c);
+  }
+
+  // For expression blocks we only walk the tail expression; statement scanning is handled at the stmt level.
+  if match n { ast.ExprNode.Block(_b) => true, _ => false } {
+    let b: ast.ExprBlock = match n { ast.ExprNode.Block(x) => x, _ => ast.ExprBlock { stmts: Vec(), has_tail: false, tail: -1 } };
+    if b.has_tail { return prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, b.tail); }
+    return prep_ok(c);
+  }
+  if match n { ast.ExprNode.TryBlock(_bid) => true, _ => false } {
+    let bid: i32 = match n { ast.ExprNode.TryBlock(x) => x, _ => -1 };
+    return prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, bid);
+  }
+  if match n { ast.ExprNode.StructLit(_t, _fs) => true, _ => false } {
+    let tye: i32 = match n { ast.ExprNode.StructLit(x, _fs) => x, _ => -1 };
+    let fs2: Vec[ast.StructLitField] = match n { ast.ExprNode.StructLit(_x, y) => y, _ => Vec() };
+    let r0: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, tye);
+    if !r0.ok { return r0; }
+    c = r0.ctx;
+    let mut fi: i32 = 0;
+    while fi < fs2.len() {
+      let f: ast.StructLitField = fs2.get(fi);
+      let r1: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, f.expr);
+      if !r1.ok { return r1; }
+      c = r1.ctx;
+      fi = fi + 1;
+    }
+    return prep_ok(c);
+  }
+  if match n { ast.ExprNode.Match(_s, _arms) => true, _ => false } {
+    let scrut: i32 = match n { ast.ExprNode.Match(x, _as) => x, _ => -1 };
+    let arms: Vec[ast.MatchArm] = match n { ast.ExprNode.Match(_x, as0) => as0, _ => Vec() };
+    let r0: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, scrut);
+    if !r0.ok { return r0; }
+    c = r0.ctx;
+    let mut ai3: i32 = 0;
+    while ai3 < arms.len() {
+      let a: ast.MatchArm = arms.get(ai3);
+      let r1: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, a.expr);
+      if !r1.ok { return r1; }
+      c = r1.ctx;
+      ai3 = ai3 + 1;
+    }
+    return prep_ok(c);
+  }
+
+  return prep_ok(c);
+}
+
+pub fn prep_async_inst_in_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, id: i32) -> PrepAsyncInstResult {
+  return prep_async_inst_in_expr_inner(ctx, w, mod_path, imps, exprs, l0, id);
+}

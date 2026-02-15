@@ -1,6 +1,7 @@
 import "vox/ast" as ast
 import "vox/ir" as ir
 import "vox/async_norm" as an
+import "vox/async_cfg" as ac
 
 // Async lowering metadata collection.
 
@@ -37,6 +38,165 @@ fn local_decl_find(xs: Vec[AsyncLocalDecl], name: String) -> AsyncLocalDecl {
     i = i + 1;
   }
   return AsyncLocalDecl { name: "", ty: -1, mutable: false, stmt_idx: -1 };
+}
+
+struct StmtAwaitInfo { ok: bool, operand: i32, is_try: bool }
+
+fn stmt_await_info(exprs: ast.ExprPool, st: ast.Stmt) -> StmtAwaitInfo {
+  let eid: i32 =
+    if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+      match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e) => e, _ => -1 }
+    } else if match st { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
+      match st { ast.Stmt.ExprStmt(_sp, e) => e, _ => -1 }
+    } else if match st { ast.Stmt.ReturnStmt(_sp, h, _e) => true, _ => false } {
+      let has0: bool = match st { ast.Stmt.ReturnStmt(_sp, h, _e) => h, _ => false };
+      if has0 { match st { ast.Stmt.ReturnStmt(_sp, _h, e) => e, _ => -1 } } else { -1 }
+    } else { -1 };
+  if eid == -1 { return StmtAwaitInfo { ok: false, operand: -1, is_try: false }; }
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
+  if match n { ast.ExprNode.Await(_x) => true, _ => false } {
+    let op: i32 = match n { ast.ExprNode.Await(x) => x, _ => -1 };
+    return StmtAwaitInfo { ok: true, operand: op, is_try: false };
+  }
+  if match n { ast.ExprNode.Try(_x) => true, _ => false } {
+    let x: i32 = match n { ast.ExprNode.Try(y) => y, _ => -1 };
+    let nx: ast.ExprNode = ast.expr_pool_get(exprs, x);
+    if match nx { ast.ExprNode.Await(_y) => true, _ => false } {
+      let op2: i32 = match nx { ast.ExprNode.Await(y) => y, _ => -1 };
+      return StmtAwaitInfo { ok: true, operand: op2, is_try: true };
+    }
+  }
+  return StmtAwaitInfo { ok: false, operand: -1, is_try: false };
+}
+
+struct WalkAsyncResult {
+  ok: bool,
+  err: TcError,
+  ctx: Ctx,
+  locals: Locals,
+  decls: Vec[AsyncLocalDecl],
+  await_operand_tys: Vec[i32],
+  seen_names: Vec[String],
+}
+
+fn walk_async_block(
+  ctx0: Ctx,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  b0: ast.Block,
+  l0: Locals,
+  decls0: Vec[AsyncLocalDecl],
+  await_operand_tys0: Vec[i32],
+  seen0: Vec[String],
+) -> WalkAsyncResult {
+  let mut c: Ctx = ctx0;
+  let mut l: Locals = l0;
+  let mut decls: Vec[AsyncLocalDecl] = decls0;
+  let mut await_tys: Vec[i32] = await_operand_tys0;
+  let mut seen: Vec[String] = seen0;
+
+  let mut si: i32 = 0;
+  while si < b0.stmts.len() {
+    let st0: ast.Stmt = b0.stmts.get(si);
+
+    if match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+      let sp0: ast.Span = stmt_span(st0);
+      let is_mut: bool = match st0 { ast.Stmt.Let(_sp, m0, _n, _ha, _ann, _e) => m0, _ => false };
+      let name0: String = match st0 { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
+      let has_ann: bool = match st0 { ast.Stmt.Let(_sp, _m, _n, ha0, _ann, _e) => ha0, _ => false };
+      let ann0: ast.TypeName = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, an0, _e) => an0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+      let init0: i32 = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e0) => e0, _ => -1 };
+
+      // Async capture rewrite is currently name-based; disallow shadowing to keep it correct.
+      if string_vec_contains(seen, name0) {
+        return WalkAsyncResult { ok: false, err: type_error_at(sp0, "async fn does not support shadowing yet: ".concat(name0)), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+      }
+      seen.push(name0);
+
+      let mut vty: i32 = -1;
+      if has_ann {
+        let tr0: ResolveTyResult = resolve_type(c, w, mod_path, imps, l.type_params, ann0);
+        c = tr0.ctx;
+        if !tr0.ok { return WalkAsyncResult { ok: false, err: type_error_at(sp0, "let annotation type resolve failed"), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen }; }
+        vty = strip_range_only(c, tr0.idx);
+      } else {
+        let pr0: PrepAsyncInstResult = prep_async_inst_in_expr(c, w, mod_path, imps, exprs, l, init0);
+        if !pr0.ok {
+          let msg0: String = "failed to prepare async inst for let init: ".concat(tc_error_to_string(pr0.err));
+          return WalkAsyncResult { ok: false, err: type_error_at(sp0, msg0), ctx: pr0.ctx, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+        }
+        c = pr0.ctx;
+        let er0: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l, init0, -1);
+        if !er0.ok {
+          let msg: String = "failed to typecheck let init in async fn: ".concat(tc_error_to_string(er0.err));
+          return WalkAsyncResult { ok: false, err: type_error_at(sp0, msg), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+        }
+        vty = strip_range_only(c, er0.ty);
+      }
+      l = locals_decl(l, name0, vty, is_mut);
+      decls.push(AsyncLocalDecl { name: name0, ty: vty, mutable: is_mut, stmt_idx: -1 });
+    }
+
+    // Await operand typing (statement-level await).
+    let ai: StmtAwaitInfo = stmt_await_info(exprs, st0);
+    if ai.ok {
+      let pr1: PrepAsyncInstResult = prep_async_inst_in_expr(c, w, mod_path, imps, exprs, l, ai.operand);
+      if !pr1.ok {
+        let msg1: String = "failed to prepare async inst for await operand: ".concat(tc_error_to_string(pr1.err));
+        return WalkAsyncResult { ok: false, err: type_error_at(stmt_span(st0), msg1), ctx: pr1.ctx, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+      }
+      c = pr1.ctx;
+      let er_op: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l, ai.operand, -1);
+      if !er_op.ok {
+        let msg: String = "failed to typecheck await operand: ".concat(tc_error_to_string(er_op.err));
+        return WalkAsyncResult { ok: false, err: type_error_at(stmt_span(st0), msg), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+      }
+      let op_ty: i32 = strip_range_only(c, er_op.ty);
+      if ty_has_forbidden_borrow(c, op_ty) {
+        return WalkAsyncResult { ok: false, err: type_error_at(stmt_span(st0), "await operand cannot contain non-static borrow"), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+      }
+      await_tys.push(op_ty);
+    }
+
+    // Recurse into nested statement blocks with proper scoping.
+    if match st0 { ast.Stmt.IfStmt(_sp, _c, _t, _h, _e) => true, _ => false } {
+      let then_b: ast.Block = match st0 { ast.Stmt.IfStmt(_sp, _c, t0, _h, _e) => t0, _ => ast.Block { stmts: Vec() } };
+      let has_else: bool = match st0 { ast.Stmt.IfStmt(_sp, _c, _t, h0, _e) => h0, _ => false };
+      let else_b: ast.Block = match st0 { ast.Stmt.IfStmt(_sp, _c, _t, _h, e0) => e0, _ => ast.Block { stmts: Vec() } };
+
+      let rt: WalkAsyncResult = walk_async_block(c, w, mod_path, imps, exprs, then_b, locals_enter(l), decls, await_tys, seen);
+      if !rt.ok { return rt; }
+      c = rt.ctx;
+      decls = rt.decls;
+      await_tys = rt.await_operand_tys;
+      seen = rt.seen_names;
+
+      if has_else {
+        let re: WalkAsyncResult = walk_async_block(c, w, mod_path, imps, exprs, else_b, locals_enter(l), decls, await_tys, seen);
+        if !re.ok { return re; }
+        c = re.ctx;
+        decls = re.decls;
+        await_tys = re.await_operand_tys;
+        seen = re.seen_names;
+      }
+    }
+
+    if match st0 { ast.Stmt.WhileStmt(_sp, _c, _b) => true, _ => false } {
+      let body0: ast.Block = match st0 { ast.Stmt.WhileStmt(_sp, _c0, b0) => b0, _ => ast.Block { stmts: Vec() } };
+      let rb: WalkAsyncResult = walk_async_block(c, w, mod_path, imps, exprs, body0, locals_enter(l), decls, await_tys, seen);
+      if !rb.ok { return rb; }
+      c = rb.ctx;
+      decls = rb.decls;
+      await_tys = rb.await_operand_tys;
+      seen = rb.seen_names;
+    }
+
+    si = si + 1;
+  }
+
+  return WalkAsyncResult { ok: true, err: TcError.None, ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
 }
 
 fn expr_contains_try(exprs: ast.ExprPool, eid: i32) -> bool {
@@ -444,22 +604,59 @@ fn structs_replace_by_name(ctx0: Ctx, mod_path: String, name: String, sig: Struc
   return ctx;
 }
 
-fn collect_async_prepare_one(ctx0: Ctx, w: World, mod_path: String, prog_imports: Vec[ast.ImportDecl], exprs_mod: ast.ExprPool, fd: ast.FuncDecl, lowered: String) -> CollectAsyncPrepareOneResult {
+fn synth_params(names: Vec[String]) -> Vec[ast.Param] {
+  let mut out: Vec[ast.Param] = Vec();
+  let mut i: i32 = 0;
+  while i < names.len() {
+    out.push(ast.Param { name: names.get(i), ty: ast.TypeName { parts: Vec(), args: Vec() } });
+    i = i + 1;
+  }
+  return out;
+}
+
+struct FindTraitMethodRetResult { found: bool, ret: ast.TypeName }
+
+fn find_trait_method_ret(m: WorldModule, trait_name: String, method: String) -> FindTraitMethodRetResult {
+  let mut ti: i32 = 0;
+  while ti < m.prog.traits.len() {
+    let td: ast.TraitDecl = m.prog.traits.get(ti);
+    if td.name == trait_name {
+      let mut mi: i32 = 0;
+      while mi < td.methods.len() {
+        let md: ast.TraitMethodDecl = td.methods.get(mi);
+        if md.name == method {
+          return FindTraitMethodRetResult { found: true, ret: md.ret };
+        }
+        mi = mi + 1;
+      }
+    }
+    ti = ti + 1;
+  }
+  return FindTraitMethodRetResult { found: false, ret: ast.TypeName { parts: Vec(), args: Vec() } };
+}
+
+fn collect_async_prepare_one(
+  ctx0: Ctx,
+  w: World,
+  sym_mod_path: String,
+  body_mod_path: String,
+  body_imports: Vec[ast.ImportDecl],
+  exprs_mod: ast.ExprPool,
+  fd: ast.FuncDecl,
+  lowered: String
+) -> CollectAsyncPrepareOneResult {
   let mut c: Ctx = ctx0;
 
-  let fidx: i32 = find_func_sym_idx(c, mod_path, lowered);
+  let fidx: i32 = find_func_sym_idx(c, sym_mod_path, lowered);
   if fidx == -1 {
     return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "missing fn sig"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
   }
   let fsym0: FuncSym = c.funcs.get(fidx);
   let output_ty: i32 = fsym0.sig.ret;
-  if fsym0.sig.type_params.len() != 0 || fsym0.sig.const_params.len() != 0 {
-    return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "async fn with generics is not supported yet"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
-  }
 
   // Async fn returns a Future value; without lifetimes in the language surface,
   // forbid non-static borrows in params/output because they'd escape via the frame.
-  if ty_has_forbidden_borrow(c, output_ty) {
+  if ty_has_forbidden_borrow(c, strip_range_only(c, output_ty)) {
     return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "async fn output cannot contain non-static borrow"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
   }
   let mut pi0: i32 = 0;
@@ -471,15 +668,15 @@ fn collect_async_prepare_one(ctx0: Ctx, w: World, mod_path: String, prog_imports
     pi0 = pi0 + 1;
   }
 
-  let ir0: ImportsResult = build_imports(w, mod_path, prog_imports, fd.file);
+  let ir0: ImportsResult = build_imports(w, body_mod_path, body_imports, fd.file);
   if !ir0.ok { return CollectAsyncPrepareOneResult { ok: false, err: ir0.err, ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad }; }
   let base_imps: Imports = ir0.imps;
   let async_alias: String = fresh_internal_async_alias(base_imps);
   let imps2: Imports = imps_add_alias(base_imps, async_alias, "std/async");
 
   // Synthesize frame struct.
-  let frame_name: String = async_frame_fresh_name(c, mod_path, lowered);
-  let irs: ResolveTyResult = nominal_intern_struct(c, mod_path, frame_name);
+  let frame_name: String = async_frame_fresh_name(c, sym_mod_path, lowered);
+  let irs: ResolveTyResult = nominal_intern_struct(c, sym_mod_path, frame_name);
   c = irs.ctx;
   if !irs.ok {
     return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "failed to intern async frame type"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
@@ -488,17 +685,17 @@ fn collect_async_prepare_one(ctx0: Ctx, w: World, mod_path: String, prog_imports
 
   // Prepare with base fields only; await operands + captures are filled in finalize pass.
   let fs_base: Vec[StructFieldSig] = async_frame_fields(c, fd, fsym0.sig);
-  c = ctx_add_struct_sig(c, StructSig { mod_path: mod_path, name: frame_name, base_name: frame_name, vis: ast.vis_private(), is_pub: false, fields: fs_base });
+  c = ctx_add_struct_sig(c, StructSig { mod_path: sym_mod_path, name: frame_name, base_name: frame_name, vis: ast.vis_private(), is_pub: false, fields: fs_base });
 
   // Future impl lowered poll name and signature.
-  let poll_lowered: String = async_poll_fresh_lowered(c, mod_path, lowered);
+  let poll_lowered: String = async_poll_fresh_lowered(c, sym_mod_path, lowered);
   let mut poll_parts: Vec[String] = Vec();
   poll_parts.push(async_alias);
   poll_parts.push("Poll");
   let mut poll_args: Vec[ast.TypeName] = Vec();
   poll_args.push(fd.ret);
   let poll_tn: ast.TypeName = ast.TypeName { parts: poll_parts, args: poll_args };
-  let pr: ResolveTyResult = resolve_type(c, w, mod_path, imps2, Vec(), poll_tn);
+  let pr: ResolveTyResult = resolve_type(c, w, body_mod_path, imps2, fsym0.sig.type_params, poll_tn);
   c = pr.ctx;
   if !pr.ok { return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "failed to resolve std/async::Poll for async lowering"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad }; }
 
@@ -506,7 +703,7 @@ fn collect_async_prepare_one(ctx0: Ctx, w: World, mod_path: String, prog_imports
   ctx_parts.push(async_alias);
   ctx_parts.push("Context");
   let ctx_tn: ast.TypeName = ast.TypeName { parts: ctx_parts, args: Vec() };
-  let cr: ResolveTyResult = resolve_type(c, w, mod_path, imps2, Vec(), ctx_tn);
+  let cr: ResolveTyResult = resolve_type(c, w, body_mod_path, imps2, fsym0.sig.type_params, ctx_tn);
   c = cr.ctx;
   if !cr.ok { return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "failed to resolve std/async::Context for async lowering"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad }; }
   let ctx_ty: i32 = cr.idx;
@@ -525,7 +722,7 @@ fn collect_async_prepare_one(ctx0: Ctx, w: World, mod_path: String, prog_imports
     type_param_bounds: Vec(),
     const_where_bounds: Vec(),
   };
-  c = ctx_add_func_sym(c, FuncSym { mod_path: mod_path, name: poll_lowered, sig: poll_sig });
+  c = ctx_add_func_sym(c, FuncSym { mod_path: sym_mod_path, name: poll_lowered, sig: poll_sig });
 
   // Future impl signature for the frame type.
   let mut assoc: Vec[ImplAssocTypeSig] = Vec();
@@ -542,7 +739,7 @@ fn collect_async_prepare_one(ctx0: Ctx, w: World, mod_path: String, prog_imports
     default_body: ast.Block { stmts: Vec() },
   });
   c = ctx_add_impl_sig(c, ImplSig {
-    mod_path: mod_path,
+    mod_path: sym_mod_path,
     decl_idx: -1,
     is_inherent: false,
     trait_mod_path: "std/async",
@@ -560,27 +757,36 @@ fn collect_async_prepare_one(ctx0: Ctx, w: World, mod_path: String, prog_imports
   c = funcs_replace(c, fidx, FuncSym { mod_path: fsym0.mod_path, name: fsym0.name, sig: sig2 });
 
   // Record metadata for typechecking async bodies and for IRGen lowering.
-  c = ctx_add_async_fn_sig(c, AsyncFnSig { mod_path: mod_path, name: lowered, output_ty: output_ty, frame_name: frame_name, frame_ty: frame_ty, poll_lowered: poll_lowered });
+  c = ctx_add_async_fn_sig(c, AsyncFnSig { mod_path: sym_mod_path, name: lowered, output_ty: output_ty, frame_name: frame_name, frame_ty: frame_ty, poll_lowered: poll_lowered });
 
   return CollectAsyncPrepareOneResult { ok: true, err: TcError.None, ctx: c, frame_name: frame_name, frame_ty: frame_ty, poll_lowered: poll_lowered, output_ty: output_ty };
 }
 
-fn collect_async_finalize_one(ctx0: Ctx, w: World, mod_path: String, prog_imports: Vec[ast.ImportDecl], exprs_mod: ast.ExprPool, fd: ast.FuncDecl, lowered: String) -> CollectAsyncFinalizeOneResult {
+fn collect_async_finalize_one(
+  ctx0: Ctx,
+  w: World,
+  sym_mod_path: String,
+  body_mod_path: String,
+  body_imports: Vec[ast.ImportDecl],
+  exprs_mod: ast.ExprPool,
+  fd: ast.FuncDecl,
+  lowered: String
+) -> CollectAsyncFinalizeOneResult {
   let mut c: Ctx = ctx0;
 
-  let ar: FindAsyncFnResult = find_async_fn(c, mod_path, lowered);
+  let ar: FindAsyncFnResult = find_async_fn(c, sym_mod_path, lowered);
   if !ar.found {
     return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "missing async fn lowering metadata"), ctx: c };
   }
   let frame_name: String = ar.sig.frame_name;
 
-  let fidx: i32 = find_func_sym_idx(c, mod_path, lowered);
+  let fidx: i32 = find_func_sym_idx(c, sym_mod_path, lowered);
   if fidx == -1 {
     return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "missing fn sig"), ctx: c };
   }
   let fsym0: FuncSym = c.funcs.get(fidx);
 
-  let ir0: ImportsResult = build_imports(w, mod_path, prog_imports, fd.file);
+  let ir0: ImportsResult = build_imports(w, body_mod_path, body_imports, fd.file);
   if !ir0.ok { return CollectAsyncFinalizeOneResult { ok: false, err: ir0.err, ctx: c }; }
   let base_imps: Imports = ir0.imps;
 
@@ -588,97 +794,49 @@ fn collect_async_finalize_one(ctx0: Ctx, w: World, mod_path: String, prog_import
   if !nr.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, nr.err), ctx: c }; }
   let exprs: ast.ExprPool = nr.exprs;
   let body: ast.Block = nr.body;
-  let aps: Vec[an.AwaitPoint] = an.find_await_points(exprs, body.stmts);
 
-  // Typecheck in order: let bindings and await operands.
+  // Typecheck in source order (nested if/while included): let bindings and await operands.
   let mut locals: Vec[AsyncLocalDecl] = Vec();
   let mut await_operand_tys: Vec[i32] = Vec();
   let mut l_cur: Locals = locals_new();
   l_cur.fn_is_async = true;
+  let mut seen_names: Vec[String] = Vec();
+  let mut exclude_names: Vec[String] = Vec();
 
   let mut pi0: i32 = 0;
   while pi0 < fd.params.len() {
     let pty0: i32 = strip_range_only(c, fsym0.sig.params.get(pi0));
     let p: ast.Param = fd.params.get(pi0);
     l_cur = locals_decl(l_cur, p.name, pty0, false);
+    // Params are already stored in the frame as p_<name>; do not capture them.
+    exclude_names.push(p.name);
+    seen_names.push(p.name);
     pi0 = pi0 + 1;
   }
 
-  let mut ap_i: i32 = 0;
-  let mut si0: i32 = 0;
-  while si0 < body.stmts.len() {
-    let st0: ast.Stmt = body.stmts.get(si0);
-    if match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
-      let sp0: ast.Span = stmt_span(st0);
-      let is_mut: bool = match st0 { ast.Stmt.Let(_sp, m0, _n, _ha, _ann, _e) => m0, _ => false };
-      let name0: String = match st0 { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
-      let has_ann: bool = match st0 { ast.Stmt.Let(_sp, _m, _n, ha0, _ann, _e) => ha0, _ => false };
-      let ann0: ast.TypeName = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, an0, _e) => an0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
-      let init0: i32 = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e0) => e0, _ => -1 };
-      let mut vty: i32 = -1;
-      if has_ann {
-        let tr0: ResolveTyResult = resolve_type(c, w, mod_path, base_imps, l_cur.type_params, ann0);
-        c = tr0.ctx;
-        if !tr0.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(sp0, "let annotation type resolve failed"), ctx: c }; }
-        vty = strip_range_only(c, tr0.idx);
-      } else {
-        let er0: ExprTyResult = tc_expr(c, w, mod_path, base_imps, exprs, l_cur, init0, -1);
-        if !er0.ok {
-          let msg: String = "failed to typecheck let init in async fn: ".concat(tc_error_to_string(er0.err));
-          return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(sp0, msg), ctx: c };
-        }
-        vty = strip_range_only(c, er0.ty);
-      }
-      l_cur = locals_decl(l_cur, name0, vty, is_mut);
-      locals.push(AsyncLocalDecl { name: name0, ty: vty, mutable: is_mut, stmt_idx: si0 });
-    }
+  let wr: WalkAsyncResult = walk_async_block(c, w, body_mod_path, base_imps, exprs, body, l_cur, locals, await_operand_tys, seen_names);
+  if !wr.ok { return CollectAsyncFinalizeOneResult { ok: false, err: wr.err, ctx: wr.ctx }; }
+  c = wr.ctx;
+  locals = wr.decls;
+  await_operand_tys = wr.await_operand_tys;
 
-    if ap_i < aps.len() && aps.get(ap_i).stmt_idx == si0 {
-      let op: i32 = aps.get(ap_i).operand;
-      let er_op: ExprTyResult = tc_expr(c, w, mod_path, base_imps, exprs, l_cur, op, -1);
-      if !er_op.ok {
-        let msg: String = "failed to typecheck await operand: ".concat(tc_error_to_string(er_op.err));
-        return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(stmt_span(st0), msg), ctx: c };
-      }
-      let op_ty: i32 = strip_range_only(c, er_op.ty);
-      if ty_has_forbidden_borrow(c, op_ty) {
-        return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(stmt_span(st0), "await operand cannot contain non-static borrow"), ctx: c };
-      }
-      await_operand_tys.push(op_ty);
-      ap_i = ap_i + 1;
-    }
-
-    si0 = si0 + 1;
+  // Determine captures via CFG liveness across await resume points.
+  let cfg: ac.BuildResult = ac.build(exprs, body);
+  if !cfg.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, cfg.err), ctx: c }; }
+  if cfg.await_count != await_operand_tys.len() {
+    return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "internal: async await count mismatch"), ctx: c };
   }
-
-  // Determine captures: locals used after any await statement.
-  let mut await_stmt_idxs: Vec[i32] = Vec();
-  ap_i = 0;
-  while ap_i < aps.len() { await_stmt_idxs.push(aps.get(ap_i).stmt_idx); ap_i = ap_i + 1; }
-  let mut captures: Vec[CaptureUse] = Vec();
-  let mut li0: i32 = 0;
-  while li0 < locals.len() {
-    let ld: AsyncLocalDecl = locals.get(li0);
-    let mut ai1: i32 = 0;
-    while ai1 < await_stmt_idxs.len() {
-      let aidx: i32 = await_stmt_idxs.get(ai1);
-      if ld.stmt_idx < aidx {
-        let mut sj: i32 = aidx + 1;
-        while sj < body.stmts.len() {
-          let stj: ast.Stmt = body.stmts.get(sj);
-          if stmt_uses_name(exprs, stj, ld.name) {
-            if capture_use_find(captures, ld.name).name == "" {
-              captures.push(CaptureUse { name: ld.name, await_stmt_idx: aidx, use_stmt_idx: sj });
-            }
-            sj = body.stmts.len();
-            ai1 = await_stmt_idxs.len();
-          }
-          sj = sj + 1;
-        }
-      }
-      ai1 = ai1 + 1;
+  let cr: ac.CapturesResult = ac.captures(exprs, cfg, exclude_names);
+  if !cr.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, cr.err), ctx: c }; }
+  let mut captures: Vec[String] = Vec();
+  let mut ci1: i32 = 0;
+  while ci1 < cr.captures.len() {
+    let nm: String = cr.captures.get(ci1);
+    let ld0: AsyncLocalDecl = local_decl_find(locals, nm);
+    if ld0.name != "" {
+      if !string_vec_contains(captures, nm) { captures.push(nm); }
     }
-    li0 = li0 + 1;
+    ci1 = ci1 + 1;
   }
 
   // Update frame struct signature with await operand + capture fields.
@@ -690,28 +848,16 @@ fn collect_async_finalize_one(ctx0: Ctx, w: World, mod_path: String, prog_import
   }
   let mut ci0: i32 = 0;
   while ci0 < captures.len() {
-    let cu: CaptureUse = captures.get(ci0);
-    let nm: String = cu.name;
+    let nm: String = captures.get(ci0);
     let ld: AsyncLocalDecl = local_decl_find(locals, nm);
     if ld.name == "" { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "internal: missing capture local decl"), ctx: c }; }
     if ty_has_forbidden_borrow(c, ld.ty) {
-      let decl_sp: ast.Span = stmt_span(body.stmts.get(ld.stmt_idx));
-      let await_sp: ast.Span = stmt_span(body.stmts.get(cu.await_stmt_idx));
-      let use_sp: ast.Span = stmt_span(body.stmts.get(cu.use_stmt_idx));
-      let msg: String =
-        "borrowed local cannot live across await: "
-          .concat(nm)
-          .concat(" (declared at ")
-          .concat(span_loc(decl_sp))
-          .concat("; crosses await at ")
-          .concat(span_loc(await_sp))
-          .concat(")");
-      return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(use_sp, msg), ctx: c };
+      return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "borrowed local cannot live across await: ".concat(nm)), ctx: c };
     }
     fs.push(StructFieldSig { name: "l_".concat(nm), ty: ld.ty, vis: ast.vis_private(), is_pub: false });
     ci0 = ci0 + 1;
   }
-  c = structs_replace_by_name(c, mod_path, frame_name, StructSig { mod_path: mod_path, name: frame_name, base_name: frame_name, vis: ast.vis_private(), is_pub: false, fields: fs });
+  c = structs_replace_by_name(c, sym_mod_path, frame_name, StructSig { mod_path: sym_mod_path, name: frame_name, base_name: frame_name, vis: ast.vis_private(), is_pub: false, fields: fs });
 
   return CollectAsyncFinalizeOneResult { ok: true, err: TcError.None, ctx: c };
 }
@@ -746,7 +892,7 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
           if !mf.found { return TcCtxResult { ok: false, err: type_error_at(md.sp, "missing impl method sig"), ctx: c }; }
           let lowered: String = mf.m.lowered_name;
 
-          let r: CollectAsyncPrepareOneResult = collect_async_prepare_one(c, w, m.path, m.prog.imports, exprs_mod, md, lowered);
+          let r: CollectAsyncPrepareOneResult = collect_async_prepare_one(c, w, m.path, m.path, m.prog.imports, exprs_mod, md, lowered);
           if !r.ok { return TcCtxResult { ok: false, err: r.err, ctx: r.ctx }; }
           c = r.ctx;
 
@@ -788,6 +934,86 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
         mdi = mdi + 1;
       }
 
+      // Synthesized default trait methods live in impl signatures but have bodies in the trait module.
+      // Prepare async lowering for those methods as well.
+      if !id.is_inherent {
+        let isig_def0: ImplSig = c.impls.get(impl_sig_idx);
+        let tf_def0: FindTraitResult = find_trait(c, isig_def0.trait_mod_path, isig_def0.trait_name);
+        if tf_def0.found {
+          let mut msi: i32 = 0;
+          while msi < isig_def0.methods.len() {
+            let msd0: ImplMethodSig = isig_def0.methods.get(msi);
+            if msd0.from_default {
+              let tmf0: FindTraitMethodResult = find_trait_method(tf_def0.sig, msd0.name);
+              if tmf0.found && tmf0.m.is_async {
+                let fmd0: FindModResult = find_mod(w, msd0.default_mod_path);
+                if !fmd0.found {
+                  return TcCtxResult { ok: false, err: type_error_at(id.sp, "missing default trait method module"), ctx: c };
+                }
+                let mdm0: WorldModule = w.mods.get(fmd0.idx);
+                let rr0: FindTraitMethodRetResult = find_trait_method_ret(mdm0, isig_def0.trait_name, msd0.name);
+                if !rr0.found {
+                  return TcCtxResult { ok: false, err: type_error_at(id.sp, "internal: missing trait method decl for async default body"), ctx: c };
+                }
+                let fd0: ast.FuncDecl = ast.FuncDecl {
+                  file: msd0.default_file,
+                  sp: ast.span0(),
+                  vis: ast.vis_private(),
+                  is_pub: false,
+                  is_async: true,
+                  name: msd0.lowered_name,
+                  type_params: Vec(),
+                  type_param_packs: Vec(),
+                  const_params: Vec(),
+                  type_param_bounds: Vec(),
+                  const_where_bounds: Vec(),
+                  params: synth_params(msd0.default_params),
+                  ret: rr0.ret,
+                  ffi_imports: Vec(),
+                  ffi_exports: Vec(),
+                  body: msd0.default_body,
+                };
+
+                let rdef0: CollectAsyncPrepareOneResult =
+                  collect_async_prepare_one(c, w, m.path, mdm0.path, mdm0.prog.imports, mdm0.prog.exprs, fd0, msd0.lowered_name);
+                if !rdef0.ok { return TcCtxResult { ok: false, err: rdef0.err, ctx: rdef0.ctx }; }
+                c = rdef0.ctx;
+
+                let isig1d: ImplSig = c.impls.get(impl_sig_idx);
+                let meth_idxd: i32 = find_impl_method_idx_by_lowered(isig1d, msd0.lowered_name);
+                if meth_idxd == -1 { return TcCtxResult { ok: false, err: type_error_at(id.sp, "internal: missing lowered impl method entry (default)"), ctx: c }; }
+                let mut ms0d: ImplMethodSig = isig1d.methods.get(meth_idxd);
+                let mut ms_sigd: FuncSig = ms0d.sig;
+                ms_sigd.ret = rdef0.frame_ty;
+                ms0d.sig = ms_sigd;
+                let mut isig2d: ImplSig = impl_methods_replace(isig1d, meth_idxd, ms0d);
+
+                // Bind synthesized async trait assoc type to the generated frame.
+                let assoc_name: String = "__async$".concat(msd0.name);
+                let mut foundd: bool = false;
+                let mut ai0: i32 = 0;
+                while ai0 < isig2d.assoc_types.len() {
+                  let a0: ImplAssocTypeSig = isig2d.assoc_types.get(ai0);
+                  if a0.name == assoc_name {
+                    foundd = true;
+                    if a0.ty != rdef0.frame_ty {
+                      return TcCtxResult { ok: false, err: type_error_at(id.sp, "async trait assoc type binding mismatch"), ctx: c };
+                    }
+                  }
+                  ai0 = ai0 + 1;
+                }
+                if !foundd {
+                  isig2d.assoc_types.push(ImplAssocTypeSig { name: assoc_name, ty: rdef0.frame_ty });
+                }
+
+                c = impls_replace(c, impl_sig_idx, isig2d);
+              }
+            }
+            msi = msi + 1;
+          }
+        }
+      }
+
       ii = ii + 1;
     }
 
@@ -796,7 +1022,7 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
     while fi < m.prog.funcs.len() {
       let fd: ast.FuncDecl = m.prog.funcs.get(fi);
       if fd.is_async {
-        let r0: CollectAsyncPrepareOneResult = collect_async_prepare_one(c, w, m.path, m.prog.imports, exprs_mod, fd, fd.name);
+        let r0: CollectAsyncPrepareOneResult = collect_async_prepare_one(c, w, m.path, m.path, m.prog.imports, exprs_mod, fd, fd.name);
         if !r0.ok { return TcCtxResult { ok: false, err: r0.err, ctx: r0.ctx }; }
         c = r0.ctx;
       }
@@ -817,7 +1043,7 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
     while fi2 < m2.prog.funcs.len() {
       let fd2: ast.FuncDecl = m2.prog.funcs.get(fi2);
       if fd2.is_async {
-        let r2: CollectAsyncFinalizeOneResult = collect_async_finalize_one(c, w, m2.path, m2.prog.imports, exprs_mod2, fd2, fd2.name);
+        let r2: CollectAsyncFinalizeOneResult = collect_async_finalize_one(c, w, m2.path, m2.path, m2.prog.imports, exprs_mod2, fd2, fd2.name);
         if !r2.ok { return TcCtxResult { ok: false, err: r2.err, ctx: r2.ctx }; }
         c = r2.ctx;
       }
@@ -838,11 +1064,59 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
           let mf2: FindImplMethodResult = find_impl_method(isig, md2.name);
           if !mf2.found { return TcCtxResult { ok: false, err: type_error_at(md2.sp, "missing impl method sig"), ctx: c }; }
           let lowered2: String = mf2.m.lowered_name;
-          let r3: CollectAsyncFinalizeOneResult = collect_async_finalize_one(c, w, m2.path, m2.prog.imports, exprs_mod2, md2, lowered2);
+          let r3: CollectAsyncFinalizeOneResult = collect_async_finalize_one(c, w, m2.path, m2.path, m2.prog.imports, exprs_mod2, md2, lowered2);
           if !r3.ok { return TcCtxResult { ok: false, err: r3.err, ctx: r3.ctx }; }
           c = r3.ctx;
         }
         mdi2 = mdi2 + 1;
+      }
+
+      if !id2.is_inherent {
+        let isig_def2: ImplSig = c.impls.get(impl_sig_idx2);
+        let tf_def2: FindTraitResult = find_trait(c, isig_def2.trait_mod_path, isig_def2.trait_name);
+        if tf_def2.found {
+          let mut msi2: i32 = 0;
+          while msi2 < isig_def2.methods.len() {
+            let msd2: ImplMethodSig = isig_def2.methods.get(msi2);
+            if msd2.from_default {
+              let tmf2: FindTraitMethodResult = find_trait_method(tf_def2.sig, msd2.name);
+              if tmf2.found && tmf2.m.is_async {
+                let fmd2: FindModResult = find_mod(w, msd2.default_mod_path);
+                if !fmd2.found {
+                  return TcCtxResult { ok: false, err: type_error_at(id2.sp, "missing default trait method module"), ctx: c };
+                }
+                let mdm2: WorldModule = w.mods.get(fmd2.idx);
+                let rr2: FindTraitMethodRetResult = find_trait_method_ret(mdm2, isig_def2.trait_name, msd2.name);
+                if !rr2.found {
+                  return TcCtxResult { ok: false, err: type_error_at(id2.sp, "internal: missing trait method decl for async default body"), ctx: c };
+                }
+                let fd2d: ast.FuncDecl = ast.FuncDecl {
+                  file: msd2.default_file,
+                  sp: ast.span0(),
+                  vis: ast.vis_private(),
+                  is_pub: false,
+                  is_async: true,
+                  name: msd2.lowered_name,
+                  type_params: Vec(),
+                  type_param_packs: Vec(),
+                  const_params: Vec(),
+                  type_param_bounds: Vec(),
+                  const_where_bounds: Vec(),
+                  params: synth_params(msd2.default_params),
+                  ret: rr2.ret,
+                  ffi_imports: Vec(),
+                  ffi_exports: Vec(),
+                  body: msd2.default_body,
+                };
+                let rdef2: CollectAsyncFinalizeOneResult =
+                  collect_async_finalize_one(c, w, m2.path, mdm2.path, mdm2.prog.imports, mdm2.prog.exprs, fd2d, msd2.lowered_name);
+                if !rdef2.ok { return TcCtxResult { ok: false, err: rdef2.err, ctx: rdef2.ctx }; }
+                c = rdef2.ctx;
+              }
+            }
+            msi2 = msi2 + 1;
+          }
+        }
       }
 
       ii2 = ii2 + 1;
@@ -851,5 +1125,8 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
     mi = mi + 1;
   }
 
+  // Now that all async bodies have been analyzed and base frame layouts are finalized,
+  // refine any instantiated async frames that were requested while typechecking.
+  c = async_inst_finalize_frames(c);
   return TcCtxResult { ok: true, err: TcError.None, ctx: c };
 }
