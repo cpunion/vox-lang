@@ -34,6 +34,10 @@ fn add_int(p0: ast.ExprPool, sp: ast.Span, text: String) -> ast.AddExprResult {
   return add_expr(p0, ast.ExprNode.Int(text), sp);
 }
 
+fn add_bool(p0: ast.ExprPool, sp: ast.Span, v: bool) -> ast.AddExprResult {
+  return add_expr(p0, ast.ExprNode.Bool(v), sp);
+}
+
 fn add_str(p0: ast.ExprPool, sp: ast.Span, text: String) -> ast.AddExprResult {
   return add_expr(p0, ast.ExprNode.Str(text), sp);
 }
@@ -57,7 +61,220 @@ fn add_dot_call1(p0: ast.ExprPool, sp: ast.Span, name: String, arg0: i32) -> ast
   return add_call(r0.pool, sp, r0.id, as0);
 }
 
-fn async_rewrite_stmt_list(p0: ast.ExprPool, frame_var: String, ss: Vec[ast.Stmt]) -> SynthResult {
+fn string_vec_contains(xs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if xs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn str_starts_with(s: String, prefix: String) -> bool {
+  if s.len() < prefix.len() { return false; }
+  let mut i: i32 = 0;
+  while i < prefix.len() {
+    if s.byte_at(i) != prefix.byte_at(i) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+struct RewriteExprResult { ok: bool, err: String, exprs: ast.ExprPool, id: i32 }
+
+fn async_rewrite_expr_capture(p0: ast.ExprPool, frame_var: String, captures: Vec[String], ret_ann: ast.TypeName, eid: i32) -> RewriteExprResult {
+  let n: ast.ExprNode = ast.expr_pool_get(p0, eid);
+  if match n { ast.ExprNode.Ident(_x) => true, _ => false } {
+    let name: String = match n { ast.ExprNode.Ident(x) => x, _ => "" };
+    if string_vec_contains(captures, name) {
+      let sp: ast.Span = ast.expr_pool_span(p0, eid);
+      let r_f: ast.AddExprResult = add_ident(p0, sp, frame_var);
+      let r_m: ast.AddExprResult = add_member(r_f.pool, sp, r_f.id, "l_".concat(name));
+      return RewriteExprResult { ok: true, err: "", exprs: r_m.pool, id: r_m.id };
+    }
+    return RewriteExprResult { ok: true, err: "", exprs: p0, id: eid };
+  }
+
+  if match n { ast.ExprNode.Int(_v) => true, ast.ExprNode.Float(_v) => true, ast.ExprNode.Bool(_b) => true, ast.ExprNode.Str(_s) => true, ast.ExprNode.DotIdent(_s) => true, _ => false } {
+    return RewriteExprResult { ok: true, err: "", exprs: p0, id: eid };
+  }
+
+  let sp: ast.Span = ast.expr_pool_span(p0, eid);
+
+  if match n { ast.ExprNode.Unary(_op, _a) => true, _ => false } {
+    let op: ast.UnaryOp = match n { ast.ExprNode.Unary(x, _a) => x, _ => ast.UnaryOp.Pos };
+    let a: i32 = match n { ast.ExprNode.Unary(_op, x) => x, _ => -1 };
+    let ra: RewriteExprResult = async_rewrite_expr_capture(p0, frame_var, captures, ret_ann, a);
+    if !ra.ok { return ra; }
+    if ra.id == a { return RewriteExprResult { ok: true, err: "", exprs: ra.exprs, id: eid }; }
+    let r: ast.AddExprResult = add_expr(ra.exprs, ast.ExprNode.Unary(op, ra.id), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r.pool, id: r.id };
+  }
+
+  if match n { ast.ExprNode.As(_a, _tn) => true, _ => false } {
+    let a: i32 = match n { ast.ExprNode.As(x, _tn) => x, _ => -1 };
+    let tn: ast.TypeName = match n { ast.ExprNode.As(_a, x) => x, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+    let ra: RewriteExprResult = async_rewrite_expr_capture(p0, frame_var, captures, ret_ann, a);
+    if !ra.ok { return ra; }
+    if ra.id == a { return RewriteExprResult { ok: true, err: "", exprs: ra.exprs, id: eid }; }
+    let r: ast.AddExprResult = add_expr(ra.exprs, ast.ExprNode.As(ra.id, tn), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r.pool, id: r.id };
+  }
+
+  if match n { ast.ExprNode.Binary(_op, _l, _r) => true, _ => false } {
+    let op: ast.BinaryOp = match n { ast.ExprNode.Binary(x, _l, _r) => x, _ => ast.BinaryOp.Add };
+    let l: i32 = match n { ast.ExprNode.Binary(_op, x, _r) => x, _ => -1 };
+    let r0: i32 = match n { ast.ExprNode.Binary(_op, _l, x) => x, _ => -1 };
+    let rl: RewriteExprResult = async_rewrite_expr_capture(p0, frame_var, captures, ret_ann, l);
+    if !rl.ok { return rl; }
+    let rr: RewriteExprResult = async_rewrite_expr_capture(rl.exprs, frame_var, captures, ret_ann, r0);
+    if !rr.ok { return rr; }
+    if rl.id == l && rr.id == r0 { return RewriteExprResult { ok: true, err: "", exprs: rr.exprs, id: eid }; }
+    let r1: ast.AddExprResult = add_expr(rr.exprs, ast.ExprNode.Binary(op, rl.id, rr.id), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r1.pool, id: r1.id };
+  }
+
+  if match n { ast.ExprNode.If(_c, _t, _e) => true, _ => false } {
+    let c: i32 = match n { ast.ExprNode.If(x, _t, _e) => x, _ => -1 };
+    let t: i32 = match n { ast.ExprNode.If(_c, x, _e) => x, _ => -1 };
+    let e: i32 = match n { ast.ExprNode.If(_c, _t, x) => x, _ => -1 };
+    let rc: RewriteExprResult = async_rewrite_expr_capture(p0, frame_var, captures, ret_ann, c);
+    if !rc.ok { return rc; }
+    let rt: RewriteExprResult = async_rewrite_expr_capture(rc.exprs, frame_var, captures, ret_ann, t);
+    if !rt.ok { return rt; }
+    let re: RewriteExprResult = async_rewrite_expr_capture(rt.exprs, frame_var, captures, ret_ann, e);
+    if !re.ok { return re; }
+    if rc.id == c && rt.id == t && re.id == e { return RewriteExprResult { ok: true, err: "", exprs: re.exprs, id: eid }; }
+    let r1: ast.AddExprResult = add_expr(re.exprs, ast.ExprNode.If(rc.id, rt.id, re.id), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r1.pool, id: r1.id };
+  }
+
+  if match n { ast.ExprNode.Member(_r, _f) => true, _ => false } {
+    let rcv: i32 = match n { ast.ExprNode.Member(x, _f) => x, _ => -1 };
+    let f: String = match n { ast.ExprNode.Member(_r, x) => x, _ => "" };
+    let rr: RewriteExprResult = async_rewrite_expr_capture(p0, frame_var, captures, ret_ann, rcv);
+    if !rr.ok { return rr; }
+    if rr.id == rcv { return RewriteExprResult { ok: true, err: "", exprs: rr.exprs, id: eid }; }
+    let r1: ast.AddExprResult = add_expr(rr.exprs, ast.ExprNode.Member(rr.id, f), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r1.pool, id: r1.id };
+  }
+
+  if match n { ast.ExprNode.Call(_c, _t, _a) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.Call(x, _t, _a) => x, _ => -1 };
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, x, _a) => x, _ => Vec() };
+    let args: Vec[i32] = match n { ast.ExprNode.Call(_c, _t, x) => x, _ => Vec() };
+    let rc: RewriteExprResult = async_rewrite_expr_capture(p0, frame_var, captures, ret_ann, callee);
+    if !rc.ok { return rc; }
+    let mut out_args: Vec[i32] = Vec();
+    let mut changed: bool = rc.id != callee;
+    let mut i: i32 = 0;
+    let mut p: ast.ExprPool = rc.exprs;
+    while i < args.len() {
+      let ri: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, args.get(i));
+      if !ri.ok { return ri; }
+      p = ri.exprs;
+      out_args.push(ri.id);
+      if ri.id != args.get(i) { changed = true; }
+      i = i + 1;
+    }
+    if !changed { return RewriteExprResult { ok: true, err: "", exprs: p, id: eid }; }
+    let r1: ast.AddExprResult = add_expr(p, ast.ExprNode.Call(rc.id, targs, out_args), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r1.pool, id: r1.id };
+  }
+
+  if match n { ast.ExprNode.StructLit(_t, _fs) => true, _ => false } {
+    let ty_expr: i32 = match n { ast.ExprNode.StructLit(x, _fs) => x, _ => -1 };
+    let fs: Vec[ast.StructLitField] = match n { ast.ExprNode.StructLit(_t, x) => x, _ => Vec() };
+    let rt: RewriteExprResult = async_rewrite_expr_capture(p0, frame_var, captures, ret_ann, ty_expr);
+    if !rt.ok { return rt; }
+    let mut p: ast.ExprPool = rt.exprs;
+    let mut out_fs: Vec[ast.StructLitField] = Vec();
+    let mut changed: bool = rt.id != ty_expr;
+    let mut i: i32 = 0;
+    while i < fs.len() {
+      let f0: ast.StructLitField = fs.get(i);
+      let re: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, f0.expr);
+      if !re.ok { return re; }
+      p = re.exprs;
+      out_fs.push(ast.StructLitField { name: f0.name, expr: re.id });
+      if re.id != f0.expr { changed = true; }
+      i = i + 1;
+    }
+    if !changed { return RewriteExprResult { ok: true, err: "", exprs: p, id: eid }; }
+    let r1: ast.AddExprResult = add_expr(p, ast.ExprNode.StructLit(rt.id, out_fs), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r1.pool, id: r1.id };
+  }
+
+  if match n { ast.ExprNode.Match(_s, _as) => true, _ => false } {
+    let scrut: i32 = match n { ast.ExprNode.Match(x, _as) => x, _ => -1 };
+    let arms: Vec[ast.MatchArm] = match n { ast.ExprNode.Match(_s, x) => x, _ => Vec() };
+    let rs: RewriteExprResult = async_rewrite_expr_capture(p0, frame_var, captures, ret_ann, scrut);
+    if !rs.ok { return rs; }
+    let mut p: ast.ExprPool = rs.exprs;
+    let mut out_arms: Vec[ast.MatchArm] = Vec();
+    let mut changed: bool = rs.id != scrut;
+    let mut i: i32 = 0;
+    while i < arms.len() {
+      let a0: ast.MatchArm = arms.get(i);
+      let re: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, a0.expr);
+      if !re.ok { return re; }
+      p = re.exprs;
+      out_arms.push(ast.MatchArm { pat: a0.pat, expr: re.id });
+      if re.id != a0.expr { changed = true; }
+      i = i + 1;
+    }
+    if !changed { return RewriteExprResult { ok: true, err: "", exprs: p, id: eid }; }
+    let r1: ast.AddExprResult = add_expr(p, ast.ExprNode.Match(rs.id, out_arms), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r1.pool, id: r1.id };
+  }
+
+  if match n { ast.ExprNode.Try(x) => true, _ => false } {
+    let x: i32 = match n { ast.ExprNode.Try(y) => y, _ => -1 };
+    let rx: RewriteExprResult = async_rewrite_expr_capture(p0, frame_var, captures, ret_ann, x);
+    if !rx.ok { return rx; }
+    if rx.id == x { return RewriteExprResult { ok: true, err: "", exprs: rx.exprs, id: eid }; }
+    let r1: ast.AddExprResult = add_expr(rx.exprs, ast.ExprNode.Try(rx.id), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r1.pool, id: r1.id };
+  }
+  if match n { ast.ExprNode.Await(x) => true, _ => false } {
+    let x: i32 = match n { ast.ExprNode.Await(y) => y, _ => -1 };
+    let rx: RewriteExprResult = async_rewrite_expr_capture(p0, frame_var, captures, ret_ann, x);
+    if !rx.ok { return rx; }
+    if rx.id == x { return RewriteExprResult { ok: true, err: "", exprs: rx.exprs, id: eid }; }
+    let r1: ast.AddExprResult = add_expr(rx.exprs, ast.ExprNode.Await(rx.id), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r1.pool, id: r1.id };
+  }
+  if match n { ast.ExprNode.TryBlock(x) => true, _ => false } {
+    let x: i32 = match n { ast.ExprNode.TryBlock(y) => y, _ => -1 };
+    let rx: RewriteExprResult = async_rewrite_expr_capture(p0, frame_var, captures, ret_ann, x);
+    if !rx.ok { return rx; }
+    if rx.id == x { return RewriteExprResult { ok: true, err: "", exprs: rx.exprs, id: eid }; }
+    let r1: ast.AddExprResult = add_expr(rx.exprs, ast.ExprNode.TryBlock(rx.id), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r1.pool, id: r1.id };
+  }
+
+  // D03: keep this conservative; treat block expr as a container for stmt rewriting.
+  if match n { ast.ExprNode.Block(_b) => true, _ => false } {
+    let b0: ast.ExprBlock = match n { ast.ExprNode.Block(x) => x, _ => ast.ExprBlock { stmts: Vec(), has_tail: false, tail: -1 } };
+    let rr: SynthResult = async_rewrite_stmt_list(p0, frame_var, captures, ret_ann, b0.stmts);
+    if !rr.ok { return RewriteExprResult { ok: false, err: rr.err, exprs: rr.exprs, id: -1 }; }
+    let mut p: ast.ExprPool = rr.exprs;
+    let mut tail_id: i32 = b0.tail;
+    if b0.has_tail && b0.tail != -1 {
+      let rt: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, b0.tail);
+      if !rt.ok { return rt; }
+      p = rt.exprs;
+      tail_id = rt.id;
+    }
+    let b1: ast.ExprBlock = ast.ExprBlock { stmts: rr.body.stmts, has_tail: b0.has_tail, tail: tail_id };
+    let r1: ast.AddExprResult = add_expr(p, ast.ExprNode.Block(b1), sp);
+    return RewriteExprResult { ok: true, err: "", exprs: r1.pool, id: r1.id };
+  }
+
+  return RewriteExprResult { ok: false, err: "internal: async capture rewrite missing expr case", exprs: p0, id: -1 };
+}
+
+fn async_rewrite_stmt_list(p0: ast.ExprPool, frame_var: String, captures: Vec[String], ret_ann: ast.TypeName, ss: Vec[ast.Stmt]) -> SynthResult {
   let mut p: ast.ExprPool = p0;
   let mut out: Vec[ast.Stmt] = Vec();
   let mut i: i32 = 0;
@@ -70,36 +287,53 @@ fn async_rewrite_stmt_list(p0: ast.ExprPool, frame_var: String, ss: Vec[ast.Stmt
       let has_else: bool = match st { ast.Stmt.IfStmt(_sp, _c, _t, h, _e) => h, _ => false };
       let else_b: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, _t, _h, e) => e, _ => ast.Block { stmts: Vec() } };
 
-      let r_then: SynthResult = async_rewrite_stmt_list(p, frame_var, then_b.stmts);
+      let rc: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, cond);
+      if !rc.ok { return SynthResult { ok: false, err: rc.err, exprs: rc.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = rc.exprs;
+      let r_then: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, ret_ann, then_b.stmts);
       if !r_then.ok { return r_then; }
       p = r_then.exprs;
       let r_else: SynthResult =
-        if has_else { async_rewrite_stmt_list(p, frame_var, else_b.stmts) }
+        if has_else { async_rewrite_stmt_list(p, frame_var, captures, ret_ann, else_b.stmts) }
         else { SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: Vec() } } };
       if !r_else.ok { return r_else; }
       p = r_else.exprs;
-      out.push(ast.Stmt.IfStmt(sp, cond, ast.Block { stmts: r_then.body.stmts }, has_else, ast.Block { stmts: r_else.body.stmts }));
+      out.push(ast.Stmt.IfStmt(sp, rc.id, ast.Block { stmts: r_then.body.stmts }, has_else, ast.Block { stmts: r_else.body.stmts }));
     } else if match st { ast.Stmt.WhileStmt(_sp, _cond, _body) => true, _ => false } {
       let sp: ast.Span = match st { ast.Stmt.WhileStmt(x, _c, _b) => x, _ => ast.span0() };
       let cond: i32 = match st { ast.Stmt.WhileStmt(_sp, c, _b) => c, _ => -1 };
       let body: ast.Block = match st { ast.Stmt.WhileStmt(_sp, _c, b) => b, _ => ast.Block { stmts: Vec() } };
-      let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, body.stmts);
+      let rc: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, cond);
+      if !rc.ok { return SynthResult { ok: false, err: rc.err, exprs: rc.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = rc.exprs;
+      let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, ret_ann, body.stmts);
       if !r_body.ok { return r_body; }
       p = r_body.exprs;
-      out.push(ast.Stmt.WhileStmt(sp, cond, ast.Block { stmts: r_body.body.stmts }));
+      out.push(ast.Stmt.WhileStmt(sp, rc.id, ast.Block { stmts: r_body.body.stmts }));
     } else if match st { ast.Stmt.ReturnStmt(_sp, _has, _eid) => true, _ => false } {
       let sp: ast.Span = match st { ast.Stmt.ReturnStmt(x, _h, _e) => x, _ => ast.span0() };
       let has: bool = match st { ast.Stmt.ReturnStmt(_sp, h, _e) => h, _ => false };
       let eid: i32 = match st { ast.Stmt.ReturnStmt(_sp, _h, e) => e, _ => -1 };
 
-      // x.state = -1; return .Ready(<expr>)
+      // Evaluate expression first (may suspend/return Pending), then mark done and return Ready.
       let mut rhs_id: i32 = eid;
       if !has {
         let r0: ast.AddExprResult = add_int(p, sp, "0");
         p = r0.pool;
         rhs_id = r0.id;
+      } else {
+        let rr: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, rhs_id);
+        if !rr.ok { return SynthResult { ok: false, err: rr.err, exprs: rr.exprs, body: ast.Block { stmts: Vec() } }; }
+        p = rr.exprs;
+        rhs_id = rr.id;
       }
-      let r_ready: ast.AddExprResult = add_dot_call1(p, sp, "Ready", rhs_id);
+
+      let tmp_name: String = "__async$ret$".concat(i.to_string());
+      // Keep return expression type context so `.Ok(...)` style constructors remain inferrable.
+      out.push(ast.Stmt.Let(sp, false, tmp_name, true, ret_ann, rhs_id));
+      let r_tmp: ast.AddExprResult = add_ident(p, sp, tmp_name);
+      p = r_tmp.pool;
+      let r_ready: ast.AddExprResult = add_dot_call1(p, sp, "Ready", r_tmp.id);
       p = r_ready.pool;
 
       let r_zero2: ast.AddExprResult = add_int(p, sp, "0");
@@ -110,6 +344,41 @@ fn async_rewrite_stmt_list(p0: ast.ExprPool, frame_var: String, ss: Vec[ast.Stmt
       p = r_done.pool;
       out.push(ast.Stmt.AssignField(sp, frame_var, "state", r_done.id));
       out.push(ast.Stmt.ReturnStmt(sp, true, r_ready.id));
+    } else if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.Let(x, _m, _n, _ha, _ann, _e) => x, _ => ast.span0() };
+      let is_mut: bool = match st { ast.Stmt.Let(_sp, m0, _n, _ha, _ann, _e) => m0, _ => false };
+      let name0: String = match st { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
+      let has_ann: bool = match st { ast.Stmt.Let(_sp, _m, _n, ha0, _ann, _e) => ha0, _ => false };
+      let ann0: ast.TypeName = match st { ast.Stmt.Let(_sp, _m, _n, _ha, an0, _e) => an0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+      let e0: i32 = match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e0) => e0, _ => -1 };
+      let re: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, e0);
+      if !re.ok { return SynthResult { ok: false, err: re.err, exprs: re.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = re.exprs;
+      out.push(ast.Stmt.Let(sp, is_mut, name0, has_ann, ann0, re.id));
+    } else if match st { ast.Stmt.Assign(_sp, _n, _e) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.Assign(x, _n, _e) => x, _ => ast.span0() };
+      let name0: String = match st { ast.Stmt.Assign(_sp, n0, _e) => n0, _ => "" };
+      let e0: i32 = match st { ast.Stmt.Assign(_sp, _n, e0) => e0, _ => -1 };
+      let re: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, e0);
+      if !re.ok { return SynthResult { ok: false, err: re.err, exprs: re.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = re.exprs;
+      out.push(ast.Stmt.Assign(sp, name0, re.id));
+    } else if match st { ast.Stmt.AssignField(_sp, _r, _f, _e) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.AssignField(x, _r, _f, _e) => x, _ => ast.span0() };
+      let recv: String = match st { ast.Stmt.AssignField(_sp, r0, _f, _e) => r0, _ => "" };
+      let f: String = match st { ast.Stmt.AssignField(_sp, _r, f0, _e) => f0, _ => "" };
+      let e0: i32 = match st { ast.Stmt.AssignField(_sp, _r, _f, e0) => e0, _ => -1 };
+      let re: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, e0);
+      if !re.ok { return SynthResult { ok: false, err: re.err, exprs: re.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = re.exprs;
+      out.push(ast.Stmt.AssignField(sp, recv, f, re.id));
+    } else if match st { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.ExprStmt(x, _e) => x, _ => ast.span0() };
+      let e0: i32 = match st { ast.Stmt.ExprStmt(_sp, e0) => e0, _ => -1 };
+      let re: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, e0);
+      if !re.ok { return SynthResult { ok: false, err: re.err, exprs: re.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = re.exprs;
+      out.push(ast.Stmt.ExprStmt(sp, re.id));
     } else {
       out.push(st);
     }
@@ -149,7 +418,67 @@ fn synth_async_ctor_body(exprs0: ast.ExprPool, fd: ast.FuncDecl, frame_name: Str
   return SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: ss } };
 }
 
-fn synth_async_poll_body(exprs0: ast.ExprPool, fd: ast.FuncDecl, frame_var: String) -> SynthResult {
+struct AwaitPoint { stmt_idx: i32, operand: i32, is_try: bool }
+
+fn stmt_expr_id(st: ast.Stmt) -> i32 {
+  if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+    return match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e) => e, _ => -1 };
+  }
+  if match st { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
+    return match st { ast.Stmt.ExprStmt(_sp, e) => e, _ => -1 };
+  }
+  if match st { ast.Stmt.ReturnStmt(_sp, h, _e) => true, _ => false } {
+    let has0: bool = match st { ast.Stmt.ReturnStmt(_sp, h, _e) => h, _ => false };
+    if has0 { return match st { ast.Stmt.ReturnStmt(_sp, _h, e) => e, _ => -1 }; }
+  }
+  return -1;
+}
+
+fn find_await_points(exprs: ast.ExprPool, ss: Vec[ast.Stmt]) -> Vec[AwaitPoint] {
+  let mut out: Vec[AwaitPoint] = Vec();
+  let mut i: i32 = 0;
+  while i < ss.len() {
+    let st: ast.Stmt = ss.get(i);
+    let eid: i32 = stmt_expr_id(st);
+    if eid != -1 {
+      let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
+      if match n { ast.ExprNode.Await(_x) => true, _ => false } {
+        out.push(AwaitPoint { stmt_idx: i, operand: match n { ast.ExprNode.Await(x) => x, _ => -1 }, is_try: false });
+      } else if match n { ast.ExprNode.Try(_x) => true, _ => false } {
+        let x: i32 = match n { ast.ExprNode.Try(y) => y, _ => -1 };
+        let nx: ast.ExprNode = ast.expr_pool_get(exprs, x);
+        if match nx { ast.ExprNode.Await(_y) => true, _ => false } {
+          out.push(AwaitPoint { stmt_idx: i, operand: match nx { ast.ExprNode.Await(y) => y, _ => -1 }, is_try: true });
+        }
+      }
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn inject_capture_stores(p0: ast.ExprPool, frame_var: String, captures: Vec[String], ss0: Vec[ast.Stmt]) -> SynthResult {
+  let mut p: ast.ExprPool = p0;
+  let mut out: Vec[ast.Stmt] = Vec();
+  let mut i: i32 = 0;
+  while i < ss0.len() {
+    let st: ast.Stmt = ss0.get(i);
+    out.push(st);
+    if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+      let sp: ast.Span = stmt_span(st);
+      let name0: String = match st { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
+      if string_vec_contains(captures, name0) {
+        let r_id: ast.AddExprResult = add_ident(p, sp, name0);
+        p = r_id.pool;
+        out.push(ast.Stmt.AssignField(sp, frame_var, "l_".concat(name0), r_id.id));
+      }
+    }
+    i = i + 1;
+  }
+  return SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: out } };
+}
+
+fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd: ast.FuncDecl, frame_var: String, frame_name: String) -> SynthResult {
   let mut p: ast.ExprPool = exprs0;
   let sp: ast.Span = fd.sp;
 
@@ -188,133 +517,187 @@ fn synth_async_poll_body(exprs0: ast.ExprPool, fd: ast.FuncDecl, frame_var: Stri
     i = i + 1;
   }
 
-  // If the body contains a single top-level await statement, preserve progress by:
-  // - storing the awaited operand (a Future) into the frame once (state==0)
-  // - awaiting the stored frame field on subsequent polls (state==1)
-  let mut await_stmt_idx: i32 = -1;
-  let mut await_operand: i32 = -1;
-  let mut await_is_try: bool = false;
-  let mut si: i32 = 0;
-  while si < fd.body.stmts.len() {
-    let st0: ast.Stmt = fd.body.stmts.get(si);
-    let mut eid0: i32 = -1;
-    if match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
-      eid0 = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e) => e, _ => -1 };
-    } else if match st0 { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
-      eid0 = match st0 { ast.Stmt.ExprStmt(_sp, e) => e, _ => -1 };
-    } else if match st0 { ast.Stmt.ReturnStmt(_sp, h, _e) => true, _ => false } {
-      let has0: bool = match st0 { ast.Stmt.ReturnStmt(_sp, h, _e) => h, _ => false };
-      if has0 { eid0 = match st0 { ast.Stmt.ReturnStmt(_sp, _h, e) => e, _ => -1 }; }
-    }
-    if eid0 != -1 {
-      let n0: ast.ExprNode = ast.expr_pool_get(p, eid0);
-      if match n0 { ast.ExprNode.Await(_x) => true, _ => false } {
-        if await_stmt_idx != -1 {
-          return SynthResult { ok: false, err: "async fn with multiple await is deferred (D03)", exprs: p, body: ast.Block { stmts: Vec() } };
-        }
-        await_stmt_idx = si;
-        await_operand = match n0 { ast.ExprNode.Await(x) => x, _ => -1 };
-        await_is_try = false;
-      } else if match n0 { ast.ExprNode.Try(_x) => true, _ => false } {
-        let x0: i32 = match n0 { ast.ExprNode.Try(x) => x, _ => -1 };
-        let nx: ast.ExprNode = ast.expr_pool_get(p, x0);
-        if match nx { ast.ExprNode.Await(_y) => true, _ => false } {
-          if await_stmt_idx != -1 {
-            return SynthResult { ok: false, err: "async fn with multiple await is deferred (D03)", exprs: p, body: ast.Block { stmts: Vec() } };
-          }
-          await_stmt_idx = si;
-          await_operand = match nx { ast.ExprNode.Await(y) => y, _ => -1 };
-          await_is_try = true;
-        }
+  // Captured locals are stored in frame fields `l_<name>`.
+  let mut captures: Vec[String] = Vec();
+  let fr: tc.FindStructResult = tc.find_struct(ctx, mod_path, frame_name);
+  if fr.found {
+    let mut fi: i32 = 0;
+    while fi < fr.sig.fields.len() {
+      let f: tc.StructFieldSig = fr.sig.fields.get(fi);
+      if str_starts_with(f.name, "l_") {
+        captures.push(f.name.slice(2, f.name.len()));
       }
+      fi = fi + 1;
     }
-    si = si + 1;
   }
 
-  // Split the body around the await point:
-  // - pre-await stmts execute only once under `if state == 0 { ... }`
-  // - await+post stmts execute on every poll, awaiting the stored frame field `a0`
-  let mut pre_user: Vec[ast.Stmt] = Vec();
-  let mut rest_user: Vec[ast.Stmt] = Vec();
-  si = 0;
-  while si < fd.body.stmts.len() {
-    let st1: ast.Stmt = fd.body.stmts.get(si);
-    if await_stmt_idx != -1 && si < await_stmt_idx {
-      pre_user.push(st1);
-    } else if await_stmt_idx != -1 && si == await_stmt_idx {
-      // Rewrite the await statement to await the stored frame field: `__frame.a0.await` (or `...await?`).
-      let sp1: ast.Span = stmt_span(st1);
+  let aps: Vec[AwaitPoint] = find_await_points(p, fd.body.stmts);
+
+  let r_true: ast.AddExprResult = add_bool(p, sp, true);
+  p = r_true.pool;
+
+  let mut loop_body: Vec[ast.Stmt] = Vec();
+
+  let mut st_k: i32 = 0;
+  while st_k <= aps.len() {
+    let r_fx0: ast.AddExprResult = add_ident(p, sp, frame_var);
+    p = r_fx0.pool;
+    let r_state0: ast.AddExprResult = add_member(p, sp, r_fx0.id, "state");
+    p = r_state0.pool;
+    let r_k: ast.AddExprResult = add_int(p, sp, st_k.to_string());
+    p = r_k.pool;
+    let r_eq: ast.AddExprResult = add_binary(p, sp, ast.BinaryOp.Eq, r_state0.id, r_k.id);
+    p = r_eq.pool;
+
+    let mut then_ss: Vec[ast.Stmt] = Vec();
+
+    if aps.len() == 0 {
+      // No await: run the body once under state==0.
+      let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, fd.body.stmts);
+      if !r_body.ok { return r_body; }
+      p = r_body.exprs;
+      let r_caps: SynthResult = inject_capture_stores(p, frame_var, captures, r_body.body.stmts);
+      if !r_caps.ok { return r_caps; }
+      p = r_caps.exprs;
+      let mut j: i32 = 0;
+      while j < r_caps.body.stmts.len() { then_ss.push(r_caps.body.stmts.get(j)); j = j + 1; }
+      loop_body.push(ast.Stmt.IfStmt(sp, r_eq.id, ast.Block { stmts: then_ss }, false, ast.Block { stmts: Vec() }));
+      st_k = 1;
+      continue;
+    }
+
+    if st_k == 0 {
+      // pre0: stmts before first await, then store a0 and advance to state 1.
+      let mut pre_user: Vec[ast.Stmt] = Vec();
+      let mut si: i32 = 0;
+      while si < aps.get(0).stmt_idx { pre_user.push(fd.body.stmts.get(si)); si = si + 1; }
+      let r_pre: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, pre_user);
+      if !r_pre.ok { return r_pre; }
+      p = r_pre.exprs;
+      let r_pre2: SynthResult = inject_capture_stores(p, frame_var, captures, r_pre.body.stmts);
+      if !r_pre2.ok { return r_pre2; }
+      p = r_pre2.exprs;
+      si = 0;
+      while si < r_pre2.body.stmts.len() { then_ss.push(r_pre2.body.stmts.get(si)); si = si + 1; }
+
+      let op0: i32 = aps.get(0).operand;
+      let rop: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, fd.ret, op0);
+      if !rop.ok { return SynthResult { ok: false, err: rop.err, exprs: rop.exprs, body: ast.Block { stmts: Vec() } }; }
+      p = rop.exprs;
+      then_ss.push(ast.Stmt.AssignField(sp, frame_var, "a0", rop.id));
+      let r_one: ast.AddExprResult = add_int(p, sp, "1");
+      p = r_one.pool;
+      then_ss.push(ast.Stmt.AssignField(sp, frame_var, "state", r_one.id));
+      then_ss.push(ast.Stmt.Continue(sp));
+    } else {
+      let ap: AwaitPoint = aps.get(st_k - 1);
+      let st0: ast.Stmt = fd.body.stmts.get(ap.stmt_idx);
+      let sp1: ast.Span = stmt_span(st0);
+
+      // Rewrite await statement to await the stored frame field: `__frame.aN.await` (or `...await?`).
       let r_fx: ast.AddExprResult = add_ident(p, sp1, frame_var);
       p = r_fx.pool;
-      let r_a0: ast.AddExprResult = add_member(p, sp1, r_fx.id, "a0");
-      p = r_a0.pool;
-      let r_aw: ast.AddExprResult = add_expr(p, ast.ExprNode.Await(r_a0.id), sp1);
+      let r_a: ast.AddExprResult = add_member(p, sp1, r_fx.id, "a".concat((st_k - 1).to_string()));
+      p = r_a.pool;
+      let r_aw: ast.AddExprResult = add_expr(p, ast.ExprNode.Await(r_a.id), sp1);
       p = r_aw.pool;
       let new_eid: i32 =
-        if await_is_try {
+        if ap.is_try {
           let r_tr: ast.AddExprResult = add_expr(p, ast.ExprNode.Try(r_aw.id), sp1);
           p = r_tr.pool;
           r_tr.id
         } else { r_aw.id };
-      if match st1 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
-        let is_mut: bool = match st1 { ast.Stmt.Let(_sp, m0, _n, _ha, _ann, _e) => m0, _ => false };
-        let name0: String = match st1 { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
-        let has_ann: bool = match st1 { ast.Stmt.Let(_sp, _m, _n, ha0, _ann, _e) => ha0, _ => false };
-        let ann0: ast.TypeName = match st1 { ast.Stmt.Let(_sp, _m, _n, _ha, an0, _e) => an0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
-        rest_user.push(ast.Stmt.Let(sp1, is_mut, name0, has_ann, ann0, new_eid));
-      } else if match st1 { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
-        rest_user.push(ast.Stmt.ExprStmt(sp1, new_eid));
-      } else if match st1 { ast.Stmt.ReturnStmt(_sp, h0, _e) => true, _ => false } {
-        let has0: bool = match st1 { ast.Stmt.ReturnStmt(_sp, h0, _e) => h0, _ => false };
-        rest_user.push(ast.Stmt.ReturnStmt(sp1, has0, new_eid));
-      } else {
-        rest_user.push(st1);
+
+      let mut await_stmt: ast.Stmt = st0;
+      if match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+        let is_mut: bool = match st0 { ast.Stmt.Let(_sp, m0, _n, _ha, _ann, _e) => m0, _ => false };
+        let name0: String = match st0 { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
+        let has_ann: bool = match st0 { ast.Stmt.Let(_sp, _m, _n, ha0, _ann, _e) => ha0, _ => false };
+        let ann0: ast.TypeName = match st0 { ast.Stmt.Let(_sp, _m, _n, _ha, an0, _e) => an0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+        await_stmt = ast.Stmt.Let(sp1, is_mut, name0, has_ann, ann0, new_eid);
+      } else if match st0 { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
+        await_stmt = ast.Stmt.ExprStmt(sp1, new_eid);
+      } else if match st0 { ast.Stmt.ReturnStmt(_sp, h0, _e) => true, _ => false } {
+        let has0: bool = match st0 { ast.Stmt.ReturnStmt(_sp, h0, _e) => h0, _ => false };
+        await_stmt = ast.Stmt.ReturnStmt(sp1, has0, new_eid);
       }
-    } else {
-      rest_user.push(st1);
+
+      let mut ss_await: Vec[ast.Stmt] = Vec();
+      ss_await.push(await_stmt);
+      let r_await: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, ss_await);
+      if !r_await.ok { return r_await; }
+      p = r_await.exprs;
+      let r_await2: SynthResult = inject_capture_stores(p, frame_var, captures, r_await.body.stmts);
+      if !r_await2.ok { return r_await2; }
+      p = r_await2.exprs;
+      let mut j0: i32 = 0;
+      while j0 < r_await2.body.stmts.len() { then_ss.push(r_await2.body.stmts.get(j0)); j0 = j0 + 1; }
+
+      // Between segment: stmts after this await up to next await (or tail).
+      let start: i32 = ap.stmt_idx + 1;
+      let end: i32 = if st_k < aps.len() { aps.get(st_k).stmt_idx } else { fd.body.stmts.len() };
+      let mut seg: Vec[ast.Stmt] = Vec();
+      let mut si: i32 = start;
+      while si < end { seg.push(fd.body.stmts.get(si)); si = si + 1; }
+
+      let r_seg: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, seg);
+      if !r_seg.ok { return r_seg; }
+      p = r_seg.exprs;
+      let r_seg2: SynthResult = inject_capture_stores(p, frame_var, captures, r_seg.body.stmts);
+      if !r_seg2.ok { return r_seg2; }
+      p = r_seg2.exprs;
+      si = 0;
+      while si < r_seg2.body.stmts.len() { then_ss.push(r_seg2.body.stmts.get(si)); si = si + 1; }
+
+      if st_k < aps.len() {
+        // Initialize next awaited operand aK and advance to state K+1.
+        let opk: i32 = aps.get(st_k).operand;
+        let rop: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, fd.ret, opk);
+        if !rop.ok { return SynthResult { ok: false, err: rop.err, exprs: rop.exprs, body: ast.Block { stmts: Vec() } }; }
+        p = rop.exprs;
+        then_ss.push(ast.Stmt.AssignField(sp, frame_var, "a".concat(st_k.to_string()), rop.id));
+        let r_next: ast.AddExprResult = add_int(p, sp, (st_k + 1).to_string());
+        p = r_next.pool;
+        then_ss.push(ast.Stmt.AssignField(sp, frame_var, "state", r_next.id));
+        then_ss.push(ast.Stmt.Continue(sp));
+      } else {
+        // Tail state ends via rewritten returns (Ready + mark done).
+      }
     }
-    si = si + 1;
+
+    loop_body.push(ast.Stmt.IfStmt(sp, r_eq.id, ast.Block { stmts: then_ss }, false, ast.Block { stmts: Vec() }));
+    st_k = st_k + 1;
   }
 
-  let mut pre_rewritten: Vec[ast.Stmt] = Vec();
-  if await_stmt_idx != -1 {
-    let r_pre: SynthResult = async_rewrite_stmt_list(p, frame_var, pre_user);
-    if !r_pre.ok { return r_pre; }
-    p = r_pre.exprs;
-    pre_rewritten = r_pre.body.stmts;
-  }
+  // invalid state => panic
+  let r_panic2: ast.AddExprResult = add_ident(p, sp, "panic");
+  p = r_panic2.pool;
+  let r_msg2: ast.AddExprResult = add_str(p, sp, "invalid async state");
+  p = r_msg2.pool;
+  let mut pargs2: Vec[i32] = Vec();
+  pargs2.push(r_msg2.id);
+  let r_call2: ast.AddExprResult = add_call(p, sp, r_panic2.id, pargs2);
+  p = r_call2.pool;
+  loop_body.push(ast.Stmt.ExprStmt(sp, r_call2.id));
 
-  let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, rest_user);
-  if !r_body.ok { return r_body; }
-  p = r_body.exprs;
+  let loop_stmt: ast.Stmt = ast.Stmt.WhileStmt(sp, r_true.id, ast.Block { stmts: loop_body });
 
-  // Concatenate pre + rewritten body.
   let mut out: Vec[ast.Stmt] = Vec();
   i = 0;
   while i < pre.len() { out.push(pre.get(i)); i = i + 1; }
+  out.push(loop_stmt);
 
-  // One-time init before the first await: store operand into frame + advance state.
-  if await_stmt_idx != -1 {
-    let r_fx0: ast.AddExprResult = add_ident(p, sp, frame_var);
-    p = r_fx0.pool;
-    let r_st0: ast.AddExprResult = add_member(p, sp, r_fx0.id, "state");
-    p = r_st0.pool;
-    let r_zero0: ast.AddExprResult = add_int(p, sp, "0");
-    p = r_zero0.pool;
-    let r_eq0: ast.AddExprResult = add_binary(p, sp, ast.BinaryOp.Eq, r_st0.id, r_zero0.id);
-    p = r_eq0.pool;
-    let r_one0: ast.AddExprResult = add_int(p, sp, "1");
-    p = r_one0.pool;
-    let mut then0: Vec[ast.Stmt] = Vec();
-    let mut k: i32 = 0;
-    while k < pre_rewritten.len() { then0.push(pre_rewritten.get(k)); k = k + 1; }
-    then0.push(ast.Stmt.AssignField(sp, frame_var, "a0", await_operand));
-    then0.push(ast.Stmt.AssignField(sp, frame_var, "state", r_one0.id));
-    out.push(ast.Stmt.IfStmt(sp, r_eq0.id, ast.Block { stmts: then0 }, false, ast.Block { stmts: Vec() }));
-  }
-
-  i = 0;
-  while i < r_body.body.stmts.len() { out.push(r_body.body.stmts.get(i)); i = i + 1; }
+  // Satisfy the IRGen "missing return" check: the loop above is infinite by construction,
+  // but the current IRGen does not prove it. This is unreachable.
+  let r_panic3: ast.AddExprResult = add_ident(p, sp, "panic");
+  p = r_panic3.pool;
+  let r_msg3: ast.AddExprResult = add_str(p, sp, "unreachable: async poll fell through");
+  p = r_msg3.pool;
+  let mut pargs3: Vec[i32] = Vec();
+  pargs3.push(r_msg3.id);
+  let r_call3: ast.AddExprResult = add_call(p, sp, r_panic3.id, pargs3);
+  p = r_call3.pool;
+  out.push(ast.Stmt.ExprStmt(sp, r_call3.id));
 
   return SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: out } };
 }

@@ -104,3 +104,33 @@ fn test_irgen_async_await_future_impl_lowers_poll_call() -> () {
   t.assert(contains(s, "addr_of_field_chain"));
   t.assert(contains(s, ".a0"));
 }
+
+fn test_irgen_async_multi_await_and_captures_lower_to_frame_fields() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/async", """
+    pub enum Poll[T] { Pending, Ready(T) }
+    pub struct Waker { pub token: i64 }
+    pub struct Context { pub waker: Waker }
+    pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+  """);
+  w = add_mod(w, "main", """
+    enum Poll[T] { Pending, Ready(T) }
+    async fn main() -> i32 {
+      let x: i32 = 3;
+      let p0: Poll[i32] = .Ready(x);
+      let y: i32 = p0.await;
+      let p1: Poll[i32] = .Ready(x + y);
+      let z: i32 = p1.await;
+      return z;
+    }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+
+  let s: String = ir.format_program(r.prog);
+  // D03: multiple await points => multiple stored operands.
+  t.assert(contains(s, ".a0"));
+  t.assert(contains(s, ".a1"));
+  // D03: locals used after a suspension point are captured into the frame.
+  t.assert(contains(s, ".l_x"));
+}
