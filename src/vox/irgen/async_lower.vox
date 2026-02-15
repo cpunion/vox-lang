@@ -1,0 +1,185 @@
+import "vox/ast" as ast
+import "vox/typecheck" as tc
+
+struct SynthResult {
+  ok: bool,
+  err: String,
+  exprs: ast.ExprPool,
+  body: ast.Block,
+}
+
+fn add_expr(p0: ast.ExprPool, n: ast.ExprNode, sp: ast.Span) -> ast.AddExprResult {
+  return ast.expr_pool_add(p0, n, sp);
+}
+
+fn add_ident(p0: ast.ExprPool, sp: ast.Span, name: String) -> ast.AddExprResult {
+  return add_expr(p0, ast.ExprNode.Ident(name), sp);
+}
+
+fn add_int(p0: ast.ExprPool, sp: ast.Span, text: String) -> ast.AddExprResult {
+  return add_expr(p0, ast.ExprNode.Int(text), sp);
+}
+
+fn add_str(p0: ast.ExprPool, sp: ast.Span, text: String) -> ast.AddExprResult {
+  return add_expr(p0, ast.ExprNode.Str(text), sp);
+}
+
+fn add_member(p0: ast.ExprPool, sp: ast.Span, recv: i32, field: String) -> ast.AddExprResult {
+  return add_expr(p0, ast.ExprNode.Member(recv, field), sp);
+}
+
+fn add_binary(p0: ast.ExprPool, sp: ast.Span, op: ast.BinaryOp, a: i32, b: i32) -> ast.AddExprResult {
+  return add_expr(p0, ast.ExprNode.Binary(op, a, b), sp);
+}
+
+fn add_call(p0: ast.ExprPool, sp: ast.Span, callee: i32, args: Vec[i32]) -> ast.AddExprResult {
+  return add_expr(p0, ast.ExprNode.Call(callee, Vec(), args), sp);
+}
+
+fn add_dot_call1(p0: ast.ExprPool, sp: ast.Span, name: String, arg0: i32) -> ast.AddExprResult {
+  let r0: ast.AddExprResult = add_expr(p0, ast.ExprNode.DotIdent(name), sp);
+  let mut as0: Vec[i32] = Vec();
+  as0.push(arg0);
+  return add_call(r0.pool, sp, r0.id, as0);
+}
+
+fn async_rewrite_stmt_list(p0: ast.ExprPool, frame_var: String, ss: Vec[ast.Stmt]) -> SynthResult {
+  let mut p: ast.ExprPool = p0;
+  let mut out: Vec[ast.Stmt] = Vec();
+  let mut i: i32 = 0;
+  while i < ss.len() {
+    let st: ast.Stmt = ss.get(i);
+    if match st { ast.Stmt.IfStmt(_sp, _cond, _then_b, _has_else, _else_b) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.IfStmt(x, _c, _t, _h, _e) => x, _ => ast.span0() };
+      let cond: i32 = match st { ast.Stmt.IfStmt(_sp, c, _t, _h, _e) => c, _ => -1 };
+      let then_b: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, t, _h, _e) => t, _ => ast.Block { stmts: Vec() } };
+      let has_else: bool = match st { ast.Stmt.IfStmt(_sp, _c, _t, h, _e) => h, _ => false };
+      let else_b: ast.Block = match st { ast.Stmt.IfStmt(_sp, _c, _t, _h, e) => e, _ => ast.Block { stmts: Vec() } };
+
+      let r_then: SynthResult = async_rewrite_stmt_list(p, frame_var, then_b.stmts);
+      if !r_then.ok { return r_then; }
+      p = r_then.exprs;
+      let r_else: SynthResult =
+        if has_else { async_rewrite_stmt_list(p, frame_var, else_b.stmts) }
+        else { SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: Vec() } } };
+      if !r_else.ok { return r_else; }
+      p = r_else.exprs;
+      out.push(ast.Stmt.IfStmt(sp, cond, ast.Block { stmts: r_then.body.stmts }, has_else, ast.Block { stmts: r_else.body.stmts }));
+    } else if match st { ast.Stmt.WhileStmt(_sp, _cond, _body) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.WhileStmt(x, _c, _b) => x, _ => ast.span0() };
+      let cond: i32 = match st { ast.Stmt.WhileStmt(_sp, c, _b) => c, _ => -1 };
+      let body: ast.Block = match st { ast.Stmt.WhileStmt(_sp, _c, b) => b, _ => ast.Block { stmts: Vec() } };
+      let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, body.stmts);
+      if !r_body.ok { return r_body; }
+      p = r_body.exprs;
+      out.push(ast.Stmt.WhileStmt(sp, cond, ast.Block { stmts: r_body.body.stmts }));
+    } else if match st { ast.Stmt.ReturnStmt(_sp, _has, _eid) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.ReturnStmt(x, _h, _e) => x, _ => ast.span0() };
+      let has: bool = match st { ast.Stmt.ReturnStmt(_sp, h, _e) => h, _ => false };
+      let eid: i32 = match st { ast.Stmt.ReturnStmt(_sp, _h, e) => e, _ => -1 };
+
+      // x.state = 1; return .Ready(<expr>)
+      let mut rhs_id: i32 = eid;
+      if !has {
+        let r0: ast.AddExprResult = add_int(p, sp, "0");
+        p = r0.pool;
+        rhs_id = r0.id;
+      }
+      let r_ready: ast.AddExprResult = add_dot_call1(p, sp, "Ready", rhs_id);
+      p = r_ready.pool;
+
+      let r_one: ast.AddExprResult = add_int(p, sp, "1");
+      p = r_one.pool;
+      out.push(ast.Stmt.AssignField(sp, frame_var, "state", r_one.id));
+      out.push(ast.Stmt.ReturnStmt(sp, true, r_ready.id));
+    } else {
+      out.push(st);
+    }
+    i = i + 1;
+  }
+  return SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: out } };
+}
+
+fn synth_async_ctor_body(exprs0: ast.ExprPool, fd: ast.FuncDecl, frame_name: String) -> SynthResult {
+  let mut p: ast.ExprPool = exprs0;
+  let sp: ast.Span = fd.sp;
+
+  let r_ty: ast.AddExprResult = add_ident(p, sp, frame_name);
+  p = r_ty.pool;
+  let ty_eid: i32 = r_ty.id;
+
+  let r_state: ast.AddExprResult = add_int(p, sp, "0");
+  p = r_state.pool;
+
+  let mut fs: Vec[ast.StructLitField] = Vec();
+  fs.push(ast.StructLitField { name: "state", expr: r_state.id });
+
+  let mut i: i32 = 0;
+  while i < fd.params.len() {
+    let prm: ast.Param = fd.params.get(i);
+    let r_id: ast.AddExprResult = add_ident(p, sp, prm.name);
+    p = r_id.pool;
+    fs.push(ast.StructLitField { name: "p_".concat(prm.name), expr: r_id.id });
+    i = i + 1;
+  }
+
+  let r_lit: ast.AddExprResult = add_expr(p, ast.ExprNode.StructLit(ty_eid, fs), sp);
+  p = r_lit.pool;
+
+  let mut ss: Vec[ast.Stmt] = Vec();
+  ss.push(ast.Stmt.ReturnStmt(sp, true, r_lit.id));
+  return SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: ss } };
+}
+
+fn synth_async_poll_body(exprs0: ast.ExprPool, fd: ast.FuncDecl, frame_var: String) -> SynthResult {
+  let mut p: ast.ExprPool = exprs0;
+  let sp: ast.Span = fd.sp;
+
+  // if x.state != 0 { panic("polled after ready"); }
+  let r_x: ast.AddExprResult = add_ident(p, sp, frame_var);
+  p = r_x.pool;
+  let r_state: ast.AddExprResult = add_member(p, sp, r_x.id, "state");
+  p = r_state.pool;
+  let r_zero: ast.AddExprResult = add_int(p, sp, "0");
+  p = r_zero.pool;
+  let r_cond: ast.AddExprResult = add_binary(p, sp, ast.BinaryOp.Ne, r_state.id, r_zero.id);
+  p = r_cond.pool;
+  let r_panic: ast.AddExprResult = add_ident(p, sp, "panic");
+  p = r_panic.pool;
+  let r_msg: ast.AddExprResult = add_str(p, sp, "polled after ready");
+  p = r_msg.pool;
+  let mut pargs: Vec[i32] = Vec();
+  pargs.push(r_msg.id);
+  let r_call: ast.AddExprResult = add_call(p, sp, r_panic.id, pargs);
+  p = r_call.pool;
+  let mut then_ss: Vec[ast.Stmt] = Vec();
+  then_ss.push(ast.Stmt.ExprStmt(sp, r_call.id));
+  let guard: ast.Stmt = ast.Stmt.IfStmt(sp, r_cond.id, ast.Block { stmts: then_ss }, false, ast.Block { stmts: Vec() });
+
+  // Bind original params from frame fields: let p = x.p_p;
+  let mut pre: Vec[ast.Stmt] = Vec();
+  pre.push(guard);
+  let mut i: i32 = 0;
+  while i < fd.params.len() {
+    let prm: ast.Param = fd.params.get(i);
+    let r_x2: ast.AddExprResult = add_ident(p, sp, frame_var);
+    p = r_x2.pool;
+    let r_m: ast.AddExprResult = add_member(p, sp, r_x2.id, "p_".concat(prm.name));
+    p = r_m.pool;
+    pre.push(ast.Stmt.Let(sp, false, prm.name, false, ast.TypeName { parts: Vec(), args: Vec() }, r_m.id));
+    i = i + 1;
+  }
+
+  let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, fd.body.stmts);
+  if !r_body.ok { return r_body; }
+  p = r_body.exprs;
+
+  // Concatenate pre + rewritten body.
+  let mut out: Vec[ast.Stmt] = Vec();
+  i = 0;
+  while i < pre.len() { out.push(pre.get(i)); i = i + 1; }
+  i = 0;
+  while i < r_body.body.stmts.len() { out.push(r_body.body.stmts.get(i)); i = i + 1; }
+
+  return SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: out } };
+}

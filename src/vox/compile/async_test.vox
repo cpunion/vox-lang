@@ -3,18 +3,32 @@ import "vox/compile" as c
 import "vox/loader" as ld
 import "vox/codegen" as cg
 
+fn std_async_file() -> ld.SourceFile {
+  return ld.SourceFile {
+    path: "src/std/async/async.vox",
+    text: """
+      pub enum Poll[T] { Pending, Ready(T) }
+      pub struct Waker { pub token: i64 }
+      pub struct Context { pub waker: Waker }
+      pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+    """,
+  };
+}
+
 fn test_compile_async_fn_without_await_smoke() -> () {
   let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file());
   fs.push(ld.SourceFile {
     path: "src/main.vox",
     text: """
       async fn inc(x: i32) -> i32 { return x + 1; }
-      fn main() -> i32 { return inc(41); }
+      async fn main() -> i32 { return inc(41).await; }
     """,
   });
 
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
-    emit_driver_main: true,
+    // Driver main is sync; async entrypoints are deferred to stage2 runtime/executor integration.
+    emit_driver_main: false,
     driver_main_kind: cg.DriverMainKind.User,
     emit_test_main: false,
     test_funcs: Vec(),
@@ -23,6 +37,7 @@ fn test_compile_async_fn_without_await_smoke() -> () {
 }
 fn test_compile_async_fn_with_await_poll_ready_smoke() -> () {
   let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file());
   fs.push(ld.SourceFile {
     path: "src/main.vox",
     text: """
@@ -32,12 +47,12 @@ fn test_compile_async_fn_with_await_poll_ready_smoke() -> () {
         let y: i32 = p.await;
         return y + 1;
       }
-      fn main() -> i32 { return inc(41); }
+      async fn main() -> i32 { return inc(41).await; }
     """,
   });
 
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
-    emit_driver_main: true,
+    emit_driver_main: false,
     driver_main_kind: cg.DriverMainKind.User,
     emit_test_main: false,
     test_funcs: Vec(),
@@ -46,15 +61,7 @@ fn test_compile_async_fn_with_await_poll_ready_smoke() -> () {
 }
 fn test_compile_async_fn_with_await_future_impl_smoke() -> () {
   let mut fs: Vec[ld.SourceFile] = Vec();
-  fs.push(ld.SourceFile {
-    path: "src/std/async/async.vox",
-    text: """
-      pub enum Poll[T] { Pending, Ready(T) }
-      pub struct Waker { pub token: i64 }
-      pub struct Context { pub waker: Waker }
-      pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
-    """,
-  });
+  fs.push(std_async_file());
   fs.push(ld.SourceFile {
     path: "src/main.vox",
     text: """
@@ -69,11 +76,11 @@ fn test_compile_async_fn_with_await_future_impl_smoke() -> () {
         let x: i32 = c.await;
         return x + 1;
       }
-    """,
+  """,
   });
 
   let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
-    emit_driver_main: true,
+    emit_driver_main: false,
     driver_main_kind: cg.DriverMainKind.User,
     emit_test_main: false,
     test_funcs: Vec(),
@@ -82,6 +89,7 @@ fn test_compile_async_fn_with_await_future_impl_smoke() -> () {
 }
 fn test_compile_async_fn_allows_postfix_await_then_try_smoke() -> () {
   let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file());
   fs.push(ld.SourceFile {
     path: "src/main.vox",
     text: """

@@ -116,6 +116,27 @@ fn member_chain(exprs: ast.ExprPool, recv_id: i32) -> MemberChainResult {
   return MemberChainResult { ok: false, err: "Vec.push recv must be place", base: "", fields: Vec() };
 }
 
+fn place_chain(exprs: ast.ExprPool, recv_id: i32) -> MemberChainResult {
+  let mut cur: i32 = recv_id;
+  let mut rev: Vec[String] = Vec();
+  while true {
+    let n: ast.ExprNode = ast.expr_pool_get(exprs, cur);
+    if match n { ast.ExprNode.Ident(_x) => true, _ => false } {
+      let base: String = match n { ast.ExprNode.Ident(s) => s, _ => "" };
+      return MemberChainResult { ok: true, err: "", base: base, fields: rev_strings(rev) };
+    }
+    if match n { ast.ExprNode.Member(_r, _n) => true, _ => false } {
+      let r: i32 = match n { ast.ExprNode.Member(x, _n) => x, _ => -1 };
+      let f: String = match n { ast.ExprNode.Member(_r, x) => x, _ => "" };
+      rev.push(f);
+      cur = r;
+      continue;
+    }
+    return MemberChainResult { ok: false, err: "inout argument must be a place", base: "", fields: Vec() };
+  }
+  return MemberChainResult { ok: false, err: "inout argument must be a place", base: "", fields: Vec() };
+}
+
 fn gen_vec_push_member_place(g0: Gen, recv_id: i32, recv_ty: i32, elem: i32, val: ir.Value, out_ty: i32) -> GenExprResult {
   let mc: MemberChainResult = member_chain(g0.exprs, recv_id);
   if !mc.ok { return GenExprResult { ok: false, err: mc.err, g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
@@ -1596,7 +1617,32 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
         let er: GenExprResult = gen_expr(g, args.get(i), want);
         if !er.ok { return er; }
         g = er.g;
-        vs.push(er.val);
+        let pbk: i32 = if i < sig.param_borrow_kinds.len() { sig.param_borrow_kinds.get(i) } else { tc.param_borrow_none() };
+        if tc.param_borrow_is_mut(pbk) {
+          let mc: MemberChainResult = place_chain(g.exprs, args.get(i));
+          if !mc.ok { return GenExprResult { ok: false, err: mc.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+          let br: LookupSlotResult = slots_lookup(g.slots, mc.base);
+          if !br.found { return GenExprResult { ok: false, err: "unknown base var", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+          if !br.mutable { return GenExprResult { ok: false, err: "inout argument root is immutable", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+          let elem_ty: i32 = tc.strip_range_only(g.ctx, want);
+          let static0: bool = pbk == tc.param_borrow_ref_static_mut();
+          let rr: tc.ResolveTyResult = tc.intern_ref(g.ctx, elem_ty, true, static0);
+          g.ctx = rr.ctx;
+          if !rr.ok { return GenExprResult { ok: false, err: "failed to intern &mut arg ref type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+          let ref_ty: i32 = rr.idx;
+          let nt: GenNewIdResult = gen_new_temp(g);
+          g = nt.g;
+          let tid: i32 = nt.id;
+          if mc.fields.len() == 0 {
+            g = gen_emit(g, ir.Instr.AddrOfSlot(tid, ref_ty, br.slot));
+          } else {
+            g = gen_emit(g, ir.Instr.AddrOfFieldChain(tid, ref_ty, br.slot, mc.fields));
+          }
+          vs.push(ir.v_temp(tid));
+        } else {
+          vs.push(er.val);
+        }
         i = i + 1;
       }
     } else {
@@ -1606,7 +1652,32 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
         let erf: GenExprResult = gen_expr(g, args.get(i), want_fixed);
         if !erf.ok { return erf; }
         g = erf.g;
-        vs.push(erf.val);
+        let pbk: i32 = if i < sig.param_borrow_kinds.len() { sig.param_borrow_kinds.get(i) } else { tc.param_borrow_none() };
+        if tc.param_borrow_is_mut(pbk) {
+          let mc: MemberChainResult = place_chain(g.exprs, args.get(i));
+          if !mc.ok { return GenExprResult { ok: false, err: mc.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+          let br: LookupSlotResult = slots_lookup(g.slots, mc.base);
+          if !br.found { return GenExprResult { ok: false, err: "unknown base var", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+          if !br.mutable { return GenExprResult { ok: false, err: "inout argument root is immutable", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+          let elem_ty: i32 = tc.strip_range_only(g.ctx, want_fixed);
+          let static0: bool = pbk == tc.param_borrow_ref_static_mut();
+          let rr: tc.ResolveTyResult = tc.intern_ref(g.ctx, elem_ty, true, static0);
+          g.ctx = rr.ctx;
+          if !rr.ok { return GenExprResult { ok: false, err: "failed to intern &mut arg ref type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+          let ref_ty: i32 = rr.idx;
+          let nt: GenNewIdResult = gen_new_temp(g);
+          g = nt.g;
+          let tid: i32 = nt.id;
+          if mc.fields.len() == 0 {
+            g = gen_emit(g, ir.Instr.AddrOfSlot(tid, ref_ty, br.slot));
+          } else {
+            g = gen_emit(g, ir.Instr.AddrOfFieldChain(tid, ref_ty, br.slot, mc.fields));
+          }
+          vs.push(ir.v_temp(tid));
+        } else {
+          vs.push(erf.val);
+        }
         i = i + 1;
       }
 
@@ -1791,7 +1862,32 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
       let er2: GenExprResult = gen_expr(g, args.get(i2), want);
       if !er2.ok { return er2; }
       g = er2.g;
-      vs2.push(er2.val);
+      let pbk: i32 = if i2 < sig_use.param_borrow_kinds.len() { sig_use.param_borrow_kinds.get(i2) } else { tc.param_borrow_none() };
+      if tc.param_borrow_is_mut(pbk) {
+        let mc: MemberChainResult = place_chain(g.exprs, args.get(i2));
+        if !mc.ok { return GenExprResult { ok: false, err: mc.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+        let br: LookupSlotResult = slots_lookup(g.slots, mc.base);
+        if !br.found { return GenExprResult { ok: false, err: "unknown base var", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+        if !br.mutable { return GenExprResult { ok: false, err: "inout argument root is immutable", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+        let elem_ty: i32 = tc.strip_range_only(g.ctx, want0);
+        let static0: bool = pbk == tc.param_borrow_ref_static_mut();
+        let rr: tc.ResolveTyResult = tc.intern_ref(g.ctx, elem_ty, true, static0);
+        g.ctx = rr.ctx;
+        if !rr.ok { return GenExprResult { ok: false, err: "failed to intern &mut arg ref type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+        let ref_ty: i32 = rr.idx;
+        let nt: GenNewIdResult = gen_new_temp(g);
+        g = nt.g;
+        let tid: i32 = nt.id;
+        if mc.fields.len() == 0 {
+          g = gen_emit(g, ir.Instr.AddrOfSlot(tid, ref_ty, br.slot));
+        } else {
+          g = gen_emit(g, ir.Instr.AddrOfFieldChain(tid, ref_ty, br.slot, mc.fields));
+        }
+        vs2.push(ir.v_temp(tid));
+      } else {
+        vs2.push(er2.val);
+      }
       let ur2: tc.UnifyResult = tc.unify_ty(g.ctx, sig_use.params.get(i2), er2.ty, subs);
       if !ur2.ok { return GenExprResult { ok: false, err: "cannot infer generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
       subs = ur2.subs;
@@ -1807,7 +1903,32 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
       let erf: GenExprResult = gen_expr(g, args.get(i2), want_fixed);
       if !erf.ok { return erf; }
       g = erf.g;
-      vs2.push(erf.val);
+      let pbk: i32 = if i2 < sig_use.param_borrow_kinds.len() { sig_use.param_borrow_kinds.get(i2) } else { tc.param_borrow_none() };
+      if tc.param_borrow_is_mut(pbk) {
+        let mc: MemberChainResult = place_chain(g.exprs, args.get(i2));
+        if !mc.ok { return GenExprResult { ok: false, err: mc.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+        let br: LookupSlotResult = slots_lookup(g.slots, mc.base);
+        if !br.found { return GenExprResult { ok: false, err: "unknown base var", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+        if !br.mutable { return GenExprResult { ok: false, err: "inout argument root is immutable", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+        let elem_ty: i32 = tc.strip_range_only(g.ctx, want0_fixed);
+        let static0: bool = pbk == tc.param_borrow_ref_static_mut();
+        let rr: tc.ResolveTyResult = tc.intern_ref(g.ctx, elem_ty, true, static0);
+        g.ctx = rr.ctx;
+        if !rr.ok { return GenExprResult { ok: false, err: "failed to intern &mut arg ref type", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+        let ref_ty: i32 = rr.idx;
+        let nt: GenNewIdResult = gen_new_temp(g);
+        g = nt.g;
+        let tid: i32 = nt.id;
+        if mc.fields.len() == 0 {
+          g = gen_emit(g, ir.Instr.AddrOfSlot(tid, ref_ty, br.slot));
+        } else {
+          g = gen_emit(g, ir.Instr.AddrOfFieldChain(tid, ref_ty, br.slot, mc.fields));
+        }
+        vs2.push(ir.v_temp(tid));
+      } else {
+        vs2.push(erf.val);
+      }
       let urf: tc.UnifyResult = tc.unify_ty(g.ctx, sig_use.params.get(i2), erf.ty, subs);
       if !urf.ok { return GenExprResult { ok: false, err: "cannot infer generic arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
       subs = urf.subs;

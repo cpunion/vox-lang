@@ -1,6 +1,8 @@
 import "std/testing" as t
 import "vox/parse" as p
 import "vox/typecheck" as tc
+import "vox/macroexpand" as mx
+import "vox/loader" as ld
 
 fn tc_src(src: String) -> tc.TcResult {
   let pr: p.ParseResult = p.parse_text(src);
@@ -65,16 +67,80 @@ fn test_typecheck_async_fn_allows_postfix_await_then_try_smoke() -> () {
   t.assert_with(r.ok, tc.tc_error_to_string(r.err));
 }
 
+fn test_typecheck_async_fn_allows_postfix_await_then_try_smoke_after_macroexpand() -> () {
+  let src: String = """
+    enum Result[T, E] { Ok(T), Err(E) }
+    enum Poll[T] { Pending, Ready(T) }
+    async fn main() -> Result[i32, i32] {
+      let p: Poll[Result[i32, i32]] = .Ready(.Ok(1));
+      let x: i32 = p.await?;
+      return .Ok(x + 1);
+    }
+  """;
+  let pr: p.ParseResult = p.parse_text(src);
+  t.assert(pr.err == p.ParseError.None);
+
+  let std_async_src: String = """
+    pub enum Poll[T] { Pending, Ready(T) }
+    pub struct Waker { pub token: i64 }
+    pub struct Context { pub waker: Waker }
+    pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+  """;
+  let pr_std: p.ParseResult = p.parse_text(std_async_src);
+  t.assert(pr_std.err == p.ParseError.None);
+
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "std/async", pr_std.prog);
+  w = tc.world_add(w, "main", pr.prog);
+  let xr: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(xr.ok, tc.tc_error_to_string(xr.err));
+  let r: tc.TcResult = tc.typecheck_world(xr.world);
+  t.assert_with(r.ok, tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_async_fn_allows_postfix_await_then_try_smoke_via_loader_pipeline() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/std/async/async.vox",
+    text: """
+      pub enum Poll[T] { Pending, Ready(T) }
+      pub struct Waker { pub token: i64 }
+      pub struct Context { pub waker: Waker }
+      pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+    """,
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      enum Result[T, E] { Ok(T), Err(E) }
+      enum Poll[T] { Pending, Ready(T) }
+      async fn main() -> Result[i32, i32] {
+        let p: Poll[Result[i32, i32]] = .Ready(.Ok(1));
+        let x: i32 = p.await?;
+        return .Ok(x + 1);
+      }
+    """,
+  });
+  let lr: ld.LoadWorldResult = ld.world_from_files(fs);
+  t.assert_with(lr.ok, lr.err);
+  let xr: mx.ExpandResult = mx.expand_world(lr.world, mx.default_config());
+  t.assert_with(xr.ok, tc.tc_error_to_string(xr.err));
+  let r: tc.TcResult = tc.typecheck_world(xr.world);
+  t.assert_with(r.ok, tc.tc_error_to_string(r.err));
+}
+
 fn test_typecheck_async_impl_method_without_await_smoke() -> () {
   let src: String = "struct S { x: i32 }\nimpl S { async fn f(x: S) -> i32 { return x.x + 1; } }\nfn main() -> i32 { let s: S = S { x: 0 }; return s.f(); }";
   let r: tc.TcResult = tc_src(src);
-  t.assert_with(r.ok, tc.tc_error_to_string(r.err));
+  t.assert(!r.ok);
+  t.assert(contains(tc.tc_error_to_string(r.err), "async impl method is deferred (D03)"));
 }
 
 fn test_typecheck_async_impl_method_with_await_poll_ready_smoke() -> () {
   let src: String = "enum Poll[T] { Pending, Ready(T) }\nstruct S { x: i32 }\nimpl S { async fn f(x: S) -> i32 { let p: Poll[i32] = .Ready(x.x); let y: i32 = p.await; return y + 1; } }\nfn main() -> i32 { let s: S = S { x: 0 }; return s.f(); }";
   let r: tc.TcResult = tc_src(src);
-  t.assert_with(r.ok, tc.tc_error_to_string(r.err));
+  t.assert(!r.ok);
+  t.assert(contains(tc.tc_error_to_string(r.err), "async impl method is deferred (D03)"));
 }
 
 fn test_typecheck_await_expr_requires_async_fn_error() -> () {

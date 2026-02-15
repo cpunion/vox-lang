@@ -343,11 +343,26 @@ fn tc_expr_try(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
   if !src.ok {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "`?` requires Result[T, E] or Option[T]") };
   }
-  let target: i32 = if l0.try_ret_ty != -1 { l0.try_ret_ty } else { l0.fn_ret_ty };
+  let mut target: i32 = if l0.try_ret_ty != -1 { l0.try_ret_ty } else { l0.fn_ret_ty };
   if target == -1 {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "`?` can only be used inside function/try block") };
   }
-  let dst: TryContainerInfo = try_container_info(ctx, target);
+
+  // Allow `?` to propagate through a Poll-like wrapper:
+  // `fn ... -> Poll[Result[T, E]] { ... x? ... }` should be valid and will lower
+  // to returning `.Ready(.Err(..))` in the poll state machine.
+  let mut dst: TryContainerInfo = try_container_info(ctx, target);
+  if !dst.ok {
+    let pi: AwaitPollInfo = await_poll_info(ctx, target);
+    if pi.ok {
+      let d2: TryContainerInfo = try_container_info(ctx, pi.out_ty);
+      if d2.ok {
+        target = pi.out_ty;
+        dst = d2;
+      }
+    }
+  }
+
   if !dst.ok {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(sp, "propagation target type must be Result[T, E] or Option[T] when using `?`") };
   }

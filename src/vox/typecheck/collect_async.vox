@@ -1,0 +1,240 @@
+import "vox/ast" as ast
+import "vox/ir" as ir
+
+fn find_func_sym_idx(ctx: Ctx, mod_path: String, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.funcs.len() {
+    let f: FuncSym = ctx.funcs.get(i);
+    if f.mod_path == mod_path && f.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn funcs_replace(ctx0: Ctx, idx: i32, fsym: FuncSym) -> Ctx {
+  let mut ctx: Ctx = ctx0;
+  if idx < 0 || idx >= ctx.funcs.len() { return ctx; }
+  let mut out: Vec[FuncSym] = Vec();
+  let mut i: i32 = 0;
+  while i < ctx.funcs.len() {
+    out.push(if i == idx { fsym } else { ctx.funcs.get(i) });
+    i = i + 1;
+  }
+  ctx.funcs = out;
+  return ctx;
+}
+
+fn structs_has(ctx: Ctx, mod_path: String, name: String) -> bool {
+  let fs: FindStructResult = find_struct(ctx, mod_path, name);
+  return fs.found;
+}
+
+fn async_frame_fresh_name(ctx: Ctx, mod_path: String, base: String) -> String {
+  let mut n: i32 = 0;
+  while true {
+    let cand: String = "__async_frame$".concat(base).concat("$").concat(n.to_string());
+    if !structs_has(ctx, mod_path, cand) { return cand; }
+    n = n + 1;
+  }
+  return "__async_frame$".concat(base).concat("$0");
+}
+
+fn async_poll_fresh_lowered(ctx: Ctx, mod_path: String, base: String) -> String {
+  let mut n: i32 = 0;
+  while true {
+    let cand: String = "async$poll$".concat(base).concat("$").concat(n.to_string());
+    let fr: FindFuncResult = find_func(ctx, mod_path, cand);
+    if !fr.found { return cand; }
+    n = n + 1;
+  }
+  return "async$poll$".concat(base).concat("$0");
+}
+
+fn async_frame_fields(ctx: Ctx, fd: ast.FuncDecl, sig: FuncSig) -> Vec[StructFieldSig] {
+  let mut fs: Vec[StructFieldSig] = Vec();
+  fs.push(StructFieldSig { name: "state", ty: ctx.ty_i32, vis: ast.vis_private(), is_pub: false });
+
+  let mut i: i32 = 0;
+  while i < fd.params.len() {
+    let p: ast.Param = fd.params.get(i);
+    let ty0: i32 = strip_range_only(ctx, sig.params.get(i));
+    fs.push(StructFieldSig { name: "p_".concat(p.name), ty: ty0, vis: ast.vis_private(), is_pub: false });
+    i = i + 1;
+  }
+  return fs;
+}
+
+fn ctx_add_struct_sig(ctx0: Ctx, sig: StructSig) -> Ctx {
+  let mut ctx: Ctx = ctx0;
+  ctx.structs.push(sig);
+  return ctx;
+}
+
+fn ctx_add_func_sym(ctx0: Ctx, sym: FuncSym) -> Ctx {
+  let mut ctx: Ctx = ctx0;
+  ctx.funcs.push(sym);
+  return ctx;
+}
+
+fn ctx_add_impl_sig(ctx0: Ctx, sig: ImplSig) -> Ctx {
+  let mut ctx: Ctx = ctx0;
+  ctx.impls.push(sig);
+  return ctx;
+}
+
+fn ctx_add_async_fn_sig(ctx0: Ctx, sig: AsyncFnSig) -> Ctx {
+  let mut ctx: Ctx = ctx0;
+  ctx.async_fns.push(sig);
+  return ctx;
+}
+
+fn imps_has_alias(imps: Imports, alias: String) -> bool {
+  let mut i: i32 = 0;
+  while i < imps.aliases.len() {
+    let a: ImportAlias = imps.aliases.get(i);
+    if a.alias == alias { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn imps_add_alias(imps0: Imports, alias: String, path: String) -> Imports {
+  let mut imps: Imports = imps0;
+  if imps_has_alias(imps, alias) { return imps; }
+  imps.aliases.push(ImportAlias { alias: alias, path: path });
+  return imps;
+}
+
+fn fresh_internal_async_alias(imps: Imports) -> String {
+  let mut n: i32 = 0;
+  while true {
+    let cand: String = if n == 0 { "__async" } else { "__async".concat(n.to_string()) };
+    if !imps_has_alias(imps, cand) { return cand; }
+    n = n + 1;
+  }
+  return "__async";
+}
+
+// Collect and synthesize async fn lowering metadata:
+// - a per-fn frame struct type
+// - a Future impl signature for that frame type (poll + Output)
+// - rewrite the async function's signature return type to the frame type
+fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
+  let mut c: Ctx = ctx0;
+
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: WorldModule = w.mods.get(mi);
+    let mut fi: i32 = 0;
+    while fi < m.prog.funcs.len() {
+      let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+      if !fd.is_async { fi = fi + 1; continue; }
+
+      if fd.type_params.len() != 0 || fd.const_params.len() != 0 {
+        return TcCtxResult { ok: false, err: type_error_at(fd.sp, "async fn with generics is deferred (D03)"), ctx: c };
+      }
+
+      let fidx: i32 = find_func_sym_idx(c, m.path, fd.name);
+      if fidx == -1 {
+        return TcCtxResult { ok: false, err: type_error_at(fd.sp, "missing fn sig"), ctx: c };
+      }
+      let fsym0: FuncSym = c.funcs.get(fidx);
+      let output_ty: i32 = fsym0.sig.ret;
+
+      // Synthesize frame struct.
+      let frame_name: String = async_frame_fresh_name(c, m.path, fd.name);
+      let irs: ResolveTyResult = nominal_intern_struct(c, m.path, frame_name);
+      c = irs.ctx;
+      if !irs.ok {
+        return TcCtxResult { ok: false, err: type_error_at(fd.sp, "failed to intern async frame type"), ctx: c };
+      }
+      let frame_ty: i32 = irs.idx;
+
+      let fs: Vec[StructFieldSig] = async_frame_fields(c, fd, fsym0.sig);
+      c = ctx_add_struct_sig(c, StructSig { mod_path: m.path, name: frame_name, base_name: frame_name, vis: ast.vis_private(), is_pub: false, fields: fs });
+
+      // Future impl lowered poll name and signature.
+      let ir0: ImportsResult = build_imports(w, m.path, m.prog.imports, fd.file);
+      if !ir0.ok { return TcCtxResult { ok: false, err: ir0.err, ctx: c }; }
+      let base_imps: Imports = ir0.imps;
+      let async_alias: String = fresh_internal_async_alias(base_imps);
+      let imps2: Imports = imps_add_alias(base_imps, async_alias, "std/async");
+
+      let poll_lowered: String = async_poll_fresh_lowered(c, m.path, fd.name);
+      let mut poll_parts: Vec[String] = Vec();
+      poll_parts.push(async_alias);
+      poll_parts.push("Poll");
+      let mut poll_args: Vec[ast.TypeName] = Vec();
+      poll_args.push(fd.ret);
+      let poll_tn: ast.TypeName = ast.TypeName { parts: poll_parts, args: poll_args };
+      let pr: ResolveTyResult = resolve_type(c, w, m.path, imps2, Vec(), poll_tn);
+      c = pr.ctx;
+      if !pr.ok { return TcCtxResult { ok: false, err: type_error_at(fd.sp, "failed to resolve std/async::Poll for async lowering"), ctx: c }; }
+
+      let mut ctx_parts: Vec[String] = Vec();
+      ctx_parts.push(async_alias);
+      ctx_parts.push("Context");
+      let ctx_tn: ast.TypeName = ast.TypeName { parts: ctx_parts, args: Vec() };
+      let cr: ResolveTyResult = resolve_type(c, w, m.path, imps2, Vec(), ctx_tn);
+      c = cr.ctx;
+      if !cr.ok { return TcCtxResult { ok: false, err: type_error_at(fd.sp, "failed to resolve std/async::Context for async lowering"), ctx: c }; }
+      let ctx_ty: i32 = cr.idx;
+
+      let poll_sig: FuncSig = FuncSig {
+        params: vec2(frame_ty, ctx_ty),
+        param_borrow_kinds: vec2(param_borrow_ref_mut(), param_borrow_ref()),
+        ret: pr.idx,
+        has_variadic: false,
+        variadic_elem: -1,
+        vis: ast.vis_private(),
+        is_pub: false,
+        type_params: Vec(),
+        type_param_packs: Vec(),
+        const_params: Vec(),
+        type_param_bounds: Vec(),
+        const_where_bounds: Vec(),
+      };
+      c = ctx_add_func_sym(c, FuncSym { mod_path: m.path, name: poll_lowered, sig: poll_sig });
+
+      // Future impl signature.
+      let mut assoc: Vec[ImplAssocTypeSig] = Vec();
+      assoc.push(ImplAssocTypeSig { name: "Output", ty: output_ty });
+      let mut ms: Vec[ImplMethodSig] = Vec();
+      ms.push(ImplMethodSig {
+        name: "poll",
+        lowered_name: poll_lowered,
+        sig: poll_sig,
+        from_default: false,
+        default_mod_path: "",
+        default_file: "",
+        default_params: Vec(),
+        default_body: ast.Block { stmts: Vec() },
+      });
+      c = ctx_add_impl_sig(c, ImplSig {
+        mod_path: m.path,
+        decl_idx: -1,
+        is_inherent: false,
+        trait_mod_path: "std/async",
+        trait_name: "Future",
+        for_ty: frame_ty,
+        head_type_params: Vec(),
+        head_type_param_bounds: Vec(),
+        assoc_types: assoc,
+        methods: ms,
+      });
+
+      // Rewrite async function signature to return the frame type.
+      let mut sig2: FuncSig = fsym0.sig;
+      sig2.ret = frame_ty;
+      c = funcs_replace(c, fidx, FuncSym { mod_path: fsym0.mod_path, name: fsym0.name, sig: sig2 });
+
+      // Record metadata for typechecking async bodies and for IRGen lowering.
+      c = ctx_add_async_fn_sig(c, AsyncFnSig { mod_path: m.path, name: fd.name, output_ty: output_ty, frame_name: frame_name, frame_ty: frame_ty, poll_lowered: poll_lowered });
+
+      fi = fi + 1;
+    }
+    mi = mi + 1;
+  }
+
+  return TcCtxResult { ok: true, err: TcError.None, ctx: c };
+}

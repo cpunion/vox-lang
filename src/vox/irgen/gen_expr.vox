@@ -289,7 +289,23 @@ fn gen_await_poll_from_future(g0: Gen, recv: ir.Value, recv_ty0: i32) -> AwaitFu
   g = pr.g;
   let p_tid: i32 = pr.id;
   let mut args: Vec[ir.Value] = Vec();
-  args.push(recv);
+  // `Future::poll` takes `&mut Self`; lower as inout: create a stack slot copy and pass its address.
+  let ns: GenNewIdResult = gen_new_slot(g);
+  g = ns.g;
+  let recv_slot: i32 = ns.id;
+  g = gen_emit(g, ir.Instr.SlotDecl(recv_slot, recv_ty));
+  g = gen_emit(g, ir.Instr.Store(recv_slot, recv));
+  let rr: tc.ResolveTyResult = tc.intern_ref(g.ctx, recv_ty, true, false);
+  g.ctx = rr.ctx;
+  if !rr.ok {
+    return AwaitFuturePollResult { ok: false, err: "await failed to intern poll recv ref type", g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
+  }
+  let ref_ty: i32 = rr.idx;
+  let na: GenNewIdResult = gen_new_temp(g);
+  g = na.g;
+  let recv_ptr: i32 = na.id;
+  g = gen_emit(g, ir.Instr.AddrOfSlot(recv_ptr, ref_ty, recv_slot));
+  args.push(ir.v_temp(recv_ptr));
   args.push(ir.v_temp(c_tid));
   g = gen_emit(g, ir.Instr.Call(true, p_tid, poll_ret, qname(fi.sig.mod_path, im.m.lowered_name), args));
 
@@ -533,7 +549,22 @@ fn gen_expr_try(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
   if !src.ok { return GenExprResult { ok: false, err: "`?` requires Result[T, E] or Option[T]", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
   let ct: CurrentTryResult = current_try(g);
   let target_ret_ty: i32 = if ct.found { ct.t.ret_ty } else { g.ret_ty };
-  let dst: TryEnumInfo = try_enum_info(g, target_ret_ty);
+  let mut dst: TryEnumInfo = try_enum_info(g, target_ret_ty);
+  let mut wrap_poll: bool = false;
+  let mut poll_ai: AwaitPollInfo = AwaitPollInfo { ok: false, ready_name: "", ready_idx: -1, ready_ty: g.ctx.ty_bad };
+  let mut container_ret_ty: i32 = target_ret_ty;
+  if !dst.ok {
+    // Allow `?` inside poll-like wrapper fns: `fn ... -> Poll[Result[T,E]] { x? }`.
+    poll_ai = await_poll_info(g, target_ret_ty);
+    if poll_ai.ok {
+      container_ret_ty = poll_ai.ready_ty;
+      let d2: TryEnumInfo = try_enum_info(g, container_ret_ty);
+      if d2.ok {
+        dst = d2;
+        wrap_poll = true;
+      }
+    }
+  }
   if !dst.ok || src.is_result != dst.is_result {
     return GenExprResult { ok: false, err: "function return type incompatible with `?`", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
   }
@@ -600,14 +631,24 @@ fn gen_expr_try(g0: Gen, a: i32, out_ty: i32) -> GenExprResult {
     let ret_tid: i32 = tr4.id;
     let mut ps: Vec[ir.Value] = Vec();
     ps.push(err_v);
-    g = gen_emit(g, ir.Instr.EnumInit(ret_tid, target_ret_ty, dst.residual_name, ps));
+    g = gen_emit(g, ir.Instr.EnumInit(ret_tid, container_ret_ty, dst.residual_name, ps));
     rv = ir.v_temp(ret_tid);
   } else {
     let tr5: GenNewIdResult = gen_new_temp(g);
     g = tr5.g;
     let ret_tid2: i32 = tr5.id;
-    g = gen_emit(g, ir.Instr.EnumInit(ret_tid2, target_ret_ty, dst.residual_name, Vec()));
+    g = gen_emit(g, ir.Instr.EnumInit(ret_tid2, container_ret_ty, dst.residual_name, Vec()));
     rv = ir.v_temp(ret_tid2);
+  }
+
+  if wrap_poll {
+    let trw: GenNewIdResult = gen_new_temp(g);
+    g = trw.g;
+    let w_tid: i32 = trw.id;
+    let mut psw: Vec[ir.Value] = Vec();
+    psw.push(rv);
+    g = gen_emit(g, ir.Instr.EnumInit(w_tid, target_ret_ty, poll_ai.ready_name, psw));
+    rv = ir.v_temp(w_tid);
   }
   if ct.found {
     g = gen_emit(g, ir.Instr.Store(ct.t.ret_slot, rv));
