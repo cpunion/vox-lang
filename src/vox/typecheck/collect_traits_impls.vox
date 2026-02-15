@@ -317,7 +317,7 @@ fn impl_lowered_name(ts: TraitSig, method: String, nth: i32) -> String {
 }
 
 struct CtiSubstTyResult { ok: bool, ctx: Ctx, ty: i32 }
-struct TraitMethodSigForResult { ok: bool, ctx: Ctx, sig: FuncSig }
+struct TraitMethodSigForResult { ok: bool, ctx: Ctx, sig: FuncSig, async_output_ty: i32 }
 
 fn cti_fresh_subst_nominal_name(ctx: Ctx, mod_path: String, base_name: String, tag: String) -> String {
   let mut n: i32 = 0;
@@ -593,6 +593,7 @@ fn trait_method_sig_for(ctx0: Ctx, ms: TraitMethodSig, for_ty: i32, assocs: Vec[
           type_params: Vec(), type_param_packs: Vec(), const_params: Vec(),
           type_param_bounds: Vec(), const_where_bounds: Vec(),
         },
+        async_output_ty: -1,
       };
     }
     ps.push(pr.ty);
@@ -612,6 +613,7 @@ fn trait_method_sig_for(ctx0: Ctx, ms: TraitMethodSig, for_ty: i32, assocs: Vec[
         type_params: Vec(), type_param_packs: Vec(), const_params: Vec(),
         type_param_bounds: Vec(), const_where_bounds: Vec(),
       },
+      async_output_ty: -1,
     };
   }
 
@@ -630,9 +632,31 @@ fn trait_method_sig_for(ctx0: Ctx, ms: TraitMethodSig, for_ty: i32, assocs: Vec[
           type_params: Vec(), type_param_packs: Vec(), const_params: Vec(),
           type_param_bounds: Vec(), const_where_bounds: Vec(),
         },
+        async_output_ty: -1,
       };
     }
     var_ty = vr.ty;
+  }
+
+  let mut aout: i32 = -1;
+  if ms.is_async && ms.async_output_ty != -1 {
+    let ar0: CtiSubstTyResult = cti_subst_ty_intern(c, ms.async_output_ty, subs);
+    c = ar0.ctx;
+    if !ar0.ok {
+      return TraitMethodSigForResult {
+        ok: false,
+        ctx: c,
+        sig: FuncSig {
+          params: Vec(), param_borrow_kinds: Vec(), ret: c.ty_bad,
+          has_variadic: false, variadic_elem: -1,
+          vis: ast.vis_private(), is_pub: false,
+          type_params: Vec(), type_param_packs: Vec(), const_params: Vec(),
+          type_param_bounds: Vec(), const_where_bounds: Vec(),
+        },
+        async_output_ty: -1,
+      };
+    }
+    aout = ar0.ty;
   }
 
   return TraitMethodSigForResult {
@@ -652,6 +676,7 @@ fn trait_method_sig_for(ctx0: Ctx, ms: TraitMethodSig, for_ty: i32, assocs: Vec[
       type_param_bounds: ms.sig.type_param_bounds,
       const_where_bounds: ms.sig.const_where_bounds,
     },
+    async_output_ty: aout,
   };
 }
 
@@ -1106,6 +1131,32 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         if !rr.ok {
           return TcCtxResult { ok: false, err: type_error_at(td.sp, resolve_fail_msg(md.ret, "type resolve failed in trait method ret")), ctx: c };
         }
+        let mut ret_sig_ty: i32 = rr.idx;
+        let mut async_output_ty: i32 = -1;
+        if md.is_async {
+          if md.has_body {
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "async trait method default body is not supported yet"), ctx: c };
+          }
+          // Desugar `async fn m(..) -> T` in trait into:
+          // - add assoc type `__async$m`
+          // - rewrite return type to `Self.__async$m`
+          let assoc_name: String = "__async$".concat(md.name);
+          if trait_assoc_type_exists(assocs, assoc_name) {
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "async trait method conflicts with existing associated type: ".concat(assoc_name)), ctx: c };
+          }
+          assocs.push(TraitAssocTypeSig { name: assoc_name });
+          async_output_ty = rr.idx;
+          let mut parts: Vec[String] = Vec();
+          parts.push("Self");
+          parts.push(assoc_name);
+          let proj_tn: ast.TypeName = ast.TypeName { parts: parts, args: Vec() };
+          let prj: ResolveTyResult = resolve_type(c, w, m.path, imps, tps_self, proj_tn);
+          c = prj.ctx;
+          if !prj.ok {
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "failed to resolve async trait method return projection type"), ctx: c };
+          }
+          ret_sig_ty = prj.idx;
+        }
 
         let mut tbs: Vec[TypeParamBoundSig] = Vec();
         let mut bi: i32 = 0;
@@ -1160,7 +1211,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
           sig: FuncSig {
             params: ps,
             param_borrow_kinds: pbks,
-            ret: rr.idx,
+            ret: ret_sig_ty,
             has_variadic: has_variadic_md,
             variadic_elem: variadic_elem_md,
             vis: ast.vis_pub(),
@@ -1171,6 +1222,8 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
             type_param_bounds: tbs,
             const_where_bounds: cwr.bounds,
           },
+          is_async: md.is_async,
+          async_output_ty: async_output_ty,
           has_default: md.has_body,
           default_mod_path: m.path,
           default_file: td.file,
@@ -1532,6 +1585,12 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
       let mut ai3: i32 = 0;
       while ai3 < tf.sig.assoc_types.len() {
         let ta: TraitAssocTypeSig = tf.sig.assoc_types.get(ai3);
+        // Async trait methods synthesize hidden associated types `__async$<method>`;
+        // those are bound by async lowering and do not need explicit impl bindings.
+        if ta.name.len() >= 8 && ta.name.slice(0, 8) == "__async$" {
+          ai3 = ai3 + 1;
+          continue;
+        }
         if !impl_assoc_type_exists(impl_assocs, ta.name) {
           return TcCtxResult { ok: false, err: type_error_at(id.sp, "impl missing associated type: ".concat(ta.name)), ctx: c };
         }
@@ -1767,16 +1826,38 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         c = ret_r.ctx;
         if !ret_r.ok { return TcCtxResult { ok: false, err: type_error_at(md.sp, resolve_fail_msg(md.ret, "impl method ret type resolve failed")), ctx: c }; }
         let got_ret: i32 = subst_ty(c, ret_r.idx, impl_to_trait_tps);
-        if !cti_ty_compat(c, want.ret, got_ret) {
-          let msgr: String =
-            "impl method ret type mismatch: got "
-              .concat(ty_inst_str(c, got_ret))
-              .concat(", want ")
-              .concat(ty_inst_str(c, want.ret));
-          return TcCtxResult { ok: false, err: type_error_at(md.sp, msgr), ctx: c };
+        let mut emit_want: FuncSig = want;
+        if tms.is_async {
+          if !md.is_async {
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl must use async fn to implement async trait method"), ctx: c };
+          }
+          if wr1.async_output_ty == -1 {
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, "internal: missing async output type for trait method"), ctx: c };
+          }
+          let want_out: i32 = wr1.async_output_ty;
+          if !cti_ty_compat(c, want_out, got_ret) {
+            let msgr: String =
+              "impl async method output type mismatch: got "
+                .concat(ty_inst_str(c, got_ret))
+                .concat(", want ")
+                .concat(ty_inst_str(c, want_out));
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, msgr), ctx: c };
+          }
+          // Before async lowering runs, store the declared output type in the lowered fn signature.
+          // collect_async_fns will later rewrite it to the synthesized frame future type.
+          emit_want.ret = want_out;
+        } else {
+          if !cti_ty_compat(c, want.ret, got_ret) {
+            let msgr: String =
+              "impl method ret type mismatch: got "
+                .concat(ty_inst_str(c, got_ret))
+                .concat(", want ")
+                .concat(ty_inst_str(c, want.ret));
+            return TcCtxResult { ok: false, err: type_error_at(md.sp, msgr), ctx: c };
+          }
         }
 
-        let emit_sig: FuncSig = impl_method_emit_sig(id.type_params, head_tpbs, want);
+        let emit_sig: FuncSig = impl_method_emit_sig(id.type_params, head_tpbs, emit_want);
         let lowered: String = fresh_impl_lowered_name(c, m.path, tf.sig, tms.name, c.impls.len() * 1000 + mdi);
         c.funcs.push(FuncSym { mod_path: m.path, name: lowered, sig: emit_sig });
         ims.push(ImplMethodSig {

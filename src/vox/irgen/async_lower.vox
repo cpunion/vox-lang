@@ -1,5 +1,6 @@
 import "vox/ast" as ast
 import "vox/typecheck" as tc
+import "vox/async_norm" as an
 
 struct SynthResult {
   ok: bool,
@@ -362,7 +363,11 @@ fn async_rewrite_stmt_list(p0: ast.ExprPool, frame_var: String, captures: Vec[St
       let re: RewriteExprResult = async_rewrite_expr_capture(p, frame_var, captures, ret_ann, e0);
       if !re.ok { return SynthResult { ok: false, err: re.err, exprs: re.exprs, body: ast.Block { stmts: Vec() } }; }
       p = re.exprs;
-      out.push(ast.Stmt.Assign(sp, name0, re.id));
+      if string_vec_contains(captures, name0) {
+        out.push(ast.Stmt.AssignField(sp, frame_var, "l_".concat(name0), re.id));
+      } else {
+        out.push(ast.Stmt.Assign(sp, name0, re.id));
+      }
     } else if match st { ast.Stmt.AssignField(_sp, _r, _f, _e) => true, _ => false } {
       let sp: ast.Span = match st { ast.Stmt.AssignField(x, _r, _f, _e) => x, _ => ast.span0() };
       let recv: String = match st { ast.Stmt.AssignField(_sp, r0, _f, _e) => r0, _ => "" };
@@ -531,7 +536,16 @@ fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd
     }
   }
 
-  let aps: Vec[AwaitPoint] = find_await_points(p, fd.body.stmts);
+  // Normalize: lift nested awaits into standalone statements so await points are discoverable
+  // by the simple statement-level state machine builder.
+  let nr: an.NormalizeResult = an.normalize_async_block(p, fd.body);
+  if !nr.ok {
+    return SynthResult { ok: false, err: nr.err, exprs: nr.exprs, body: ast.Block { stmts: Vec() } };
+  }
+  p = nr.exprs;
+  let body0: ast.Block = nr.body;
+
+  let aps: Vec[AwaitPoint] = find_await_points(p, body0.stmts);
 
   let r_true: ast.AddExprResult = add_bool(p, sp, true);
   p = r_true.pool;
@@ -553,7 +567,7 @@ fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd
 
     if aps.len() == 0 {
       // No await: run the body once under state==0.
-      let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, fd.body.stmts);
+      let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, body0.stmts);
       if !r_body.ok { return r_body; }
       p = r_body.exprs;
       let r_caps: SynthResult = inject_capture_stores(p, frame_var, captures, r_body.body.stmts);
@@ -570,7 +584,7 @@ fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd
       // pre0: stmts before first await, then store a0 and advance to state 1.
       let mut pre_user: Vec[ast.Stmt] = Vec();
       let mut si: i32 = 0;
-      while si < aps.get(0).stmt_idx { pre_user.push(fd.body.stmts.get(si)); si = si + 1; }
+      while si < aps.get(0).stmt_idx { pre_user.push(body0.stmts.get(si)); si = si + 1; }
       let r_pre: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, pre_user);
       if !r_pre.ok { return r_pre; }
       p = r_pre.exprs;
@@ -591,7 +605,7 @@ fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd
       then_ss.push(ast.Stmt.Continue(sp));
     } else {
       let ap: AwaitPoint = aps.get(st_k - 1);
-      let st0: ast.Stmt = fd.body.stmts.get(ap.stmt_idx);
+      let st0: ast.Stmt = body0.stmts.get(ap.stmt_idx);
       let sp1: ast.Span = stmt_span(st0);
 
       // Rewrite await statement to await the stored frame field: `__frame.aN.await` (or `...await?`).
@@ -635,10 +649,10 @@ fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd
 
       // Between segment: stmts after this await up to next await (or tail).
       let start: i32 = ap.stmt_idx + 1;
-      let end: i32 = if st_k < aps.len() { aps.get(st_k).stmt_idx } else { fd.body.stmts.len() };
+      let end: i32 = if st_k < aps.len() { aps.get(st_k).stmt_idx } else { body0.stmts.len() };
       let mut seg: Vec[ast.Stmt] = Vec();
       let mut si: i32 = start;
-      while si < end { seg.push(fd.body.stmts.get(si)); si = si + 1; }
+      while si < end { seg.push(body0.stmts.get(si)); si = si + 1; }
 
       let r_seg: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, seg);
       if !r_seg.ok { return r_seg; }

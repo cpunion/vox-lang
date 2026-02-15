@@ -15,7 +15,7 @@
 3. 语义部分开启（D03-3 scaffold）：
    - `async fn`（无 `await`）已进入正常 typecheck/codegen 管线（当前行为仍等价同步函数）
    - `await` 表达式已解析为 AST 节点（`ExprNode.Await`），并已接入 typecheck/irgen：仅允许在 `async fn` 中使用；推荐表面语法为 `e.await`（同时保留前缀 `await e` 兼容）。当前阶段支持通过 frame 状态机保留进度（frame.state + frame.a0/a1/...），`Pending => return Pending`，`Ready(v) => v`。
-   - trait `async fn` 在 parser 报 `async trait method is deferred (D03)`
+   - `trait async fn` 已支持（无 default body），并通过“隐式关联类型投影” desugar：对每个 async 方法自动引入 `type __async$<method>`，并把方法返回类型改写为 `Self.__async$<method>`；实现侧由编译器自动把该关联类型绑定到 lowering 后的 frame 类型。
 
 ## 2. 为什么核心选 pull
 
@@ -60,16 +60,17 @@ trait Future {
 
 当前阶段（已落地，scaffold）：
 
-1. `e.await`（或兼容语法 `await e`）只能用于 Poll-shaped 枚举 `{ Pending, Ready(T) }`。
-2. `e.await` 的表达式类型为 `T`。
-3. lowering 语义：`Ready(v) => v`；`Pending` 时从 enclosing poll 返回 `Pending`，并通过 async frame（state + aN 字段）保留进度。
+1. `e.await`（或兼容语法 `await e`）可用于：
+   - Poll-shaped 枚举 `{ Pending, Ready(T) }`
+   - 或实现了 `std/async::Future` 的类型（要求其 `poll(...) -> Poll[Output]`）
+2. `e.await` 的表达式类型为 `T`（或 `Future::Output`）。
+3. lowering 语义：`Ready(v) => v`；`Pending` 时从 enclosing `poll` 返回 `Pending`，并通过 async frame（state + aN 字段）保留进度。
 4. `await` 只能出现在 async 上下文（`async fn`，`async` block 后续引入）。
 
 目标阶段（D03-3b 之后）：
 
-1. `e.await` 要求 `e` 的类型实现 `Future`。
-2. `e.await` 的表达式类型为该 `Future::Output`。
-3. `Pending` 通过状态机挂起与唤醒，不再是 panic。
+1. 支持更一般的 `await` 归一化：允许 `await` 出现在更多表达式位置（如 `if/match` 表达式内部），并且能在 lowering 中正确拆分控制流。
+2. drop/cancel 语义与资源释放细节补齐。
 
 ## 6. push 与 pull 的转换
 
