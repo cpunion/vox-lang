@@ -137,6 +137,23 @@ fn ty_has_forbidden_borrow(ctx: Ctx, ty0: i32) -> bool {
   return false;
 }
 
+fn span_loc(sp: ast.Span) -> String {
+  if sp.file == "" { return "<unknown>"; }
+  return sp.file.concat(":").concat(sp.line.to_string()).concat(":").concat(sp.col.to_string());
+}
+
+struct CaptureUse { name: String, await_stmt_idx: i32, use_stmt_idx: i32 }
+
+fn capture_use_find(xs: Vec[CaptureUse], name: String) -> CaptureUse {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let x: CaptureUse = xs.get(i);
+    if x.name == name { return x; }
+    i = i + 1;
+  }
+  return CaptureUse { name: "", await_stmt_idx: -1, use_stmt_idx: -1 };
+}
+
 fn expr_uses_name(exprs: ast.ExprPool, eid: i32, name: String) -> bool {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
   if match n { ast.ExprNode.Ident(_s) => true, _ => false } {
@@ -440,6 +457,20 @@ fn collect_async_prepare_one(ctx0: Ctx, w: World, mod_path: String, prog_imports
     return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "async fn with generics is not supported yet"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
   }
 
+  // Async fn returns a Future value; without lifetimes in the language surface,
+  // forbid non-static borrows in params/output because they'd escape via the frame.
+  if ty_has_forbidden_borrow(c, output_ty) {
+    return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "async fn output cannot contain non-static borrow"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
+  }
+  let mut pi0: i32 = 0;
+  while pi0 < fsym0.sig.params.len() {
+    let pty0: i32 = strip_range_only(c, fsym0.sig.params.get(pi0));
+    if ty_has_forbidden_borrow(c, pty0) {
+      return CollectAsyncPrepareOneResult { ok: false, err: type_error_at(fd.sp, "async fn param cannot contain non-static borrow"), ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad };
+    }
+    pi0 = pi0 + 1;
+  }
+
   let ir0: ImportsResult = build_imports(w, mod_path, prog_imports, fd.file);
   if !ir0.ok { return CollectAsyncPrepareOneResult { ok: false, err: ir0.err, ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad }; }
   let base_imps: Imports = ir0.imps;
@@ -624,7 +655,7 @@ fn collect_async_finalize_one(ctx0: Ctx, w: World, mod_path: String, prog_import
   let mut await_stmt_idxs: Vec[i32] = Vec();
   ap_i = 0;
   while ap_i < aps.len() { await_stmt_idxs.push(aps.get(ap_i).stmt_idx); ap_i = ap_i + 1; }
-  let mut captures: Vec[String] = Vec();
+  let mut captures: Vec[CaptureUse] = Vec();
   let mut li0: i32 = 0;
   while li0 < locals.len() {
     let ld: AsyncLocalDecl = locals.get(li0);
@@ -636,7 +667,9 @@ fn collect_async_finalize_one(ctx0: Ctx, w: World, mod_path: String, prog_import
         while sj < body.stmts.len() {
           let stj: ast.Stmt = body.stmts.get(sj);
           if stmt_uses_name(exprs, stj, ld.name) {
-            if !string_vec_contains(captures, ld.name) { captures.push(ld.name); }
+            if capture_use_find(captures, ld.name).name == "" {
+              captures.push(CaptureUse { name: ld.name, await_stmt_idx: aidx, use_stmt_idx: sj });
+            }
             sj = body.stmts.len();
             ai1 = await_stmt_idxs.len();
           }
@@ -657,11 +690,23 @@ fn collect_async_finalize_one(ctx0: Ctx, w: World, mod_path: String, prog_import
   }
   let mut ci0: i32 = 0;
   while ci0 < captures.len() {
-    let nm: String = captures.get(ci0);
+    let cu: CaptureUse = captures.get(ci0);
+    let nm: String = cu.name;
     let ld: AsyncLocalDecl = local_decl_find(locals, nm);
     if ld.name == "" { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "internal: missing capture local decl"), ctx: c }; }
     if ty_has_forbidden_borrow(c, ld.ty) {
-      return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "borrowed local cannot live across await: ".concat(nm)), ctx: c };
+      let decl_sp: ast.Span = stmt_span(body.stmts.get(ld.stmt_idx));
+      let await_sp: ast.Span = stmt_span(body.stmts.get(cu.await_stmt_idx));
+      let use_sp: ast.Span = stmt_span(body.stmts.get(cu.use_stmt_idx));
+      let msg: String =
+        "borrowed local cannot live across await: "
+          .concat(nm)
+          .concat(" (declared at ")
+          .concat(span_loc(decl_sp))
+          .concat("; crosses await at ")
+          .concat(span_loc(await_sp))
+          .concat(")");
+      return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(use_sp, msg), ctx: c };
     }
     fs.push(StructFieldSig { name: "l_".concat(nm), ty: ld.ty, vis: ast.vis_private(), is_pub: false });
     ci0 = ci0 + 1;

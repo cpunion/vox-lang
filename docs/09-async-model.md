@@ -66,6 +66,7 @@ trait Future {
 2. `e.await` 的表达式类型为 `T`（或 `Future::Output`）。
 3. lowering 语义：`Ready(v) => v`；`Pending` 时从 enclosing `poll` 返回 `Pending`，并通过 async frame（state + aN 字段）保留进度。
 4. `await` 只能出现在 async 上下文（`async fn`，`async` block 后续引入）。
+5. 无生命周期标注的约束：`async fn` 会返回一个可逃逸的 Future/frame 值，因此其 **参数/输出类型中禁止出现非 `&'static` 的借用**（包括嵌套在 `Vec[...]`、struct/enum 字段中的借用）。否则借用将随 frame 逃逸，无法在类型系统中表达其有效期。
 
 目标阶段（D03-3b 之后）：
 

@@ -106,7 +106,7 @@ Governance from now on:
   - Stage2 baseline landed: marker traits in `std/prelude` + auto-derivation for scalars/String/Vec/Range/struct/enum; type params still require explicit bounds.
   - Source: `docs/08-thread-safety.md`.
 
-- [ ] D03 Async model.
+- [x] D03 Async model.
   - [x] D03-1 词法/语法前置：保留 `async`/`await` 关键字，`async fn` AST 标记接入。
   - [x] D03-2 未启用语义的稳定诊断：`await`/trait async method 给出明确 deferred 错误。
   - [x] D03-2a `await` 语法通路：parser 产出 `ExprNode.Await`（表面语法推荐 `e.await`，保留 `await e` 兼容），由 typecheck/irgen 统一给 deferred 语义错误。
@@ -117,7 +117,7 @@ Governance from now on:
   - [x] D03-3b `async fn` lowering 到状态机 frame + `poll`。
   - [x] D03-3c `await` 的 typecheck/irgen 接入：仅允许 `async fn`；操作数支持 Poll-shaped 枚举 `{ Pending, Ready(T) }`，或实现 `std/async::Future` 的类型；`Ready(v)` 提取为 `T`；`Pending` 从 enclosing `poll` 返回 `Pending` 并保留进度。
   - [x] D03-3c1 从 Poll scaffold 过渡到 Future trait（`Future::Output`）绑定。
-  - [ ] D03-4 借用跨 `await` 约束与诊断。
+  - [x] D03-4 借用跨 `await` 约束与诊断。
   - Source: `docs/09-async-model.md`.
 
 - [ ] D04 Effect/resource system.
