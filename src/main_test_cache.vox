@@ -32,9 +32,13 @@ fn test_build_cache_meta_path(out: String) -> String {
   return out.concat(".test.cache.key");
 }
 
-fn test_build_cache_key(files0: Vec[ld.SourceFile], tests0: Vec[String]) -> String {
+fn test_build_cache_tests_path(out: String) -> String {
+  return out.concat(".test.cache.tests");
+}
+
+fn test_build_cache_key(files0: Vec[ld.SourceFile]) -> String {
   let mut h: u64 = 1469598103934665603 as u64;
-  h = lock_hash_text(h, "test-build-cache-v2\n");
+  h = lock_hash_text(h, "test-build-cache-v3\n");
   h = lock_hash_text(h, if host_is_windows() { "windows\n" } else { "posix\n" });
 
   let files: Vec[ld.SourceFile] = sort_source_files(files0);
@@ -48,29 +52,153 @@ fn test_build_cache_key(files0: Vec[ld.SourceFile], tests0: Vec[String]) -> Stri
     h = lock_hash_text(h, "\n");
     i = i + 1;
   }
+  return h.to_string();
+}
 
+fn parse_test_build_cache_tests(text: String) -> Vec[String] {
+  let lines: Vec[String] = lock_split_lines(text);
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < lines.len() {
+    let s: String = trim_space_main(lines.get(i));
+    if s != "" { out.push(s); }
+    i = i + 1;
+  }
+  return sort_strings(out);
+}
+
+fn format_test_build_cache_tests(tests0: Vec[String]) -> String {
   let tests: Vec[String] = sort_strings(tests0);
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < tests.len() {
+    out = out.concat(tests.get(i)).concat("\n");
+    i = i + 1;
+  }
+  return out;
+}
+
+fn test_build_cache_contains_all(hay0: Vec[String], need0: Vec[String]) -> bool {
+  let hay: Vec[String] = sort_strings(hay0);
+  let need: Vec[String] = sort_strings(need0);
+  let mut i: i32 = 0;
+  while i < need.len() {
+    let want: String = need.get(i);
+    let mut found: bool = false;
+    let mut j: i32 = 0;
+    while j < hay.len() {
+      if hay.get(j) == want {
+        found = true;
+        j = hay.len();
+      } else {
+        j = j + 1;
+      }
+    }
+    if !found { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn test_build_cache_load_tests(out: String, key: String, cpath: String, bin: String) -> Vec[String] {
+  let meta: String = test_build_cache_meta_path(out);
+  if !fs.exists(meta) { return Vec(); }
+  if !fs.exists(cpath) { return Vec(); }
+  let has_bin: bool = fs.exists(bin) || fs.exists(bin.concat(".exe"));
+  if !has_bin { return Vec(); }
+  let cur: String = trim_space_main(fs.read_to_string(meta));
+  if cur != key { return Vec(); }
+  let tests_path: String = test_build_cache_tests_path(out);
+  if !fs.exists(tests_path) { return Vec(); }
+  return parse_test_build_cache_tests(fs.read_to_string(tests_path));
+}
+
+fn test_build_cache_hit(out: String, key: String, cpath: String, bin: String, selected0: Vec[String]) -> bool {
+  let compiled: Vec[String] = test_build_cache_load_tests(out, key, cpath, bin);
+  if compiled.len() == 0 { return false; }
+  return test_build_cache_contains_all(compiled, selected0);
+}
+
+fn merge_unique_strings(xs0: Vec[String], ys0: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    let s: String = xs0.get(i);
+    let mut found: bool = false;
+    let mut k: i32 = 0;
+    while k < out.len() {
+      if out.get(k) == s {
+        found = true;
+        k = out.len();
+      } else {
+        k = k + 1;
+      }
+    }
+    if s != "" && !found { out.push(s); }
+    i = i + 1;
+  }
   let mut j: i32 = 0;
-  while j < tests.len() {
-    h = lock_hash_text(h, "T\n");
-    h = lock_hash_text(h, tests.get(j));
-    h = lock_hash_text(h, "\n");
+  while j < ys0.len() {
+    let s: String = ys0.get(j);
+    let mut found: bool = false;
+    let mut k: i32 = 0;
+    while k < out.len() {
+      if out.get(k) == s {
+        found = true;
+        k = out.len();
+      } else {
+        k = k + 1;
+      }
+    }
+    if s != "" && !found { out.push(s); }
     j = j + 1;
+  }
+  return sort_strings(out);
+}
+
+fn write_test_build_cache(out: String, key: String, tests: Vec[String]) -> () {
+  let meta: String = test_build_cache_meta_path(out);
+  fs.write_string(meta, key.concat("\n"));
+  fs.write_string(test_build_cache_tests_path(out), format_test_build_cache_tests(tests));
+}
+
+fn build_cache_meta_path(out: String) -> String {
+  return out.concat(".build.cache.key");
+}
+
+fn build_cache_key(files0: Vec[ld.SourceFile], mode: String) -> String {
+  let mut h: u64 = 1469598103934665603 as u64;
+  h = lock_hash_text(h, "build-cache-v1\n");
+  h = lock_hash_text(h, if host_is_windows() { "windows\n" } else { "posix\n" });
+  h = lock_hash_text(h, mode);
+  h = lock_hash_text(h, "\n");
+
+  let files: Vec[ld.SourceFile] = sort_source_files(files0);
+  let mut i: i32 = 0;
+  while i < files.len() {
+    let f: ld.SourceFile = files.get(i);
+    h = lock_hash_text(h, "F\n");
+    h = lock_hash_text(h, f.path);
+    h = lock_hash_text(h, "\n");
+    h = lock_hash_text(h, f.text);
+    h = lock_hash_text(h, "\n");
+    i = i + 1;
   }
   return h.to_string();
 }
 
-fn test_build_cache_hit(out: String, key: String, cpath: String, bin: String) -> bool {
-  let meta: String = test_build_cache_meta_path(out);
+fn build_cache_hit(out: String, key: String, cpath: String, bin: String) -> bool {
+  let meta: String = build_cache_meta_path(out);
   if !fs.exists(meta) { return false; }
   if !fs.exists(cpath) { return false; }
-  if !fs.exists(bin) { return false; }
+  let has_bin: bool = fs.exists(bin) || fs.exists(bin.concat(".exe"));
+  if !has_bin { return false; }
   let cur: String = trim_space_main(fs.read_to_string(meta));
   return cur == key;
 }
 
-fn write_test_build_cache(out: String, key: String) -> () {
-  let meta: String = test_build_cache_meta_path(out);
+fn write_build_cache(out: String, key: String) -> () {
+  let meta: String = build_cache_meta_path(out);
   fs.write_string(meta, key.concat("\n"));
 }
 

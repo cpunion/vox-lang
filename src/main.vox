@@ -395,6 +395,15 @@ fn cc_common_flags_for_target(target_os: String, use_msvc: bool) -> String {
   return " -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE";
 }
 
+fn cc_debug_flags(use_msvc: bool) -> String {
+  let raw: String = trim_space_main(proc.getenv("VOX_CC_DEBUG"));
+  let on: bool = raw == "1" || raw == "true" || raw == "yes" || raw == "on";
+  if use_msvc {
+    return if on { " /Zi" } else { "" };
+  }
+  return if on { " -g" } else { " -g0" };
+}
+
 fn ar_cmd_for_target(host_os: String, target_os: String, target_arch: String, target_triple: String, target_abi: String) -> String {
   let ar_env: String = trim_space_main(proc.getenv("AR"));
   if ar_env != "" { return ar_env; }
@@ -431,62 +440,92 @@ fn cc_shared_flag_for_target(target_os: String, use_msvc: bool) -> String {
 
 fn cc_cmdline_static_msvc(cc: String, cpath: String, out: String, ar: String) -> String {
   let obj: String = out.concat(".obj");
-  return cc
-    .concat(" /nologo /TC /Od /Zi /c")
-    .concat(" ")
-    .concat(cpath)
-    .concat(" /Fo:")
-    .concat(obj)
-    .concat(" && ")
-    .concat(ar)
-    .concat(" /nologo /OUT:")
-    .concat(out)
-    .concat(" ")
-    .concat(obj);
+  let mut cmd: String = cc;
+  cmd = cmd.concat(" /nologo /TC /Od");
+  cmd = cmd.concat(cc_debug_flags(true));
+  cmd = cmd.concat(" /c ");
+  cmd = cmd.concat(cpath);
+  cmd = cmd.concat(" /Fo:");
+  cmd = cmd.concat(obj);
+  cmd = cmd.concat(" && ");
+  cmd = cmd.concat(ar);
+  cmd = cmd.concat(" /nologo /OUT:");
+  cmd = cmd.concat(out);
+  cmd = cmd.concat(" ");
+  cmd = cmd.concat(obj);
+  return cmd;
 }
 
 fn cc_cmdline_static_gnu(cc: String, tflags: String, target_os: String, cpath: String, out: String, ar: String) -> String {
   let obj: String = out.concat(".o");
-  return cc
-    .concat(tflags)
-    .concat(" -std=c11 -O0 -g")
-    .concat(cc_common_flags_for_target(target_os, false))
-    .concat(" -c ")
-    .concat(cpath)
-    .concat(" -o ")
-    .concat(obj)
-    .concat(" && ")
-    .concat(ar)
-    .concat(" rcs ")
-    .concat(out)
-    .concat(" ")
-    .concat(obj);
+  let mut cmd: String = cc;
+  cmd = cmd.concat(tflags);
+  cmd = cmd.concat(" -std=c11 -O0");
+  cmd = cmd.concat(cc_debug_flags(false));
+  cmd = cmd.concat(cc_common_flags_for_target(target_os, false));
+  cmd = cmd.concat(" -c ");
+  cmd = cmd.concat(cpath);
+  cmd = cmd.concat(" -o ");
+  cmd = cmd.concat(obj);
+  cmd = cmd.concat(" && ");
+  cmd = cmd.concat(ar);
+  cmd = cmd.concat(" rcs ");
+  cmd = cmd.concat(out);
+  cmd = cmd.concat(" ");
+  cmd = cmd.concat(obj);
+  return cmd;
 }
 
 fn cc_cmdline_non_static_msvc(cc: String, target_os: String, target_abi: String, artifact: String, cpath: String, out: String) -> String {
   let shared_flag: String = if artifact == "shared" { cc_shared_flag_for_target(target_os, true) } else { "" };
-  return cc
-    .concat(" /nologo /TC /Od /Zi")
-    .concat(shared_flag)
-    .concat(" ")
-    .concat(cpath)
-    .concat(" /Fe:")
-    .concat(out)
-    .concat(cc_link_flags_for_target(target_os, target_abi, true, artifact));
+  let mut cmd: String = cc;
+  cmd = cmd.concat(" /nologo /TC /Od");
+  cmd = cmd.concat(cc_debug_flags(true));
+  cmd = cmd.concat(shared_flag);
+  cmd = cmd.concat(" ");
+  cmd = cmd.concat(cpath);
+  cmd = cmd.concat(" /Fe:");
+  cmd = cmd.concat(out);
+  cmd = cmd.concat(cc_link_flags_for_target(target_os, target_abi, true, artifact));
+  return cmd;
 }
 
 fn cc_cmdline_non_static_gnu(cc: String, tflags: String, target_os: String, target_abi: String, artifact: String, cpath: String, out: String) -> String {
   let shared_flag: String = if artifact == "shared" { cc_shared_flag_for_target(target_os, false) } else { "" };
-  return cc
-    .concat(tflags)
-    .concat(" -std=c11 -O0 -g")
-    .concat(cc_common_flags_for_target(target_os, false))
-    .concat(shared_flag)
-    .concat(" ")
-    .concat(cpath)
-    .concat(" -o ")
-    .concat(out)
-    .concat(cc_link_flags_for_target(target_os, target_abi, false, artifact));
+  let mut cmd: String = cc;
+  cmd = cmd.concat(tflags);
+  cmd = cmd.concat(" -std=c11 -O0");
+  cmd = cmd.concat(cc_debug_flags(false));
+  cmd = cmd.concat(cc_common_flags_for_target(target_os, false));
+  cmd = cmd.concat(shared_flag);
+  cmd = cmd.concat(" ");
+  cmd = cmd.concat(cpath);
+  cmd = cmd.concat(" -o ");
+  cmd = cmd.concat(out);
+  cmd = cmd.concat(cc_link_flags_for_target(target_os, target_abi, false, artifact));
+  return cmd;
+}
+
+fn append_build_mode_line(out0: String, key: String, value: String) -> String {
+  let mut out: String = out0;
+  out = out.concat(key);
+  out = out.concat(value);
+  out = out.concat("\n");
+  return out;
+}
+
+fn build_mode_text(cmd0: String, driver_key: String, emit_driver_key: String, host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, artifact: String) -> String {
+  let mut out: String = "";
+  out = append_build_mode_line(out, "cmd=", cmd0);
+  out = append_build_mode_line(out, "driver=", driver_key);
+  out = append_build_mode_line(out, "emit_driver_main=", emit_driver_key);
+  out = append_build_mode_line(out, "host=", host_os.concat("-").concat(host_arch));
+  out = append_build_mode_line(out, "target=", target_os.concat("-").concat(target_arch));
+  out = append_build_mode_line(out, "triple=", target_triple);
+  out = append_build_mode_line(out, "abi=", target_abi);
+  out = out.concat("artifact=");
+  out = out.concat(artifact);
+  return out;
 }
 
 fn cc_cmdline_for_target_artifact(host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, artifact: String, cpath: String, out: String) -> String {
@@ -541,6 +580,9 @@ fn usage() -> () {
   print("  --target=<value>    build/build-pkg/test-pkg: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc, i686-w64-mingw32, wasm32-unknown-unknown)\n");
   print("  --artifact=<kind>   build/build-pkg: artifact kind (exe|static|shared)\n");
   print("  --version, -V       print embedded compiler version\n");
+  print("\n");
+  print("env:\n");
+  print("  VOX_CC_DEBUG=1      enable C compiler debug symbols (-g / /Zi)\n");
 }
 
 fn print_invalid_lock_error(msg: String) -> () {
@@ -2605,19 +2647,33 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(srcs_build);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
-    if !r.ok {
-      print("compile failed: ".concat(r.err).concat("\n"));
-      return 1;
-    }
     let cpath: String = out.concat(".c");
-    fs.write_string(cpath, r.c);
-    let cmdline: String = cc_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), artifact, cpath, out);
-    let code: i32 = proc.exec(cmdline);
-    if code != 0 {
-      print("cc failed: ".concat(cmdline).concat("\n"));
-      print("cc exit: ".concat(code.to_string()).concat("\n"));
-      return 1;
+    let mut files_for_cache: Vec[ld.SourceFile] = Vec();
+    let mut fci: i32 = 0;
+    while fci < files.len() {
+      files_for_cache.push(files.get(fci));
+      fci = fci + 1;
+    }
+    let driver_key: String = if driver == cg.DriverMainKind.Tool { "tool" } else { "user" };
+    let emit_driver_key: String = if artifact == "exe" { "1" } else { "0" };
+    let build_mode: String = build_mode_text("build", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi, artifact);
+    let build_key: String = build_cache_key(files_for_cache, build_mode);
+    if !build_cache_hit(out, build_key, cpath, out) {
+      let r: c.CompileResult =
+        c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
+      if !r.ok {
+        print("compile failed: ".concat(r.err).concat("\n"));
+        return 1;
+      }
+      fs.write_string(cpath, r.c);
+      let cmdline: String = cc_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), artifact, cpath, out);
+      let code: i32 = proc.exec(cmdline);
+      if code != 0 {
+        print("cc failed: ".concat(cmdline).concat("\n"));
+        print("cc exit: ".concat(code.to_string()).concat("\n"));
+        return 1;
+      }
+      write_build_cache(out, build_key);
     }
     return 0;
   }
@@ -2681,19 +2737,33 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
-    if !r.ok {
-      print("compile failed: ".concat(r.err).concat("\n"));
-      return 1;
-    }
     let cpath: String = out.concat(".c");
-    fs.write_string(cpath, r.c);
-    let cmdline: String = cc_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), artifact, cpath, out);
-    let code: i32 = proc.exec(cmdline);
-    if code != 0 {
-      print("cc failed: ".concat(cmdline).concat("\n"));
-      print("cc exit: ".concat(code.to_string()).concat("\n"));
-      return 1;
+    let mut files_for_cache: Vec[ld.SourceFile] = Vec();
+    let mut fci: i32 = 0;
+    while fci < files.len() {
+      files_for_cache.push(files.get(fci));
+      fci = fci + 1;
+    }
+    let driver_key: String = if driver == cg.DriverMainKind.Tool { "tool" } else { "user" };
+    let emit_driver_key: String = if artifact == "exe" { "1" } else { "0" };
+    let build_mode: String = build_mode_text("build-pkg", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi, artifact);
+    let build_key: String = build_cache_key(files_for_cache, build_mode);
+    if !build_cache_hit(out, build_key, cpath, out) {
+      let r: c.CompileResult =
+        c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
+      if !r.ok {
+        print("compile failed: ".concat(r.err).concat("\n"));
+        return 1;
+      }
+      fs.write_string(cpath, r.c);
+      let cmdline: String = cc_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), artifact, cpath, out);
+      let code: i32 = proc.exec(cmdline);
+      if code != 0 {
+        print("cc failed: ".concat(cmdline).concat("\n"));
+        print("cc exit: ".concat(code.to_string()).concat("\n"));
+        return 1;
+      }
+      write_build_cache(out, build_key);
     }
     return 0;
   }
@@ -2798,17 +2868,17 @@ fn main() -> i32 {
 
     let cpath: String = out.concat(".test.c");
     let bin: String = out.concat(".test");
-    let mut tests_for_cache: Vec[String] = Vec();
+    let mut tests_for_selected: Vec[String] = Vec();
     let mut tci: i32 = 0;
     while tci < tests.len() {
-      tests_for_cache.push(tests.get(tci));
+      tests_for_selected.push(tests.get(tci));
       tci = tci + 1;
     }
-    let mut tests_for_compile: Vec[String] = Vec();
-    let mut tco: i32 = 0;
-    while tco < tests.len() {
-      tests_for_compile.push(tests.get(tco));
-      tco = tco + 1;
+    let mut tests_for_hit: Vec[String] = Vec();
+    let mut thi: i32 = 0;
+    while thi < tests_for_selected.len() {
+      tests_for_hit.push(tests_for_selected.get(thi));
+      thi = thi + 1;
     }
     let mut tests_for_queues: Vec[String] = Vec();
     let mut tqu: i32 = 0;
@@ -2823,8 +2893,10 @@ fn main() -> i32 {
       files_for_cache.push(files.get(fci));
       fci = fci + 1;
     }
-    let build_key: String = test_build_cache_key(files_for_cache, tests_for_cache);
-    if !test_build_cache_hit(out, build_key, cpath, bin) {
+    let build_key: String = test_build_cache_key(files_for_cache);
+    let cached_tests: Vec[String] = test_build_cache_load_tests(out, build_key, cpath, bin);
+    let tests_for_compile: Vec[String] = merge_unique_strings(cached_tests, tests_for_selected);
+    if !test_build_cache_hit(out, build_key, cpath, bin, tests_for_hit) {
       let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile });
       if !r.ok {
         print("compile failed: ".concat(r.err).concat("\n"));
@@ -2839,7 +2911,7 @@ fn main() -> i32 {
         print("cc exit: ".concat(code.to_string()).concat("\n"));
         return 1;
       }
-      write_test_build_cache(out, build_key);
+      write_test_build_cache(out, build_key, tests_for_compile);
     }
 
     // Run tests by module-level parallel queues, keeping module-internal order.
