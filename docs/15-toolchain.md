@@ -4,13 +4,28 @@
 
 ```bash
 vox emit-c    [--driver=user|tool] <out.c>   <src...>
-vox build     [--driver=user|tool] [--artifact=exe|static|shared] <out.bin> <src...>
-vox build-pkg [--driver=user|tool] [--artifact=exe|static|shared] <out.bin>
-vox test-pkg  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] <out.bin>
+vox build     [--driver=user|tool] [--artifact=exe|static|shared] [--target=<value>] [out.bin]
+vox test      [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] [out.bin]
+vox install   [--target=<value>] [out.bin]
+vox build-src [--driver=user|tool] [--artifact=exe|static|shared] [--target=<value>] <out.bin> <src...>
+vox build-pkg [out.bin]   # 兼容别名
+vox test-pkg  [out.bin]   # 兼容别名
 vox list-pkg  [--json]
 vox toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
 vox version | --version | -V
 ```
+
+默认行为（无 `-pkg` 后缀主命令）：
+
+- `vox build`：构建当前项目（`./src`），默认输出 `target/debug/<package_name>`。
+- `vox test`：测试当前项目（`./src` + `./tests`），默认输出 `target/debug/<package_name>`。
+- `vox install`：先按 `vox build` 构建，再安装到 `~/.vox/bin/<package_name>`（仅宿主目标）。
+- `vox build-src`：显式源码列表构建（旧 `build <out> <src...>` 语义）。
+
+兼容别名：
+
+- `vox build-pkg` 等价于 `vox build`
+- `vox test-pkg` 等价于 `vox test`
 
 `vox version` 解析顺序：`VOX_BUILD_VERSION`（若设置）优先；否则在 git 仓库中推导为 `X.Y.Z[-dirty]-<n>+g<sha>`（命中 tag 且干净时输出 `X.Y.Z`）；无 git 时 `release` 构建输出 `X.Y.Z`，普通源码包输出 `X.Y.Z+src`。
 

@@ -15,8 +15,6 @@ CLI（见 `docs/15-toolchain.md`）：
 
 ```bash
 vox test
-vox test --engine=c
-vox test --engine=interp
 vox test --run='regex'
 vox test --filter='substring'
 vox test --jobs=4
@@ -27,33 +25,30 @@ vox test --json
 
 Stage0 行为：
 
-- `vox build/run`：会忽略 `src/**/*_test.vox`
+- `vox build`：会忽略 `src/**/*_test.vox`
 - `vox test`：会包含 `src/**/*.vox` + `src/**/*_test.vox` + `tests/**/*.vox`，并执行所有 `test_*` 函数
 - 依赖包（path deps）的测试文件不会被加入（保持依赖纯净）
- - `vox test --engine=c`（默认）：编译生成测试可执行文件并执行（更贴近最终语义）
- - `vox test --engine=interp`：解释执行测试（用于快速对照；能力可能更受限）
  - `vox test --run=<regex>`：仅运行匹配的测试（匹配限定名 `mod::test_x` 与短名 `test_x`）
  - `vox test --filter=<text>`：按子串筛选测试（匹配限定名 `mod::test_x` 与短名 `test_x`）
- - `vox test --jobs=N`（或 `-j N`）：设置模块级并行度；默认 `GOMAXPROCS`，始终保持“模块内串行”
+ - `vox test --jobs=N`（或 `-j N`）：设置模块级并行度（默认 `1`），始终保持“模块内串行”
  - `vox test --rerun-failed`：仅重跑上次失败测试（缓存文件：`target/debug/.vox_failed_tests`）
  - `vox test --list`：仅列出当前筛选后的测试，不执行
 - `vox test --json`：输出机器可读 JSON 报告（包含 selection/results/modules/module_details/failed_tests/slowest/summary）
  - 调度策略：模块间并行、模块内串行（稳定日志顺序与共享状态可控）
  - 输出包含每个测试耗时（如 `([OK] mod::test_x (0.42ms))`）
- - `--engine=c` 与 `--engine=interp` 的 JSON 字段语义保持一致：`results.duration_us/error`、`modules.duration_us`、`slowest.duration_us` 都输出真实执行数据
  - 输出包含模块级汇总（`[module] <mod>: <passed> passed, <failed> failed (<dur>)`）
 - 输出包含最慢测试 TopN（当前 N=5，`[slowest] <test> (<dur>)`）
 - 输出包含选择摘要（`[select] discovered: N, selected: M`，并在使用 `--run/--filter/--rerun-failed` 时打印过滤来源）
-- 测试失败后输出重跑提示（`[hint] rerun failed: vox test --engine=... --rerun-failed <dir>`）
+- 测试失败后输出重跑提示（`[hint] rerun failed: vox test --rerun-failed <dir>`）
 - `target/debug/.vox_failed_tests` 当前采用 JSON 元数据格式（包含失败测试列表与更新时间）；读取端兼容旧版纯文本行列表
 
-Stage2 `test-pkg` 对齐增强（2026-02）：
+Stage2 `vox test`（兼容别名：`test-pkg`）对齐增强（2026-02）：
 
 - JSON 报告新增稳定元信息：`report_version`、`rerun_cache_path`、`rerun_cache_version`
 - `results` 在失败项上包含 `error` 与 `log_file` 字段，便于外部系统直接抓取失败上下文
 - `--rerun-failed` 缓存采用版本化 JSON（含 `version`、`updated_unix_us`、`tests`，同时保留 `failed_tests` 兼容键）
 - 读取 `--rerun-failed` 缓存时会做规范化（排序、去重、去空），并兼容旧版纯文本/旧 JSON 格式
-- `test-pkg` 筛选参数（`--module/--run/--filter/--jobs/--fail-fast/--list/--rerun-failed/--json`）可放在 `<out.bin>` 前后
+- `test`（兼容别名：`test-pkg`）筛选参数（`--module/--run/--filter/--jobs/--fail-fast/--list/--rerun-failed/--json`）可放在 `<out.bin>` 前后
 
 `--json` 的关键字段：
 

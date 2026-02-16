@@ -95,7 +95,7 @@ pub fn add(a: i32, b: i32) -> i32 {
 
 ## 5. 构建与目标组合
 
-- `vox build/build-pkg` 支持 `--artifact=exe|static|shared`。
+- `vox build`（兼容别名：`build-pkg`）支持 `--artifact=exe|static|shared`。
 - `shared/static` 产物不生成 driver `main`。
 - wasm 目标当前仅支持 `--artifact=exe`。
 
@@ -107,7 +107,7 @@ wasm 三元组：
 
 测试运行约束：
 
-- `test-pkg` 在 wasm 上仅支持 `wasm32-wasi`。
+- `test`（兼容别名：`test-pkg`）在 wasm 上仅支持 `wasm32-wasi`。
 - runner 由 `WASM_RUNNER` 指定，默认 `wasmtime`。
 
 ## 6. 运行时/互操作说明
@@ -119,6 +119,6 @@ wasm 三元组：
 ## 7. 示例
 
 - Node.js + 浏览器调用 wasm：`examples/wasm_call/`
-  - 构建：`vox build-pkg --target=wasm32-unknown-unknown target/vox_wasm_demo.wasm`
+  - 构建：`vox build --target=wasm32-unknown-unknown target/vox_wasm_demo.wasm`
   - Node 运行：`node node/run.mjs`
   - Web 运行：`VOX_WASM_WEB_PORT=8080 node web/server.mjs` 后访问 `http://127.0.0.1:8080/web/`

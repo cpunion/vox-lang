@@ -1,9 +1,18 @@
-.PHONY: fmt test test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-p0p1 test-intrinsics \
+.PHONY: fmt fmt-check test test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-p0p1 test-intrinsics \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run \
 	release-source-bundle release-source-verify
 
+FMT_PATHS ?= src/main.vox src/vox/fmt
+
 fmt:
-	@echo "[fmt] no formatter configured for .vox yet"
+	@set -e; \
+	COMPILER_BIN=$$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1); \
+	"$$COMPILER_BIN" fmt $(FMT_PATHS)
+
+fmt-check:
+	@set -e; \
+	COMPILER_BIN=$$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1); \
+	"$$COMPILER_BIN" fmt --check $(FMT_PATHS)
 
 # Run core repo tests: rolling selfhost gates + example package smoke.
 test: test-intrinsics test-rolling test-examples
