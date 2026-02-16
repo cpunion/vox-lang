@@ -1,0 +1,109 @@
+import "std/io" as io
+import "std/fs" as fs
+import "std/process" as proc
+import "vox_claw" as vc
+
+fn trim_ws(raw: String) -> String {
+  let mut lo: i32 = 0;
+  while lo < raw.len() {
+    let ch: i32 = raw.byte_at(lo);
+    if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
+      lo = lo + 1;
+    } else {
+      break;
+    }
+  }
+  if lo >= raw.len() { return ""; }
+
+  let mut hi: i32 = raw.len();
+  while hi > lo {
+    let ch: i32 = raw.byte_at(hi - 1);
+    if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
+      hi = hi - 1;
+    } else {
+      break;
+    }
+  }
+  return raw.slice(lo, hi);
+}
+
+fn shell_quote(raw: String) -> String {
+  let mut out: String = "'";
+  let mut i: i32 = 0;
+  while i < raw.len() {
+    if raw.byte_at(i) == 39 {
+      out = out.concat("'\\''");
+    } else {
+      out = out.concat(raw.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  return out.concat("'");
+}
+
+fn ensure_reader_script(path: String) -> () {
+  fs.write_string(path, """#!/bin/sh
+read -r line || exit 9
+printf "%s" "$line" > "$1"
+""");
+}
+
+fn repl_read_line(script_path: String, out_path: String, prompt: String) -> String {
+  io.out(prompt);
+  let cmd: String = "sh "
+    .concat(shell_quote(script_path))
+    .concat(" ")
+    .concat(shell_quote(out_path));
+  let rc: i32 = proc.exec(cmd);
+  if rc != 0 { return "__EOF__"; }
+  if !fs.exists(out_path) { return "__EOF__"; }
+  return fs.read_to_string(out_path);
+}
+
+fn main() -> i32 {
+  let cfg: vc.AssistantConfig = vc.config_default();
+  let mut state: vc.AgentState = vc.agent_new(cfg);
+
+  io.out_ln("vox_claw repl");
+  io.out_ln("model=".concat(state.cfg.model));
+  io.out_ln("endpoint=".concat(vc.endpoint_url(state.cfg.api_host, state.cfg.api_path)));
+  io.out_ln("api_key_loaded=".concat(vc.agent_has_api_key(state).to_string()));
+  io.out_ln("type :tools to show tool protocol, :memory to inspect recent memory, :quit to exit");
+  if !vc.agent_has_api_key(state) {
+    io.out_ln("warning: OPENAI_API_KEY not found, agent will reply with setup error until key is configured.");
+  }
+
+  let repl_dir: String = state.cfg.workspace.concat("/repl");
+  fs.mkdir_p(repl_dir);
+  let reader_script: String = repl_dir.concat("/read_line.sh");
+  let reader_out: String = repl_dir.concat("/line.txt");
+  ensure_reader_script(reader_script);
+
+  while true {
+    let line: String = repl_read_line(reader_script, reader_out, "you> ");
+    if line == "__EOF__" { break; }
+
+    let cmd: String = trim_ws(Clone.clone(line));
+    if cmd == "" { continue; }
+    if cmd == ":quit" || cmd == ":exit" { break; }
+    if cmd == ":tools" {
+      io.out_ln(vc.tools_help_text());
+      continue;
+    }
+    if cmd == ":memory" {
+      io.out_ln(vc.agent_memory_overview(state, 12));
+      continue;
+    }
+
+    let reply: vc.AgentReply = vc.agent_run_turn(state, line);
+    state = reply.state;
+
+    let mut head: String = "vox";
+    if reply.used_tools > 0 {
+      head = head.concat("[tools=").concat(reply.used_tools.to_string()).concat("]");
+    }
+    io.out_ln(head.concat("> ").concat(reply.text));
+  }
+  io.out_ln("bye");
+  return 0;
+}

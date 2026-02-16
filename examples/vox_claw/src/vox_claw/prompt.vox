@@ -1,0 +1,126 @@
+import "std/time" as tm
+
+fn bool_name(v: bool) -> String {
+  if v { return "true"; }
+  return "false";
+}
+
+fn tool_manifest_line(t: ToolSpec) -> String {
+  return "- ".concat(t.name)
+    .concat(" (network=")
+    .concat(bool_name(t.requires_network))
+    .concat("): ")
+    .concat(t.description);
+}
+
+pub fn tools_manifest(tools: Vec[ToolSpec]) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < tools.len() {
+    out = out.concat(tool_manifest_line(tools.get(i))).concat("\n");
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn memory_prompt_snapshot(store: MemoryStore, limit: i32) -> String {
+  let mut out: String = "";
+  let xs: Vec[MemoryRecord] = memory_recent(store, limit);
+  if xs.len() == 0 { return "- (empty)\n"; }
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let r: MemoryRecord = xs.get(i);
+    out = out
+      .concat("- [")
+      .concat(r.ts_ns.to_string())
+      .concat("] ")
+      .concat(r.key)
+      .concat(" = ")
+      .concat(r.value)
+      .concat("\n");
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn scheduler_prompt_snapshot(sched: Scheduler) -> String {
+  let mut out: String = "";
+  let now_ns: i64 = tm.now_ns();
+  let due: Vec[ScheduledTask] = scheduler_due(sched, now_ns);
+  if due.len() == 0 { return "- due: none\n"; }
+  let mut i: i32 = 0;
+  while i < due.len() {
+    let d: ScheduledTask = due.get(i);
+    out = out
+      .concat("- due#")
+      .concat(d.id.to_string())
+      .concat(" every=")
+      .concat(d.every_s.to_string())
+      .concat("s prompt=")
+      .concat(d.prompt)
+      .concat("\n");
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn tool_protocol_prompt() -> String {
+  return """Tool protocol:
+- If a tool is needed, output one single line only:
+  TOOL:<name>|<payload>
+- Tool names: help, memory.put, memory.get, memory.keys, schedule.add, schedule.due, shell.exec, web.get
+- Payload format:
+  memory.put => <key>|<value>
+  memory.get => <key>
+  schedule.add => <seconds>|<task prompt>
+  shell.exec => <command>
+  web.get => <url>
+- After receiving TOOL_RESULT, decide next step. When done, output normal answer text.
+""";
+}
+
+pub fn system_prompt(cfg: AssistantConfig, tools: Vec[ToolSpec]) -> String {
+  let head: String = """You are vox_claw, a pragmatic coding agent.
+Model: """;
+  let mid: String = """
+allow_network=""";
+  let tail: String = """
+max_tool_iters=""";
+  let lead_tools: String = """
+Available tools:
+""";
+  return head
+    .concat(cfg.model)
+    .concat(mid)
+    .concat(bool_name(cfg.allow_network))
+    .concat(tail)
+    .concat(cfg.max_tool_iters.to_string())
+    .concat(lead_tools)
+    .concat(tools_manifest(tools))
+    .concat(tool_protocol_prompt());
+}
+
+pub fn build_turn_prompt(
+  cfg: AssistantConfig,
+  tools: Vec[ToolSpec],
+  memory: MemoryStore,
+  sched: Scheduler,
+  dialogue: String,
+  scratchpad: String,
+  user_input: String,
+) -> String {
+  return "[SYSTEM]\n"
+    .concat(system_prompt(cfg, tools))
+    .concat("\n[MEMORY]\n")
+    .concat(memory_prompt_snapshot(memory, 8))
+    .concat("\n[SCHEDULER]\n")
+    .concat(scheduler_prompt_snapshot(sched))
+    .concat("\n[DIALOGUE]\n")
+    .concat(dialogue)
+    .concat("USER: ")
+    .concat(user_input)
+    .concat("\n")
+    .concat("\n[TOOL TRACE]\n")
+    .concat(scratchpad)
+    .concat("\n[ASSISTANT]\n");
+}

@@ -1,0 +1,235 @@
+import "std/fs" as fs
+import "std/string" as s
+
+fn trim_left_ws(raw: String) -> String {
+  let mut i: i32 = 0;
+  while i < raw.len() {
+    let ch: i32 = raw.byte_at(i);
+    if ch == 32 || ch == 9 {
+      i = i + 1;
+    } else {
+      return raw.slice(i, raw.len());
+    }
+  }
+  return "";
+}
+
+fn trim_ws(raw: String) -> String {
+  let left: String = trim_left_ws(raw);
+  if left.len() == 0 { return ""; }
+  let mut hi: i32 = left.len();
+  while hi > 0 {
+    let ch: i32 = left.byte_at(hi - 1);
+    if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
+      hi = hi - 1;
+    } else {
+      break;
+    }
+  }
+  return left.slice(0, hi);
+}
+
+fn limit_text(raw: String, max_n: i32) -> String {
+  if raw.len() <= max_n { return raw; }
+  if max_n <= 3 { return raw.slice(0, max_n); }
+  return raw.slice(0, max_n - 3).concat("...");
+}
+
+fn tail_text(raw: String, max_n: i32) -> String {
+  if raw.len() <= max_n { return raw; }
+  return raw.slice(raw.len() - max_n, raw.len());
+}
+
+fn starts_with_error(raw: String) -> bool {
+  return s.starts_with(s.view_all(trim_ws(raw)), "ERROR:");
+}
+
+pub struct AgentState {
+  pub cfg: AssistantConfig,
+  pub memory: MemoryStore,
+  pub scheduler: Scheduler,
+  pub blocked: Vec[String],
+  pub api_key: String,
+  pub jsonl_path: String,
+  pub dialogue: String,
+}
+
+pub struct AgentReply {
+  pub state: AgentState,
+  pub text: String,
+  pub used_tools: i32,
+}
+
+pub fn agent_new(cfg: AssistantConfig) -> AgentState {
+  fs.mkdir_p(cfg.workspace.concat("/memory"));
+  fs.mkdir_p(cfg.workspace.concat("/gateway"));
+  fs.mkdir_p(cfg.workspace.concat("/tools"));
+
+  let jsonl_path: String = cfg.workspace.concat("/memory/events.jsonl");
+  if !fs.exists(jsonl_path) {
+    memory_jsonl_reset(Clone.clone(jsonl_path));
+  }
+  let mut memory: MemoryStore = memory_store_from_jsonl(Clone.clone(jsonl_path));
+  if memory_recent(memory, 1).len() == 0 {
+    memory = memory_record_jsonl(
+      memory,
+      Clone.clone(jsonl_path),
+      "boot",
+      "vox_claw agent initialized",
+    );
+  }
+
+  let mut api_key: String = openai_api_key(".env");
+  if api_key == "" {
+    api_key = openai_api_key("../../.env");
+  }
+
+  let mut sched: Scheduler = scheduler();
+  let add: AddTaskResult = scheduler_add(sched, 180, "summarize recent memory");
+  sched = add.scheduler;
+
+  return AgentState {
+    cfg: cfg,
+    memory: memory,
+    scheduler: sched,
+    blocked: blocked_tokens(),
+    api_key: api_key,
+    jsonl_path: jsonl_path,
+    dialogue: "",
+  };
+}
+
+pub fn agent_has_api_key(state: AgentState) -> bool {
+  return state.api_key != "";
+}
+
+pub fn agent_repl_banner(state: AgentState) -> String {
+  let mut key_loaded: String = "false";
+  if state.api_key != "" { key_loaded = "true"; }
+  return """vox_claw repl
+model="""
+    .concat(state.cfg.model)
+    .concat("\nendpoint=")
+    .concat(endpoint_url(state.cfg.api_host, state.cfg.api_path))
+    .concat("\napi_key_loaded=")
+    .concat(key_loaded)
+    .concat("\ntype :tools to show tool protocol, :memory to inspect recent memory, :quit to exit");
+}
+
+pub fn agent_memory_overview(state: AgentState, limit: i32) -> String {
+  return memory_prompt_snapshot(state.memory, limit);
+}
+
+pub fn agent_run_turn(state: AgentState, user_input: String) -> AgentReply {
+  let input: String = trim_ws(user_input);
+  if input == "" {
+    return AgentReply {
+      state: state,
+      text: "",
+      used_tools: 0,
+    };
+  }
+
+  let cfg: AssistantConfig = state.cfg;
+  let mut memory: MemoryStore = state.memory;
+  let mut sched: Scheduler = state.scheduler;
+  let blocked: Vec[String] = state.blocked;
+  let api_key: String = state.api_key;
+  let jsonl_path: String = state.jsonl_path;
+  let dialogue: String = state.dialogue;
+
+  memory = memory_record_jsonl(memory, Clone.clone(jsonl_path), "user", Clone.clone(input));
+
+  let mut scratchpad: String = "";
+  let mut used_tools: i32 = 0;
+  let mut final_text: String = "";
+  let mut iter: i32 = 0;
+
+  while iter < cfg.max_tool_iters {
+    if api_key == "" {
+      final_text = "OPENAI_API_KEY missing, cannot call model. Put OPENAI_API_KEY in .env or environment.";
+      iter = cfg.max_tool_iters;
+    } else {
+      let prompt: String = build_turn_prompt(
+        Clone.clone(cfg),
+        default_tools(),
+        Clone.clone(memory),
+        Clone.clone(sched),
+        Clone.clone(dialogue),
+        Clone.clone(scratchpad),
+        Clone.clone(input),
+      );
+      let llm_text: String = chat_complete_text(
+        Clone.clone(cfg.api_host),
+        Clone.clone(cfg.api_path),
+        Clone.clone(cfg.model),
+        prompt,
+        Clone.clone(api_key),
+        Clone.clone(cfg.workspace).concat("/gateway"),
+      );
+
+      if starts_with_error(Clone.clone(llm_text)) {
+        final_text = llm_text;
+        iter = cfg.max_tool_iters;
+      } else {
+        let call: ToolCall = parse_tool_call(llm_text);
+        if call.ok {
+          let tr: ToolExecResult = execute_tool(
+            call,
+            memory,
+            sched,
+            Clone.clone(jsonl_path),
+            Clone.clone(cfg.workspace),
+            cfg.allow_network,
+            Clone.clone(blocked),
+          );
+          memory = tr.memory;
+          sched = tr.scheduler;
+          used_tools = used_tools + 1;
+          scratchpad = scratchpad
+            .concat("TOOL_RESULT[")
+            .concat(used_tools.to_string())
+            .concat("]: ")
+            .concat(limit_text(tr.output, 800))
+            .concat("\n");
+          scratchpad = tail_text(scratchpad, 2400);
+          iter = iter + 1;
+        } else {
+          final_text = llm_text;
+          iter = cfg.max_tool_iters;
+        }
+      }
+    }
+  }
+
+  if final_text == "" {
+    final_text = "Reached max_tool_iters without final answer.";
+  }
+
+  memory = memory_record_jsonl(memory, Clone.clone(jsonl_path), "assistant", Clone.clone(final_text));
+  let next_dialogue: String = tail_text(
+    dialogue
+      .concat("USER: ")
+      .concat(input)
+      .concat("\nASSISTANT: ")
+      .concat(final_text)
+      .concat("\n"),
+    8000,
+  );
+
+  let next_state: AgentState = AgentState {
+    cfg: cfg,
+    memory: memory,
+    scheduler: sched,
+    blocked: blocked,
+    api_key: api_key,
+    jsonl_path: jsonl_path,
+    dialogue: next_dialogue,
+  };
+
+  return AgentReply {
+    state: next_state,
+    text: final_text,
+    used_tools: used_tools,
+  };
+}

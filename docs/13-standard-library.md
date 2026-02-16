@@ -13,6 +13,8 @@
 - `std::async`：pull 模型异步核心（`Poll[T]`、`Future`、`Context`、`Waker`）
 - `std::collections`：`Vec`、`Map` 等
 - `std::io`：输出 + 最小文件抽象 + 最小 TCP 抽象
+- `std::net`：URL/Query/HTTP 文本编解码 + 基于 TCP 的最小 HTTP roundtrip
+- `std::dotenv`：`.env` 读取与键查找（供 CLI/agent 配置加载）
 
 当前实现落地：
 
@@ -42,9 +44,19 @@
   - 其中键比较相关 API 需要 `K: Eq`。
   - 另外提供 `impl[K: Eq + Clone, V: Clone] Clone for Map[K,V]`（深拷贝 keys/vals，不共享底层 Vec 存储）。
   - 另外提供 `impl[K: Eq, V] Release for Map[K,V]`（返回空 `Map`，显式断开当前值）。
+- `std::collections` 新增通用容器：
+  - `Queue[T]`：FIFO 队列，基于 `Vec` + `head` 指针与惰性 compact；支持 `push`/`front`/`pop`/`to_vec`/`clear`/`release`。
+  - `Set[T: Eq]`：去重集合，基于线性 `Vec[T]`；支持 `add`/`remove`/`contains`/`values`/`clear`/`release`。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取、环境变量读取）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`，以及 `File`/`file_read_all`/`file_write_all`/`file_exists`/`mkdir_p`。网络部分提供 `NetAddr` + `NetConn` 与最小 TCP API：`net_connect` / `net_send` / `net_recv` / `net_close`（解释器与 C 后端一致可用；失败时统一 panic）。
+- `std::net` 已提供：
+  - URL/Query：`Url`、`parse_url`、`url_to_string`、`query_escape`、`build_query`
+  - HTTP 文本：`HttpRequest` + `with_header`/`with_body`/`render`，`parse_status`/`parse_status_code`/`header_value`/`response_body`
+  - 最小 TCP HTTP：`http_roundtrip` 与 `http_get`（基于 `std::io` 的 `NetConn`）
+- `std::dotenv` 已提供：
+  - `value(path, key)`：读取单个 `.env` 文件中的键值（支持 `KEY=...` 与 `export KEY=...`）
+  - `value_from_paths(paths, key)`：按路径顺序查找首个非空值
 - `std::sync` 当前 API 为泛型句柄：`Mutex[T]` / `Atomic[T]`（当前 `T` 由 `SyncScalar` 约束，已覆盖 `i32/i64`）；底层统一基于 runtime `i64` handle intrinsic。`fetch_add/swap/load/store` 已在解释器与 C 后端对齐。
 
 重要：由于 Vox 的“临时借用”规则，标准库应优先提供“可长期保存的拥有型视图”（例如 `StrView` / `Slice[T]`），并优先使用 view-first API（避免不必要的 `to_string` / `to_vec` 物化）。
