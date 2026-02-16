@@ -1881,13 +1881,54 @@ fn tc_call_func_unqualified(
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "compile_error: ".concat(msg)) };
   }
   if name == "@uninit" {
-    if type_args.len() != 0 || args.len() != 0 {
-      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@uninit expects no type args and no value args") };
+    if args.len() != 0 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@uninit expects no value args") };
     }
-    if expected == -1 {
-      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "cannot infer type for @uninit; use it only in typed contexts") };
+    if type_args.len() == 0 {
+      if expected == -1 {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "cannot infer type for @uninit; use @uninit[T]() or a typed context") };
+      }
+      return ExprTyResult { ok: true, ty: expected, err: TcError.None };
     }
-    return ExprTyResult { ok: true, ty: expected, err: TcError.None };
+    if type_args.len() != 1 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@uninit allows at most one type arg") };
+    }
+    let tr: ResolveTyResult = resolve_type(ctx, w, mod_path, imps, l0.type_params, type_args.get(0));
+    let c2: Ctx = tr.ctx;
+    if !tr.ok { return ExprTyResult { ok: false, ty: c2.ty_bad, err: TcError.None }; }
+    let ty: i32 = tr.idx;
+    if expected != -1 {
+      if !assignable_to(c2, expected, ty) || !assignable_to(c2, ty, expected) {
+        return ExprTyResult { ok: false, ty: c2.ty_bad, err: type_error_at(call_sp, "@uninit type arg does not match expected type") };
+      }
+    }
+    return ExprTyResult { ok: true, ty: ty, err: TcError.None };
+  }
+  if name == "@uninit_id" {
+    if type_args.len() != 0 || args.len() != 1 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@uninit_id expects exactly one integer argument") };
+    }
+    let an: ast.ExprNode = ast.expr_pool_get(exprs, args.get(0));
+    if !match an { ast.ExprNode.Int(_s) => true, _ => false } {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@uninit_id arg must be an integer literal") };
+    }
+    let text: String = match an { ast.ExprNode.Int(s) => s, _ => "0" };
+    let pr: ParseI64DecResult = parse_i64_dec(text);
+    if !pr.ok {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@uninit_id arg parse failed") };
+    }
+    let idx0: i64 = pr.val;
+    let ntys: i64 = ctx.pool.tys.len() as i64;
+    if idx0 < 0 || idx0 >= ntys {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@uninit_id type id out of range") };
+    }
+    let ty: i32 = idx0 as i32;
+    if expected != -1 {
+      if !assignable_to(ctx, expected, ty) || !assignable_to(ctx, ty, expected) {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@uninit_id type does not match expected type") };
+      }
+    }
+    return ExprTyResult { ok: true, ty: ty, err: TcError.None };
   }
   if name == "@enum_is" {
     if type_args.len() != 0 || args.len() != 2 {
@@ -1991,6 +2032,10 @@ fn tc_call_func_unqualified(
 
   let nf: NamedFuncImport = find_named_func(imps.named_funcs, name);
   if nf.local != "" {
+    if is_reserved_intrinsic_name(name) && !is_std_module(mod_path) {
+      let msg0: String = "reserved intrinsic is only available in std modules: ".concat(name);
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg0) };
+    }
     let frx: FindFuncResult = find_func(ctx, nf.mod_path, nf.name);
     if !frx.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "unknown fn: ".concat(name)) }; }
     return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, nf.mod_path, frx.sig, type_args, args, expected);
@@ -1998,6 +2043,10 @@ fn tc_call_func_unqualified(
   // Prefer local module, otherwise prelude fallback.
   let fr0: FindFuncResult = find_func(ctx, mod_path, name);
   if fr0.found {
+    if is_reserved_intrinsic_name(name) && !is_std_module(mod_path) {
+      let msg1: String = "reserved intrinsic is only available in std modules: ".concat(name);
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg1) };
+    }
     return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, mod_path, fr0.sig, type_args, args, expected);
   }
   let prelude: String = "std/prelude";
@@ -2034,6 +2083,10 @@ fn tc_call_func_qualified(
   args: Vec[i32],
   expected: i32
 ) -> ExprTyResult {
+  if is_reserved_intrinsic_name(name) && target_mod == "" && !is_std_module(cur_mod) {
+    let msg: String = "reserved intrinsic is only available in std modules: ".concat(name);
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+  }
   let fr: FindFuncResult = find_func(ctx, target_mod, name);
   if !fr.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "unknown fn: ".concat(name)) }; }
   if !vis_allows(fr.sig.vis, target_mod, cur_mod) {
