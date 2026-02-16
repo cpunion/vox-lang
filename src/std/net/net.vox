@@ -1,0 +1,377 @@
+import "std/io" as io
+import "std/string" as s
+
+fn is_ascii_alnum(ch: i32) -> bool {
+  if ch >= 48 && ch <= 57 { return true; }
+  if ch >= 65 && ch <= 90 { return true; }
+  if ch >= 97 && ch <= 122 { return true; }
+  return false;
+}
+
+fn hex_byte(ch: i32) -> String {
+  let table: String = "0123456789ABCDEF";
+  let hi: i32 = ch / 16;
+  let lo: i32 = ch % 16;
+  return "%".concat(table.slice(hi, hi + 1)).concat(table.slice(lo, lo + 1));
+}
+
+fn parse_decimal(raw: String) -> i32 {
+  if raw.len() == 0 { return -1; }
+  let mut i: i32 = 0;
+  let mut out: i32 = 0;
+  while i < raw.len() {
+    let ch: i32 = raw.byte_at(i);
+    if ch < 48 || ch > 57 { return -1; }
+    out = out * 10 + (ch - 48);
+    i = i + 1;
+  }
+  return out;
+}
+
+fn trim_left_ws(raw: String) -> String {
+  let mut i: i32 = 0;
+  while i < raw.len() {
+    let ch: i32 = raw.byte_at(i);
+    if ch == 32 || ch == 9 {
+      i = i + 1;
+    } else {
+      return raw.slice(i, raw.len());
+    }
+  }
+  return "";
+}
+
+fn first_line(text: String) -> String {
+  let v: s.StrView = s.view_all(text);
+  let crlf: i32 = s.index_of(v, "\r\n");
+  if crlf >= 0 { return text.slice(0, crlf); }
+  let lf: i32 = s.index_of(v, "\n");
+  if lf >= 0 { return text.slice(0, lf); }
+  return text;
+}
+
+fn line_end_at(text: String, start: i32) -> i32 {
+  if start >= text.len() { return text.len(); }
+  let rest: String = text.slice(start, text.len());
+  let crlf: i32 = s.index_of(s.view_all(rest), "\r\n");
+  if crlf >= 0 { return start + crlf; }
+  let lf: i32 = s.index_of(s.view_all(rest), "\n");
+  if lf >= 0 { return start + lf; }
+  return text.len();
+}
+
+fn next_line_start(text: String, end: i32) -> i32 {
+  if end >= text.len() { return text.len(); }
+  if end + 1 < text.len() && text.byte_at(end) == 13 && text.byte_at(end + 1) == 10 {
+    return end + 2;
+  }
+  return end + 1;
+}
+
+fn header_section(text: String) -> String {
+  let full: s.StrView = s.view_all(text);
+  let sep_crlf: i32 = s.index_of(full, "\r\n\r\n");
+  if sep_crlf >= 0 { return text.slice(0, sep_crlf); }
+  let sep_lf: i32 = s.index_of(full, "\n\n");
+  if sep_lf >= 0 { return text.slice(0, sep_lf); }
+  return text;
+}
+
+pub struct Url {
+  pub scheme: String,
+  pub host: String,
+  pub port: i32,
+  pub path: String,
+  pub query: String,
+}
+
+pub struct QueryItem {
+  pub key: String,
+  pub value: String,
+}
+
+pub struct HttpHeader {
+  pub name: String,
+  pub value: String,
+}
+
+pub struct HttpRequest {
+  pub method: String,
+  pub host: String,
+  pub path: String,
+  pub headers: Vec[HttpHeader],
+  pub body: String,
+}
+
+pub struct HttpResponseHead {
+  pub code: i32,
+  pub reason: String,
+}
+
+pub fn default_port(scheme: String) -> i32 {
+  if scheme == "https" { return 443; }
+  if scheme == "http" { return 80; }
+  return 0;
+}
+
+pub fn query_item(key: String, value: String) -> QueryItem {
+  return QueryItem { key: key, value: value };
+}
+
+pub fn query_escape(raw: String) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < raw.len() {
+    let ch: i32 = raw.byte_at(i);
+    if is_ascii_alnum(ch) || ch == 45 || ch == 46 || ch == 95 || ch == 126 {
+      out = out.concat(raw.slice(i, i + 1));
+    } else if ch == 32 {
+      out = out.concat("+");
+    } else {
+      out = out.concat(hex_byte(ch));
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn build_query(items: Vec[QueryItem]) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < items.len() {
+    let it: QueryItem = items.get(i);
+    if i > 0 { out = out.concat("&"); }
+    out = out.concat(query_escape(it.key));
+    out = out.concat("=");
+    out = out.concat(query_escape(it.value));
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn parse_url(raw: String) -> Url {
+  let mut scheme: String = "http";
+  let mut rest: String = raw;
+
+  let sep: i32 = s.index_of(s.view_all(raw), "://");
+  if sep >= 0 {
+    scheme = raw.slice(0, sep);
+    rest = raw.slice(sep + 3, raw.len());
+  }
+
+  let mut cut: i32 = rest.len();
+  let slash: i32 = s.index_of(s.view_all(rest), "/");
+  let qmark: i32 = s.index_of(s.view_all(rest), "?");
+  if slash >= 0 { cut = slash; }
+  if qmark >= 0 && qmark < cut { cut = qmark; }
+
+  let authority: String = rest.slice(0, cut);
+  let tail: String = rest.slice(cut, rest.len());
+
+  let mut host: String = authority;
+  let mut port: i32 = default_port(scheme);
+  let colon: i32 = s.last_index_of(s.view_all(authority), ":");
+  if colon > 0 {
+    let parsed: i32 = parse_decimal(authority.slice(colon + 1, authority.len()));
+    if parsed > 0 {
+      host = authority.slice(0, colon);
+      port = parsed;
+    }
+  }
+
+  let mut path: String = "/";
+  let mut query: String = "";
+  if tail.len() > 0 {
+    if s.starts_with(s.view_all(tail), "?") {
+      query = tail.slice(1, tail.len());
+    } else {
+      let i: i32 = s.index_of(s.view_all(tail), "?");
+      if i >= 0 {
+        path = tail.slice(0, i);
+        query = tail.slice(i + 1, tail.len());
+      } else {
+        path = tail;
+      }
+    }
+  }
+  if path == "" { path = "/"; }
+
+  return Url {
+    scheme: scheme,
+    host: host,
+    port: port,
+    path: path,
+    query: query,
+  };
+}
+
+pub fn url_to_string(u: Url) -> String {
+  let mut out: String = u.scheme.concat("://").concat(u.host);
+  let dp: i32 = default_port(u.scheme);
+  if u.port > 0 && u.port != dp {
+    out = out.concat(":").concat(u.port.to_string());
+  }
+  out = out.concat(u.path);
+  if u.query != "" {
+    out = out.concat("?").concat(u.query);
+  }
+  return out;
+}
+
+pub fn http_header(name: String, value: String) -> HttpHeader {
+  return HttpHeader { name: name, value: value };
+}
+
+fn header_index(headers: Vec[HttpHeader], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < headers.len() {
+    if headers.get(i).name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn ensure_path(path: String) -> String {
+  if path == "" { return "/"; }
+  if s.starts_with(s.view_all(path), "/") { return path; }
+  return "/".concat(path);
+}
+
+pub fn http_request(method: String, host: String, path: String) -> HttpRequest {
+  return HttpRequest {
+    method: method,
+    host: host,
+    path: ensure_path(path),
+    headers: Vec(),
+    body: "",
+  };
+}
+
+impl HttpRequest {
+  fn with_header(r: HttpRequest, name: String, value: String) -> HttpRequest {
+    let mut out: HttpRequest = r;
+    let i: i32 = header_index(out.headers, name);
+    let h: HttpHeader = HttpHeader { name: name, value: value };
+    if i >= 0 {
+      out.headers.set(i, h);
+    } else {
+      out.headers.push(h);
+    }
+    return out;
+  }
+
+  fn with_body(r: HttpRequest, body: String) -> HttpRequest {
+    let mut out: HttpRequest = r;
+    out.body = body;
+    out = out.with_header("Content-Length", out.body.len().to_string());
+    return out;
+  }
+
+  fn render(r: HttpRequest) -> String {
+    let mut out: String = r.method
+      .concat(" ")
+      .concat(ensure_path(r.path))
+      .concat(" HTTP/1.1\r\n");
+
+    if header_index(r.headers, "Host") < 0 {
+      out = out.concat("Host: ").concat(r.host).concat("\r\n");
+    }
+
+    let mut i: i32 = 0;
+    while i < r.headers.len() {
+      let h: HttpHeader = r.headers.get(i);
+      out = out.concat(h.name).concat(": ").concat(h.value).concat("\r\n");
+      i = i + 1;
+    }
+
+    if r.body.len() > 0 && header_index(r.headers, "Content-Length") < 0 {
+      out = out.concat("Content-Length: ").concat(r.body.len().to_string()).concat("\r\n");
+    }
+
+    out = out.concat("\r\n");
+    if r.body.len() > 0 {
+      out = out.concat(r.body);
+    }
+    return out;
+  }
+}
+
+pub fn parse_status(resp: String) -> HttpResponseHead {
+  let line: String = first_line(resp);
+  let first_sp: i32 = s.index_of(s.view_all(line), " ");
+  if first_sp < 0 {
+    return HttpResponseHead { code: -1, reason: "" };
+  }
+  let rest: String = line.slice(first_sp + 1, line.len());
+  let second_sp: i32 = s.index_of(s.view_all(rest), " ");
+  if second_sp < 0 {
+    let only_code: i32 = parse_decimal(rest);
+    return HttpResponseHead { code: only_code, reason: "" };
+  }
+  let code: i32 = parse_decimal(rest.slice(0, second_sp));
+  let reason: String = rest.slice(second_sp + 1, rest.len());
+  return HttpResponseHead { code: code, reason: reason };
+}
+
+pub fn parse_status_code(resp: String) -> i32 {
+  return parse_status(resp).code;
+}
+
+pub fn response_body(resp: String) -> String {
+  let v: s.StrView = s.view_all(resp);
+  let sep_crlf: i32 = s.index_of(v, "\r\n\r\n");
+  if sep_crlf >= 0 { return resp.slice(sep_crlf + 4, resp.len()); }
+  let sep_lf: i32 = s.index_of(v, "\n\n");
+  if sep_lf >= 0 { return resp.slice(sep_lf + 2, resp.len()); }
+  return "";
+}
+
+pub fn header_value(resp: String, name: String) -> String {
+  let head: String = header_section(resp);
+  let prefix: String = name.concat(":");
+  let mut at: i32 = 0;
+  while at < head.len() {
+    let end: i32 = line_end_at(head, at);
+    let line: String = head.slice(at, end);
+    if s.starts_with(s.view_all(line), prefix) {
+      return trim_left_ws(line.slice(prefix.len(), line.len()));
+    }
+    at = next_line_start(head, end);
+  }
+  return "";
+}
+
+pub fn http_roundtrip(url: String, req: HttpRequest, recv_limit: i32) -> String {
+  let u: Url = parse_url(url);
+  let mut out_req: HttpRequest = req;
+
+  if out_req.host == "" {
+    out_req.host = u.host;
+  }
+
+  if out_req.path == "" || out_req.path == "/" {
+    out_req.path = u.path;
+    if u.query != "" {
+      out_req.path = out_req.path.concat("?").concat(u.query);
+    }
+  }
+
+  let addr: io.NetAddr = io.net_addr(u.host, u.port);
+  let conn: io.NetConn = io.net_connect(addr);
+  let raw: String = out_req.render();
+  io.net_send(conn, raw);
+  let resp: String = io.net_recv(conn, recv_limit);
+  io.net_close(conn);
+  return resp;
+}
+
+pub fn http_get(url: String, recv_limit: i32) -> String {
+  let u: Url = parse_url(url);
+  let mut path: String = u.path;
+  if u.query != "" {
+    path = path.concat("?").concat(u.query);
+  }
+  let mut req: HttpRequest = http_request("GET", u.host, path);
+  req = req.with_header("Connection", "close");
+  return http_roundtrip(url, req, recv_limit);
+}
