@@ -1245,6 +1245,106 @@ fn gen_call_reflect_intrinsic(g0: Gen, name: String, type_args: Vec[ast.TypeName
   return GenExprResult { ok: false, err: "unknown intrinsic", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
 }
 
+fn intrinsic_arg_str_lit(exprs: ast.ExprPool, id: i32) -> String {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
+  return match n { ast.ExprNode.Str(s) => s, _ => "" };
+}
+
+fn intrinsic_arg_int_lit(exprs: ast.ExprPool, id: i32) -> i32 {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
+  if !match n { ast.ExprNode.Int(_s) => true, _ => false } { return -1; }
+  let s: String = match n { ast.ExprNode.Int(x) => x, _ => "" };
+  let pr: tc.ParseI32DecResult = tc.parse_i32_dec(s);
+  if !pr.ok { return -1; }
+  return pr.val;
+}
+
+fn gen_call_enum_value_intrinsic(g0: Gen, name: String, args: Vec[i32], out_ty: i32) -> GenExprResult {
+  let mut g: Gen = g0;
+  if name == "@enum_is" {
+    if args.len() != 2 { return GenExprResult { ok: false, err: "intrinsic call arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  } else if name == "@enum_payload" {
+    if args.len() != 3 { return GenExprResult { ok: false, err: "intrinsic call arity mismatch", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  } else {
+    return GenExprResult { ok: false, err: "unknown intrinsic", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+  }
+
+  // Operands are always generated with literal variant/index in our lowering.
+  let vname: String = intrinsic_arg_str_lit(g.exprs, args.get(1));
+  if vname == "" { return GenExprResult { ok: false, err: "intrinsic expects string literal variant name", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+  let ar: GenExprResult = gen_expr(g, args.get(0), -1);
+  if !ar.ok { return ar; }
+  g = ar.g;
+  let esr: EnumSigResult = enum_sig_for_ty(g.ctx, ar.ty);
+  if !esr.ok { return GenExprResult { ok: false, err: esr.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+  let fv: FindVariantResult = find_enum_variant(esr.sig, vname);
+  if !fv.found { return GenExprResult { ok: false, err: "unknown enum variant", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+  let nt_tag: GenNewIdResult = gen_new_temp(g);
+  g = nt_tag.g;
+  let tag_tid: i32 = nt_tag.id;
+  g = gen_emit(g, ir.Instr.EnumTag(tag_tid, ar.val));
+
+  let nt_w: GenNewIdResult = gen_new_temp(g);
+  g = nt_w.g;
+  let want_tid: i32 = nt_w.id;
+  g = gen_emit(g, ir.Instr.Const(want_tid, g.ctx.ty_i32, ir.v_int(fv.idx)));
+
+  let nt_eq: GenNewIdResult = gen_new_temp(g);
+  g = nt_eq.g;
+  let eq_tid: i32 = nt_eq.id;
+  g = gen_emit(g, ir.Instr.Cmp(eq_tid, ir.CmpKind.Eq, g.ctx.ty_i32, ir.v_temp(tag_tid), ir.v_temp(want_tid)));
+
+  if name == "@enum_is" {
+    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(eq_tid), ty: g.ctx.ty_bool };
+  }
+
+  let idx: i32 = intrinsic_arg_int_lit(g.exprs, args.get(2));
+  if idx < 0 { return GenExprResult { ok: false, err: "intrinsic expects integer literal index", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
+
+  // Emit a checked payload extract:
+  // if tag != want { panic(...) } else { out = enum_payload(recv, variant, idx) }
+  let sl: GenNewIdResult = gen_new_slot(g);
+  g = sl.g;
+  let out_slot: i32 = sl.id;
+  g = gen_emit(g, ir.Instr.SlotDecl(out_slot, out_ty));
+
+  let base: i32 = g.blocks.len();
+  let bok: GenNewIdResult = gen_new_block(g, "enum_payload_ok_".concat(base.to_string()));
+  g = bok.g;
+  let ok_idx: i32 = bok.id;
+  let ok_name: String = g.blocks.get(ok_idx).name;
+  let bbad: GenNewIdResult = gen_new_block(g, "enum_payload_bad_".concat(base.to_string()));
+  g = bbad.g;
+  let bad_idx: i32 = bbad.id;
+  let bad_name: String = g.blocks.get(bad_idx).name;
+  let bend: GenNewIdResult = gen_new_block(g, "enum_payload_end_".concat(base.to_string()));
+  g = bend.g;
+  let end_idx: i32 = bend.id;
+  let end_name: String = g.blocks.get(end_idx).name;
+
+  g = gen_term(g, ir.Term.CondBr(ir.v_temp(eq_tid), ok_name, bad_name));
+
+  g = gen_set_block(g, ok_idx);
+  let nt_p: GenNewIdResult = gen_new_temp(g);
+  g = nt_p.g;
+  let payload_tid: i32 = nt_p.id;
+  g = gen_emit(g, ir.Instr.EnumPayload(payload_tid, out_ty, ar.val, vname, idx));
+  g = gen_emit(g, ir.Instr.Store(out_slot, ir.v_temp(payload_tid)));
+  g = gen_term(g, ir.Term.Br(end_name));
+
+  g = gen_set_block(g, bad_idx);
+  g = gen_term(g, ir.Term.Panic(ir.v_str("@enum_payload on non-matching variant")));
+
+  g = gen_set_block(g, end_idx);
+  let nt_out: GenNewIdResult = gen_new_temp(g);
+  g = nt_out.g;
+  let out_tid: i32 = nt_out.id;
+  g = gen_emit(g, ir.Instr.Load(out_tid, out_ty, out_slot));
+  return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(out_tid), ty: out_ty };
+}
+
 fn gen_call_trait_static(g0: Gen, trait_mod: String, trait_name: String, method: String, type_args: Vec[ast.TypeName], args: Vec[i32], out_ty: i32) -> GenExprResult {
   if args.len() == 0 {
     return GenExprResult { ok: false, err: "trait static call requires receiver arg", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
@@ -1374,6 +1474,10 @@ fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i
     let name: String = parts.get(0);
     if tc.is_reflect_intrinsic_name(name) {
       return gen_call_reflect_intrinsic(g0, name, ta, args, out_ty);
+    }
+    if name == "@enum_is" || name == "@enum_payload" {
+      if ta.len() != 0 { return GenExprResult { ok: false, err: "intrinsic does not accept type args", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+      return gen_call_enum_value_intrinsic(g0, name, args, out_ty);
     }
     let nf: tc.NamedFuncImport = find_named_func_import(g0.imps.named_funcs, name);
     if nf.local != "" {
