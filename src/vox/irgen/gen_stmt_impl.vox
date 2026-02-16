@@ -51,18 +51,46 @@ fn resolve_type_inst(ctx: tc.Ctx, w: tc.World, mod_path: String, imps: tc.Import
   return tc.resolve_type(ctx, w, mod_path, imps, Vec(), tn);
 }
 
-fn is_uninit_call(exprs: ast.ExprPool, id: i32) -> bool {
+struct UninitCallInfo { ok: bool, has_targ: bool, targ: ast.TypeName }
+
+fn uninit_call_info(exprs: ast.ExprPool, id: i32) -> UninitCallInfo {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
-  if !match n { ast.ExprNode.Call(_c, _t, _a) => true, _ => false } { return false; }
+  if !match n { ast.ExprNode.Call(_c, _t, _a) => true, _ => false } {
+    return UninitCallInfo { ok: false, has_targ: false, targ: ast.TypeName { parts: Vec(), args: Vec() } };
+  }
   let callee: i32 = match n { ast.ExprNode.Call(c0, _t0, _a0) => c0, _ => -1 };
   let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c0, t0, _a0) => t0, _ => Vec() };
   let args: Vec[i32] = match n { ast.ExprNode.Call(_c0, _t0, a0) => a0, _ => Vec() };
-  if targs.len() != 0 || args.len() != 0 { return false; }
+  if args.len() != 0 { return UninitCallInfo { ok: false, has_targ: false, targ: ast.TypeName { parts: Vec(), args: Vec() } }; }
+  if targs.len() > 1 { return UninitCallInfo { ok: false, has_targ: false, targ: ast.TypeName { parts: Vec(), args: Vec() } }; }
   let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
   if match cn { ast.ExprNode.Ident(s) => true, _ => false } {
-    return match cn { ast.ExprNode.Ident(s) => s == "@uninit", _ => false };
+    let ok: bool = match cn { ast.ExprNode.Ident(s) => s == "@uninit", _ => false };
+    if !ok { return UninitCallInfo { ok: false, has_targ: false, targ: ast.TypeName { parts: Vec(), args: Vec() } }; }
+    if targs.len() == 1 { return UninitCallInfo { ok: true, has_targ: true, targ: targs.get(0) }; }
+    return UninitCallInfo { ok: true, has_targ: false, targ: ast.TypeName { parts: Vec(), args: Vec() } };
   }
-  return false;
+  return UninitCallInfo { ok: false, has_targ: false, targ: ast.TypeName { parts: Vec(), args: Vec() } };
+}
+
+fn uninit_id_call_ty(exprs: ast.ExprPool, id: i32) -> i32 {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
+  if !match n { ast.ExprNode.Call(_c, _t, _a) => true, _ => false } { return -1; }
+  let callee: i32 = match n { ast.ExprNode.Call(c0, _t0, _a0) => c0, _ => -1 };
+  let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c0, t0, _a0) => t0, _ => Vec() };
+  let args: Vec[i32] = match n { ast.ExprNode.Call(_c0, _t0, a0) => a0, _ => Vec() };
+  if targs.len() != 0 || args.len() != 1 { return -1; }
+  let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+  if !match cn { ast.ExprNode.Ident(s) => s == "@uninit_id", _ => false } { return -1; }
+  let an: ast.ExprNode = ast.expr_pool_get(exprs, args.get(0));
+  if !match an { ast.ExprNode.Int(_s) => true, _ => false } { return -1; }
+  let text: String = match an { ast.ExprNode.Int(s) => s, _ => "0" };
+  let pr: tc.ParseI64DecResult = tc.parse_i64_dec(text);
+  if !pr.ok { return -1; }
+  let idx0: i64 = pr.val;
+  if idx0 < 0 { return -1; }
+  if idx0 > 2147483647 { return -1; }
+  return idx0 as i32;
 }
 
 fn gen_stmt_let(g0: Gen, mutable: bool, name: String, has_ann: bool, ann: ast.TypeName, init: i32) -> GenStmtResult {
@@ -74,16 +102,47 @@ fn gen_stmt_let(g0: Gen, mutable: bool, name: String, has_ann: bool, ann: ast.Ty
     g.ctx = rr.ctx;
     expected = rr.idx;
   }
-  // `@uninit()` is a compiler-only helper that produces an uninitialized slot.
-  // Lower it by emitting SlotDecl only (no Store) to avoid UB from reading
-  // indeterminate bytes as a value in C.
-  if expected != -1 && is_uninit_call(g.exprs, init) {
+  // Internal `@uninit_id(<tyid>)` produces an uninitialized slot of the given type id.
+  // This is used by compiler-lowered code to avoid needing a resolvable TypeName.
+  let uid_ty: i32 = uninit_id_call_ty(g.exprs, init);
+  if uid_ty != -1 {
+    let mut uninit_ty: i32 = uid_ty;
+    if expected != -1 && expected != uninit_ty {
+      return GenStmtResult { ok: false, err: "@uninit_id type does not match let annotation", g: g };
+    }
+    if uninit_ty < 0 || uninit_ty >= g.ctx.pool.tys.len() { return GenStmtResult { ok: false, err: "@uninit_id type id out of range", g: g }; }
     let rs: GenNewIdResult = gen_new_slot(g);
     g = rs.g;
     let sid: i32 = rs.id;
-    g = gen_emit(g, ir.Instr.SlotDecl(sid, expected));
-    g.slots = slots_decl(g.slots, name, sid, expected, mutable);
-    g.locals = tc.locals_decl(g.locals, name, expected, mutable);
+    g = gen_emit(g, ir.Instr.SlotDecl(sid, uninit_ty));
+    g.slots = slots_decl(g.slots, name, sid, uninit_ty, mutable);
+    g.locals = tc.locals_decl(g.locals, name, uninit_ty, mutable);
+    return GenStmtResult { ok: true, err: "", g: g };
+  }
+  // `@uninit()` is a compiler-only helper that produces an uninitialized slot.
+  // Lower it by emitting SlotDecl only (no Store) to avoid UB from reading
+  // indeterminate bytes as a value in C.
+  let ui: UninitCallInfo = uninit_call_info(g.exprs, init);
+  if ui.ok {
+    if expected != -1 && ui.has_targ {
+      return GenStmtResult { ok: false, err: "@uninit does not allow both let annotation and explicit type arg", g: g };
+    }
+    let mut uninit_ty: i32 = expected;
+    if uninit_ty == -1 {
+      if !ui.has_targ {
+        return GenStmtResult { ok: false, err: "cannot infer type for @uninit; use type arg or let annotation", g: g };
+      }
+      let rr2: tc.ResolveTyResult = resolve_type_inst(g.ctx, g.w, g.mod_path, g.imps, g.type_subs, ui.targ);
+      if !rr2.ok { return GenStmtResult { ok: false, err: "bad @uninit type arg", g: g }; }
+      g.ctx = rr2.ctx;
+      uninit_ty = rr2.idx;
+    }
+    let rs: GenNewIdResult = gen_new_slot(g);
+    g = rs.g;
+    let sid: i32 = rs.id;
+    g = gen_emit(g, ir.Instr.SlotDecl(sid, uninit_ty));
+    g.slots = slots_decl(g.slots, name, sid, uninit_ty, mutable);
+    g.locals = tc.locals_decl(g.locals, name, uninit_ty, mutable);
     return GenStmtResult { ok: true, err: "", g: g };
   }
   let er: GenExprResult = gen_expr(g, init, expected);
@@ -205,6 +264,60 @@ fn gen_stmt_assign_field(g0: Gen, recv: String, field: String, rhs: i32) -> GenS
     g = gen_emit(g, ir.Instr.StoreField(ps.parent_slot, ps.field, ir.v_temp(tid)));
     ri = ri - 1;
   }
+  return GenStmtResult { ok: true, err: "", g: g };
+}
+
+fn try_stack_pop_stmt(v: Vec[TryCtx]) -> Vec[TryCtx] {
+  if v.len() == 0 { return v; }
+  let mut out: Vec[TryCtx] = Vec();
+  let mut i: i32 = 0;
+  while i < v.len() - 1 {
+    out.push(v.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn find_ir_block_idx(bs: Vec[ir.Block], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < bs.len() {
+    if bs.get(i).name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn gen_stmt_try_begin(g0: Gen, out_name: String) -> GenStmtResult {
+  let mut g: Gen = g0;
+  let sr: LookupSlotResult = slots_lookup(g.slots, out_name);
+  if !sr.found { return GenStmtResult { ok: false, err: "unknown try target var", g: g }; }
+
+  let base: i32 = g.blocks.len();
+  let bend: GenNewIdResult = gen_new_block(g, "try_scope_end_".concat(base.to_string()));
+  g = bend.g;
+  let end_idx: i32 = bend.id;
+  let end_name: String = g.blocks.get(end_idx).name;
+
+  let mut tries: Vec[TryCtx] = g.tries;
+  tries.push(TryCtx { ret_slot: sr.slot, end_blk: end_name, ret_ty: sr.ty });
+  g.tries = tries;
+  return GenStmtResult { ok: true, err: "", g: g };
+}
+
+fn gen_stmt_try_end(g0: Gen) -> GenStmtResult {
+  let mut g: Gen = g0;
+  if g.tries.len() == 0 { return GenStmtResult { ok: false, err: "try end without begin", g: g }; }
+  let t: TryCtx = g.tries.get(g.tries.len() - 1);
+
+  // Ensure normal completion joins at the try-end label, like gen_expr_try_block.
+  if !g.blocks.get(g.cur).has_term {
+    g = gen_term(g, ir.Term.Br(t.end_blk));
+  }
+  let end_idx: i32 = find_ir_block_idx(g.blocks, t.end_blk);
+  if end_idx == -1 { return GenStmtResult { ok: false, err: "internal: try end label missing", g: g }; }
+
+  g = gen_set_block(g, end_idx);
+  g.tries = try_stack_pop_stmt(g.tries);
   return GenStmtResult { ok: true, err: "", g: g };
 }
 

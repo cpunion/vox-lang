@@ -130,7 +130,14 @@ fn typecheck_fn_with_sig(
   let mut pi: i32 = 0;
   while pi < fnc.params.len() {
     let p: ast.Param = fnc.params.get(pi);
-    l = locals_decl(l, p.name, use_sig.params.get(pi), false);
+    let pbk: i32 =
+      if pi < use_sig.param_borrow_kinds.len() {
+        use_sig.param_borrow_kinds.get(pi)
+      } else {
+        param_borrow_none()
+      };
+    let is_mut_param: bool = pbk == param_borrow_ref_mut();
+    l = locals_decl(l, p.name, use_sig.params.get(pi), is_mut_param);
     pi = pi + 1;
   }
 
@@ -192,6 +199,20 @@ fn tc_stmt(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprP
     ast.Stmt.ExprStmt(sp, eid) => tc_stmt_expr(ctx, w, mod_path, imps, exprs, l0, sp, eid),
     ast.Stmt.IfStmt(sp, cond, then_b, has_else, else_b) => tc_stmt_if(ctx, w, mod_path, imps, exprs, l0, ret_ty, sp, cond, then_b, has_else, else_b),
     ast.Stmt.WhileStmt(sp, cond, body) => tc_stmt_while(ctx, w, mod_path, imps, exprs, l0, ret_ty, sp, cond, body),
+    ast.Stmt.TryBegin(sp, out_name) => {
+      let vr: LookupVarResult = locals_lookup(l0, out_name);
+      if !vr.found {
+        TcStmtResult { ok: false, err: type_error_at(sp, "unknown try target var: ".concat(out_name)), ctx: ctx, locals: l0 }
+      } else {
+        TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: locals_try_push(l0, vr.ty) }
+      }
+    },
+    ast.Stmt.TryEnd(sp) =>
+      if l0.try_ret_stack.len() == 0 {
+        TcStmtResult { ok: false, err: type_error_at(sp, "try end without begin"), ctx: ctx, locals: l0 }
+      } else {
+        TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: locals_try_pop(l0) }
+      },
     ast.Stmt.Break(sp) =>
       if l0.loop_depth > 0 {
         TcStmtResult { ok: true, err: TcError.None, ctx: ctx, locals: l0 }
@@ -329,10 +350,20 @@ fn tc_stmt_assign_field(ctx: Ctx, w: World, mod_path: String, imps: Imports, exp
   let vr: LookupVarResult = locals_lookup(l0, recv);
   if !vr.found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown var"), ctx: ctx, locals: l0 }; }
   if vr.moved { return TcStmtResult { ok: false, err: type_error_at(sp, "assign to field of moved var"), ctx: ctx, locals: l0 }; }
-  if !vr.mutable { return TcStmtResult { ok: false, err: type_error_at(sp, "assign to immutable var"), ctx: ctx, locals: l0 }; }
 
   let parts: Vec[String] = split_field_path(field);
   let mut cur_ty: i32 = vr.ty;
+  let rt0: ir.Ty = ir.ty_pool_get(ctx.pool, cur_ty);
+  if rt0.kind == ir.TyKind.Ref {
+    if !ir.ty_ref_is_mut(rt0) {
+      return TcStmtResult { ok: false, err: type_error_at(sp, "assign to immutable var"), ctx: ctx, locals: l0 };
+    }
+    cur_ty = rt0.elem;
+  } else {
+    if !vr.mutable {
+      return TcStmtResult { ok: false, err: type_error_at(sp, "assign to immutable var"), ctx: ctx, locals: l0 };
+    }
+  }
   let mut fty: i32 = ctx.ty_bad;
   let mut pi: i32 = 0;
   while pi < parts.len() {

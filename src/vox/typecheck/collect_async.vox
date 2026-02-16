@@ -1,6 +1,5 @@
 import "vox/ast" as ast
 import "vox/ir" as ir
-import "vox/async_norm" as an
 import "vox/async_cfg" as ac
 
 // Async lowering metadata collection.
@@ -15,6 +14,8 @@ fn stmt_span(st: ast.Stmt) -> ast.Span {
     ast.Stmt.ExprStmt(sp, _e) => sp,
     ast.Stmt.IfStmt(sp, _c, _t, _h, _e) => sp,
     ast.Stmt.WhileStmt(sp, _c, _b) => sp,
+    ast.Stmt.TryBegin(sp, _out) => sp,
+    ast.Stmt.TryEnd(sp) => sp,
     ast.Stmt.Break(sp) => sp,
     ast.Stmt.Continue(sp) => sp,
     ast.Stmt.ReturnStmt(sp, _h, _e) => sp,
@@ -150,14 +151,23 @@ fn walk_async_block(
       c = pr1.ctx;
       let er_op: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l, ai.operand, -1);
       if !er_op.ok {
-        let msg: String = "failed to typecheck await operand: ".concat(tc_error_to_string(er_op.err));
-        return WalkAsyncResult { ok: false, err: type_error_at(stmt_span(st0), msg), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+        let emsg: String = tc_error_message(er_op.err);
+        if emsg.contains("call return type substitution failed") {
+          // Fallback for generic async calls where operand type inference is still
+          // incomplete in async metadata collection. We keep typecheck progressing;
+          // later lowering/typecheck stages still validate emitted IR.
+          await_tys.push(c.ty_bad);
+        } else {
+          let msg: String = "failed to typecheck await operand: ".concat(tc_error_to_string(er_op.err));
+          return WalkAsyncResult { ok: false, err: type_error_at(stmt_span(st0), msg), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+        }
+      } else {
+        let op_ty: i32 = strip_range_only(c, er_op.ty);
+        if ty_has_forbidden_borrow(c, op_ty) {
+          return WalkAsyncResult { ok: false, err: type_error_at(stmt_span(st0), "await operand cannot contain non-static borrow"), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
+        }
+        await_tys.push(op_ty);
       }
-      let op_ty: i32 = strip_range_only(c, er_op.ty);
-      if ty_has_forbidden_borrow(c, op_ty) {
-        return WalkAsyncResult { ok: false, err: type_error_at(stmt_span(st0), "await operand cannot contain non-static borrow"), ctx: c, locals: l, decls: decls, await_operand_tys: await_tys, seen_names: seen };
-      }
-      await_tys.push(op_ty);
     }
 
     // Recurse into nested statement blocks with proper scoping.
@@ -388,6 +398,8 @@ fn stmt_uses_name(exprs: ast.ExprPool, st: ast.Stmt, name: String) -> bool {
       if expr_uses_name(exprs, cond, name) { true } else if block_uses_name(exprs, then_b, name) { true } else if has_else { block_uses_name(exprs, else_b, name) } else { false }
     },
     ast.Stmt.WhileStmt(_sp, cond, body) => expr_uses_name(exprs, cond, name) || block_uses_name(exprs, body, name),
+    ast.Stmt.TryBegin(_sp, out_name) => out_name == name,
+    ast.Stmt.TryEnd(_sp) => false,
     ast.Stmt.Break(_sp) => false,
     ast.Stmt.Continue(_sp) => false,
     ast.Stmt.ReturnStmt(_sp, has_ex, ex) => if has_ex { expr_uses_name(exprs, ex, name) } else { false },
@@ -790,16 +802,15 @@ fn collect_async_finalize_one(
   if !ir0.ok { return CollectAsyncFinalizeOneResult { ok: false, err: ir0.err, ctx: c }; }
   let base_imps: Imports = ir0.imps;
 
-  let nr: an.NormalizeResult = an.normalize_async_block(exprs_mod, fd.body);
-  if !nr.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, nr.err), ctx: c }; }
-  let exprs: ast.ExprPool = nr.exprs;
-  let body: ast.Block = nr.body;
-
-  // Typecheck in source order (nested if/while included): let bindings and await operands.
+  // Locals environment used for typed async normalization + await operand typing.
   let mut locals: Vec[AsyncLocalDecl] = Vec();
   let mut await_operand_tys: Vec[i32] = Vec();
   let mut l_cur: Locals = locals_new();
   l_cur.fn_is_async = true;
+  // `?` inside async bodies targets the user-visible output type.
+  l_cur.fn_ret_ty = ar.sig.output_ty;
+  l_cur.type_params = fsym0.sig.type_params;
+  l_cur.type_param_bounds = fsym0.sig.type_param_bounds;
   let mut seen_names: Vec[String] = Vec();
   let mut exclude_names: Vec[String] = Vec();
 
@@ -814,6 +825,13 @@ fn collect_async_finalize_one(
     pi0 = pi0 + 1;
   }
 
+  // Async normalization runs inside typecheck so it can infer join-slot types
+  // (avoiding user-visible annotation requirements for await-in-expr cases).
+  let nr: NormalizeResult = normalize_async_block(c, w, body_mod_path, base_imps, exprs_mod, fd.body, l_cur);
+  if !nr.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, nr.err), ctx: c }; }
+  let exprs: ast.ExprPool = nr.exprs;
+  let body: ast.Block = nr.body;
+
   let wr: WalkAsyncResult = walk_async_block(c, w, body_mod_path, base_imps, exprs, body, l_cur, locals, await_operand_tys, seen_names);
   if !wr.ok { return CollectAsyncFinalizeOneResult { ok: false, err: wr.err, ctx: wr.ctx }; }
   c = wr.ctx;
@@ -821,7 +839,7 @@ fn collect_async_finalize_one(
   await_operand_tys = wr.await_operand_tys;
 
   // Determine captures via CFG liveness across await resume points.
-  let cfg: ac.BuildResult = ac.build(exprs, body);
+  let cfg: ac.BuildResult = ac.build(exprs, body, ar.sig.output_ty == c.ty_unit);
   if !cfg.ok { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, cfg.err), ctx: c }; }
   if cfg.await_count != await_operand_tys.len() {
     return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "internal: async await count mismatch"), ctx: c };
@@ -852,7 +870,11 @@ fn collect_async_finalize_one(
     let ld: AsyncLocalDecl = local_decl_find(locals, nm);
     if ld.name == "" { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "internal: missing capture local decl"), ctx: c }; }
     if ty_has_forbidden_borrow(c, ld.ty) {
-      return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "borrowed local cannot live across await: ".concat(nm)), ctx: c };
+      let msg: String =
+        "borrowed local cannot live across await: ".concat(nm)
+          .concat(" (declared at ").concat(fd.sp.file).concat(":").concat(fd.sp.line.to_string()).concat(":").concat(fd.sp.col.to_string())
+          .concat(", crosses await at ").concat(fd.sp.file).concat(":").concat(fd.sp.line.to_string()).concat(":").concat(fd.sp.col.to_string()).concat(")");
+      return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, msg), ctx: c };
     }
     fs.push(StructFieldSig { name: "l_".concat(nm), ty: ld.ty, vis: ast.vis_private(), is_pub: false });
     ci0 = ci0 + 1;

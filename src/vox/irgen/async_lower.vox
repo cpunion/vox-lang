@@ -1,6 +1,5 @@
 import "vox/ast" as ast
 import "vox/typecheck" as tc
-import "vox/async_norm" as an
 import "vox/async_cfg" as ac
 
 struct SynthResult {
@@ -18,6 +17,8 @@ fn stmt_span(st: ast.Stmt) -> ast.Span {
     ast.Stmt.ExprStmt(sp, _e) => sp,
     ast.Stmt.IfStmt(sp, _c, _t, _h, _e) => sp,
     ast.Stmt.WhileStmt(sp, _c, _b) => sp,
+    ast.Stmt.TryBegin(sp, _out) => sp,
+    ast.Stmt.TryEnd(sp) => sp,
     ast.Stmt.Break(sp) => sp,
     ast.Stmt.Continue(sp) => sp,
     ast.Stmt.ReturnStmt(sp, _h, _e) => sp,
@@ -61,6 +62,15 @@ fn add_dot_call1(p0: ast.ExprPool, sp: ast.Span, name: String, arg0: i32) -> ast
   let mut as0: Vec[i32] = Vec();
   as0.push(arg0);
   return add_call(r0.pool, sp, r0.id, as0);
+}
+
+fn has_return_stmt(ss: Vec[ast.Stmt]) -> bool {
+  let mut i: i32 = 0;
+  while i < ss.len() {
+    if match ss.get(i) { ast.Stmt.ReturnStmt(_sp, _h, _e) => true, _ => false } { return true; }
+    i = i + 1;
+  }
+  return false;
 }
 
 fn string_vec_contains(xs: Vec[String], s: String) -> bool {
@@ -320,7 +330,11 @@ fn async_rewrite_stmt_list(p0: ast.ExprPool, frame_var: String, captures: Vec[St
       // Evaluate expression first (may suspend/return Pending), then mark done and return Ready.
       let mut rhs_id: i32 = eid;
       if !has {
-        let r0: ast.AddExprResult = add_int(p, sp, "0");
+        let r0: ast.AddExprResult = add_expr(
+          p,
+          ast.ExprNode.Block(ast.ExprBlock { stmts: Vec(), has_tail: false, tail: -1 }),
+          sp
+        );
         p = r0.pool;
         rhs_id = r0.id;
       } else {
@@ -484,7 +498,17 @@ fn inject_capture_stores(p0: ast.ExprPool, frame_var: String, captures: Vec[Stri
   return SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: out } };
 }
 
-fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd: ast.FuncDecl, frame_var: String, frame_name: String) -> SynthResult {
+fn synth_async_poll_body(
+  ctx: tc.Ctx,
+  w: tc.World,
+  mod_path: String,
+  imps: tc.Imports,
+  exprs0: ast.ExprPool,
+  fd: ast.FuncDecl,
+  frame_var: String,
+  frame_name: String,
+  allow_fallthrough_return: bool
+) -> SynthResult {
   let mut p: ast.ExprPool = exprs0;
   let sp: ast.Span = fd.sp;
 
@@ -539,14 +563,28 @@ fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd
 
   // Normalize: lift nested awaits into standalone statements so await points are discoverable
   // by the simple statement-level state machine builder.
-  let nr: an.NormalizeResult = an.normalize_async_block(p, fd.body);
+  let mut l_norm: tc.Locals = tc.locals_new();
+  l_norm.fn_is_async = true;
+  let af: tc.FindAsyncFnResult = tc.find_async_fn(ctx, mod_path, fd.name);
+  if af.found { l_norm.fn_ret_ty = af.sig.output_ty; }
+  let ff: tc.FindFuncResult = tc.find_func(ctx, mod_path, fd.name);
+  if ff.found {
+    l_norm.type_params = ff.sig.type_params;
+    l_norm.type_param_bounds = ff.sig.type_param_bounds;
+    let mut pi: i32 = 0;
+    while pi < fd.params.len() && pi < ff.sig.params.len() {
+      l_norm = tc.locals_decl(l_norm, fd.params.get(pi).name, tc.strip_range(ctx, ff.sig.params.get(pi)), false);
+      pi = pi + 1;
+    }
+  }
+  let nr: tc.NormalizeResult = tc.normalize_async_block(ctx, w, mod_path, imps, p, fd.body, l_norm);
   if !nr.ok {
     return SynthResult { ok: false, err: nr.err, exprs: nr.exprs, body: ast.Block { stmts: Vec() } };
   }
   p = nr.exprs;
   let body0: ast.Block = nr.body;
 
-  let cfg: ac.BuildResult = ac.build(p, body0);
+  let cfg: ac.BuildResult = ac.build(p, body0, allow_fallthrough_return);
   if !cfg.ok {
     return SynthResult { ok: false, err: cfg.err, exprs: p, body: ast.Block { stmts: Vec() } };
   }
@@ -650,7 +688,11 @@ fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd
       raw.push(ast.Stmt.ExprStmt(sp, r_call2.id));
       raw.push(ast.Stmt.Continue(sp));
     } else {
-      // Return: the return statement is part of raw stmts (normal return, or await poll return).
+      // Return: usually the return statement is part of raw stmts (normal return, or await poll return).
+      // For unit async fns, fallthrough may become Term.Return with no explicit return stmt.
+      if allow_fallthrough_return && !has_return_stmt(raw) {
+        raw.push(ast.Stmt.ReturnStmt(sp, false, -1));
+      }
     }
 
     let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, raw);
@@ -683,16 +725,10 @@ fn synth_async_poll_body(ctx: tc.Ctx, mod_path: String, exprs0: ast.ExprPool, fd
   out.push(loop_stmt);
 
   // Satisfy the IRGen "missing return" check: the loop above is infinite by construction,
-  // but the current IRGen does not prove it. This is unreachable.
-  let r_panic4: ast.AddExprResult = add_ident(p, sp, "panic");
-  p = r_panic4.pool;
-  let r_msg4: ast.AddExprResult = add_str(p, sp, "unreachable: async poll fell through");
-  p = r_msg4.pool;
-  let mut pargs4: Vec[i32] = Vec();
-  pargs4.push(r_msg4.id);
-  let r_call4: ast.AddExprResult = add_call(p, sp, r_panic4.id, pargs4);
-  p = r_call4.pool;
-  out.push(ast.Stmt.ExprStmt(sp, r_call4.id));
+  // but the current IRGen does not prove it. This path is unreachable.
+  let r_pending4: ast.AddExprResult = add_expr(p, ast.ExprNode.DotIdent("Pending"), sp);
+  p = r_pending4.pool;
+  out.push(ast.Stmt.ReturnStmt(sp, true, r_pending4.id));
 
   return SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: out } };
 }
