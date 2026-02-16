@@ -118,7 +118,8 @@ Governance from now on:
   - [x] D03-3c `await` 的 typecheck/irgen 接入：仅允许 `async fn`；操作数支持 Poll-shaped 枚举 `{ Pending, Ready(T) }`，或实现 `std/async::Future` 的类型；`Ready(v)` 提取为 `T`；`Pending` 从 enclosing `poll` 返回 `Pending` 并保留进度。
   - [x] D03-3c1 从 Poll scaffold 过渡到 Future trait（`Future::Output`）绑定。
   - [x] D03-4 借用跨 `await` 约束与诊断。
-  - [ ] D03-5 `await` in general expression control-flow (`try`/`match`/macro args).
+  - [x] D03-5 `await` in general expression control-flow (`try`/`match`/macro args).
+    - Landed: async normalization now supports `await` in nested `if`/`match`/`try` expression control-flow and macro-call args, with compile/typecheck regressions in `src/vox/compile/async_test.vox` and `src/vox/typecheck/async_test.vox`.
     - See: `docs/29-async-expr-await.md`.
   - Source: `docs/09-async-model.md`.
 

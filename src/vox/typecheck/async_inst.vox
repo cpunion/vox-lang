@@ -3,6 +3,7 @@ import "vox/ast" as ast
 pub struct EnsureAsyncInstResult { pub ok: bool, pub err: TcError, pub ctx: Ctx, pub frame_ty: i32 }
 
 pub struct PrepAsyncInstResult { pub ok: bool, pub err: TcError, pub ctx: Ctx }
+struct PrepInferSubsResult { ok: bool, err: TcError, ctx: Ctx, subs: Vec[TySub] }
 fn prep_ok(c: Ctx) -> PrepAsyncInstResult { return PrepAsyncInstResult { ok: true, err: TcError.None, ctx: c }; }
 fn prep_err(c: Ctx, e: TcError) -> PrepAsyncInstResult { return PrepAsyncInstResult { ok: false, err: e, ctx: c }; }
 
@@ -368,6 +369,42 @@ fn prep_call_callee(exprs: ast.ExprPool, callee: i32) -> PrepCalleeResult {
   return PrepCalleeResult { ok: false, alias: "", name: "" };
 }
 
+fn prep_try_infer_async_call_subs(
+  ctx0: Ctx,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  sig: FuncSig,
+  args: Vec[i32],
+) -> PrepInferSubsResult {
+  let mut c: Ctx = ctx0;
+  if sig.has_variadic { return PrepInferSubsResult { ok: true, err: TcError.None, ctx: c, subs: Vec() }; }
+  if args.len() != sig.params.len() { return PrepInferSubsResult { ok: true, err: TcError.None, ctx: c, subs: Vec() }; }
+  if sig.type_params.len() == 0 { return PrepInferSubsResult { ok: true, err: TcError.None, ctx: c, subs: Vec() }; }
+  if sig.type_param_packs.len() != 0 { return PrepInferSubsResult { ok: true, err: TcError.None, ctx: c, subs: Vec() }; }
+  if sig.const_params.len() != 0 { return PrepInferSubsResult { ok: true, err: TcError.None, ctx: c, subs: Vec() }; }
+
+  let mut subs: Vec[TySub] = Vec();
+  let mut i: i32 = 0;
+  while i < args.len() {
+    let ar: ExprTyResult = tc_expr(c, w, mod_path, imps, exprs, l0, args.get(i), -1);
+    if !ar.ok { return PrepInferSubsResult { ok: true, err: TcError.None, ctx: c, subs: Vec() }; }
+    let ur: UnifyResult = unify_ty(c, sig.params.get(i), ar.ty, subs);
+    if !ur.ok { return PrepInferSubsResult { ok: true, err: TcError.None, ctx: c, subs: Vec() }; }
+    subs = ur.subs;
+    i = i + 1;
+  }
+
+  i = 0;
+  while i < sig.type_params.len() {
+    if subs_lookup(subs, sig.type_params.get(i)) == -1 { return PrepInferSubsResult { ok: true, err: TcError.None, ctx: c, subs: Vec() }; }
+    i = i + 1;
+  }
+  return PrepInferSubsResult { ok: true, err: TcError.None, ctx: c, subs: subs };
+}
+
 fn prep_async_inst_in_expr_inner(ctx0: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, id: i32) -> PrepAsyncInstResult {
   let mut c: Ctx = ctx0;
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
@@ -425,8 +462,7 @@ fn prep_async_inst_in_expr_inner(ctx0: Ctx, w: World, mod_path: String, imps: Im
       ai = ai + 1;
     }
 
-    // Then, materialize async inst metadata for explicit generic async calls.
-    if targs.len() == 0 { return prep_ok(c); }
+    // Then, materialize async inst metadata for generic async calls.
     let cr: PrepCalleeResult = prep_call_callee(exprs, callee);
     if !cr.ok { return prep_ok(c); }
     let alias_or_empty: String = cr.alias;
@@ -452,17 +488,25 @@ fn prep_async_inst_in_expr_inner(ctx0: Ctx, w: World, mod_path: String, imps: Im
     let ar: FindAsyncFnResult = find_async_fn(c, target_mod, base_name);
     if !ar.found { return prep_ok(c); }
     if fr.sig.type_param_packs.len() != 0 || fr.sig.const_params.len() != 0 { return prep_ok(c); }
-    if targs.len() != fr.sig.type_params.len() { return prep_ok(c); }
 
     let mut subs0: Vec[TySub] = Vec();
-    let mut ti: i32 = 0;
-    while ti < targs.len() {
-      if is_const_generic_arg_tn_or_local(l0, targs.get(ti)) { return prep_ok(c); }
-      let rr: ResolveTyResult = resolve_type(c, w, mod_path, imps, l0.type_params, targs.get(ti));
-      c = rr.ctx;
-      if !rr.ok { return prep_ok(c); }
-      subs0.push(TySub { name: fr.sig.type_params.get(ti), ty: rr.idx });
-      ti = ti + 1;
+    if targs.len() != 0 {
+      if targs.len() != fr.sig.type_params.len() { return prep_ok(c); }
+      let mut ti: i32 = 0;
+      while ti < targs.len() {
+        if is_const_generic_arg_tn_or_local(l0, targs.get(ti)) { return prep_ok(c); }
+        let rr: ResolveTyResult = resolve_type(c, w, mod_path, imps, l0.type_params, targs.get(ti));
+        c = rr.ctx;
+        if !rr.ok { return prep_ok(c); }
+        subs0.push(TySub { name: fr.sig.type_params.get(ti), ty: rr.idx });
+        ti = ti + 1;
+      }
+    } else {
+      let ir: PrepInferSubsResult = prep_try_infer_async_call_subs(c, w, mod_path, imps, exprs, l0, fr.sig, args);
+      if !ir.ok { return prep_err(ir.ctx, ir.err); }
+      c = ir.ctx;
+      subs0 = ir.subs;
+      if subs0.len() == 0 { return prep_ok(c); }
     }
 
     let er: EnsureAsyncInstResult = ensure_async_inst_for_generic_call(c, w, mod_path, target_mod, base_name, fr.sig, subs0, Vec());

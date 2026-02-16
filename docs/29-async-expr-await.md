@@ -4,7 +4,7 @@ This doc tracks the next step after D03-4 (borrow constraints): removing remaini
 restrictions so async code is ergonomic without forcing users to rewrite everything into statement
 form manually.
 
-## Current Status (As Of v0.?)
+## Current Status (As Of v0.2.x)
 
 Supported:
 
@@ -16,12 +16,12 @@ Supported:
   - assignment
   - expression statement
   - `return`
+- `await` in general nested expression control-flow:
+  - `try { ... }` expressions
+  - `match` expressions (including arm bodies)
+  - macro call arguments
 
-Still rejected (compiler error from `async_norm`):
-
-- `await` inside `try { ... }` expressions.
-- `await` inside `match` expressions (in arms) when the `match` is used in arbitrary expression positions (non-statement contexts).
-- `await` inside macro call arguments.
+This closes D03-5 scope from `docs/27-active-backlog.md`.
 
 ## Why These Are Hard In The Current Pipeline
 
@@ -59,24 +59,22 @@ Introduce a *typed* async expression lowering stage used only for `async fn` bod
 
 This lowered form becomes the input to the existing async CFG builder and capture analysis.
 
-## Work Items (Queued)
+## Verification
 
-1. `await` in `try { ... }`:
-   - Preserve `?`-targeting semantics inside try scopes.
-   - Ensure suspend/resume does not duplicate side effects.
-   - Add tests covering `try { let x = fut.await?; x }` and nested `try`.
+- Typecheck tests:
+  - `test_typecheck_async_fn_allows_await_inside_try_block_smoke`
+  - `test_typecheck_async_fn_allows_await_in_nested_match_expr_smoke`
+  - `test_typecheck_async_fn_allows_await_in_macro_arg_smoke`
+- Compile tests:
+  - `test_compile_async_fn_allows_await_inside_try_block_smoke`
+  - `test_compile_async_nested_match_expr_with_await_smoke`
+  - `test_compile_async_fn_allows_await_in_macro_arg_smoke`
 
-2. `await` in `if` expressions in arbitrary expression positions:
-   - e.g. `foo(if c { a.await } else { b })`
-   - Requires typed join slot (like current `@uninit()` path) without forcing user annotations.
+## Remaining Async Work (Outside D03-5)
 
-3. `await` in `match` expressions (arms):
-   - Full pattern binding + arm-local scoping.
-   - Ensure captures and move tracking remain correct.
-
-4. `await` in macro args:
-   - Define a stable phase order: macroexpand -> async lowering -> IRGen.
-   - Ensure diagnostics point to post-expand spans.
+1. Generic async instantiation for const/type-pack parameter shapes (`async_inst` still rejects these).
+2. `await` on generic `Future::poll` method signatures in IRGen.
+3. Runtime executor integration for async entrypoints (`async main` / async tests).
 
 ## Non-goals
 
