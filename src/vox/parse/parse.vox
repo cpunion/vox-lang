@@ -122,12 +122,9 @@ fn pos_to_line_col(text: String, line_starts: Vec[i32], at0: i32) -> LineCol {
   return LineCol { line: line, col: col };
 }
 
-fn span_at(p: Parser, at: i32) -> ast.Span {
-  let lc: LineCol = pos_to_line_col(p.text, p.line_starts, at);
-  return ast.Span { file: p.file, line: lc.line, col: lc.col };
+fn span_tok(p: Parser, t: lex.Token) -> ast.Span {
+  return ast.Span { file: p.file, line: t.line, col: t.col };
 }
-
-fn span_tok(p: Parser, t: lex.Token) -> ast.Span { return span_at(p, t.start); }
 
 fn span_expr(exprs: ast.ExprPool, id: i32) -> ast.Span { return ast.expr_pool_span(exprs, id); }
 
@@ -225,7 +222,6 @@ pub struct ParseResult {
 struct Parser {
   file: String,
   text: String,
-  line_starts: Vec[i32],
   toks: Vec[lex.Token],
   pos: i32,
   has_err: bool,
@@ -270,7 +266,7 @@ struct ParseConstDefaultResult { p: Parser, ok: bool, text: String }
 struct ParseTopFnAttrsResult { p: Parser, ffi_imports: Vec[ast.FfiImportAttr], ffi_exports: Vec[ast.FfiExportAttr] }
 
 fn dummy_token() -> lex.Token {
-  return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0 };
+  return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0, line: 1, col: 1 };
 }
 
 fn lex_err_none(e: lex.LexError) -> bool {
@@ -779,6 +775,7 @@ fn parse_string_inner(p: Parser) -> ParseStringResult {
 }
 
 fn parse_import_name(p: Parser) -> ParseImportNameResult {
+  let sp_name: ast.Span = span_tok(p, peek(p));
   let r0: ParseIdentResult = parse_ident(p);
   let mut q: Parser = r0.p;
   let mut alias: String = "";
@@ -788,7 +785,7 @@ fn parse_import_name(p: Parser) -> ParseImportNameResult {
     q = r2.p;
     alias = r2.name;
   }
-  return ParseImportNameResult { p: q, nm: ast.ImportName { name: r0.name, alias: alias, sp: span_at(p, r0.at) } };
+  return ParseImportNameResult { p: q, nm: ast.ImportName { name: r0.name, alias: alias, sp: sp_name } };
 }
 
 fn parse_import_decl(p: Parser) -> ParseImportResult {
@@ -1128,8 +1125,9 @@ fn parse_primary(p: Parser) -> ParseExprResult {
   }
 
   if kind_is(k, lex.TokenKind.Ident) {
+    let sp0: ast.Span = span_tok(p, peek(p));
     let r: ParseIdentResult = parse_ident(p);
-    return add_expr(r.p, span_at(p, r.at), ast.ExprNode.Ident(r.name));
+    return add_expr(r.p, sp0, ast.ExprNode.Ident(r.name));
   }
 
   if kind_is(k, lex.TokenKind.At) {
@@ -1145,8 +1143,9 @@ fn parse_primary(p: Parser) -> ParseExprResult {
   }
 
 		  if kind_is(k, lex.TokenKind.Str) {
+        let sp0: ast.Span = span_tok(p, peek(p));
 		    let r: ParseStringResult = parse_string_inner(p);
-		    return add_expr(r.p, span_at(p, r.at), ast.ExprNode.Str(r.s));
+		    return add_expr(r.p, sp0, ast.ExprNode.Str(r.s));
 		  }
 
 	if kind_is(k, lex.TokenKind.KwMatch) {
@@ -1440,7 +1439,7 @@ fn parse_postfix(p: Parser, base: i32) -> ParseExprResult {
 		}
 
 fn parse_pat(p: Parser) -> ParsePatResult {
-  let sp0: ast.Span = span_at(p, peek(p).start);
+  let sp0: ast.Span = span_tok(p, peek(p));
   let k: lex.TokenKind = peek_kind(p);
   // Negative integer pattern: `-123`
   if kind_is(k, lex.TokenKind.Minus) && kind_is(peek2_kind(p), lex.TokenKind.Int) {
@@ -1689,7 +1688,7 @@ fn parse_expr(p: Parser, min_prec: i32) -> ParseExprResult {
 }
 
 fn parse_stmt(p: Parser) -> ParseStmtResult {
-  let sp0: ast.Span = span_at(p, peek(p).start);
+  let sp0: ast.Span = span_tok(p, peek(p));
   let k: lex.TokenKind = peek_kind(p);
   if kind_is(k, lex.TokenKind.KwLet) {
     let ar1: AdvanceResult = advance(p);
@@ -1796,7 +1795,7 @@ fn parse_stmt(p: Parser) -> ParseStmtResult {
       let lhs_add0: ast.AddExprResult = ast.expr_pool_add(
         q.exprs,
         ast.ExprNode.Ident(r1.name),
-        span_at(q, op_tok.start)
+        span_tok(q, op_tok)
       );
       let mut lhs_id: i32 = lhs_add0.id;
       let mut q2: Parser = q;
@@ -1806,7 +1805,7 @@ fn parse_stmt(p: Parser) -> ParseStmtResult {
         let lhs_next: ast.AddExprResult = ast.expr_pool_add(
           q2.exprs,
           ast.ExprNode.Member(lhs_id, fields.get(fi)),
-          span_at(q2, op_tok.start)
+          span_tok(q2, op_tok)
         );
         lhs_id = lhs_next.id;
         q2.exprs = lhs_next.pool;
@@ -1816,7 +1815,7 @@ fn parse_stmt(p: Parser) -> ParseStmtResult {
       let addb: ast.AddExprResult = ast.expr_pool_add(
         q2.exprs,
         ast.ExprNode.Binary(bop, lhs_id, rhs_id),
-        span_at(q2, op_tok.start)
+        span_tok(q2, op_tok)
       );
       q = q2;
       q.exprs = addb.pool;
@@ -1838,13 +1837,13 @@ fn parse_stmt(p: Parser) -> ParseStmtResult {
       let lhs_add: ast.AddExprResult = ast.expr_pool_add(
         q.exprs,
         ast.ExprNode.Ident(r1.name),
-        span_at(q, op_tok.start)
+        span_tok(q, op_tok)
       );
       let bop: ast.BinaryOp = assign_op_to_binary(op_tok.kind);
       let bin_add: ast.AddExprResult = ast.expr_pool_add(
         lhs_add.pool,
         ast.ExprNode.Binary(bop, lhs_add.id, rhs_id),
-        span_at(q, op_tok.start)
+        span_tok(q, op_tok)
       );
       q.exprs = bin_add.pool;
       rhs_id = bin_add.id;
@@ -3017,7 +3016,7 @@ pub fn parse_text_with_path(path: String, text: String) -> ParseResult {
 	  if !lex_err_none(lr.err) {
 	    return ParseResult { prog: ast.Program { imports: Vec(), types: Vec(), consts: Vec(), structs: Vec(), enums: Vec(), traits: Vec(), impls: Vec(), funcs: Vec(), exprs: ast.expr_pool() }, err: ParseError.Lex(lr.err) };
 	  }
-	  let p: Parser = Parser { file: path, text: text, line_starts: build_line_starts(text), toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None, exprs: ast.expr_pool() };
+	  let p: Parser = Parser { file: path, text: text, toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None, exprs: ast.expr_pool() };
 	  let r: ParseProgramResult = parse_program(p);
 	  return ParseResult { prog: r.prog, err: r.p.err };
 	}
