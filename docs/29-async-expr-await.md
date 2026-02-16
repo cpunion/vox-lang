@@ -20,7 +20,7 @@ Supported:
 Still rejected (compiler error from `async_norm`):
 
 - `await` inside `try { ... }` expressions.
-- `await` inside `match` expressions (in arms).
+- `await` inside `match` expressions (in arms) when the `match` is used in arbitrary expression positions (non-statement contexts).
 - `await` inside macro call arguments.
 
 ## Why These Are Hard In The Current Pipeline
@@ -82,4 +82,3 @@ This lowered form becomes the input to the existing async CFG builder and captur
 
 - Effects/async IO runtime design (executor, waker integration beyond v0).
 - Full generator syntax (`yield`) or async blocks (`async { ... }`) in this iteration.
-

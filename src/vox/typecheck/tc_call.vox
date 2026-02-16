@@ -1889,6 +1889,105 @@ fn tc_call_func_unqualified(
     }
     return ExprTyResult { ok: true, ty: expected, err: TcError.None };
   }
+  if name == "@enum_is" {
+    if type_args.len() != 0 || args.len() != 2 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@enum_is expects (enum_value, \"Variant\")") };
+    }
+    let ar0: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), -1);
+    if !ar0.ok { return ar0; }
+    let ar1: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(1), ctx.ty_string);
+    if !ar1.ok { return ar1; }
+    let n1: ast.ExprNode = ast.expr_pool_get(exprs, args.get(1));
+    if !match n1 { ast.ExprNode.Str(_s) => true, _ => false } {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@enum_is variant name must be a string literal") };
+    }
+    let vname: String = match n1 { ast.ExprNode.Str(s) => s, _ => "" };
+
+    let base: i32 = strip_range(ctx, ar0.ty);
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+    if t.kind != ir.TyKind.Enum {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@enum_is expects enum value as first argument") };
+    }
+    let fe: FindEnumResult = find_enum(ctx, ty_mod(t), ty_name(t));
+    if !fe.found {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@enum_is unknown enum type") };
+    }
+    let es: EnumSig = fe.sig;
+    let mut found: bool = false;
+    let mut i: i32 = 0;
+    while i < es.vars.len() {
+      if es.vars.get(i).name == vname { found = true; }
+      i = i + 1;
+    }
+    if !found {
+      let msg: String = "@enum_is unknown variant: ".concat(enum_sig_display_name(es)).concat(".").concat(vname);
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+    }
+
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
+  }
+  if name == "@enum_payload" {
+    if type_args.len() != 0 || args.len() != 3 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@enum_payload expects (enum_value, \"Variant\", idx)") };
+    }
+    let ar0: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), -1);
+    if !ar0.ok { return ar0; }
+    let ar1: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(1), ctx.ty_string);
+    if !ar1.ok { return ar1; }
+    let ar2: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(2), ctx.ty_i32);
+    if !ar2.ok { return ar2; }
+
+    let n1: ast.ExprNode = ast.expr_pool_get(exprs, args.get(1));
+    if !match n1 { ast.ExprNode.Str(_s) => true, _ => false } {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@enum_payload variant name must be a string literal") };
+    }
+    let vname: String = match n1 { ast.ExprNode.Str(s) => s, _ => "" };
+
+    let n2: ast.ExprNode = ast.expr_pool_get(exprs, args.get(2));
+    if !match n2 { ast.ExprNode.Int(_s) => true, _ => false } {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@enum_payload index must be an integer literal") };
+    }
+    let itext: String = match n2 { ast.ExprNode.Int(s) => s, _ => "" };
+    let pr: ParseI32DecResult = parse_i32_dec(itext);
+    if !pr.ok || pr.val < 0 {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@enum_payload index out of range") };
+    }
+    let idx: i32 = pr.val;
+
+    let base: i32 = strip_range(ctx, ar0.ty);
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+    if t.kind != ir.TyKind.Enum {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@enum_payload expects enum value as first argument") };
+    }
+    let fe: FindEnumResult = find_enum(ctx, ty_mod(t), ty_name(t));
+    if !fe.found {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "@enum_payload unknown enum type") };
+    }
+    let es: EnumSig = fe.sig;
+    let mut found: bool = false;
+    let mut out: i32 = ctx.ty_bad;
+    let mut i: i32 = 0;
+    while i < es.vars.len() {
+      let v: EnumVariantSig = es.vars.get(i);
+      if v.name == vname {
+        found = true;
+        if idx >= v.fields.len() {
+          let msg2: String = "@enum_payload field index out of range for ".concat(enum_sig_display_name(es)).concat(".").concat(vname);
+          return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg2) };
+        }
+        out = v.fields.get(idx);
+      }
+      i = i + 1;
+    }
+    if !found {
+      let msg: String = "@enum_payload unknown variant: ".concat(enum_sig_display_name(es)).concat(".").concat(vname);
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
+    }
+
+    if expected != -1 && !assignable_to(ctx, expected, out) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: out, err: TcError.None };
+  }
 
   let nf: NamedFuncImport = find_named_func(imps.named_funcs, name);
   if nf.local != "" {
