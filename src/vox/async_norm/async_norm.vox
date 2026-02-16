@@ -492,6 +492,82 @@ pub struct NormalizeResult { pub ok: bool, pub err: String, pub exprs: ast.ExprP
 
 struct NormalizeInnerResult { ok: bool, err: String, exprs: ast.ExprPool, stmts: Vec[ast.Stmt], next_tmp: i32 }
 
+fn normalize_match_with_await_in_stmt_ctx(
+  exprs0: ast.ExprPool,
+  sp: ast.Span,
+  scrut0: i32,
+  arms0: Vec[ast.MatchArm],
+  tmp0: i32,
+  kind: i32,
+  outnm: String,
+) -> NormalizeInnerResult {
+  // kind: 0 = assign to outnm, 1 = exprstmt, 2 = return
+  if arms0.len() == 0 {
+    return NormalizeInnerResult { ok: false, err: "match must have at least one arm", exprs: exprs0, stmts: Vec(), next_tmp: tmp0 };
+  }
+  if kind == 0 && outnm == "" {
+    return NormalizeInnerResult { ok: false, err: "internal: match lowering missing out name", exprs: exprs0, stmts: Vec(), next_tmp: tmp0 };
+  }
+
+  let mut p: ast.ExprPool = exprs0;
+  let mut tmp: i32 = tmp0;
+  let mut out: Vec[ast.Stmt] = Vec();
+
+  // Evaluate scrutinee once (lift awaits out first).
+  let rs: LiftExprResult = lift_expr(p, scrut0, tmp, sp, false);
+  if !rs.ok { return NormalizeInnerResult { ok: false, err: rs.err, exprs: rs.exprs, stmts: Vec(), next_tmp: rs.next_tmp }; }
+  p = rs.exprs;
+  tmp = rs.next_tmp;
+  let mut j0: i32 = 0;
+  while j0 < rs.prefix.len() { out.push(rs.prefix.get(j0)); j0 = j0 + 1; }
+
+  let scrutnm: String = match_scrut_name(tmp);
+  tmp = tmp + 1;
+  out.push(ast.Stmt.Let(sp, false, scrutnm, false, ast.TypeName { parts: Vec(), args: Vec() }, rs.id));
+  let r_scrut: ast.AddExprResult = add_ident(p, sp, scrutnm);
+  p = r_scrut.pool;
+  let scrut_id: i32 = r_scrut.id;
+
+  // Else branch: panic for non-exhaustive match.
+  let r_panic: ast.AddExprResult = mk_panic_call(p, sp, "non-exhaustive match in async await lowering");
+  p = r_panic.pool;
+  let mut else_blk: ast.Block = ast.Block { stmts: Vec() };
+  else_blk.stmts.push(ast.Stmt.ExprStmt(sp, r_panic.id));
+
+  let mut ai: i32 = arms0.len() - 1;
+  while ai >= 0 {
+    let arm: ast.MatchArm = arms0.get(ai);
+    let cr: LiftExprResult = mk_match_cond(p, sp, scrut_id, arm.pat);
+    if !cr.ok { return NormalizeInnerResult { ok: false, err: cr.err, exprs: cr.exprs, stmts: Vec(), next_tmp: tmp }; }
+    p = cr.exprs;
+    let br: LiftExprResult = mk_match_binds(p, sp, scrut_id, arm.pat);
+    if !br.ok { return NormalizeInnerResult { ok: false, err: br.err, exprs: br.exprs, stmts: Vec(), next_tmp: tmp }; }
+    p = br.exprs;
+
+    let mut then_ss0: Vec[ast.Stmt] = Vec();
+    let mut bi0: i32 = 0;
+    while bi0 < br.prefix.len() { then_ss0.push(br.prefix.get(bi0)); bi0 = bi0 + 1; }
+
+    let mut arm_stmt: ast.Stmt = ast.Stmt.ExprStmt(sp, arm.expr);
+    if kind == 0 { arm_stmt = ast.Stmt.Assign(sp, outnm, arm.expr); }
+    else if kind == 2 { arm_stmt = ast.Stmt.ReturnStmt(sp, true, arm.expr); }
+    then_ss0.push(arm_stmt);
+
+    let rt: NormalizeInnerResult = normalize_async_stmt_list(p, then_ss0, tmp);
+    if !rt.ok { return rt; }
+    p = rt.exprs;
+    tmp = rt.next_tmp;
+
+    let ifst: ast.Stmt = ast.Stmt.IfStmt(sp, cr.id, ast.Block { stmts: rt.stmts }, true, else_blk);
+    else_blk = ast.Block { stmts: Vec() };
+    else_blk.stmts.push(ifst);
+    ai = ai - 1;
+  }
+
+  out.push(else_blk.stmts.get(0));
+  return NormalizeInnerResult { ok: true, err: "", exprs: p, stmts: out, next_tmp: tmp };
+}
+
 fn normalize_async_stmt_list(exprs0: ast.ExprPool, ss0: Vec[ast.Stmt], tmp0: i32) -> NormalizeInnerResult {
   let mut p: ast.ExprPool = exprs0;
   let mut out: Vec[ast.Stmt] = Vec();
@@ -566,9 +642,6 @@ fn normalize_async_stmt_list(exprs0: ast.ExprPool, ss0: Vec[ast.Stmt], tmp0: i32
         }
         let scrut0: i32 = match in0 { ast.ExprNode.Match(s0, _a0) => s0, _ => -1 };
         let arms0: Vec[ast.MatchArm] = match in0 { ast.ExprNode.Match(_s0, a0) => a0, _ => Vec() };
-        if arms0.len() == 0 {
-          return NormalizeInnerResult { ok: false, err: "match must have at least one arm", exprs: p, stmts: Vec(), next_tmp: tmp };
-        }
 
         let outnm: String = match_out_name(tmp);
         tmp = tmp + 1;
@@ -578,55 +651,12 @@ fn normalize_async_stmt_list(exprs0: ast.ExprPool, ss0: Vec[ast.Stmt], tmp0: i32
         p = r_call.pool;
         out.push(ast.Stmt.Let(sp, true, outnm, true, ann0, r_call.id));
 
-        // Evaluate scrutinee once (lift awaits out first).
-        let rs: LiftExprResult = lift_expr(p, scrut0, tmp, sp, false);
-        if !rs.ok { return NormalizeInnerResult { ok: false, err: rs.err, exprs: rs.exprs, stmts: Vec(), next_tmp: rs.next_tmp }; }
-        p = rs.exprs;
-        tmp = rs.next_tmp;
-        let mut j0: i32 = 0;
-        while j0 < rs.prefix.len() { out.push(rs.prefix.get(j0)); j0 = j0 + 1; }
-
-        let scrutnm: String = match_scrut_name(tmp);
-        tmp = tmp + 1;
-        out.push(ast.Stmt.Let(sp, false, scrutnm, false, ast.TypeName { parts: Vec(), args: Vec() }, rs.id));
-        let r_scrut: ast.AddExprResult = add_ident(p, sp, scrutnm);
-        p = r_scrut.pool;
-        let scrut_id: i32 = r_scrut.id;
-
-        // Else branch: panic for non-exhaustive match.
-        let r_panic: ast.AddExprResult = mk_panic_call(p, sp, "non-exhaustive match in async await lowering");
-        p = r_panic.pool;
-        let mut else_blk: ast.Block = ast.Block { stmts: Vec() };
-        else_blk.stmts.push(ast.Stmt.ExprStmt(sp, r_panic.id));
-
-        let mut ai: i32 = arms0.len() - 1;
-        while ai >= 0 {
-          let arm: ast.MatchArm = arms0.get(ai);
-          let cr: LiftExprResult = mk_match_cond(p, sp, scrut_id, arm.pat);
-          if !cr.ok { return NormalizeInnerResult { ok: false, err: cr.err, exprs: cr.exprs, stmts: Vec(), next_tmp: tmp }; }
-          p = cr.exprs;
-          let br: LiftExprResult = mk_match_binds(p, sp, scrut_id, arm.pat);
-          if !br.ok { return NormalizeInnerResult { ok: false, err: br.err, exprs: br.exprs, stmts: Vec(), next_tmp: tmp }; }
-          p = br.exprs;
-
-          let mut then_ss0: Vec[ast.Stmt] = Vec();
-          let mut bi0: i32 = 0;
-          while bi0 < br.prefix.len() { then_ss0.push(br.prefix.get(bi0)); bi0 = bi0 + 1; }
-          then_ss0.push(ast.Stmt.Assign(sp, outnm, arm.expr));
-
-          let rt: NormalizeInnerResult = normalize_async_stmt_list(p, then_ss0, tmp);
-          if !rt.ok { return rt; }
-          p = rt.exprs;
-          tmp = rt.next_tmp;
-
-          let ifst: ast.Stmt = ast.Stmt.IfStmt(sp, cr.id, ast.Block { stmts: rt.stmts }, true, else_blk);
-          else_blk = ast.Block { stmts: Vec() };
-          else_blk.stmts.push(ifst);
-          ai = ai - 1;
-        }
-
-        // The chain is built into else_blk as a single nested if statement.
-        out.push(else_blk.stmts.get(0));
+        let rr: NormalizeInnerResult = normalize_match_with_await_in_stmt_ctx(p, sp, scrut0, arms0, tmp, 0, outnm);
+        if !rr.ok { return rr; }
+        p = rr.exprs;
+        tmp = rr.next_tmp;
+        let mut k0: i32 = 0;
+        while k0 < rr.stmts.len() { out.push(rr.stmts.get(k0)); k0 = k0 + 1; }
 
         let r_out: ast.AddExprResult = add_ident(p, sp, outnm);
         p = r_out.pool;
@@ -684,54 +714,12 @@ fn normalize_async_stmt_list(exprs0: ast.ExprPool, ss0: Vec[ast.Stmt], tmp0: i32
       if match en0 { ast.ExprNode.Match(_s, _arms) => true, _ => false } && expr_has_await(p, e0) {
         let scrut0: i32 = match en0 { ast.ExprNode.Match(s0, _a0) => s0, _ => -1 };
         let arms0: Vec[ast.MatchArm] = match en0 { ast.ExprNode.Match(_s0, a0) => a0, _ => Vec() };
-        if arms0.len() == 0 {
-          return NormalizeInnerResult { ok: false, err: "match must have at least one arm", exprs: p, stmts: Vec(), next_tmp: tmp };
-        }
-
-        let rs: LiftExprResult = lift_expr(p, scrut0, tmp, sp, false);
-        if !rs.ok { return NormalizeInnerResult { ok: false, err: rs.err, exprs: rs.exprs, stmts: Vec(), next_tmp: rs.next_tmp }; }
-        p = rs.exprs;
-        tmp = rs.next_tmp;
-        let mut j0: i32 = 0;
-        while j0 < rs.prefix.len() { out.push(rs.prefix.get(j0)); j0 = j0 + 1; }
-
-        let scrutnm: String = match_scrut_name(tmp);
-        tmp = tmp + 1;
-        out.push(ast.Stmt.Let(sp, false, scrutnm, false, ast.TypeName { parts: Vec(), args: Vec() }, rs.id));
-        let r_scrut: ast.AddExprResult = add_ident(p, sp, scrutnm);
-        p = r_scrut.pool;
-        let scrut_id: i32 = r_scrut.id;
-
-        let r_panic: ast.AddExprResult = mk_panic_call(p, sp, "non-exhaustive match in async await lowering");
-        p = r_panic.pool;
-        let mut else_blk: ast.Block = ast.Block { stmts: Vec() };
-        else_blk.stmts.push(ast.Stmt.ExprStmt(sp, r_panic.id));
-
-        let mut ai: i32 = arms0.len() - 1;
-        while ai >= 0 {
-          let arm: ast.MatchArm = arms0.get(ai);
-          let cr: LiftExprResult = mk_match_cond(p, sp, scrut_id, arm.pat);
-          if !cr.ok { return NormalizeInnerResult { ok: false, err: cr.err, exprs: cr.exprs, stmts: Vec(), next_tmp: tmp }; }
-          p = cr.exprs;
-          let br: LiftExprResult = mk_match_binds(p, sp, scrut_id, arm.pat);
-          if !br.ok { return NormalizeInnerResult { ok: false, err: br.err, exprs: br.exprs, stmts: Vec(), next_tmp: tmp }; }
-          p = br.exprs;
-
-          let mut then_ss0: Vec[ast.Stmt] = Vec();
-          let mut bi0: i32 = 0;
-          while bi0 < br.prefix.len() { then_ss0.push(br.prefix.get(bi0)); bi0 = bi0 + 1; }
-          then_ss0.push(ast.Stmt.ExprStmt(sp, arm.expr));
-          let rt: NormalizeInnerResult = normalize_async_stmt_list(p, then_ss0, tmp);
-          if !rt.ok { return rt; }
-          p = rt.exprs;
-          tmp = rt.next_tmp;
-
-          let ifst: ast.Stmt = ast.Stmt.IfStmt(sp, cr.id, ast.Block { stmts: rt.stmts }, true, else_blk);
-          else_blk = ast.Block { stmts: Vec() };
-          else_blk.stmts.push(ifst);
-          ai = ai - 1;
-        }
-        out.push(else_blk.stmts.get(0));
+        let rr: NormalizeInnerResult = normalize_match_with_await_in_stmt_ctx(p, sp, scrut0, arms0, tmp, 1, "");
+        if !rr.ok { return rr; }
+        p = rr.exprs;
+        tmp = rr.next_tmp;
+        let mut k0: i32 = 0;
+        while k0 < rr.stmts.len() { out.push(rr.stmts.get(k0)); k0 = k0 + 1; }
         i = i + 1;
         continue;
       }
@@ -790,54 +778,12 @@ fn normalize_async_stmt_list(exprs0: ast.ExprPool, ss0: Vec[ast.Stmt], tmp0: i32
       if match en0 { ast.ExprNode.Match(_s, _arms) => true, _ => false } && expr_has_await(p, e0) {
         let scrut0: i32 = match en0 { ast.ExprNode.Match(s0, _a0) => s0, _ => -1 };
         let arms0: Vec[ast.MatchArm] = match en0 { ast.ExprNode.Match(_s0, a0) => a0, _ => Vec() };
-        if arms0.len() == 0 {
-          return NormalizeInnerResult { ok: false, err: "match must have at least one arm", exprs: p, stmts: Vec(), next_tmp: tmp };
-        }
-
-        let rs: LiftExprResult = lift_expr(p, scrut0, tmp, sp, false);
-        if !rs.ok { return NormalizeInnerResult { ok: false, err: rs.err, exprs: rs.exprs, stmts: Vec(), next_tmp: rs.next_tmp }; }
-        p = rs.exprs;
-        tmp = rs.next_tmp;
-        let mut j0: i32 = 0;
-        while j0 < rs.prefix.len() { out.push(rs.prefix.get(j0)); j0 = j0 + 1; }
-
-        let scrutnm: String = match_scrut_name(tmp);
-        tmp = tmp + 1;
-        out.push(ast.Stmt.Let(sp, false, scrutnm, false, ast.TypeName { parts: Vec(), args: Vec() }, rs.id));
-        let r_scrut: ast.AddExprResult = add_ident(p, sp, scrutnm);
-        p = r_scrut.pool;
-        let scrut_id: i32 = r_scrut.id;
-
-        let r_panic: ast.AddExprResult = mk_panic_call(p, sp, "non-exhaustive match in async await lowering");
-        p = r_panic.pool;
-        let mut else_blk: ast.Block = ast.Block { stmts: Vec() };
-        else_blk.stmts.push(ast.Stmt.ExprStmt(sp, r_panic.id));
-
-        let mut ai: i32 = arms0.len() - 1;
-        while ai >= 0 {
-          let arm: ast.MatchArm = arms0.get(ai);
-          let cr: LiftExprResult = mk_match_cond(p, sp, scrut_id, arm.pat);
-          if !cr.ok { return NormalizeInnerResult { ok: false, err: cr.err, exprs: cr.exprs, stmts: Vec(), next_tmp: tmp }; }
-          p = cr.exprs;
-          let br: LiftExprResult = mk_match_binds(p, sp, scrut_id, arm.pat);
-          if !br.ok { return NormalizeInnerResult { ok: false, err: br.err, exprs: br.exprs, stmts: Vec(), next_tmp: tmp }; }
-          p = br.exprs;
-
-          let mut then_ss0: Vec[ast.Stmt] = Vec();
-          let mut bi0: i32 = 0;
-          while bi0 < br.prefix.len() { then_ss0.push(br.prefix.get(bi0)); bi0 = bi0 + 1; }
-          then_ss0.push(ast.Stmt.ReturnStmt(sp, true, arm.expr));
-          let rt: NormalizeInnerResult = normalize_async_stmt_list(p, then_ss0, tmp);
-          if !rt.ok { return rt; }
-          p = rt.exprs;
-          tmp = rt.next_tmp;
-
-          let ifst: ast.Stmt = ast.Stmt.IfStmt(sp, cr.id, ast.Block { stmts: rt.stmts }, true, else_blk);
-          else_blk = ast.Block { stmts: Vec() };
-          else_blk.stmts.push(ifst);
-          ai = ai - 1;
-        }
-        out.push(else_blk.stmts.get(0));
+        let rr: NormalizeInnerResult = normalize_match_with_await_in_stmt_ctx(p, sp, scrut0, arms0, tmp, 2, "");
+        if !rr.ok { return rr; }
+        p = rr.exprs;
+        tmp = rr.next_tmp;
+        let mut k0: i32 = 0;
+        while k0 < rr.stmts.len() { out.push(rr.stmts.get(k0)); k0 = k0 + 1; }
         i = i + 1;
         continue;
       }
