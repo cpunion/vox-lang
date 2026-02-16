@@ -19,8 +19,8 @@
 4. async 入口与测试可运行（最小执行器，v0）：
    - 当构建可执行文件启用 driver main 时：若用户定义 `async fn main() -> T`，编译器在编译期生成一个同步 `fn main() -> T` wrapper。
    - 当构建测试二进制启用 test main 时：若发现 `async fn test_*() -> ()`，编译器为该 test 生成一个同步 wrapper 并交给测试运行器调用。
-   - wrapper 内部使用一个 tight loop 自旋 `poll` 直到 `Ready`（`Pending` 时 `continue`），用于保证 `async fn main` 与 async tests 在无完整 runtime 的阶段也能端到端跑通。
-   - 当前不做真正的 blocking/parking/backoff；这部分留给后续 runtime/executor（或宿主）实现。
+   - wrapper 内部使用 tight loop 轮询 `poll` 直到 `Ready`；`Pending` 分支优先调用 `std/async::pending_wait(iter, cx)`（若不存在则回退到 `spin_wait(iter)`，再回退到纯 continue），用于保证 `async fn main` 与 async tests 在无完整 runtime 的阶段也能端到端跑通。
+   - 当前不做真正的 blocking/parking；这部分留给后续 runtime/executor（或宿主）实现。
 
 ## 2. 为什么核心选 pull
 

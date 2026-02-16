@@ -1,4 +1,4 @@
-.PHONY: fmt test test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-p0p1 \
+.PHONY: fmt test test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-p0p1 test-intrinsics \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run \
 	release-source-bundle release-source-verify
 
@@ -6,10 +6,14 @@ fmt:
 	@echo "[fmt] no formatter configured for .vox yet"
 
 # Run core repo tests: rolling selfhost gates + example package smoke.
-test: test-rolling test-examples
+test: test-intrinsics test-rolling test-examples
 
 # Active development gate.
-test-active: test-rolling
+test-active: test-intrinsics test-rolling
+
+# Guard std intrinsic usage against bootstrap compatibility drift.
+test-intrinsics:
+	./scripts/ci/check-std-intrinsics.sh
 
 # Rolling bootstrap gate (previous compiler -> new compiler).
 test-rolling: test-selfhost-build test-selfhost-gate

@@ -72,7 +72,7 @@ This lowered form becomes the input to the existing async CFG builder and captur
 
 ## Remaining Async Work (Outside D03-5)
 
-1. Runtime executor ergonomics beyond v0 tight-loop polling (`wake/park/backoff`).
+1. Runtime executor ergonomics beyond v0 polling hook (`wake/park` integration beyond current `pending_wait(iter, cx)` / `spin_wait(iter)` hook model).
 
 ## Completed Since This Doc
 
