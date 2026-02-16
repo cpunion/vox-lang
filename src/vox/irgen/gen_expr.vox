@@ -206,21 +206,8 @@ fn gen_await_poll_from_future(g0: Gen, recv: ir.Value, recv_slot: i32, recv_fiel
   if !im.found {
     return AwaitFuturePollResult { ok: false, err: "await Future impl missing method poll", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
   }
-  if im.m.sig.type_params.len() != 0 || im.m.sig.const_params.len() != 0 {
-    return AwaitFuturePollResult { ok: false, err: "await on generic Future::poll is not supported", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
-  }
   if im.m.sig.params.len() != 2 {
     return AwaitFuturePollResult { ok: false, err: "await Future::poll arity mismatch", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
-  }
-
-  let poll_ret0: i32 = tc.subst_ty(g0.ctx, im.m.sig.ret, subs);
-  let poll_ret: i32 = tc.strip_range_only(g0.ctx, poll_ret0);
-  let ai: AwaitPollInfo = await_poll_info(g0, poll_ret);
-  if !ai.ok {
-    return AwaitFuturePollResult { ok: false, err: "await Future::poll must return Poll-like enum", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
-  }
-  if !tc.assignable_to(g0.ctx, out_ty, ai.ready_ty) || !tc.assignable_to(g0.ctx, ai.ready_ty, out_ty) {
-    return AwaitFuturePollResult { ok: false, err: "await Future::Output does not match poll Ready payload", g: g0, poll_val: ir.v_int(0), poll_ty: g0.ctx.ty_bad, out_ty: g0.ctx.ty_bad };
   }
 
   let mut g: Gen = g0;
@@ -228,23 +215,131 @@ fn gen_await_poll_from_future(g0: Gen, recv: ir.Value, recv_slot: i32, recv_fiel
   if !cx_slot.found {
     return AwaitFuturePollResult { ok: false, err: "await Future::poll requires `cx` in scope", g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
   }
-  let cr: GenNewIdResult = gen_new_temp(g);
-  g = cr.g;
-  let cx_tid: i32 = cr.id;
   let cx_ty: i32 = tc.strip_range_only(g.ctx, cx_slot.ty);
-  g = gen_emit(g, ir.Instr.Load(cx_tid, cx_ty, cx_slot.slot));
 
-  let pr: GenNewIdResult = gen_new_temp(g);
-  g = pr.g;
-  let p_tid: i32 = pr.id;
-  let mut args: Vec[ir.Value] = Vec();
-  // `Future::poll` takes `&mut Self`; lower as inout.
+  // `Future::poll` takes `&mut Self`; lower as inout. Build the receiver ref
+  // type first so generic method params can be inferred from call argument
+  // types before we emit the call.
   let rr: tc.ResolveTyResult = tc.intern_ref(g.ctx, recv_ty, true, false);
   g.ctx = rr.ctx;
   if !rr.ok {
     return AwaitFuturePollResult { ok: false, err: "await failed to intern poll recv ref type", g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
   }
   let ref_ty: i32 = rr.idx;
+
+  let mut subs_m: Vec[tc.TySub] = subs;
+  let mut csubs: Vec[tc.ConstSub] = Vec();
+  if im.m.sig.type_params.len() != 0 || im.m.sig.const_params.len() != 0 {
+    let ur0: tc.UnifyResult = tc.unify_ty(g.ctx, im.m.sig.params.get(0), ref_ty, subs_m);
+    if !ur0.ok {
+      return AwaitFuturePollResult { ok: false, err: "await Future::poll recv type mismatch", g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
+    }
+    subs_m = ur0.subs;
+    let ur1: tc.UnifyResult = tc.unify_ty(g.ctx, im.m.sig.params.get(1), cx_ty, subs_m);
+    if !ur1.ok {
+      return AwaitFuturePollResult { ok: false, err: "await Future::poll cx type mismatch", g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
+    }
+    subs_m = ur1.subs;
+
+    // If generic params remain unconstrained by the call shape, default to the
+    // awaited output type to keep monomorphization deterministic.
+    let mut ti: i32 = 0;
+    while ti < im.m.sig.type_params.len() {
+      let tp: String = im.m.sig.type_params.get(ti);
+      if try_subs_lookup_ir(subs_m, tp) == -1 {
+        subs_m.push(tc.TySub { name: tp, ty: out_ty });
+      }
+      ti = ti + 1;
+    }
+
+    let mut bi: i32 = 0;
+    while bi < im.m.sig.type_param_bounds.len() {
+      let b: tc.TypeParamBoundSig = im.m.sig.type_param_bounds.get(bi);
+      let ty0: i32 = try_subs_lookup_ir(subs_m, b.type_param);
+      if ty0 == -1 {
+        return AwaitFuturePollResult { ok: false, err: "await Future::poll has unbound type param", g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
+      }
+      let fi2: tc.FindImplForTyResult = tc.find_impl_for_ty(g.ctx, b.trait_mod_path, b.trait_name, tc.strip_range(g.ctx, ty0));
+      if fi2.ambiguous || !fi2.found {
+        return AwaitFuturePollResult { ok: false, err: "await Future::poll type param bound unsatisfied", g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
+      }
+      bi = bi + 1;
+    }
+
+    let mut ci: i32 = 0;
+    while ci < im.m.sig.const_params.len() {
+      let cp: tc.ConstParamSig = im.m.sig.const_params.get(ci);
+      if !cp.has_default {
+        return AwaitFuturePollResult { ok: false, err: "await Future::poll requires const args without defaults", g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
+      }
+      csubs.push(tc.ConstSub { name: cp.name, ty: cp.ty, iv: cp.default_iv, text: cp.default_text });
+      ci = ci + 1;
+    }
+    let cwr: tc.ConstWhereCheckResult = tc.check_const_where_bounds(g.ctx, im.m.sig.const_where_bounds, subs_m, csubs);
+    if !cwr.ok {
+      return AwaitFuturePollResult { ok: false, err: cwr.err, g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
+    }
+  }
+
+  let poll_ret0: i32 = tc.subst_ty(g.ctx, im.m.sig.ret, subs_m);
+  let poll_ret: i32 = tc.strip_range_only(g.ctx, poll_ret0);
+  let ai: AwaitPollInfo = await_poll_info(g, poll_ret);
+  if !ai.ok {
+    return AwaitFuturePollResult { ok: false, err: "await Future::poll must return Poll-like enum", g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
+  }
+  if !tc.assignable_to(g.ctx, out_ty, ai.ready_ty) || !tc.assignable_to(g.ctx, ai.ready_ty, out_ty) {
+    return AwaitFuturePollResult { ok: false, err: "await Future::Output does not match poll Ready payload", g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
+  }
+
+  let mut call_name: String = im.m.lowered_name;
+  if im.m.sig.type_params.len() != 0 || im.m.sig.const_params.len() != 0 {
+    let mut ps: Vec[i32] = Vec();
+    let mut pi: i32 = 0;
+    while pi < im.m.sig.params.len() {
+      let pty: i32 = tc.subst_ty(g.ctx, im.m.sig.params.get(pi), subs_m);
+      if pty == g.ctx.ty_bad {
+        return AwaitFuturePollResult { ok: false, err: "await Future::poll param type substitution failed", g: g, poll_val: ir.v_int(0), poll_ty: g.ctx.ty_bad, out_ty: g.ctx.ty_bad };
+      }
+      ps.push(tc.strip_range_only(g.ctx, pty));
+      pi = pi + 1;
+    }
+
+    let inst_sig: tc.FuncSig = tc.FuncSig {
+      params: ps,
+      param_borrow_kinds: im.m.sig.param_borrow_kinds,
+      ret: poll_ret,
+      has_variadic: false,
+      variadic_elem: -1,
+      vis: im.m.sig.vis,
+      is_pub: im.m.sig.is_pub,
+      type_params: Vec(),
+      type_param_packs: Vec(),
+      const_params: im.m.sig.const_params,
+      type_param_bounds: Vec(),
+      const_where_bounds: im.m.sig.const_where_bounds,
+    };
+    let inst: String = tc.inst_name_ex(g.ctx, im.m.lowered_name, im.m.sig.type_params, im.m.sig.const_params, subs_m, csubs);
+    g.pending = pending_add(g.pending, PendingInst {
+      qname: qname(fi.sig.mod_path, inst),
+      mod_path: fi.sig.mod_path,
+      base_name: im.m.lowered_name,
+      inst_name: inst,
+      sig: inst_sig,
+      subs: subs_m,
+      const_subs: csubs,
+    });
+    call_name = inst;
+  }
+
+  let cr: GenNewIdResult = gen_new_temp(g);
+  g = cr.g;
+  let cx_tid: i32 = cr.id;
+  g = gen_emit(g, ir.Instr.Load(cx_tid, cx_ty, cx_slot.slot));
+
+  let pr: GenNewIdResult = gen_new_temp(g);
+  g = pr.g;
+  let p_tid: i32 = pr.id;
+  let mut args: Vec[ir.Value] = Vec();
   let na: GenNewIdResult = gen_new_temp(g);
   g = na.g;
   let recv_ptr: i32 = na.id;
@@ -264,7 +359,7 @@ fn gen_await_poll_from_future(g0: Gen, recv: ir.Value, recv_slot: i32, recv_fiel
   }
   args.push(ir.v_temp(recv_ptr));
   args.push(ir.v_temp(cx_tid));
-  g = gen_emit(g, ir.Instr.Call(true, p_tid, poll_ret, qname(fi.sig.mod_path, im.m.lowered_name), args));
+  g = gen_emit(g, ir.Instr.Call(true, p_tid, poll_ret, qname(fi.sig.mod_path, call_name), args));
 
   return AwaitFuturePollResult {
     ok: true,

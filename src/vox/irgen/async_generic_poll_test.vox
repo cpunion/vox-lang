@@ -1,0 +1,36 @@
+import "std/testing" as t
+import "vox/typecheck" as tc
+import "vox/irgen" as g
+import "vox/ir" as ir
+
+fn test_irgen_async_await_future_impl_generic_poll_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/async", """
+    pub enum Poll[T] { Pending, Ready(T) }
+    pub struct Waker { pub token: i64 }
+    pub struct Context { pub waker: Waker }
+    pub trait Future { type Output; fn poll[Ctx](x: &mut Self, cx: Ctx) -> Poll[Self.Output]; }
+  """);
+  w = add_mod(w, "main", """
+    import "std/async" as a
+    struct C { n: i32 }
+    impl a.Future for C {
+      type Output = i32;
+      fn poll[Ctx](x: &mut C, _cx: Ctx) -> a.Poll[i32] { return .Ready(x.n); }
+    }
+    async fn main() -> i32 {
+      let c: C = C { n: 1 };
+      let x: i32 = c.await;
+      return x + 1;
+    }
+  """);
+  let r: g.GenResult = g.generate_world(w);
+  t.assert_with(r.ok, r.err);
+
+  let s: String = ir.format_program(r.prog);
+  let has_poll: bool =
+    contains(s, "impl$std.async$Future$poll$g")
+    || contains(s, "impl$std.async$Future$poll");
+  t.assert_with(has_poll, "expected lowered Future::poll call in IR");
+  t.assert_with(contains(s, "await_pending_"), "expected await pending branch in IR");
+}
