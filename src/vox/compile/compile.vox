@@ -492,13 +492,18 @@ pub fn compile_main_text_to_c(src: String, opts: cg.EmitOptions) -> CompileResul
   }
 
   let w2: tc.World = rewrite_async_entrypoints(xr.world, opts);
-  let tr: tc.TcResult = tc.typecheck_world(w2);
+  let br: tc.BuildCtxResult = tc.build_ctx(w2);
+  if !br.ok {
+    let rendered: String = with_macroexpand_notes(tc.tc_error_to_string(br.err), xr.notes);
+    return compile_err(compile_kind_from_tc(tc.tc_error_kind(br.err)), tc.tc_error_code(br.err), tc.tc_error_message(br.err), rendered);
+  }
+  let tr: tc.TcResult = tc.typecheck_world_with_ctx(w2, br.ctx);
   if !tr.ok {
     let rendered: String = with_macroexpand_notes(tc.tc_error_to_string(tr.err), xr.notes);
     return compile_err(compile_kind_from_tc(tc.tc_error_kind(tr.err)), tc.tc_error_code(tr.err), tc.tc_error_message(tr.err), rendered);
   }
 
-  let gr: irgen.GenResult = irgen.generate_world(w2);
+  let gr: irgen.GenResult = irgen.generate_world_with_ctx(w2, br.ctx);
   if !gr.ok {
     return compile_err(compile_diag_kind_irgen(), tc.diag_code_irgen(), gr.err, gr.err);
   }
@@ -544,7 +549,13 @@ pub fn compile_files_to_c_profile(files: Vec[ld.SourceFile], opts: cg.EmitOption
   prof.rewrite_async_ns = dur_nonneg_ns(t0_rewrite, tm.now_ns());
 
   let t0_tc: i64 = tm.now_ns();
-  let tr: tc.TcResult = tc.typecheck_world(w2);
+  let br: tc.BuildCtxResult = tc.build_ctx(w2);
+  if !br.ok {
+    prof.typecheck_ns = dur_nonneg_ns(t0_tc, tm.now_ns());
+    let rendered: String = with_macroexpand_notes(tc.tc_error_to_string(br.err), xr.notes);
+    return prof_ok(compile_err(compile_kind_from_tc(tc.tc_error_kind(br.err)), tc.tc_error_code(br.err), tc.tc_error_message(br.err), rendered), prof);
+  }
+  let tr: tc.TcResult = tc.typecheck_world_with_ctx(w2, br.ctx);
   prof.typecheck_ns = dur_nonneg_ns(t0_tc, tm.now_ns());
   if !tr.ok {
     let rendered: String = with_macroexpand_notes(tc.tc_error_to_string(tr.err), xr.notes);
@@ -552,7 +563,7 @@ pub fn compile_files_to_c_profile(files: Vec[ld.SourceFile], opts: cg.EmitOption
   }
 
   let t0_irgen: i64 = tm.now_ns();
-  let gr: irgen.GenResult = irgen.generate_world(w2);
+  let gr: irgen.GenResult = irgen.generate_world_with_ctx(w2, br.ctx);
   prof.irgen_ns = dur_nonneg_ns(t0_irgen, tm.now_ns());
   if !gr.ok {
     return prof_ok(compile_err(compile_diag_kind_irgen(), tc.diag_code_irgen(), gr.err, gr.err), prof);
