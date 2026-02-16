@@ -161,6 +161,7 @@ fn block_has_await(exprs: ast.ExprPool, b: ast.Block) -> bool {
 fn tmp_name(n: i32) -> String { return "__await$".concat(n.to_string()); }
 fn match_scrut_name(n: i32) -> String { return "__match_scrut$".concat(n.to_string()); }
 fn match_out_name(n: i32) -> String { return "__match_out$".concat(n.to_string()); }
+fn try_out_name(n: i32) -> String { return "__try_out$".concat(n.to_string()); }
 
 fn add_str_lit(p0: ast.ExprPool, sp: ast.Span, s: String) -> ast.AddExprResult {
   return add_expr(p0, ast.ExprNode.Str(s), sp);
@@ -569,7 +570,56 @@ fn lift_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, l0: Locals, ex
 
   if match n { ast.ExprNode.TryBlock(_bid) => true, _ => false } {
     if !expr_has_await(exprs0, eid) { return lift_ok(exprs0, Vec(), eid, tmp0); }
-    return lift_err(exprs0, "await inside try block expression is not supported", tmp0);
+    let bid0: i32 = match n { ast.ExprNode.TryBlock(x0) => x0, _ => -1 };
+    let bn: ast.ExprNode = ast.expr_pool_get(exprs0, bid0);
+    if !match bn { ast.ExprNode.Block(_b0) => true, _ => false } {
+      return lift_err(exprs0, "internal: try block operand is not block expression", tmp0);
+    }
+    let b0: ast.ExprBlock = match bn { ast.ExprNode.Block(eb0) => eb0, _ => ast.ExprBlock { stmts: Vec(), has_tail: false, tail: -1 } };
+    let ir: InferExprTyResult = infer_expr_ty(ctx, w, mod_path, imps, exprs0, l0, eid, sp);
+    if !ir.ok { return lift_err(exprs0, "await lowering: cannot infer try-block type: ".concat(ir.err), tmp0); }
+
+    let outnm: String = try_out_name(tmp0);
+    let mut tmp: i32 = tmp0 + 1;
+    let runinit: ast.AddExprResult = add_uninit_id(exprs0, sp, ir.ty);
+    let mut p: ast.ExprPool = runinit.pool;
+    let mut pre: Vec[ast.Stmt] = Vec();
+    pre.push(ast.Stmt.Let(sp, true, outnm, false, ast.TypeName { parts: Vec(), args: Vec() }, runinit.id));
+    pre.push(ast.Stmt.TryBegin(sp, outnm));
+
+    let l_try: Locals = locals_try_push(l0, ir.ty);
+    let rn: NormalizeInnerResult = normalize_async_stmt_list(ctx, w, mod_path, imps, p, b0.stmts, tmp, l_try);
+    if !rn.ok { return lift_err(rn.exprs, rn.err, rn.next_tmp); }
+    p = rn.exprs;
+    tmp = rn.next_tmp;
+
+    let mut i: i32 = 0;
+    while i < rn.stmts.len() {
+      pre.push(rn.stmts.get(i));
+      i = i + 1;
+    }
+
+    let mut tail_id: i32 = -1;
+    if b0.has_tail {
+      let rt: LiftExprResult = lift_expr(ctx, w, mod_path, imps, l_try, p, b0.tail, tmp, sp, true);
+      if !rt.ok { return rt; }
+      p = rt.exprs;
+      tmp = rt.next_tmp;
+      i = 0;
+      while i < rt.prefix.len() {
+        pre.push(rt.prefix.get(i));
+        i = i + 1;
+      }
+      tail_id = rt.id;
+    }
+
+    let r_blk: ast.AddExprResult = add_expr(p, ast.ExprNode.Block(ast.ExprBlock { stmts: Vec(), has_tail: b0.has_tail, tail: tail_id }), sp);
+    let r_tr: ast.AddExprResult = add_expr(r_blk.pool, ast.ExprNode.TryBlock(r_blk.id), sp);
+    pre.push(ast.Stmt.Assign(sp, outnm, r_tr.id));
+    pre.push(ast.Stmt.TryEnd(sp));
+
+    let rid: ast.AddExprResult = add_ident(r_tr.pool, sp, outnm);
+    return lift_ok(rid.pool, pre, rid.id, tmp);
   }
 
   if match n { ast.ExprNode.MacroCall(_c, _t, _args) => true, _ => false } {
