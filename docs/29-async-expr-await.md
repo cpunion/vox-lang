@@ -73,8 +73,14 @@ This lowered form becomes the input to the existing async CFG builder and captur
 ## Remaining Async Work (Outside D03-5)
 
 1. Generic async instantiation for const/type-pack parameter shapes (`async_inst` still rejects these).
-2. `await` on generic `Future::poll` method signatures in IRGen.
-3. Runtime executor integration for async entrypoints (`async main` / async tests).
+2. Runtime executor integration for async entrypoints (`async main` / async tests).
+
+## Completed Since This Doc
+
+- IRGen now supports `await` lowering when `std/async::Future::poll` method signatures are generic:
+  - generic method instantiation is materialized and queued via `PendingInst`,
+  - default const params (when present) are applied for monomorphized poll calls,
+  - async await paths are covered by typecheck/irgen/compile smoke tests.
 
 ## Non-goals
 
