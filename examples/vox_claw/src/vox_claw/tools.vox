@@ -1,0 +1,405 @@
+import "std/fs" as fs
+import "std/process" as proc
+import "std/string" as s
+import "std/time" as tm
+
+fn trim_left_ws(raw: String) -> String {
+  let mut i: i32 = 0;
+  while i < raw.len() {
+    let ch: i32 = raw.byte_at(i);
+    if ch == 32 || ch == 9 {
+      i = i + 1;
+    } else {
+      return raw.slice(i, raw.len());
+    }
+  }
+  return "";
+}
+
+fn trim_ws(raw: String) -> String {
+  let left: String = trim_left_ws(raw);
+  if left.len() == 0 { return ""; }
+  let mut hi: i32 = left.len();
+  while hi > 0 {
+    let ch: i32 = left.byte_at(hi - 1);
+    if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
+      hi = hi - 1;
+    } else {
+      break;
+    }
+  }
+  return left.slice(0, hi);
+}
+
+fn parse_i32(raw: String) -> i32 {
+  if raw.len() == 0 { return 0; }
+  let mut i: i32 = 0;
+  let mut sign: i32 = 1;
+  if raw.byte_at(0) == 45 {
+    sign = -1;
+    i = 1;
+  }
+  let mut out: i32 = 0;
+  while i < raw.len() {
+    let ch: i32 = raw.byte_at(i);
+    if ch < 48 || ch > 57 { return 0; }
+    out = out * 10 + (ch - 48);
+    i = i + 1;
+  }
+  return out * sign;
+}
+
+fn split_index(raw: String, sep: String) -> i32 {
+  return s.index_of(s.view_all(raw), sep);
+}
+
+fn shell_quote(raw: String) -> String {
+  let mut out: String = "'";
+  let mut i: i32 = 0;
+  while i < raw.len() {
+    if raw.byte_at(i) == 39 {
+      out = out.concat("'\\''");
+    } else {
+      out = out.concat(raw.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  return out.concat("'");
+}
+
+fn limit_text(raw: String, max_n: i32) -> String {
+  if raw.len() <= max_n { return raw; }
+  if max_n <= 3 { return raw.slice(0, max_n); }
+  return raw.slice(0, max_n - 3).concat("...");
+}
+
+fn run_shell_capture(script_text: String, workspace: String, stem: String) -> String {
+  let base: String = workspace.concat("/tools");
+  fs.mkdir_p(base);
+
+  let script_path: String = base.concat("/").concat(stem).concat(".sh");
+  let out_path: String = base.concat("/").concat(stem).concat(".out.txt");
+  fs.write_string(script_path, script_text.concat("\n"));
+
+  let run_cmd: String = "sh "
+    .concat(shell_quote(script_path))
+    .concat(" > ")
+    .concat(shell_quote(out_path))
+    .concat(" 2>&1");
+  let rc: i32 = proc.exec(run_cmd);
+
+  let mut out: String = "";
+  if fs.exists(out_path) {
+    out = fs.read_to_string(out_path);
+  }
+  return "exit="
+    .concat(rc.to_string())
+    .concat("\n")
+    .concat(limit_text(out, 1200));
+}
+
+fn join_strings(xs: Vec[String]) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if i > 0 { out = out.concat(", "); }
+    out = out.concat(xs.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn due_summary(xs: Vec[ScheduledTask]) -> String {
+  if xs.len() == 0 { return "due=0"; }
+  let mut out: String = "due=".concat(xs.len().to_string()).concat("\n");
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let t: ScheduledTask = xs.get(i);
+    out = out
+      .concat("#")
+      .concat(t.id.to_string())
+      .concat(" every=")
+      .concat(t.every_s.to_string())
+      .concat("s prompt=")
+      .concat(t.prompt)
+      .concat("\n");
+    i = i + 1;
+  }
+  return out;
+}
+
+pub struct ToolCall {
+  pub ok: bool,
+  pub name: String,
+  pub payload: String,
+  pub error: String,
+}
+
+pub struct ToolExecResult {
+  pub memory: MemoryStore,
+  pub scheduler: Scheduler,
+  pub ok: bool,
+  pub output: String,
+}
+
+pub fn tools_help_text() -> String {
+  return """tool usage:
+TOOL:help
+TOOL:memory.put|<key>|<value>
+TOOL:memory.get|<key>
+TOOL:memory.keys
+TOOL:schedule.add|<seconds>|<prompt>
+TOOL:schedule.due
+TOOL:shell.exec|<command>
+TOOL:web.get|<url>
+""";
+}
+
+pub fn parse_tool_call(raw: String) -> ToolCall {
+  let line: String = trim_ws(raw);
+  if !s.starts_with(s.view_all(line), "TOOL:") {
+    return ToolCall {
+      ok: false,
+      name: "",
+      payload: "",
+      error: "not a tool call",
+    };
+  }
+  let body: String = trim_ws(line.slice(5, line.len()));
+  if body == "" {
+    return ToolCall {
+      ok: false,
+      name: "",
+      payload: "",
+      error: "missing tool name",
+    };
+  }
+  let cut: i32 = split_index(body, "|");
+  if cut < 0 {
+    return ToolCall {
+      ok: true,
+      name: trim_ws(body),
+      payload: "",
+      error: "",
+    };
+  }
+  return ToolCall {
+    ok: true,
+    name: trim_ws(body.slice(0, cut)),
+    payload: trim_ws(body.slice(cut + 1, body.len())),
+    error: "",
+  };
+}
+
+pub fn execute_tool(
+  call: ToolCall,
+  memory: MemoryStore,
+  scheduler: Scheduler,
+  jsonl_path: String,
+  workspace: String,
+  allow_network: bool,
+  blocked: Vec[String],
+) -> ToolExecResult {
+  let memory_fallback: MemoryStore = Clone.clone(memory);
+  let scheduler_fallback: Scheduler = Clone.clone(scheduler);
+
+  if !call.ok {
+    return ToolExecResult {
+      memory: memory,
+      scheduler: scheduler,
+      ok: false,
+      output: "invalid tool call: ".concat(call.error),
+    };
+  } else if call.name == "help" {
+    return ToolExecResult {
+      memory: memory,
+      scheduler: scheduler,
+      ok: true,
+      output: tools_help_text(),
+    };
+  } else if call.name == "memory.put" {
+    let sep: i32 = split_index(call.payload, "|");
+    if sep < 0 {
+      return ToolExecResult {
+        memory: memory,
+        scheduler: scheduler,
+        ok: false,
+        output: "memory.put requires <key>|<value>",
+      };
+    }
+    let key: String = trim_ws(call.payload.slice(0, sep));
+    let value: String = trim_ws(call.payload.slice(sep + 1, call.payload.len()));
+    if key == "" {
+      return ToolExecResult {
+        memory: memory,
+        scheduler: scheduler,
+        ok: false,
+        output: "memory.put key cannot be empty",
+      };
+    }
+    let mut next_mem: MemoryStore = memory_put(Clone.clone(memory), Clone.clone(key), Clone.clone(value));
+    next_mem = memory_record_jsonl(next_mem, jsonl_path, "memory.put", key.concat("=").concat(value));
+    return ToolExecResult {
+      memory: next_mem,
+      scheduler: scheduler,
+      ok: true,
+      output: "stored key=".concat(key),
+    };
+  } else if call.name == "memory.get" {
+    let key: String = trim_ws(call.payload);
+    if key == "" {
+      return ToolExecResult {
+        memory: memory,
+        scheduler: scheduler,
+        ok: false,
+        output: "memory.get requires <key>",
+      };
+    }
+    let value: String = memory_get_or(Clone.clone(memory), key, "(missing)");
+    return ToolExecResult {
+      memory: memory,
+      scheduler: scheduler,
+      ok: true,
+      output: value,
+    };
+  } else if call.name == "memory.keys" {
+    let keys: Vec[String] = memory_keys(Clone.clone(memory));
+    return ToolExecResult {
+      memory: memory,
+      scheduler: scheduler,
+      ok: true,
+      output: join_strings(keys),
+    };
+  } else if call.name == "schedule.add" {
+    let sep: i32 = split_index(call.payload, "|");
+    if sep < 0 {
+      return ToolExecResult {
+        memory: memory,
+        scheduler: scheduler,
+        ok: false,
+        output: "schedule.add requires <seconds>|<prompt>",
+      };
+    }
+    let every_s: i32 = parse_i32(trim_ws(call.payload.slice(0, sep)));
+    let prompt: String = trim_ws(call.payload.slice(sep + 1, call.payload.len()));
+    if prompt == "" {
+      return ToolExecResult {
+        memory: memory,
+        scheduler: scheduler,
+        ok: false,
+        output: "schedule.add prompt cannot be empty",
+      };
+    }
+    let add: AddTaskResult = scheduler_add(scheduler, every_s, Clone.clone(prompt));
+    let mut next_mem: MemoryStore = memory_record_jsonl(
+      memory,
+      jsonl_path,
+      "schedule.add",
+      add.id.to_string().concat(":").concat(prompt),
+    );
+    let mut safe_every: i32 = every_s;
+    if safe_every <= 0 { safe_every = 1; }
+    return ToolExecResult {
+      memory: next_mem,
+      scheduler: add.scheduler,
+      ok: true,
+      output: "scheduled #"
+        .concat(add.id.to_string())
+        .concat(" every=")
+        .concat(safe_every.to_string())
+        .concat("s"),
+    };
+  } else if call.name == "schedule.due" {
+    let due: Vec[ScheduledTask] = scheduler_due(Clone.clone(scheduler), tm.now_ns());
+    return ToolExecResult {
+      memory: memory,
+      scheduler: scheduler,
+      ok: true,
+      output: due_summary(due),
+    };
+  } else if call.name == "shell.exec" {
+    let cmd: String = trim_ws(call.payload);
+    if cmd == "" {
+      return ToolExecResult {
+        memory: memory,
+        scheduler: scheduler,
+        ok: false,
+        output: "shell.exec requires <command>",
+      };
+    }
+    let decision: CommandDecision = evaluate(blocked, Clone.clone(cmd));
+    let score: i32 = ffi_prefix_score(Clone.clone(cmd));
+    if !decision.allowed {
+      return ToolExecResult {
+        memory: memory,
+        scheduler: scheduler,
+        ok: false,
+        output: "blocked risk="
+          .concat(risk_name(decision.risk))
+          .concat(" reason=")
+          .concat(decision.reason)
+          .concat(" ffi_score=")
+          .concat(score.to_string()),
+      };
+    }
+
+    let mut next_mem: MemoryStore = memory_record_jsonl(memory, Clone.clone(jsonl_path), "shell.exec", Clone.clone(cmd));
+    let run: String = run_shell_capture(cmd, workspace, "shell_exec");
+    next_mem = memory_record_jsonl(next_mem, jsonl_path, "shell.exec.result", limit_text(run, 240));
+    return ToolExecResult {
+      memory: next_mem,
+      scheduler: scheduler,
+      ok: true,
+      output: "risk="
+        .concat(risk_name(decision.risk))
+        .concat(" ffi_score=")
+        .concat(score.to_string())
+        .concat("\n")
+        .concat(run),
+    };
+  } else if call.name == "web.get" {
+    if !allow_network {
+      return ToolExecResult {
+        memory: memory,
+        scheduler: scheduler,
+        ok: false,
+        output: "web.get disabled by config",
+      };
+    }
+    let url: String = trim_ws(call.payload);
+    if url == "" {
+      return ToolExecResult {
+        memory: memory,
+        scheduler: scheduler,
+        ok: false,
+        output: "web.get requires <url>",
+      };
+    }
+    let script: String = "curl -L -sS "
+      .concat(shell_quote(url))
+      .concat(" | head -n 40");
+    let mut next_mem: MemoryStore = memory_record_jsonl(memory, Clone.clone(jsonl_path), "web.get", Clone.clone(url));
+    let run: String = run_shell_capture(script, workspace, "web_get");
+    next_mem = memory_record_jsonl(next_mem, jsonl_path, "web.get.result", limit_text(run, 240));
+    return ToolExecResult {
+      memory: next_mem,
+      scheduler: scheduler,
+      ok: true,
+      output: run,
+    };
+  } else {
+    return ToolExecResult {
+      memory: memory,
+      scheduler: scheduler,
+      ok: false,
+      output: "unknown tool: ".concat(call.name),
+    };
+  }
+
+  return ToolExecResult {
+    memory: memory_fallback,
+    scheduler: scheduler_fallback,
+    ok: false,
+    output: "internal dispatch error",
+  };
+}

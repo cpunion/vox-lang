@@ -1,0 +1,141 @@
+import "std/testing" as t
+import "std/string" as s
+import "std/collections" as c
+import "std/fs" as fs
+import "vox_claw" as vc
+
+fn test_vox_claw_memory_smoke() -> () {
+  let mut mem: vc.MemoryStore = vc.memory_store();
+  mem = vc.memory_put(mem, "k", "v");
+  mem = vc.memory_record(mem, "event", "hello");
+
+  t.assert_eq(vc.memory_get_or(mem, "k", "x"), "v");
+  t.assert_eq(vc.memory_get_or(mem, "none", "x"), "x");
+
+  let recent: Vec[vc.MemoryRecord] = vc.memory_recent(mem, 1);
+  t.assert_eq(recent.len(), 1);
+  t.assert_eq(recent.get(0).key, "event");
+}
+
+fn test_vox_claw_jsonl_storage_smoke() -> () {
+  let path: String = "target/vox_claw_test/memory/events.jsonl";
+  vc.memory_jsonl_reset(path);
+
+  let mut mem: vc.MemoryStore = vc.memory_store();
+  mem = vc.memory_record_jsonl(mem, path, "topic", "openai");
+  mem = vc.memory_record_jsonl(mem, path, "model", "gpt-5-nano");
+
+  let rows: Vec[vc.MemoryRecord] = vc.memory_jsonl_load(path);
+  t.assert_eq(rows.len(), 2);
+  t.assert_eq(rows.get(0).key, "topic");
+  t.assert_eq(rows.get(1).value, "gpt-5-nano");
+
+  let restored: vc.MemoryStore = vc.memory_store_from_jsonl(path);
+  t.assert_eq(vc.memory_get_or(restored, "model", "none"), "gpt-5-nano");
+}
+
+fn test_vox_claw_scheduler_due_smoke() -> () {
+  let mut sched: vc.Scheduler = vc.scheduler();
+  let add: vc.AddTaskResult = vc.scheduler_add(sched, 10, "ping");
+  sched = add.scheduler;
+
+  let due0: Vec[vc.ScheduledTask] = vc.scheduler_due(sched, (5 as i64) * (1000000000 as i64));
+  t.assert_eq(due0.len(), 1);
+
+  sched = vc.scheduler_mark_run(sched, add.id, (5 as i64) * (1000000000 as i64));
+  let due1: Vec[vc.ScheduledTask] = vc.scheduler_due(sched, (12 as i64) * (1000000000 as i64));
+  t.assert_eq(due1.len(), 0);
+
+  let due2: Vec[vc.ScheduledTask] = vc.scheduler_due(sched, (20 as i64) * (1000000000 as i64));
+  t.assert_eq(due2.len(), 1);
+}
+
+fn test_vox_claw_security_smoke() -> () {
+  let blocked = vc.blocked_tokens();
+  let good: vc.CommandDecision = vc.evaluate(blocked, "ls -la");
+  t.assert(good.allowed);
+  t.assert_eq(vc.risk_name(good.risk), "low");
+
+  let bad: vc.CommandDecision = vc.evaluate(blocked, "rm -rf /");
+  t.assert(!bad.allowed);
+  t.assert_eq(vc.risk_name(bad.risk), "high");
+}
+
+fn test_vox_claw_gateway_render_smoke() -> () {
+  let raw: String = vc.render_chat_http(
+    "api.openai.com",
+    "/v1/chat/completions",
+    "gpt-5-nano",
+    "hi",
+    "token",
+  );
+  t.assert(s.contains(s.view_all(raw), "POST /v1/chat/completions HTTP/1.1"));
+  t.assert(s.contains(s.view_all(raw), "Authorization: Bearer token"));
+  t.assert(s.contains(s.view_all(raw), "Content-Type: application/json"));
+}
+
+fn test_vox_claw_dotenv_value_smoke() -> () {
+  let env_path: String = "target/vox_claw_test/.env";
+  vc.memory_jsonl_reset(env_path);
+  fs.write_string(env_path, "OPENAI_API_KEY=\"sk-test-123\"\nOTHER=1\n");
+  t.assert_eq(vc.dotenv_value(env_path, "OPENAI_API_KEY"), "sk-test-123");
+}
+
+fn test_vox_claw_ffi_smoke() -> () {
+  t.assert(vc.ffi_eq("abc", "abc"));
+  t.assert_eq(vc.ffi_order("abc", "abd"), -1);
+  t.assert_eq(vc.ffi_prefix_score("git status"), 3);
+  t.assert_eq(vc.ffi_prefix_score("rm -rf /tmp"), 10);
+}
+
+fn test_std_set_smoke() -> () {
+  let mut xs: c.Set[String] = c.set();
+  xs = xs.add("a");
+  xs = xs.add("a");
+  xs = xs.add("b");
+  t.assert_eq(xs.len(), 2);
+  t.assert(xs.contains("a"));
+  xs = xs.remove("a");
+  t.assert(!xs.contains("a"));
+}
+
+fn test_vox_claw_default_model_openai_smoke() -> () {
+  let cfg: vc.AssistantConfig = vc.config_default();
+  t.assert_eq(cfg.model, "gpt-5-nano");
+  t.assert_eq(cfg.api_host, "api.openai.com");
+  t.assert_eq(cfg.api_path, "/v1/chat/completions");
+}
+
+fn test_vox_claw_parse_tool_call_smoke() -> () {
+  let c0: vc.ToolCall = vc.parse_tool_call("TOOL:memory.put|topic|vox");
+  t.assert(c0.ok);
+  t.assert_eq(c0.name, "memory.put");
+  t.assert_eq(c0.payload, "topic|vox");
+
+  let c1: vc.ToolCall = vc.parse_tool_call("final answer");
+  t.assert(!c1.ok);
+}
+
+fn test_vox_claw_execute_tool_memory_put_smoke() -> () {
+  let path: String = "target/vox_claw_test/tool/events.jsonl";
+  vc.memory_jsonl_reset(path);
+
+  let call: vc.ToolCall = vc.parse_tool_call("TOOL:memory.put|project|vox-lang");
+  let out: vc.ToolExecResult = vc.execute_tool(
+    call,
+    vc.memory_store(),
+    vc.scheduler(),
+    path,
+    "target/vox_claw_test",
+    true,
+    vc.blocked_tokens(),
+  );
+  t.assert(out.ok);
+  t.assert_eq(vc.memory_get_or(out.memory, "project", ""), "vox-lang");
+}
+
+fn test_vox_claw_prompt_multiline_literal_smoke() -> () {
+  let txt: String = vc.tool_protocol_prompt();
+  t.assert(s.contains(s.view_all(txt), "Tool protocol:"));
+  t.assert(s.contains(s.view_all(txt), "TOOL:<name>|<payload>"));
+}

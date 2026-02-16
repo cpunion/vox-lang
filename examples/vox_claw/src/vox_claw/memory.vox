@@ -1,0 +1,281 @@
+import { Map, map, Queue, queue } from "std/collections"
+import "std/fs" as fs
+import "std/string" as s
+import "std/time" as tm
+
+fn parent_dir(path: String) -> String {
+  let idx: i32 = s.last_index_of(s.view_all(path), "/");
+  if idx < 0 { return "."; }
+  if idx == 0 { return "/"; }
+  return path.slice(0, idx);
+}
+
+fn parse_i64(raw: String) -> i64 {
+  if raw.len() == 0 { return 0; }
+  let mut i: i32 = 0;
+  let mut sign: i64 = 1;
+  if raw.byte_at(0) == 45 {
+    sign = -1;
+    i = 1;
+  }
+  let mut out: i64 = 0;
+  while i < raw.len() {
+    let ch: i32 = raw.byte_at(i);
+    if ch < 48 || ch > 57 { return 0; }
+    out = out * (10 as i64) + ((ch - 48) as i64);
+    i = i + 1;
+  }
+  return sign * out;
+}
+
+fn json_escape(raw: String) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < raw.len() {
+    let ch: i32 = raw.byte_at(i);
+    if ch == 34 {
+      out = out.concat("\\\"");
+    } else if ch == 92 {
+      out = out.concat("\\\\");
+    } else if ch == 10 {
+      out = out.concat("\\n");
+    } else if ch == 13 {
+      out = out.concat("\\r");
+    } else if ch == 9 {
+      out = out.concat("\\t");
+    } else {
+      out = out.concat(raw.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn json_unescape(raw: String) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < raw.len() {
+    let ch: i32 = raw.byte_at(i);
+    if ch == 92 && i + 1 < raw.len() {
+      let nx: i32 = raw.byte_at(i + 1);
+      if nx == 110 {
+        out = out.concat("\n");
+      } else if nx == 114 {
+        out = out.concat("\r");
+      } else if nx == 116 {
+        out = out.concat("\t");
+      } else if nx == 34 {
+        out = out.concat("\"");
+      } else if nx == 92 {
+        out = out.concat("\\");
+      } else {
+        out = out.concat(raw.slice(i + 1, i + 2));
+      }
+      i = i + 2;
+    } else {
+      out = out.concat(raw.slice(i, i + 1));
+      i = i + 1;
+    }
+  }
+  return out;
+}
+
+fn json_find_string(line: String, field: String) -> String {
+  let pre: String = "\"".concat(field).concat("\":\"");
+  let at: i32 = s.index_of(s.view_all(line), pre);
+  if at < 0 { return ""; }
+
+  let mut i: i32 = at + pre.len();
+  let mut raw: String = "";
+  while i < line.len() {
+    let ch: i32 = line.byte_at(i);
+    if ch == 34 { return json_unescape(raw); }
+    if ch == 92 && i + 1 < line.len() {
+      raw = raw.concat("\\").concat(line.slice(i + 1, i + 2));
+      i = i + 2;
+    } else {
+      raw = raw.concat(line.slice(i, i + 1));
+      i = i + 1;
+    }
+  }
+  return json_unescape(raw);
+}
+
+fn json_find_i64(line: String, field: String) -> i64 {
+  let pre: String = "\"".concat(field).concat("\":");
+  let at: i32 = s.index_of(s.view_all(line), pre);
+  if at < 0 { return 0; }
+  let start: i32 = at + pre.len();
+
+  let mut i: i32 = start;
+  while i < line.len() {
+    let ch: i32 = line.byte_at(i);
+    if ch == 44 || ch == 125 {
+      return parse_i64(line.slice(start, i));
+    }
+    i = i + 1;
+  }
+  return parse_i64(line.slice(start, line.len()));
+}
+
+fn line_end(text: String, start: i32) -> i32 {
+  if start >= text.len() { return text.len(); }
+  let rest: String = text.slice(start, text.len());
+  let lf: i32 = s.index_of(s.view_all(rest), "\n");
+  if lf < 0 { return text.len(); }
+  return start + lf;
+}
+
+pub struct MemoryRecord {
+  pub key: String,
+  pub value: String,
+  pub ts_ns: i64,
+}
+
+pub struct MemoryStore {
+  facts: Map[String, String],
+  timeline: Queue[MemoryRecord],
+}
+
+impl Clone for MemoryRecord {
+  fn clone(r: MemoryRecord) -> MemoryRecord {
+    return MemoryRecord {
+      key: Clone.clone(r.key),
+      value: Clone.clone(r.value),
+      ts_ns: r.ts_ns,
+    };
+  }
+}
+
+impl Clone for MemoryStore {
+  fn clone(s: MemoryStore) -> MemoryStore {
+    return MemoryStore {
+      facts: Clone.clone(s.facts),
+      timeline: Clone.clone(s.timeline),
+    };
+  }
+}
+
+pub fn memory_store() -> MemoryStore {
+  return MemoryStore {
+    facts: map(),
+    timeline: queue(),
+  };
+}
+
+pub fn memory_put(store: MemoryStore, key: String, value: String) -> MemoryStore {
+  let mut out: MemoryStore = store;
+  out.facts = out.facts.set(key, value);
+  return out;
+}
+
+pub fn memory_get_or(store: MemoryStore, key: String, fallback: String) -> String {
+  return store.facts.get_or(key, fallback);
+}
+
+pub fn memory_record(store: MemoryStore, key: String, value: String) -> MemoryStore {
+  let mut out: MemoryStore = store;
+  let rec: MemoryRecord = MemoryRecord {
+    key: key,
+    value: value,
+    ts_ns: tm.now_ns(),
+  };
+  out.timeline = out.timeline.push(rec);
+  return out;
+}
+
+pub fn memory_keys(store: MemoryStore) -> Vec[String] {
+  return store.facts.keys();
+}
+
+pub fn memory_recent(store: MemoryStore, limit: i32) -> Vec[MemoryRecord] {
+  let mut out: Vec[MemoryRecord] = Vec();
+  let xs: Vec[MemoryRecord] = store.timeline.to_vec();
+  let mut start: i32 = xs.len() - limit;
+  if start < 0 { start = 0; }
+  let mut i: i32 = start;
+  while i < xs.len() {
+    out.push(xs.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn memory_record_to_json(rec: MemoryRecord) -> String {
+  return "{\"ts_ns\":"
+    .concat(rec.ts_ns.to_string())
+    .concat(",\"key\":\"")
+    .concat(json_escape(rec.key))
+    .concat("\",\"value\":\"")
+    .concat(json_escape(rec.value))
+    .concat("\"}");
+}
+
+pub fn memory_record_from_json(line: String) -> MemoryRecord {
+  return MemoryRecord {
+    ts_ns: json_find_i64(line, "ts_ns"),
+    key: json_find_string(line, "key"),
+    value: json_find_string(line, "value"),
+  };
+}
+
+pub fn memory_jsonl_reset(path: String) -> () {
+  fs.mkdir_p(parent_dir(path));
+  fs.write_string(path, "");
+}
+
+pub fn memory_jsonl_append(path: String, rec: MemoryRecord) -> () {
+  fs.mkdir_p(parent_dir(path));
+  let mut all: String = "";
+  if fs.exists(path) {
+    all = fs.read_to_string(path);
+  }
+  if all.len() > 0 && all.byte_at(all.len() - 1) != 10 {
+    all = all.concat("\n");
+  }
+  all = all.concat(memory_record_to_json(rec)).concat("\n");
+  fs.write_string(path, all);
+}
+
+pub fn memory_record_jsonl(store: MemoryStore, path: String, key: String, value: String) -> MemoryStore {
+  let mut out: MemoryStore = store;
+  let ts: i64 = tm.now_ns();
+  let rec_append: MemoryRecord = MemoryRecord {
+    key: Clone.clone(key),
+    value: Clone.clone(value),
+    ts_ns: ts,
+  };
+  let rec_queue: MemoryRecord = MemoryRecord { key: key, value: value, ts_ns: ts };
+  out.timeline = out.timeline.push(rec_queue);
+  memory_jsonl_append(path, rec_append);
+  return out;
+}
+
+pub fn memory_jsonl_load(path: String) -> Vec[MemoryRecord] {
+  let mut out: Vec[MemoryRecord] = Vec();
+  if !fs.exists(path) { return out; }
+  let text: String = fs.read_to_string(path);
+  let mut start: i32 = 0;
+  while start < text.len() {
+    let end: i32 = line_end(text, start);
+    let line: String = text.slice(start, end);
+    if line.len() > 0 {
+      out.push(memory_record_from_json(line));
+    }
+    start = end + 1;
+  }
+  return out;
+}
+
+pub fn memory_store_from_jsonl(path: String) -> MemoryStore {
+  let mut out: MemoryStore = memory_store();
+  let rows: Vec[MemoryRecord] = memory_jsonl_load(path);
+  let mut i: i32 = 0;
+  while i < rows.len() {
+    let rec: MemoryRecord = rows.get(i);
+    out.facts = out.facts.set(Clone.clone(rec.key), Clone.clone(rec.value));
+    out.timeline = out.timeline.push(rec);
+    i = i + 1;
+  }
+  return out;
+}
