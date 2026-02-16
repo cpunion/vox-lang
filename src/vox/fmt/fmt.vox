@@ -1,0 +1,252 @@
+// Stability: Experimental module API (vox/fmt).
+
+import "std/fs" as fs
+
+struct ScanState {
+  delta: i32,
+  in_triple: bool,
+}
+
+fn is_space_tab(b: i32) -> bool { return b == 32 || b == 9; }
+
+fn has_suffix(s: String, suf: String) -> bool {
+  if s.len() < suf.len() { return false; }
+  return s.slice(s.len() - suf.len(), s.len()) == suf;
+}
+
+fn has_prefix(s: String, pre: String) -> bool {
+  if s.len() < pre.len() { return false; }
+  return s.slice(0, pre.len()) == pre;
+}
+
+fn line_has_non_ws(s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if !is_space_tab(s.byte_at(i)) && s.byte_at(i) != 13 {
+      return true;
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn trim_left_ws(s: String) -> String {
+  let mut i: i32 = 0;
+  while i < s.len() && is_space_tab(s.byte_at(i)) {
+    i = i + 1;
+  }
+  return s.slice(i, s.len());
+}
+
+fn trim_right_ws(s: String) -> String {
+  if s.len() == 0 { return s; }
+  let mut i: i32 = s.len() - 1;
+  while i >= 0 {
+    let b: i32 = s.byte_at(i);
+    if !is_space_tab(b) && b != 13 {
+      return s.slice(0, i + 1);
+    }
+    i = i - 1;
+  }
+  return "";
+}
+
+fn repeat_spaces(n0: i32) -> String {
+  let mut n: i32 = n0;
+  if n < 0 { n = 0; }
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < n {
+    out = out.concat(" ");
+    i = i + 1;
+  }
+  return out;
+}
+
+fn scan_line_state(line: String, in_triple0: bool) -> ScanState {
+  let mut in_triple: bool = in_triple0;
+  let mut delta: i32 = 0;
+  let mut i: i32 = 0;
+  while i < line.len() {
+    if in_triple {
+      if i + 2 < line.len() && line.byte_at(i) == 34 && line.byte_at(i + 1) == 34 && line.byte_at(i + 2) == 34 {
+        in_triple = false;
+        i = i + 3;
+        continue;
+      }
+      i = i + 1;
+      continue;
+    }
+
+    // line comment
+    if i + 1 < line.len() && line.byte_at(i) == 47 && line.byte_at(i + 1) == 47 {
+      break;
+    }
+
+    // triple-quoted string
+    if i + 2 < line.len() && line.byte_at(i) == 34 && line.byte_at(i + 1) == 34 && line.byte_at(i + 2) == 34 {
+      in_triple = true;
+      i = i + 3;
+      continue;
+    }
+
+    // normal string
+    if line.byte_at(i) == 34 {
+      i = i + 1;
+      while i < line.len() {
+        let b: i32 = line.byte_at(i);
+        if b == 92 { // escape
+          i = i + 2;
+          continue;
+        }
+        if b == 34 {
+          i = i + 1;
+          break;
+        }
+        i = i + 1;
+      }
+      continue;
+    }
+
+    if line.byte_at(i) == 123 {
+      delta = delta + 1;
+      i = i + 1;
+      continue;
+    }
+    if line.byte_at(i) == 125 {
+      delta = delta - 1;
+      i = i + 1;
+      continue;
+    }
+    i = i + 1;
+  }
+  return ScanState { delta: delta, in_triple: in_triple };
+}
+
+pub fn format_text(src: String) -> String {
+  if src.len() == 0 { return src; }
+
+  let mut out: String = "";
+  let mut indent: i32 = 0;
+  let mut in_triple: bool = false;
+  let mut blank_run: i32 = 0;
+
+  let mut line_start: i32 = 0;
+  let mut i: i32 = 0;
+  while i <= src.len() {
+    let at_eof: bool = i == src.len();
+    if !at_eof && src.byte_at(i) != 10 {
+      i = i + 1;
+      continue;
+    }
+
+    let raw_line: String = src.slice(line_start, i);
+    line_start = i + 1;
+    i = i + 1;
+
+    if in_triple {
+      out = out.concat(raw_line).concat("\n");
+      let st0: ScanState = scan_line_state(raw_line, true);
+      in_triple = st0.in_triple;
+      continue;
+    }
+
+    let line_trim_right: String = trim_right_ws(raw_line);
+    let content: String = trim_left_ws(line_trim_right);
+    if !line_has_non_ws(content) {
+      blank_run = blank_run + 1;
+      if blank_run <= 1 {
+        out = out.concat("\n");
+      }
+      continue;
+    }
+    blank_run = 0;
+
+    let mut line_indent: i32 = indent;
+    if content.len() > 0 && content.byte_at(0) == 125 && line_indent > 0 { // '}'
+      line_indent = line_indent - 1;
+    }
+    out = out.concat(repeat_spaces(line_indent * 2)).concat(content).concat("\n");
+
+    let st: ScanState = scan_line_state(content, false);
+    indent = indent + st.delta;
+    if indent < 0 { indent = 0; }
+    in_triple = st.in_triple;
+  }
+
+  // Keep a single trailing newline and no trailing blank line run.
+  while out.len() >= 2 && out.slice(out.len() - 2, out.len()) == "\n\n" {
+    out = out.slice(0, out.len() - 1);
+  }
+  if out.len() > 0 && out.byte_at(out.len() - 1) != 10 {
+    out = out.concat("\n");
+  }
+  return out;
+}
+
+fn collect_files_from_path(path: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  if fs.exists(path) && has_suffix(path, ".vox") {
+    out.push(path);
+    return out;
+  }
+  let xs: Vec[String] = fs.walk_vox_files(path);
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    out.push(xs.get(i));
+    i = i + 1;
+  }
+  if out.len() == 0 && fs.exists(path) {
+    let all: Vec[String] = fs.walk_vox_files(".");
+    let mut pre: String = path;
+    if pre != "" && !has_suffix(pre, "/") {
+      pre = pre.concat("/");
+    }
+    let mut j: i32 = 0;
+    while j < all.len() {
+      let p: String = all.get(j);
+      if p == path || has_prefix(p, pre) {
+        out.push(p);
+      }
+      j = j + 1;
+    }
+  }
+  return out;
+}
+
+fn contains(xs: Vec[String], x: String) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if xs.get(i) == x { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn dedup_paths(xs: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let x: String = xs.get(i);
+    if !contains(out, x) {
+      out.push(x);
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn discover_files(paths: Vec[String]) -> Vec[String] {
+  let mut all: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < paths.len() {
+    let xs: Vec[String] = collect_files_from_path(paths.get(i));
+    let mut j: i32 = 0;
+    while j < xs.len() {
+      all.push(xs.get(j));
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return dedup_paths(all);
+}
