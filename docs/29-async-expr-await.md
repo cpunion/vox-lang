@@ -72,8 +72,7 @@ This lowered form becomes the input to the existing async CFG builder and captur
 
 ## Remaining Async Work (Outside D03-5)
 
-1. Generic async instantiation for const/type-pack parameter shapes (`async_inst` still rejects these).
-2. Runtime executor integration for async entrypoints (`async main` / async tests).
+1. Runtime executor ergonomics beyond v0 tight-loop polling (`wake/park/backoff`).
 
 ## Completed Since This Doc
 
@@ -81,6 +80,10 @@ This lowered form becomes the input to the existing async CFG builder and captur
   - generic method instantiation is materialized and queued via `PendingInst`,
   - default const params (when present) are applied for monomorphized poll calls,
   - async await paths are covered by typecheck/irgen/compile smoke tests.
+- Generic async instantiation no longer rejects const/type-pack shapes in `async_inst`:
+  - const generic async calls (e.g. `f[2](...).await`) now pass end-to-end,
+  - type-pack async calls (e.g. `f[i32, String](...).await`) now pass end-to-end,
+  - impl lookup prefers exact `for_ty == recv_ty` to avoid base/inst impl ambiguity.
 
 ## Non-goals
 

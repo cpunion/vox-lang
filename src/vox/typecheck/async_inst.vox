@@ -229,9 +229,9 @@ fn ensure_async_inst_impl_and_poll(
     is_pub: false,
     type_params: Vec(),
     type_param_packs: Vec(),
-    const_params: Vec(),
+    const_params: sig_use.const_params,
     type_param_bounds: Vec(),
-    const_where_bounds: Vec(),
+    const_where_bounds: sig_use.const_where_bounds,
   };
   c = funcs_replace_by_name(c, mod_path, poll_inst_name, FuncSym { mod_path: mod_path, name: poll_inst_name, sig: poll_sig });
 
@@ -293,12 +293,6 @@ pub fn ensure_async_inst_for_generic_call(
 ) -> EnsureAsyncInstResult {
   let mut c: Ctx = ctx0;
   let _mp0: String = mod_path;
-  if sig_use.type_param_packs.len() != 0 {
-    return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "async inst for type parameter pack is not supported yet"), ctx: c, frame_ty: c.ty_bad };
-  }
-  if sig_use.const_params.len() != 0 {
-    return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "async inst for const generics is not supported yet"), ctx: c, frame_ty: c.ty_bad };
-  }
   let base_async_r: FindAsyncFnResult = find_async_fn(c, base_mod, base_name);
   if !base_async_r.found {
     return EnsureAsyncInstResult { ok: false, err: type_error_at(ast.span0(), "internal: missing async fn metadata for generic call"), ctx: c, frame_ty: c.ty_bad };
@@ -367,6 +361,22 @@ fn prep_call_callee(exprs: ast.ExprPool, callee: i32) -> PrepCalleeResult {
     }
   }
   return PrepCalleeResult { ok: false, alias: "", name: "" };
+}
+
+fn prep_has_type_param_pack(sig: FuncSig) -> bool {
+  return sig.type_param_packs.len() == 1;
+}
+
+fn prep_explicit_type_arg_arity_ok(sig: FuncSig, explicit_targ_n: i32) -> bool {
+  if !prep_has_type_param_pack(sig) { return explicit_targ_n == sig.type_params.len(); }
+  return explicit_targ_n >= (sig.type_params.len() - 1);
+}
+
+fn prep_explicit_type_arg_bind_name(sig: FuncSig, idx: i32) -> String {
+  if !prep_has_type_param_pack(sig) { return sig.type_params.get(idx); }
+  let fixed_n: i32 = sig.type_params.len() - 1;
+  if idx < fixed_n { return sig.type_params.get(idx); }
+  return sig.type_param_packs.get(0);
 }
 
 fn prep_try_infer_async_call_subs(
@@ -485,21 +495,72 @@ fn prep_async_inst_in_expr_inner(ctx0: Ctx, w: World, mod_path: String, imps: Im
     if fr.sig.type_params.len() == 0 && fr.sig.const_params.len() == 0 { return prep_ok(c); }
     let ar: FindAsyncFnResult = find_async_fn(c, target_mod, base_name);
     if !ar.found { return prep_ok(c); }
-    if fr.sig.type_param_packs.len() != 0 || fr.sig.const_params.len() != 0 { return prep_ok(c); }
 
     let mut subs0: Vec[TySub] = Vec();
+    let mut csubs0: Vec[ConstSub] = Vec();
     if targs.len() != 0 {
-      if targs.len() != fr.sig.type_params.len() { return prep_ok(c); }
+      let mut explicit_targ_n: i32 = targs.len();
+      let mut first_const: i32 = -1;
+      let mut xi: i32 = 0;
+      while xi < targs.len() {
+        if is_const_generic_arg_tn_or_local(l0, targs.get(xi)) {
+          first_const = xi;
+          xi = targs.len();
+        } else {
+          xi = xi + 1;
+        }
+      }
+      if first_const != -1 {
+        explicit_targ_n = first_const;
+        let mut xj: i32 = first_const;
+        while xj < targs.len() {
+          if !is_const_generic_arg_tn_or_local(l0, targs.get(xj)) { return prep_ok(c); }
+          xj = xj + 1;
+        }
+      }
+      if !prep_explicit_type_arg_arity_ok(fr.sig, explicit_targ_n) { return prep_ok(c); }
+
+      let explicit_const_n: i32 = targs.len() - explicit_targ_n;
+      if explicit_const_n > fr.sig.const_params.len() { return prep_ok(c); }
+
+      let has_pack: bool = prep_has_type_param_pack(fr.sig);
+      let pack_name: String = if has_pack { fr.sig.type_param_packs.get(0) } else { "" };
+      let mut pack_explicit_tys: Vec[i32] = Vec();
       let mut ti: i32 = 0;
-      while ti < targs.len() {
+      while ti < explicit_targ_n {
         if is_const_generic_arg_tn_or_local(l0, targs.get(ti)) { return prep_ok(c); }
         let rr: ResolveTyResult = resolve_type(c, w, mod_path, imps, l0.type_params, targs.get(ti));
         c = rr.ctx;
         if !rr.ok { return prep_ok(c); }
-        subs0.push(TySub { name: fr.sig.type_params.get(ti), ty: rr.idx });
+        let tp: String = prep_explicit_type_arg_bind_name(fr.sig, ti);
+        if has_pack && tp == pack_name {
+          pack_explicit_tys.push(rr.idx);
+          if subs_lookup(subs0, tp) == -1 { subs0.push(TySub { name: tp, ty: rr.idx }); }
+          ti = ti + 1;
+          continue;
+        }
+        subs0.push(TySub { name: tp, ty: rr.idx });
         ti = ti + 1;
       }
+      if has_pack && pack_explicit_tys.len() > 0 {
+        subs0 = append_pack_alias_subs(subs0, pack_name, pack_explicit_tys);
+      }
+
+      let mut ci: i32 = 0;
+      while ci < fr.sig.const_params.len() {
+        let cp: ConstParamSig = fr.sig.const_params.get(ci);
+        if ci < explicit_const_n {
+          let pr: ParseConstGenericArgWithLocalsResult = parse_const_generic_arg_with_locals(c, l0, targs.get(explicit_targ_n + ci), cp.ty);
+          if !pr.ok || pr.unresolved { return prep_ok(c); }
+          csubs0.push(ConstSub { name: cp.name, ty: cp.ty, iv: pr.iv, text: pr.text });
+        } else {
+          if !cp.has_default { return prep_ok(c); }
+          csubs0.push(ConstSub { name: cp.name, ty: cp.ty, iv: cp.default_iv, text: cp.default_text });
+        }
+        ci = ci + 1;
+      }
     } else {
+      if fr.sig.type_param_packs.len() != 0 || fr.sig.const_params.len() != 0 { return prep_ok(c); }
       let ir: PrepInferSubsResult = prep_try_infer_async_call_subs(c, w, mod_path, imps, exprs, l0, fr.sig, args);
       if !ir.ok { return prep_err(ir.ctx, ir.err); }
       c = ir.ctx;
@@ -507,7 +568,7 @@ fn prep_async_inst_in_expr_inner(ctx0: Ctx, w: World, mod_path: String, imps: Im
       if subs0.len() == 0 { return prep_ok(c); }
     }
 
-    let er: EnsureAsyncInstResult = ensure_async_inst_for_generic_call(c, w, mod_path, target_mod, base_name, fr.sig, subs0, Vec());
+    let er: EnsureAsyncInstResult = ensure_async_inst_for_generic_call(c, w, mod_path, target_mod, base_name, fr.sig, subs0, csubs0);
     if !er.ok { return prep_err(er.ctx, er.err); }
     return prep_ok(er.ctx);
   }
