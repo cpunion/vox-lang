@@ -158,10 +158,28 @@ fn dummy_type_name() -> ast.TypeName {
   return ast.TypeName { parts: Vec(), args: Vec() };
 }
 
+fn typename_is0(tn: ast.TypeName, s: String) -> bool {
+  return tn.parts.len() == 1 && tn.parts.get(0) == s && tn.args.len() == 0;
+}
+
+fn fallback_zero_expr_for_type(ret: ast.TypeName) -> ast.ExprNode {
+  if typename_is0(ret, "bool") { return ast.ExprNode.Bool(false); }
+  if typename_is0(ret, "f32") || typename_is0(ret, "f64") { return ast.ExprNode.Float("0.0"); }
+  if typename_is0(ret, "String") || typename_is0(ret, "str") { return ast.ExprNode.Str(""); }
+  return ast.ExprNode.Int("0");
+}
+
 struct MkAsyncPollLoopBodyResult { prog: ast.Program, body: ast.Block }
 
-fn mk_async_poll_loop_body(prog0: ast.Program, sp: ast.Span, async_alias: String, inner_name: String) -> MkAsyncPollLoopBodyResult {
+fn mk_async_poll_loop_body(
+  prog0: ast.Program,
+  sp: ast.Span,
+  async_alias: String,
+  inner_name: String,
+  ret: ast.TypeName
+) -> MkAsyncPollLoopBodyResult {
   let mut prog: ast.Program = prog0;
+  let ret_is_unit: bool = typename_is0(ret, "()");
 
   // A dummy expr id to satisfy AST fields where a tail is unused.
   let r_dummy: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Int("0"));
@@ -221,7 +239,11 @@ fn mk_async_poll_loop_body(prog0: ast.Program, sp: ast.Span, async_alias: String
   let r_v: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("v"));
   prog = r_v.prog;
   let mut ready_stmts: Vec[ast.Stmt] = Vec();
-  ready_stmts.push(ast.Stmt.ReturnStmt(sp, true, r_v.id));
+  if ret_is_unit {
+    ready_stmts.push(ast.Stmt.ReturnStmt(sp, false, -1));
+  } else {
+    ready_stmts.push(ast.Stmt.ReturnStmt(sp, true, r_v.id));
+  }
   let r_ready_blk: AddExprToProgResult =
     add_expr_to_prog(prog, sp, ast.ExprNode.Block(ast.ExprBlock { stmts: ready_stmts, has_tail: false, tail: r_dummy.id }));
   prog = r_ready_blk.prog;
@@ -245,6 +267,11 @@ fn mk_async_poll_loop_body(prog0: ast.Program, sp: ast.Span, async_alias: String
   ss.push(s_cx);
   ss.push(s_f);
   ss.push(s_while);
+  if !ret_is_unit {
+    let r_fallback: AddExprToProgResult = add_expr_to_prog(prog, sp, fallback_zero_expr_for_type(ret));
+    prog = r_fallback.prog;
+    ss.push(ast.Stmt.ReturnStmt(sp, true, r_fallback.id));
+  }
   return MkAsyncPollLoopBodyResult { prog: prog, body: ast.Block { stmts: ss } };
 }
 
@@ -265,7 +292,7 @@ fn rewrite_async_main_and_tests_in_program(prog0: ast.Program, emit_driver_main:
       let inner_name: String = fresh_inner_name(prog, "_async$".concat(fd0.name));
       let ir: EnsureAsyncImportResult = ensure_std_async_import(prog, fd0.file, fd0.sp);
       prog = ir.prog;
-      let br: MkAsyncPollLoopBodyResult = mk_async_poll_loop_body(prog, fd0.sp, ir.alias, inner_name);
+      let br: MkAsyncPollLoopBodyResult = mk_async_poll_loop_body(prog, fd0.sp, ir.alias, inner_name, fd0.ret);
       prog = br.prog;
 
       let mut inner: ast.FuncDecl = fd0;

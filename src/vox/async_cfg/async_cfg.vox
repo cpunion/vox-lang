@@ -204,6 +204,8 @@ fn stmt_used_names(exprs: ast.ExprPool, st: ast.Stmt) -> Vec[String] {
       while i < body.stmts.len() { out = vec_union_into(out, stmt_used_names(exprs, body.stmts.get(i))); i = i + 1; }
       out
     },
+    ast.Stmt.TryBegin(_sp, _out) => Vec(),
+    ast.Stmt.TryEnd(_sp) => Vec(),
     ast.Stmt.Break(_sp) => Vec(),
     ast.Stmt.Continue(_sp) => Vec(),
     ast.Stmt.ReturnStmt(_sp, has_ex, ex) => if has_ex { expr_used_names(exprs, ex) } else { Vec() },
@@ -460,7 +462,7 @@ fn lower_stmt_list(b0: Build, ss: Vec[ast.Stmt], cur0: i32, break_tgt: i32, cont
   return LowerResult { b: b, cur: cur };
 }
 
-pub fn build(exprs0: ast.ExprPool, b0: ast.Block) -> BuildResult {
+pub fn build(exprs0: ast.ExprPool, b0: ast.Block, allow_fallthrough_return: bool) -> BuildResult {
   let mut b: Build = Build { exprs: exprs0, blocks: Vec(), next_id: 0, next_await: 0, resume: Vec() };
   let r0: BuildNewBlockResult = build_new_block(b);
   b = r0.b;
@@ -474,11 +476,16 @@ pub fn build(exprs0: ast.ExprPool, b0: ast.Block) -> BuildResult {
   }
 
   // Close any remaining open block.
+  // For unit-return async bodies we allow implicit fallthrough return at block end.
   let idx_end: i32 = build_find_block_idx(b.blocks, end);
   if idx_end != -1 {
     let bb: Block = b.blocks.get(idx_end);
     if match bb.term { Term.Unset => true, _ => false } {
-      b = build_set_term(b, end, Term.Panic);
+      if allow_fallthrough_return {
+        b = build_set_term(b, end, Term.Return);
+      } else {
+        b = build_set_term(b, end, Term.Panic);
+      }
     }
   }
 
