@@ -462,19 +462,33 @@ fn prep_async_inst_in_expr_inner(ctx0: Ctx, w: World, mod_path: String, imps: Im
 
   // Avoid deep recursion on chained concat calls:
   // a.concat(b).concat(c)... builds a right-leaning call/member AST.
-  let ch: PrepConcatCallChain = prep_collect_concat_call_chain(exprs, id);
-  if ch.ok {
-    let base_r: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, ch.base_expr);
-    if !base_r.ok { return base_r; }
-    c = base_r.ctx;
-    let mut i: i32 = 0;
-    while i < ch.parts.len() {
-      let ar: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, ch.parts.get(i));
-      if !ar.ok { return ar; }
-      c = ar.ctx;
-      i = i + 1;
+  // Fast guard: only probe when current node itself is `*.concat(arg)`.
+  let is_concat_call_head: bool =
+    match n {
+      ast.ExprNode.Call(callee0, targs0, args0) =>
+        targs0.len() == 0 &&
+        args0.len() == 1 &&
+        match ast.expr_pool_get(exprs, callee0) {
+          ast.ExprNode.Member(_recv0, name0) => name0 == "concat",
+          _ => false,
+        },
+      _ => false,
+    };
+  if is_concat_call_head {
+    let ch: PrepConcatCallChain = prep_collect_concat_call_chain(exprs, id);
+    if ch.ok {
+      let base_r: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, ch.base_expr);
+      if !base_r.ok { return base_r; }
+      c = base_r.ctx;
+      let mut i: i32 = 0;
+      while i < ch.parts.len() {
+        let ar: PrepAsyncInstResult = prep_async_inst_in_expr_inner(c, w, mod_path, imps, exprs, l0, ch.parts.get(i));
+        if !ar.ok { return ar; }
+        c = ar.ctx;
+        i = i + 1;
+      }
+      return prep_ok(c);
     }
-    return prep_ok(c);
   }
 
   // Recurse first.
