@@ -395,6 +395,15 @@ fn cc_common_flags_for_target(target_os: String, use_msvc: bool) -> String {
   return " -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE";
 }
 
+fn cc_debug_flags(use_msvc: bool) -> String {
+  let raw: String = trim_space_main(proc.getenv("VOX_CC_DEBUG"));
+  let on: bool = raw == "1" || raw == "true" || raw == "yes" || raw == "on";
+  if use_msvc {
+    return if on { " /Zi" } else { "" };
+  }
+  return if on { " -g" } else { " -g0" };
+}
+
 fn ar_cmd_for_target(host_os: String, target_os: String, target_arch: String, target_triple: String, target_abi: String) -> String {
   let ar_env: String = trim_space_main(proc.getenv("AR"));
   if ar_env != "" { return ar_env; }
@@ -432,7 +441,9 @@ fn cc_shared_flag_for_target(target_os: String, use_msvc: bool) -> String {
 fn cc_cmdline_static_msvc(cc: String, cpath: String, out: String, ar: String) -> String {
   let obj: String = out.concat(".obj");
   return cc
-    .concat(" /nologo /TC /Od /Zi /c")
+    .concat(" /nologo /TC /Od")
+    .concat(cc_debug_flags(true))
+    .concat(" /c")
     .concat(" ")
     .concat(cpath)
     .concat(" /Fo:")
@@ -449,7 +460,8 @@ fn cc_cmdline_static_gnu(cc: String, tflags: String, target_os: String, cpath: S
   let obj: String = out.concat(".o");
   return cc
     .concat(tflags)
-    .concat(" -std=c11 -O0 -g")
+    .concat(" -std=c11 -O0")
+    .concat(cc_debug_flags(false))
     .concat(cc_common_flags_for_target(target_os, false))
     .concat(" -c ")
     .concat(cpath)
@@ -466,7 +478,8 @@ fn cc_cmdline_static_gnu(cc: String, tflags: String, target_os: String, cpath: S
 fn cc_cmdline_non_static_msvc(cc: String, target_os: String, target_abi: String, artifact: String, cpath: String, out: String) -> String {
   let shared_flag: String = if artifact == "shared" { cc_shared_flag_for_target(target_os, true) } else { "" };
   return cc
-    .concat(" /nologo /TC /Od /Zi")
+    .concat(" /nologo /TC /Od")
+    .concat(cc_debug_flags(true))
     .concat(shared_flag)
     .concat(" ")
     .concat(cpath)
@@ -479,7 +492,8 @@ fn cc_cmdline_non_static_gnu(cc: String, tflags: String, target_os: String, targ
   let shared_flag: String = if artifact == "shared" { cc_shared_flag_for_target(target_os, false) } else { "" };
   return cc
     .concat(tflags)
-    .concat(" -std=c11 -O0 -g")
+    .concat(" -std=c11 -O0")
+    .concat(cc_debug_flags(false))
     .concat(cc_common_flags_for_target(target_os, false))
     .concat(shared_flag)
     .concat(" ")
@@ -541,6 +555,9 @@ fn usage() -> () {
   print("  --target=<value>    build/build-pkg/test-pkg: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc, i686-w64-mingw32, wasm32-unknown-unknown)\n");
   print("  --artifact=<kind>   build/build-pkg: artifact kind (exe|static|shared)\n");
   print("  --version, -V       print embedded compiler version\n");
+  print("\n");
+  print("env:\n");
+  print("  VOX_CC_DEBUG=1      enable C compiler debug symbols (-g / /Zi)\n");
 }
 
 fn print_invalid_lock_error(msg: String) -> () {
@@ -2842,17 +2859,17 @@ fn main() -> i32 {
 
     let cpath: String = out.concat(".test.c");
     let bin: String = out.concat(".test");
-    let mut tests_for_cache: Vec[String] = Vec();
+    let mut tests_for_selected: Vec[String] = Vec();
     let mut tci: i32 = 0;
     while tci < tests.len() {
-      tests_for_cache.push(tests.get(tci));
+      tests_for_selected.push(tests.get(tci));
       tci = tci + 1;
     }
-    let mut tests_for_compile: Vec[String] = Vec();
-    let mut tco: i32 = 0;
-    while tco < tests.len() {
-      tests_for_compile.push(tests.get(tco));
-      tco = tco + 1;
+    let mut tests_for_hit: Vec[String] = Vec();
+    let mut thi: i32 = 0;
+    while thi < tests_for_selected.len() {
+      tests_for_hit.push(tests_for_selected.get(thi));
+      thi = thi + 1;
     }
     let mut tests_for_queues: Vec[String] = Vec();
     let mut tqu: i32 = 0;
@@ -2867,8 +2884,10 @@ fn main() -> i32 {
       files_for_cache.push(files.get(fci));
       fci = fci + 1;
     }
-    let build_key: String = test_build_cache_key(files_for_cache, tests_for_cache);
-    if !test_build_cache_hit(out, build_key, cpath, bin) {
+    let build_key: String = test_build_cache_key(files_for_cache);
+    let cached_tests: Vec[String] = test_build_cache_load_tests(out, build_key, cpath, bin);
+    let tests_for_compile: Vec[String] = merge_unique_strings(cached_tests, tests_for_selected);
+    if !test_build_cache_hit(out, build_key, cpath, bin, tests_for_hit) {
       let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile });
       if !r.ok {
         print("compile failed: ".concat(r.err).concat("\n"));
@@ -2883,7 +2902,7 @@ fn main() -> i32 {
         print("cc exit: ".concat(code.to_string()).concat("\n"));
         return 1;
       }
-      write_test_build_cache(out, build_key);
+      write_test_build_cache(out, build_key, tests_for_compile);
     }
 
     // Run tests by module-level parallel queues, keeping module-internal order.
