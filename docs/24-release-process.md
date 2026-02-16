@@ -52,6 +52,7 @@
 当前字段：
 
 - `BOOTSTRAP_TAG`：锁定用于滚动自举的 release tag
+- `bootstrap-intrinsics.allow`（文件）：锁定当前 bootstrap 可安全支持的 `src/std` 保留 intrinsic 集合
 
 CI 步骤：
 
@@ -59,6 +60,7 @@ CI 步骤：
 - 下载锁定资产：`vox-lang-${BOOTSTRAP_TAG}-${platform}.tar.gz`
 - 提取 `bin/vox[.exe]` 到 `target/bootstrap/vox_prev[.exe]`
 - 下载/提取失败直接失败
+- 运行 `scripts/ci/check-std-intrinsics.sh`，确保 `src/std` 没有越界调用未允许 intrinsic
 
 ## 4. 触发规则
 
@@ -93,6 +95,14 @@ CI 步骤：
 1. 更新 `scripts/release/bootstrap.lock` 的 `BOOTSTRAP_TAG=vX.Y.Z`
 2. 提交到 `main`
 3. 后续版本继续基于该锁定版本滚动
+
+### 新增 intrinsic 变更说明
+
+若版本内新增了保留 intrinsic（`__xxx`）：
+
+1. 该版本应只包含编译器/runtime 支持（不要求标准库立刻调用）。
+2. 将该版本写入 `bootstrap.lock` 并完成滚动验证后，
+3. 下一版本再启用标准库中的对外 API 调用（避免旧 bootstrap 第一跳失败）。
 
 ## 7. 本地演练
 

@@ -36,6 +36,9 @@ make test          # test-active + examples smoke
 - `scripts/ci/rolling-selfhost.sh`
   - 默认按源码内容 + bootstrap 指纹计算缓存键；缓存命中时跳过自举重编译，仅复用 `target/debug/vox_rolling`。
   - 可通过 `VOX_SELFHOST_FORCE_REBUILD=1` 强制重建。
+- `scripts/ci/check-std-intrinsics.sh`
+  - 校验 `src/std` 中使用的保留 intrinsic（`__*`）是否在 `scripts/release/bootstrap-intrinsics.allow` 中。
+  - 防止标准库提前依赖尚未进入锁定 bootstrap 的 intrinsic，导致滚动自举首跳失败。
 - `scripts/ci/verify-p0p1.sh`
 
 ## 发布与滚动自举
@@ -50,6 +53,15 @@ make release-verify VERSION=v0.2.0-rc1
 ```
 
 详见：`docs/24-release-process.md`。
+
+### 新增 intrinsic 的两阶段策略
+
+由于 rolling bootstrap 会先用“锁定旧版编译器”编译当前源码，新增保留 intrinsic（`__xxx`）时必须分两步：
+
+1. 先落地编译器侧支持（typecheck builtin + codegen/runtime），但标准库暂不直接调用该 intrinsic。
+2. 发布一个新版本并更新 `bootstrap.lock` 后，再在标准库/API 中启用该 intrinsic。
+
+否则旧 bootstrap 会在自举第一跳报 `unknown fn: __xxx`。
 
 ## 历史说明
 
