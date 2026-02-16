@@ -17,16 +17,29 @@ fn err0(p: ir.Program, msg: String) -> GenResult { return GenResult { ok: false,
 fn qname(mod_path: String, name: String) -> String {
   // Root module uses plain names (stage0-like); others use `a.b::name`.
   if mod_path == "" || mod_path == "main" { return name; }
-  // Replace '/' with '.'.
-  let mut s: String = mod_path;
+  // Fast path: no path separator.
+  let mut has_slash: bool = false;
   let mut i: i32 = 0;
-  while i < s.len() {
-    if s.byte_at(i) == 47 { // '/'
-      s = s.slice(0, i).concat(".").concat(s.slice(i + 1, s.len()));
+  while i < mod_path.len() {
+    if mod_path.byte_at(i) == 47 { has_slash = true; i = mod_path.len(); } else { i = i + 1; }
+  }
+  if !has_slash { return mod_path.concat("::").concat(name); }
+
+  // Convert "a/b/c" => "a.b.c" in one pass by segments.
+  let mut out: String = "";
+  let mut seg_start: i32 = 0;
+  i = 0;
+  while i < mod_path.len() {
+    if mod_path.byte_at(i) == 47 { // '/'
+      let seg: String = mod_path.slice(seg_start, i);
+      if out == "" { out = seg; } else { out = out.concat(".").concat(seg); }
+      seg_start = i + 1;
     }
     i = i + 1;
   }
-  return s.concat("::").concat(name);
+  let tail: String = mod_path.slice(seg_start, mod_path.len());
+  if out == "" { out = tail; } else { out = out.concat(".").concat(tail); }
+  return out.concat("::").concat(name);
 }
 
 enum TaskKind { Normal, Inst }
@@ -252,16 +265,14 @@ fn find_impl_method_sig(sig: tc.ImplSig, name: String) -> FindImplMethodResult {
   return FindImplMethodResult { found: false, sig: empty_impl_method_sig() };
 }
 
-pub fn generate_world(w: tc.World) -> GenResult {
-  let br: tc.BuildCtxResult = tc.build_ctx(w);
-  let mut ctx: tc.Ctx = br.ctx;
+pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
+  let mut ctx: tc.Ctx = ctx0;
   let mut p: ir.Program = ir.program(ctx.pool);
-  if !br.ok { return err0(p, tc.tc_error_to_string(br.err)); }
 
   // Nominal defs from collected signatures.
   let mut si: i32 = 0;
-  while si < br.ctx.structs.len() {
-    let s: tc.StructSig = br.ctx.structs.get(si);
+  while si < ctx.structs.len() {
+    let s: tc.StructSig = ctx.structs.get(si);
     let mut fields: Vec[ir.StructField] = Vec();
     let mut fi: i32 = 0;
     while fi < s.fields.len() {
@@ -274,8 +285,8 @@ pub fn generate_world(w: tc.World) -> GenResult {
   }
 
   let mut ei: i32 = 0;
-  while ei < br.ctx.enums.len() {
-    let e: tc.EnumSig = br.ctx.enums.get(ei);
+  while ei < ctx.enums.len() {
+    let e: tc.EnumSig = ctx.enums.get(ei);
     let mut vars: Vec[ir.EnumVariant] = Vec();
     let mut vi: i32 = 0;
     while vi < e.vars.len() {
@@ -295,7 +306,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
     while fi0 < m0.prog.funcs.len() {
       let fd0: ast.FuncDecl = m0.prog.funcs.get(fi0);
       let qn0: String = qname(m0.path, fd0.name);
-      let fr0: tc.FindFuncResult = tc.find_func(br.ctx, m0.path, fd0.name);
+      let fr0: tc.FindFuncResult = tc.find_func(ctx, m0.path, fd0.name);
       if !fr0.found { return err0(p, "missing fn sig"); }
 
       if fd0.ffi_imports.len() != 0 {
@@ -304,7 +315,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
         let mut pi0: i32 = 0;
         while pi0 < fd0.params.len() {
           let pa0: ast.Param = fd0.params.get(pi0);
-          pms.push(ir.Param { name: pa0.name, ty: tc.strip_range_only(br.ctx, fr0.sig.params.get(pi0)) });
+          pms.push(ir.Param { name: pa0.name, ty: tc.strip_range_only(ctx, fr0.sig.params.get(pi0)) });
           pi0 = pi0 + 1;
         }
         p.ffi_imports.push(ir.FfiImportDecl {
@@ -313,7 +324,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
           module: ia.module,
           symbol: ia.symbol,
           params: pms,
-          ret: tc.strip_range_only(br.ctx, fr0.sig.ret),
+          ret: tc.strip_range_only(ctx, fr0.sig.ret),
         });
       }
 
@@ -345,7 +356,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
           impl_idx: -1,
           impl_m_idx: -1,
           impl_name: "",
-          impl_sig: tc.FuncSig { params: Vec(), param_borrow_kinds: Vec(), ret: br.ctx.ty_bad, has_variadic: false, variadic_elem: -1, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_packs: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
+          impl_sig: tc.FuncSig { params: Vec(), param_borrow_kinds: Vec(), ret: ctx.ty_bad, has_variadic: false, variadic_elem: -1, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_packs: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
           impl_from_default: false,
           impl_default_mod_path: "",
           impl_default_file: "",
@@ -353,7 +364,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
           impl_default_body: ast.Block { stmts: Vec() },
           base_name: "",
           inst_name: "",
-          inst_sig: tc.FuncSig { params: Vec(), param_borrow_kinds: Vec(), ret: br.ctx.ty_bad, has_variadic: false, variadic_elem: -1, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_packs: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
+          inst_sig: tc.FuncSig { params: Vec(), param_borrow_kinds: Vec(), ret: ctx.ty_bad, has_variadic: false, variadic_elem: -1, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_packs: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
           subs: Vec(),
           const_subs: Vec(),
         });
@@ -365,7 +376,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
     let mut ii: i32 = 0;
     while ii < m.prog.impls.len() {
       let id: ast.ImplDecl = m.prog.impls.get(ii);
-      let ir0: FindImplSigResult = find_impl_sig(br.ctx, m.path, ii);
+      let ir0: FindImplSigResult = find_impl_sig(ctx, m.path, ii);
       if !ir0.found { return err0(p, "missing impl signature"); }
 
       let mut msi: i32 = 0;
@@ -395,7 +406,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
           impl_default_body: mr0.default_body,
           base_name: "",
           inst_name: "",
-          inst_sig: tc.FuncSig { params: Vec(), param_borrow_kinds: Vec(), ret: br.ctx.ty_bad, has_variadic: false, variadic_elem: -1, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_packs: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
+          inst_sig: tc.FuncSig { params: Vec(), param_borrow_kinds: Vec(), ret: ctx.ty_bad, has_variadic: false, variadic_elem: -1, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_packs: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
           subs: Vec(),
           const_subs: Vec(),
         });
@@ -517,7 +528,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
       }
     } else {
       // Generic instantiation task.
-      let fr: FindFuncDeclResult = find_generic_func(br.ctx, m2, t.base_name);
+      let fr: FindFuncDeclResult = find_generic_func(ctx, m2, t.base_name);
       if !fr.found { return err0(p, "missing generic fn for instantiation"); }
       let mut bmod: tc.WorldModule = m2;
       if fr.mod_path != t.mod_path {
@@ -556,7 +567,7 @@ pub fn generate_world(w: tc.World) -> GenResult {
         impl_idx: -1,
         impl_m_idx: -1,
         impl_name: "",
-        impl_sig: tc.FuncSig { params: Vec(), param_borrow_kinds: Vec(), ret: br.ctx.ty_bad, has_variadic: false, variadic_elem: -1, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_packs: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
+        impl_sig: tc.FuncSig { params: Vec(), param_borrow_kinds: Vec(), ret: ctx.ty_bad, has_variadic: false, variadic_elem: -1, vis: ast.vis_private(), is_pub: false, type_params: Vec(), type_param_packs: Vec(), const_params: Vec(), type_param_bounds: Vec(), const_where_bounds: Vec() },
         impl_from_default: false,
         impl_default_mod_path: "",
         impl_default_file: "",
@@ -577,4 +588,11 @@ pub fn generate_world(w: tc.World) -> GenResult {
   // Keep the program's pool in sync with any types interned while lowering bodies.
   p.pool = ctx.pool;
   return ok0(p);
+}
+
+pub fn generate_world(w: tc.World) -> GenResult {
+  let br: tc.BuildCtxResult = tc.build_ctx(w);
+  let p0: ir.Program = ir.program(br.ctx.pool);
+  if !br.ok { return err0(p0, tc.tc_error_to_string(br.err)); }
+  return generate_world_with_ctx(w, br.ctx);
 }

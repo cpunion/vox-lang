@@ -1395,6 +1395,28 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
     let recv_id: i32 = match cn { ast.ExprNode.Member(r, _) => r, _ => -1 };
     let mname: String = match cn { ast.ExprNode.Member(_, n) => n, _ => "" };
 
+    // Fast path for deep chained String.concat: avoid recursive recv descent in
+    // tc_expr_call by flattening the chain once.
+    if mname == "concat" && type_args.len() == 0 && args.len() == 1 {
+      let ch: StringConcatChain = collect_string_concat_chain(exprs, recv_id, args);
+      let br: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, ch.base_recv_id, -1);
+      if br.ok && strip_range(ctx, br.ty) == ctx.ty_string {
+        let mut ai0: i32 = 0;
+        while ai0 < ch.parts.len() {
+          let ar0: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, ch.parts.get(ai0), ctx.ty_string);
+          if !ar0.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_child_error_or(ctx, ar0, call_sp, "call argument typecheck failed") }; }
+          ai0 = ai0 + 1;
+        }
+        if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+        return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
+      }
+      if !br.ok && br.err != TcError.None && call_recv_is_local_symbol(exprs, l0, recv_id) {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: br.err };
+      }
+      // Fall through to the regular path for non-String receivers to keep
+      // diagnostics behavior unchanged.
+    }
+
     let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv_id, -1);
     if !rr.ok && rr.err != TcError.None && call_recv_is_local_symbol(exprs, l0, recv_id) {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: rr.err };

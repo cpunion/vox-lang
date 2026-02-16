@@ -463,6 +463,49 @@ fn maybe_resolve_typed_path_marker(ctx: Ctx, w: World, mod_path: String, imps: I
   return c;
 }
 
+struct CollectConcatCallChain {
+  ok: bool,
+  base_expr: i32,
+  parts: Vec[i32],
+}
+
+fn collect_concat_call_chain(exprs: ast.ExprPool, id0: i32) -> CollectConcatCallChain {
+  let mut rev_parts: Vec[i32] = Vec();
+  let mut cur: i32 = id0;
+  let mut seen: bool = false;
+
+  while true {
+    let n: ast.ExprNode = ast.expr_pool_get(exprs, cur);
+    if !match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } { break; }
+    let callee: i32 = match n { ast.ExprNode.Call(callee0, _targs, _args) => callee0, _ => -1 };
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_callee, targs0, _args) => targs0, _ => Vec() };
+    let args: Vec[i32] = match n { ast.ExprNode.Call(_callee, _targs, args0) => args0, _ => Vec() };
+    if targs.len() != 0 || args.len() != 1 { break; }
+
+    let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+    if !match cn { ast.ExprNode.Member(_recv, _name) => true, _ => false } { break; }
+    let mname: String = match cn { ast.ExprNode.Member(_recv, name0) => name0, _ => "" };
+    if mname != "concat" { break; }
+    let recv: i32 = match cn { ast.ExprNode.Member(recv0, _name) => recv0, _ => -1 };
+
+    rev_parts.push(args.get(0));
+    cur = recv;
+    seen = true;
+  }
+
+  if !seen {
+    return CollectConcatCallChain { ok: false, base_expr: id0, parts: Vec() };
+  }
+
+  let mut parts: Vec[i32] = Vec();
+  let mut i: i32 = rev_parts.len() - 1;
+  while i >= 0 {
+    parts.push(rev_parts.get(i));
+    i = i - 1;
+  }
+  return CollectConcatCallChain { ok: true, base_expr: cur, parts: parts };
+}
+
 fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, type_params: Vec[String], exprs: ast.ExprPool, id: i32, owner_file: String) -> TypeWalkResult {
   let mut c: Ctx = ctx;
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
@@ -512,6 +555,37 @@ fn walk_expr_type_names(ctx: Ctx, w: World, mod_path: String, imps: Imports, typ
   if match n { ast.ExprNode.StructLit(_tyex, _fields) => true, _ => false } {
     let tyex: i32 = match n { ast.ExprNode.StructLit(t, _fs) => t, _ => -1 };
     c = maybe_resolve_typed_path_marker(c, w, mod_path, imps, type_params, exprs, tyex);
+  }
+
+  // Avoid deep recursion on chained concat calls:
+  // a.concat(b).concat(c)... can create very deep right-leaning ASTs.
+  // Fast guard: only probe chain when current node itself is `*.concat(arg)`.
+  let is_concat_call_head: bool =
+    match n {
+      ast.ExprNode.Call(callee0, targs0, args0) =>
+        targs0.len() == 0 &&
+        args0.len() == 1 &&
+        match ast.expr_pool_get(exprs, callee0) {
+          ast.ExprNode.Member(_recv0, name0) => name0 == "concat",
+          _ => false,
+        },
+      _ => false,
+    };
+  if is_concat_call_head {
+    let ch: CollectConcatCallChain = collect_concat_call_chain(exprs, id);
+    if ch.ok {
+      let base_r: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, ch.base_expr, owner_file);
+      if !base_r.ok { return base_r; }
+      c = base_r.ctx;
+      let mut i: i32 = 0;
+      while i < ch.parts.len() {
+        let ar: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, ch.parts.get(i), owner_file);
+        if !ar.ok { return type_walk_err(ar.ctx, type_error(owner_file, "type resolve failed in call arg expression")); }
+        c = ar.ctx;
+        i = i + 1;
+      }
+      return type_walk_ok(c);
+    }
   }
 
   let wr: TypeWalkResult = match n {

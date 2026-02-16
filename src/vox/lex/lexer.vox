@@ -37,6 +37,10 @@ fn is_alnum(b: i32) -> bool {
   return is_alpha(b) || is_digit(b);
 }
 
+fn is_utf8_cont_byte(b: i32) -> bool {
+  return b >= 128 && b <= 191;
+}
+
 fn kw_kind(text: String, start: i32, end: i32) -> TokenKind {
   // Keyword detection without substring support: compare by length + bytes.
   let n: i32 = end - start;
@@ -137,6 +141,8 @@ fn kw_kind(text: String, start: i32, end: i32) -> TokenKind {
 pub fn lex_text(text: String) -> LexResult {
   let mut i: i32 = 0;
   let n: i32 = text.len();
+  let mut line: i32 = 1;
+  let mut col: i32 = 1;
   let mut toks: Vec[Token] = Vec();
 
   while i < n {
@@ -145,6 +151,12 @@ pub fn lex_text(text: String) -> LexResult {
     // whitespace
     if is_space(b) {
       i = i + 1;
+      if b == 10 {
+        line = line + 1;
+        col = 1;
+      } else if !is_utf8_cont_byte(b) {
+        col = col + 1;
+      }
       continue;
     }
 
@@ -153,29 +165,37 @@ pub fn lex_text(text: String) -> LexResult {
       if (i + 1) < n {
         if text.byte_at(i + 1) == 47 {
           i = i + 2;
+          col = col + 2;
           while i < n {
-            if text.byte_at(i) == 10 {
+            let cb: i32 = text.byte_at(i);
+            if cb == 10 {
               break;
             }
             i = i + 1;
+            if !is_utf8_cont_byte(cb) { col = col + 1; }
           }
           continue;
         }
       }
     }
 
+    let start: i32 = i;
+    let start_line: i32 = line;
+    let start_col: i32 = col;
+
     // identifier / keyword
     if is_alpha(b) {
-      let start: i32 = i;
       i = i + 1;
+      col = col + 1;
       while i < n {
         if !is_alnum(text.byte_at(i)) {
           break;
         }
         i = i + 1;
+        col = col + 1;
       }
       let k: TokenKind = kw_kind(text, start, i);
-      toks.push(Token { kind: k, start: start, end: i });
+      toks.push(Token { kind: k, start: start, end: i, line: start_line, col: start_col });
       continue;
     }
 
@@ -185,23 +205,26 @@ pub fn lex_text(text: String) -> LexResult {
     // - digits [ '.' digits ] [e|E [+-]? digits]
     // - any of the above with suffix f32/f64
     if is_digit(b) {
-      let start: i32 = i;
       let mut is_float: bool = false;
       i = i + 1;
+      col = col + 1;
       while i < n {
         if !is_digit(text.byte_at(i)) {
           break;
         }
         i = i + 1;
+        col = col + 1;
       }
 
       // Fractional part requires at least one digit after dot.
       if i < n && text.byte_at(i) == 46 && (i + 1) < n && is_digit(text.byte_at(i + 1)) {
         is_float = true;
         i = i + 1; // '.'
+        col = col + 1;
         while i < n {
           if !is_digit(text.byte_at(i)) { break; }
           i = i + 1;
+          col = col + 1;
         }
       }
 
@@ -211,10 +234,13 @@ pub fn lex_text(text: String) -> LexResult {
         if j < n && (text.byte_at(j) == 43 || text.byte_at(j) == 45) { j = j + 1; } // +/-
         if j < n && is_digit(text.byte_at(j)) {
           is_float = true;
+          col = col + (j - i);
           i = j + 1;
+          col = col + 1;
           while i < n {
             if !is_digit(text.byte_at(i)) { break; }
             i = i + 1;
+            col = col + 1;
           }
         }
       }
@@ -226,29 +252,38 @@ pub fn lex_text(text: String) -> LexResult {
         if (b1 == 51 && b2 == 50) || (b1 == 54 && b2 == 52) { // 32 / 64
           is_float = true;
           i = i + 3;
+          col = col + 3;
         }
       }
 
       let kind: TokenKind = if is_float { TokenKind.Float } else { TokenKind.Int };
-      toks.push(Token { kind: kind, start: start, end: i });
+      toks.push(Token { kind: kind, start: start, end: i, line: start_line, col: start_col });
       continue;
     }
 
     // string literal: "..." or multiline """..."""
     if b == 34 { // '"'
-      let start: i32 = i;
       // Multiline triple-quoted string.
       if (i + 2) < n && text.byte_at(i + 1) == 34 && text.byte_at(i + 2) == 34 {
         i = i + 3;
+        col = col + 3;
         let mut closed3: bool = false;
         while (i + 2) < n {
           if text.byte_at(i) == 34 && text.byte_at(i + 1) == 34 && text.byte_at(i + 2) == 34 {
             i = i + 3;
-            toks.push(Token { kind: TokenKind.Str, start: start, end: i });
+            col = col + 3;
+            toks.push(Token { kind: TokenKind.Str, start: start, end: i, line: start_line, col: start_col });
             closed3 = true;
             break;
           }
+          let cb: i32 = text.byte_at(i);
           i = i + 1;
+          if cb == 10 {
+            line = line + 1;
+            col = 1;
+          } else if !is_utf8_cont_byte(cb) {
+            col = col + 1;
+          }
         }
         if !closed3 {
           return LexResult { tokens: toks, err: LexError.UnterminatedString(start) };
@@ -257,21 +292,39 @@ pub fn lex_text(text: String) -> LexResult {
       }
 
       i = i + 1;
+      col = col + 1;
       let mut closed: bool = false;
       while i < n {
         let c: i32 = text.byte_at(i);
         if c == 34 { // closing '"'
           i = i + 1;
-          toks.push(Token { kind: TokenKind.Str, start: start, end: i });
+          col = col + 1;
+          toks.push(Token { kind: TokenKind.Str, start: start, end: i, line: start_line, col: start_col });
           closed = true;
           break;
         }
         if c == 92 { // '\\' escape, skip next char if present
           i = i + 1;
-          if i < n { i = i + 1; }
+          col = col + 1;
+          if i < n {
+            let c2: i32 = text.byte_at(i);
+            i = i + 1;
+            if c2 == 10 {
+              line = line + 1;
+              col = 1;
+            } else if !is_utf8_cont_byte(c2) {
+              col = col + 1;
+            }
+          }
           continue;
         }
         i = i + 1;
+        if c == 10 {
+          line = line + 1;
+          col = 1;
+        } else if !is_utf8_cont_byte(c) {
+          col = col + 1;
+        }
       }
       if !closed {
         return LexResult { tokens: toks, err: LexError.UnterminatedString(start) };
@@ -280,8 +333,6 @@ pub fn lex_text(text: String) -> LexResult {
     }
 
     // punctuators / operators (maximal munch)
-    let start: i32 = i;
-
     // 3-char ops
     if (i + 2) < n {
       let b1: i32 = text.byte_at(i + 1);
@@ -289,25 +340,29 @@ pub fn lex_text(text: String) -> LexResult {
       // ...
       if b == 46 && b1 == 46 && b2 == 46 {
         i = i + 3;
-        toks.push(Token { kind: TokenKind.DotDotDot, start: start, end: i });
+        col = col + 3;
+        toks.push(Token { kind: TokenKind.DotDotDot, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // ..=
       if b == 46 && b1 == 46 && b2 == 61 {
         i = i + 3;
-        toks.push(Token { kind: TokenKind.DotDotEq, start: start, end: i });
+        col = col + 3;
+        toks.push(Token { kind: TokenKind.DotDotEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // <<=
       if b == 60 && b1 == 60 && b2 == 61 {
         i = i + 3;
-        toks.push(Token { kind: TokenKind.LtLtEq, start: start, end: i });
+        col = col + 3;
+        toks.push(Token { kind: TokenKind.LtLtEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // >>=
       if b == 62 && b1 == 62 && b2 == 61 {
         i = i + 3;
-        toks.push(Token { kind: TokenKind.GtGtEq, start: start, end: i });
+        col = col + 3;
+        toks.push(Token { kind: TokenKind.GtGtEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
     }
@@ -318,152 +373,171 @@ pub fn lex_text(text: String) -> LexResult {
       // ->
       if b == 45 && b1 == 62 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.Arrow, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.Arrow, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // ..
       if b == 46 && b1 == 46 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.DotDot, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.DotDot, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // =>
       if b == 61 && b1 == 62 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.FatArrow, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.FatArrow, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // +=
       if b == 43 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.PlusEq, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.PlusEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // -=
       if b == 45 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.MinusEq, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.MinusEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // *=
       if b == 42 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.StarEq, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.StarEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // /=
       if b == 47 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.SlashEq, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.SlashEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // %=
       if b == 37 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.PercentEq, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.PercentEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // ==
       if b == 61 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.EqEq, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.EqEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // !=
       if b == 33 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.Ne, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.Ne, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // <=
       if b == 60 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.Le, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.Le, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // <<
       if b == 60 && b1 == 60 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.LtLt, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.LtLt, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // >=
       if b == 62 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.Ge, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.Ge, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // >>
       if b == 62 && b1 == 62 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.GtGt, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.GtGt, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // &&
       if b == 38 && b1 == 38 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.AndAnd, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.AndAnd, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // &=
       if b == 38 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.AmpEq, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.AmpEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // ||
       if b == 124 && b1 == 124 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.OrOr, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.OrOr, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // |=
       if b == 124 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.PipeEq, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.PipeEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
       // ^=
       if b == 94 && b1 == 61 {
         i = i + 2;
-        toks.push(Token { kind: TokenKind.CaretEq, start: start, end: i });
+        col = col + 2;
+        toks.push(Token { kind: TokenKind.CaretEq, start: start, end: i, line: start_line, col: start_col });
         continue;
       }
     }
 
     // 1-char tokens
-    if b == 40 { i = i + 1; toks.push(Token { kind: TokenKind.LParen, start: start, end: i }); continue; }   // (
-    if b == 41 { i = i + 1; toks.push(Token { kind: TokenKind.RParen, start: start, end: i }); continue; }   // )
-    if b == 123 { i = i + 1; toks.push(Token { kind: TokenKind.LBrace, start: start, end: i }); continue; }  // {
-    if b == 125 { i = i + 1; toks.push(Token { kind: TokenKind.RBrace, start: start, end: i }); continue; }  // }
-    if b == 91 { i = i + 1; toks.push(Token { kind: TokenKind.LBracket, start: start, end: i }); continue; } // [
-    if b == 93 { i = i + 1; toks.push(Token { kind: TokenKind.RBracket, start: start, end: i }); continue; } // ]
-    if b == 44 { i = i + 1; toks.push(Token { kind: TokenKind.Comma, start: start, end: i }); continue; }    // ,
-    if b == 59 { i = i + 1; toks.push(Token { kind: TokenKind.Semicolon, start: start, end: i }); continue; } // ;
-    if b == 46 { i = i + 1; toks.push(Token { kind: TokenKind.Dot, start: start, end: i }); continue; }      // .
-    if b == 58 { i = i + 1; toks.push(Token { kind: TokenKind.Colon, start: start, end: i }); continue; }    // :
-    if b == 64 { i = i + 1; toks.push(Token { kind: TokenKind.At, start: start, end: i }); continue; }       // @
-    if b == 36 { i = i + 1; toks.push(Token { kind: TokenKind.Dollar, start: start, end: i }); continue; }   // $
-    if b == 39 { i = i + 1; toks.push(Token { kind: TokenKind.Tick, start: start, end: i }); continue; }     // '
-    if b == 63 { i = i + 1; toks.push(Token { kind: TokenKind.Question, start: start, end: i }); continue; } // ?
+    if b == 40 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.LParen, start: start, end: i, line: start_line, col: start_col }); continue; }   // (
+    if b == 41 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.RParen, start: start, end: i, line: start_line, col: start_col }); continue; }   // )
+    if b == 123 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.LBrace, start: start, end: i, line: start_line, col: start_col }); continue; }  // {
+    if b == 125 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.RBrace, start: start, end: i, line: start_line, col: start_col }); continue; }  // }
+    if b == 91 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.LBracket, start: start, end: i, line: start_line, col: start_col }); continue; } // [
+    if b == 93 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.RBracket, start: start, end: i, line: start_line, col: start_col }); continue; } // ]
+    if b == 44 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Comma, start: start, end: i, line: start_line, col: start_col }); continue; }    // ,
+    if b == 59 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Semicolon, start: start, end: i, line: start_line, col: start_col }); continue; } // ;
+    if b == 46 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Dot, start: start, end: i, line: start_line, col: start_col }); continue; }      // .
+    if b == 58 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Colon, start: start, end: i, line: start_line, col: start_col }); continue; }    // :
+    if b == 64 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.At, start: start, end: i, line: start_line, col: start_col }); continue; }       // @
+    if b == 36 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Dollar, start: start, end: i, line: start_line, col: start_col }); continue; }   // $
+    if b == 39 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Tick, start: start, end: i, line: start_line, col: start_col }); continue; }     // '
+    if b == 63 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Question, start: start, end: i, line: start_line, col: start_col }); continue; } // ?
 
-    if b == 61 { i = i + 1; toks.push(Token { kind: TokenKind.Eq, start: start, end: i }); continue; }      // =
-    if b == 60 { i = i + 1; toks.push(Token { kind: TokenKind.Lt, start: start, end: i }); continue; }      // <
-    if b == 62 { i = i + 1; toks.push(Token { kind: TokenKind.Gt, start: start, end: i }); continue; }      // >
-    if b == 33 { i = i + 1; toks.push(Token { kind: TokenKind.Not, start: start, end: i }); continue; }     // !
+    if b == 61 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Eq, start: start, end: i, line: start_line, col: start_col }); continue; }      // =
+    if b == 60 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Lt, start: start, end: i, line: start_line, col: start_col }); continue; }      // <
+    if b == 62 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Gt, start: start, end: i, line: start_line, col: start_col }); continue; }      // >
+    if b == 33 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Not, start: start, end: i, line: start_line, col: start_col }); continue; }     // !
 
-    if b == 43 { i = i + 1; toks.push(Token { kind: TokenKind.Plus, start: start, end: i }); continue; }    // +
-    if b == 45 { i = i + 1; toks.push(Token { kind: TokenKind.Minus, start: start, end: i }); continue; }   // -
-    if b == 42 { i = i + 1; toks.push(Token { kind: TokenKind.Star, start: start, end: i }); continue; }    // *
-    if b == 47 { i = i + 1; toks.push(Token { kind: TokenKind.Slash, start: start, end: i }); continue; }   // /
-    if b == 37 { i = i + 1; toks.push(Token { kind: TokenKind.Percent, start: start, end: i }); continue; } // %
-    if b == 38 { i = i + 1; toks.push(Token { kind: TokenKind.Amp, start: start, end: i }); continue; }     // &
-    if b == 124 { i = i + 1; toks.push(Token { kind: TokenKind.Pipe, start: start, end: i }); continue; }   // |
-    if b == 94 { i = i + 1; toks.push(Token { kind: TokenKind.Caret, start: start, end: i }); continue; }   // ^
+    if b == 43 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Plus, start: start, end: i, line: start_line, col: start_col }); continue; }    // +
+    if b == 45 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Minus, start: start, end: i, line: start_line, col: start_col }); continue; }   // -
+    if b == 42 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Star, start: start, end: i, line: start_line, col: start_col }); continue; }    // *
+    if b == 47 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Slash, start: start, end: i, line: start_line, col: start_col }); continue; }   // /
+    if b == 37 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Percent, start: start, end: i, line: start_line, col: start_col }); continue; } // %
+    if b == 38 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Amp, start: start, end: i, line: start_line, col: start_col }); continue; }     // &
+    if b == 124 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Pipe, start: start, end: i, line: start_line, col: start_col }); continue; }   // |
+    if b == 94 { i = i + 1; col = col + 1; toks.push(Token { kind: TokenKind.Caret, start: start, end: i, line: start_line, col: start_col }); continue; }   // ^
 
     return LexResult { tokens: toks, err: LexError.UnexpectedChar(i) };
   }
 
-  toks.push(Token { kind: TokenKind.Eof, start: n, end: n });
+  toks.push(Token { kind: TokenKind.Eof, start: n, end: n, line: line, col: col });
   return LexResult { tokens: toks, err: LexError.None };
 }
