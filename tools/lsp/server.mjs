@@ -180,18 +180,36 @@ function parseCompilerDiagnostics(output) {
   return out;
 }
 
-function runDiagnostics(text) {
+function writeLspTempProject(text) {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vox-lsp-'));
-  const src = path.join(tmpRoot, 'main.vox');
-  const outC = path.join(tmpRoot, 'main.c');
-  fs.writeFileSync(src, text, 'utf8');
+  const srcDir = path.join(tmpRoot, 'src');
+  const targetDir = path.join(tmpRoot, 'target', 'debug');
+  fs.mkdirSync(srcDir, { recursive: true });
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  // Minimal package layout expected by compiler loader.
+  fs.writeFileSync(
+    path.join(tmpRoot, 'vox.toml'),
+    '[package]\nname = "vox_lsp_tmp"\nversion = "0.0.0"\nedition = "2026"\n',
+    'utf8',
+  );
+  fs.writeFileSync(path.join(srcDir, 'main.vox'), text, 'utf8');
+  return {
+    root: tmpRoot,
+    mainRel: 'src/main.vox',
+    outBinRel: 'target/debug/vox_lsp_diag',
+  };
+}
+
+function runDiagnostics(text) {
+  const p = writeLspTempProject(text);
   const voxBin = process.env.VOX_BIN || 'vox';
-  const cp = spawnSync(voxBin, ['emit-c', outC, src], {
-    cwd: workspaceRoot,
+  const cp = spawnSync(voxBin, ['build-pkg', p.outBinRel], {
+    cwd: p.root,
     encoding: 'utf8',
   });
   try {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    fs.rmSync(p.root, { recursive: true, force: true });
   } catch (_) {
     // ignore cleanup failure
   }
