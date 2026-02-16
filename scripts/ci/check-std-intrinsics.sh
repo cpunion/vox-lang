@@ -23,8 +23,9 @@ extract_allow() {
 extract_used() {
   (
     cd "$ROOT"
-    rg --no-filename -o "__[A-Za-z0-9_]+" src/std -g '*.vox' 2>/dev/null \
-      | LC_ALL=C sort -u
+    (
+      rg --no-filename -o "__[A-Za-z0-9_]+" src/std -g '*.vox' 2>/dev/null || true
+    ) | LC_ALL=C sort -u
   )
 }
 
