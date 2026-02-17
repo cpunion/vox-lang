@@ -1,4 +1,4 @@
-# 包管理（草案）
+# 包管理
 
 ## 清单文件：`vox.toml`
 
@@ -21,7 +21,7 @@ Stage1 当前可解析：
 - `dep = { git = "../local/repo", version = "tag-or-branch" }`
 - `dep = "1.2.3"`（从本地 registry cache 解析）
 
-## 目录约定（草案）
+## 目录约定
 
 ```
 my_app/

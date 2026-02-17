@@ -1,4 +1,4 @@
-# 高级泛型特性（草案）
+# 高级泛型特性
 
 > 本章用于记录 Vox 的“能在编译期落地、可实现、可诊断”的高级泛型能力。未定部分明确标注。
 
@@ -18,7 +18,7 @@ struct Buffer[T, const N: usize = 1024] {
 }
 ```
 
-当前 Stage1 已实现（函数/trait 方法）：
+当前实现（函数/trait 方法）：
 
 - `fn addn[const N: i32 = 3](x: i32) -> i32 { ... }`
 - 调用可省略有默认值的 const 实参：`addn(4)`
@@ -47,7 +47,7 @@ where
 }
 ```
 
-当前 Stage1 已实现（函数/trait 方法 + struct/enum 声明）：
+当前实现（函数/trait 方法 + struct/enum 声明）：
 
 - 语法：`where comptime N > 0, comptime N <= 256`
 - 约束对象：
@@ -66,11 +66,11 @@ where
 - 默认值一致性：声明阶段会校验“默认 const 值是否满足 comptime where”（当约束涉及的参数都有默认值时）
 - impl 一致性：`impl Trait for Type` 的方法必须与 trait 方法声明的 `comptime where` 约束一致
 
-## 3. 泛型偏特化 / 专门化（Stage1 最小可用）
+## 3. 泛型偏特化 / 专门化（当前实现最小可用）
 
 目标：允许对同一 trait 的 impl 在“更具体类型”上覆盖通用实现，同时保持可判定性和稳定诊断。
 
-当前 Stage1 已实现（受控 specialization，接近 `min_specialization`）：
+当前实现（受控 specialization，接近 `min_specialization`）：
 
 - 允许同一 trait 出现重叠 impl，但必须存在**严格特化**关系。
 - 严格特化判定基于 impl 头部（`for` 类型 + 头部 type bounds）：
@@ -120,17 +120,15 @@ where
 
 类型参数 pack 的当前语义：
 
-- `T...`（type param pack 声明）当前是“受限可用”语义：
+- `T...`（type param pack 声明）已进入“可实质参与类型系统”的实现状态：
   - 支持单个尾部 type parameter pack；
   - 显式类型实参允许超过固定前缀，超出的 trailing 类型实参会绑定到 pack 名称；
-  - 当 pack 真正参与类型约束（参数/返回/variadic 元素/type bounds/const-where 类型名）时，仍要求同构（homogeneous）绑定：
-    - 例如 `f[i32, i32, 3](...)` 可通过；
-    - 若同一 pack 位置出现异构类型，会报
-      `heterogeneous explicit type arguments for type parameter pack are not supported yet`。
-  - 当 pack 仅作为“尾部占位”且未参与上述类型约束时，允许异构 trailing 类型实参（用于阶段性放开调用侧表达能力）。
+  - 已支持异构 pack 的逐位置物化（per-position substitution）：
+    - pack 参与参数/返回/variadic 元素/type bounds/`where comptime` 反射约束时，不再要求“同构绑定”；
+    - 实例名会做稳定去歧义（如 `pack`, `pack__1`, ...），避免单态化冲突。
+  - 已支持 pack 成员投影（`Pack.N`）参与物化。
   - 对无 pack 的普通泛型，仍保留 `expected at most N, got M` 的 arity 检查。
 
-后续（未做）：
+后续增强（非阻塞）：
 
-- 真正的 type/value pack 展开；
-- 基于 arity 的专门化与更激进的代码生成优化。
+- 基于 arity/shape 的进一步专门化优化与代码体积控制策略。

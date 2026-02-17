@@ -12,7 +12,7 @@
 ## 非目标（当前阶段）
 
 1. effect/IO/资源系统：**暂不设计**（后续再引入，避免过早绑定整体语义）。
-2. 并发/async：保留方向，但不作为本阶段规范核心。
+2. async runtime/executor 细节：语言层 async/await 已落地，执行器调度策略与 effect 融合延后。
 
 ## 核心设计决策（已定）
 
@@ -42,7 +42,7 @@
 - 字面量：`&'static str`（可按 `&str` 使用）
 - 拥有字符串：`String`
 - 临时子串：`&str`（不能逃逸）
-- 可长期保存的子串：标准库类型 `StrView { owner: Arc[str], lo, hi }`（草案）
+- 可长期保存的子串：标准库类型 `StrView { owner: String, lo, hi }`
 
 ### 3) 编译期执行（`comptime`）
 

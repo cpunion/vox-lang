@@ -9,7 +9,7 @@
 
 ## 基础类型
 
-数值类型（草案）：
+数值类型：
 
 - 有符号：`i8 i16 i32 i64 isize`
 - 无符号：`u8 u16 u32 u64 usize`
@@ -44,7 +44,7 @@ struct Point {
 let p = Point { x: 1.0, y: 2.0 }
 ```
 
-字段访问与更新（草案，Stage0 优先支持）：
+字段访问与更新（当前实现）：
 
 ```vox
 let mut p = Point { x: 1, y: 2 };
@@ -94,7 +94,7 @@ Vox 支持 union 类型（sum type）表达式，并允许 union 的每一支为
 type Value = I32: i32 | Str: String | Bytes: Vec[u8];
 ```
 
-说明（草案）：
+说明：
 
 - `A | B` 是一种类型表达式。
 - 当 union 的分支需要稳定名字时，使用 `Label: Type` 形式指定构造子/模式的名字。
@@ -118,7 +118,7 @@ fn demo(v: Value) -> i32 {
 let v: Value = .I32(42);
 ```
 
-表示与性能（草案）：
+表示与性能：
 
 - union 默认使用“tagged”表示（等价于一个匿名 `enum`）。
 - 编译器可在满足条件时做布局压缩（niche/spare bits）与分支消除，但不改变语义。
@@ -131,9 +131,9 @@ Vox 支持对标量类型附加“值域约束”，用于表达与优化。
 type Tiny = @range(0..=3) i32;
 ```
 
-规则（已定，草案表述）：
+规则（已定）：
 
-- `@range(lo..=hi) T` 只能用于离散标量类型（细分范围待定）。
+- `@range(lo..=hi) T` 只能用于离散标量类型（细分范围待讨论）。
 - 范围类型的运行时表示与底层标量 `T` 相同（零额外存储）。
 - **检查发生在编译期与类型转换边界**（“进入范围类型”时检查）：
   - 若被转换值在编译期可确定：越界为编译错误。
@@ -145,7 +145,7 @@ Stage0/Stage1 v0 当前实现限制：
 - `T` 仅支持整数类型（当前 stage0/stage1 实现：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`）。
 - `lo/hi` 仅支持十进制整数字面量（更多标量与字面量形式后续再扩展）。
 
-建议提供的转换 API（草案）：
+建议提供的转换 API：
 
 ```vox
 impl Tiny {
@@ -160,7 +160,7 @@ impl Tiny {
 }
 ```
 
-约定（草案）：`x as Tiny` 等价于 `Tiny::from(x)`（带边界检查，失败 panic）。
+约定：`x as Tiny` 等价于 `Tiny::from(x)`（带边界检查，失败 panic）。
 
 编译器也可在可证明安全时消除检查，并允许将 `try_from/try_from_result` 优化为无检查构造：
 
@@ -182,7 +182,7 @@ fn identity[T](x: T) -> T { x }
 struct Pair[T, U] { first: T, second: U }
 ```
 
-Const 泛型（草案，细节见 `docs/06-advanced-generics.md`）：
+Const 泛型（细节见 `docs/06-advanced-generics.md`）：
 
 ```vox
 struct Array[T, const N: usize] {
@@ -202,7 +202,7 @@ impl Display for Point {
 }
 ```
 
-说明（草案）：
+说明：
 
 - trait bound：`T: Trait1 + Trait2`
 - `where` 子句支持复杂约束
@@ -211,7 +211,7 @@ impl Display for Point {
 - trait default method（MVP）：允许在 trait 中给方法提供默认实现；`impl` 可省略该方法（同模块/跨模块均支持）
 - 关联类型、GAT、HRTB 等高级能力暂缓引入，优先保证可实现性与诊断质量
 
-## 类型推断（草案）
+## 类型推断
 
 - 局部变量可推断：`let x = 42`
 - 泛型实参优先从参数推断，必要时支持 turbofish：`f::[i32](1)`

@@ -76,13 +76,13 @@ struct Config {
 fn default_name() -> &'static str { "vox" }
 ```
 
-## 可长期保存的子串/子切片（标准库草案）
+## 可长期保存的子串/子切片（标准库）
 
 为替代“返回/存储 `&str`”，标准库提供拥有型视图：
 
 ```vox
 struct StrView {
-  owner: Arc[str],
+  owner: String,
   lo: u32,
   hi: u32,
 }

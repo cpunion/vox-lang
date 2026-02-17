@@ -1,4 +1,4 @@
-# 测试框架（Stage0：已实现的最小子集）
+# 测试框架（当前实现：最小可用子集）
 
 目标：借鉴 `go test` 的优点，让测试像普通代码一样编译/运行，保持零运行时开销、最小样板。
 
@@ -23,7 +23,7 @@ vox test --list
 vox test --json
 ```
 
-Stage0 行为：
+当前行为：
 
 - `vox build`：会忽略 `src/**/*_test.vox`
 - `vox test`：会包含 `src/**/*.vox` + `src/**/*_test.vox` + `tests/**/*.vox`，并执行所有 `test_*` 函数
@@ -58,16 +58,16 @@ Stage2 `vox test` 对齐增强（2026-02）：
 - `module_details`：模块级测试清单（`tests`）与失败子集（`failed_tests`）
 - `failed_tests`：全局失败测试名列表（便于外部工具做后续重跑/分片）
 
-## 2. 断言（Stage0）
+## 2. 断言（当前实现）
 
-Stage0 仅内建两个最底层函数：
+编译器仅内建两个最底层函数：
 
 ```vox
 panic(msg: String);
 print(msg: String);
 ```
 
-断言与测试工具由标准库提供（以 `.vox` 源码形式随 stage0 一起注入）：
+断言与测试工具由标准库提供（以 `.vox` 源码形式随编译器一起注入）：
 
 - `std/prelude`：`assert` / `assert_with` / `assert_eq[T: Eq]` / `assert_ne[T: Eq]` / `assert_lt[T: Ord]` / `assert_le[T: Ord]` / `assert_gt[T: Ord]` / `assert_ge[T: Ord]` / `fail`
 - `std/testing`：对 `std/prelude` 的薄封装，便于显式使用 `t.assert(...)` 这类风格
@@ -88,5 +88,5 @@ fn test_ok() -> () {
 
 说明：
 
-- `assert_eq/assert_ne` 是泛型函数（stage0 支持最小子集的泛型单态化 + 推导，语法支持 `T: Eq`）。
+- `assert_eq/assert_ne` 是泛型函数（当前实现支持最小子集的泛型单态化 + 推导，语法支持 `T: Eq`）。
 - `assert_eq` 依赖 `!=`、`assert_ne` 依赖 `==`；可用类型由当前阶段 `Eq` 与比较 lowering 覆盖范围决定。

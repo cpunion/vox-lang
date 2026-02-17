@@ -1,8 +1,8 @@
-# 语法细节（草案）
+# 语法细节
 
 > 本章记录 Vox 的关键字、优先级与若干重要语法决策。未覆盖的语法按 Rust-like 默认直觉处理，后续逐步补全。
 
-## 关键字（草案）
+## 关键字
 
 声明：
 
@@ -49,7 +49,7 @@
   - const 泛型调用（显式 const 实参）：`addn[3](4)`
   - pack/variadic 语法（Stage2 当前实现）：`fn zip[T...](xs: T...) -> i32 { ... }`
     - `xs: T...` 会在类型检查阶段降级为 `Vec[T]`，并可进入 IR/codegen。
-    - `T...`（type param pack 声明）当前只保留声明语义（最多 1 个且必须在末尾），未做真正 pack 展开。
+    - `T...`（type param pack 声明）支持实质参与类型系统：可进行异构逐位置物化与 `Pack.N` 投影（细节见 `docs/06-advanced-generics.md`）。
 - 其它（Stage0 暂不实现）：`impl[T] ...` 等。
 
 ## Trait 语法（Stage1 v0）
@@ -223,7 +223,7 @@ return if ok { a } else { b };
     - 块正常完成时，尾表达式会自动包装为 `Ok/Some`。
     - 若尾表达式已是目标容器类型（`Result/Option`），则直接透传。
 
-## Union 类型语法（已定，草案）
+## Union 类型语法（已定）
 
 类型位置允许 `|` 组合 union 类型：
 
@@ -270,15 +270,15 @@ type Value = I32: i32 | Str: String;
   - 若某行缩进使用 TAB，报错（当前约束：多行字符串缩进仅允许空格）。
   - 若闭引号独占一行，会去掉该闭引号前产生的尾部空行。
 
-类型（设计草案 vs 当前实现）：
+类型（设计目标 vs 当前实现）：
 
-- 语言设计草案倾向将 `"..."` 视为 `&'static str`（可按 `&str` 使用）。
+- 语言设计目标倾向将 `"..."` 视为 `&'static str`（可按 `&str` 使用）。
 - Stage0/Stage1/Stage2 当前实现中，字符串字面量仍视为 `String`（后端以 `const char*` 表示）。
 - Stage2 当前不支持裸 `str` 类型；请使用 `String`（拥有）或 `&str`/`&'static str`（借用）。
 - Stage2 已支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法；借用形状在类型系统/IR 中保留（`Ref`）；命名 lifetime（如 `&'a T`）在语法阶段直接拒绝。
 - 过渡到切片方向的当前落地是 `std/string` 的 `StrView { owner: String, lo, hi }`（拥有型视图），用于“可长期保存的子串视图”；推荐优先使用 view-first API（如 `sub`、`take_prefix`、`take_suffix`、`drop_prefix`、`drop_suffix`）并尽量延后 `to_string` 物化。
 
-## 范围类型语法（已定，草案）
+## 范围类型语法（已定）
 
 类型位置允许 `@range(lo..=hi) T`：
 
