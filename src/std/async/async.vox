@@ -24,6 +24,28 @@ pub trait Future {
   fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output];
 }
 
+// Runtime abstraction for pending scheduling.
+//
+// v0 keeps this minimal: only pending-wait hook is required.
+// Different runtimes (tight-loop, evented, epoll-backed, etc.) can provide
+// their own impls and be threaded through pending_wait_with.
+pub trait Runtime {
+  fn pending_wait(rt: Self, i: i32, c: Context) -> ();
+}
+
+pub struct SpinRuntime {
+  pub marker: i32,
+}
+
+impl Runtime for SpinRuntime {
+  fn pending_wait(rt: SpinRuntime, i: i32, c: Context) -> () {
+    rt;
+    c;
+    spin_wait(i);
+    return;
+  }
+}
+
 // Push boundary adapter contract: external event sources can push values into
 // a sink that later wakes and feeds a pull-driven Future/Stream.
 pub trait Sink {
@@ -54,6 +76,10 @@ pub fn context(w: Waker) -> Context {
   return Context { waker: w };
 }
 
+pub fn spin_runtime() -> SpinRuntime {
+  return SpinRuntime { marker: 0 };
+}
+
 // v0 executor hook for async entry wrappers.
 // Current implementation is intentionally a no-op; hosts/runtimes can provide
 // stronger scheduling behavior in later stages.
@@ -63,10 +89,14 @@ pub fn spin_wait(i: i32) -> () {
   return;
 }
 
+pub fn pending_wait_with[R: Runtime](rt: R, i: i32, c: Context) -> () {
+  Runtime.pending_wait(rt, i, c);
+  return;
+}
+
 // Default pending hook used by generated async entry wrappers.
 // Future runtimes can replace this with real wake/park integration.
-pub fn pending_wait(i: i32, c: &Context) -> () {
-  c;
-  spin_wait(i);
+pub fn pending_wait(i: i32, c: Context) -> () {
+  pending_wait_with(spin_runtime(), i, c);
   return;
 }

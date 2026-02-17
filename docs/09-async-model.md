@@ -41,6 +41,10 @@ trait Future {
   type Output;
   fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output];
 }
+
+trait Runtime {
+  fn pending_wait(rt: Self, i: i32, c: Context) -> ();
+}
 ```
 
 说明：
@@ -48,6 +52,7 @@ trait Future {
 1. `Pending` 表示当前不能继续，需要由 waker 驱动下一次 poll。
 2. `Ready(T)` 表示完成，返回结果。
 3. `Context/Waker` 定义最小执行器接口契约；具体调度策略由 runtime/宿主决定。
+4. `Runtime` trait 定义“Pending 时如何等待/让出”的最小 runtime 分层接口，当前标准库提供 `SpinRuntime`（tight-loop + `yield_now`）默认实现，并暴露 `pending_wait_with(rt, i, cx)` 供宿主自定义 runtime 接入。
 
 ## 4. lowering 设计（D03-3 目标）
 
@@ -128,5 +133,5 @@ trait Sink {
 
 ## 9. 当前剩余工作
 
-1. runtime/executor 体验增强（`wake/park` 集成，超出当前最小 polling hook）。
+1. runtime/executor 体验继续增强（当前已有 `Runtime` 最小分层；后续补 `wake/park`、事件循环/epoll/IOCP 等更完整执行器能力）。
 2. drop/cancel 语义继续细化与验证。
