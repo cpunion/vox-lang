@@ -128,8 +128,12 @@ Governance from now on:
     - `@effect(...)` on top-level functions, trait methods, and impl methods.
     - call-site effect checking in typecheck (`missing effect(s)` diagnostics).
     - trait impl methods must match trait method effect set.
-  - [ ] D04-2 Resource/effect advanced model pending:
-    - resource read/write set declaration and scheduling constraints.
+  - [x] D04-2 Resource baseline landed:
+    - `@resource(read|write, Name)` on top-level functions, trait methods, and impl methods.
+    - call-site resource checking in typecheck (`resource check failed` diagnostics).
+    - trait impl methods must match trait method resource read/write sets.
+  - [ ] D04-3 Resource/effect advanced model pending:
+    - resource scheduling/ordering constraints and declarative dependency graph integration.
     - effect classes/executor integration (IO/GPU/etc.) and optimization semantics.
   - Source: `docs/00-overview.md`.
 

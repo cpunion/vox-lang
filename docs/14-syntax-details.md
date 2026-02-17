@@ -73,6 +73,12 @@
   - 顶层函数支持：`@effect(FsRead) fn read() -> i32 { ... }`
   - trait 方法支持：`trait R { @effect(FsRead) fn read(x: Self) -> i32; }`
   - impl 方法支持：`impl I { @effect(FsRead) fn read(x: I) -> i32 { ... } }`
+- `@resource(read, Name)` / `@resource(write, Name)`：声明函数读写资源集合。
+  - 顶层函数支持：`@resource(read, Fs) fn read() -> i32 { ... }`
+  - trait 方法支持：`trait R { @resource(read, Fs) fn read(x: Self) -> i32; }`
+  - impl 方法支持：`impl I { @resource(read, Fs) fn read(x: I) -> i32 { ... } }`
+  - 调用点会做资源集合检查（缺失时报 `resource check failed`）。
+  - `impl Trait for T` 方法需与 trait 方法声明的资源集合一致（按 read/write 集合匹配）。
 - `@ffi_import/@ffi_export` 仅允许出现在顶层函数上；trait/impl 方法位置会报错。
 
 ## 运算符优先级
