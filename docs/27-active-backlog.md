@@ -137,6 +137,7 @@ Governance from now on:
       - `vox/list` module graph now exports module-level capability summaries (`effects`, `resource_reads`, `resource_writes`) for tooling and scheduling analysis.
     - [ ] D04-3b resource scheduling/ordering constraints.
       - [x] `vox/list` 增加模块级资源冲突分析输出（`rw`/`ww`，`resource_conflicts`），作为并行调度前置输入。
+      - [x] `vox/list` 增加函数级能力与冲突输出（`functions` / `function_resource_conflicts`），用于更细粒度调度分析。
     - [ ] D04-3c effect classes/executor integration (IO/GPU/etc.) and optimization semantics.
   - Source: `docs/00-overview.md`.
 

@@ -17,6 +17,24 @@ pub struct ResourceConflict {
   pub mode: String, // "rw" (read/write) or "ww" (write/write)
 }
 
+pub struct FunctionNode {
+  pub id: String,
+  pub module_path: String,
+  pub kind: String,  // "fn" | "impl_method" | "trait_method"
+  pub owner: String, // empty for top-level fn
+  pub name: String,
+  pub effects: Vec[String],
+  pub resource_reads: Vec[String],
+  pub resource_writes: Vec[String],
+}
+
+pub struct FunctionResourceConflict {
+  pub left_fn: String,
+  pub right_fn: String,
+  pub resource: String,
+  pub mode: String, // "rw" (read/write) or "ww" (write/write)
+}
+
 pub struct ModuleNode {
   pub path: String,
   pub files: Vec[String],
@@ -30,6 +48,8 @@ pub struct Graph {
   pub modules: Vec[ModuleNode],
   pub edges: Vec[Edge],
   pub resource_conflicts: Vec[ResourceConflict],
+  pub functions: Vec[FunctionNode],
+  pub function_resource_conflicts: Vec[FunctionResourceConflict],
 }
 
 pub struct BuildResult {
@@ -46,7 +66,15 @@ pub fn list_diag_kind_loader() -> i32 { return 1; }
 pub fn list_diag_kind_import() -> i32 { return 2; }
 pub fn list_diag_kind_type() -> i32 { return 3; }
 
-fn empty_graph() -> Graph { return Graph { modules: Vec(), edges: Vec(), resource_conflicts: Vec() }; }
+fn empty_graph() -> Graph {
+  return Graph {
+    modules: Vec(),
+    edges: Vec(),
+    resource_conflicts: Vec(),
+    functions: Vec(),
+    function_resource_conflicts: Vec(),
+  };
+}
 
 fn ok(g: Graph) -> BuildResult {
   return BuildResult { ok: true, err_kind: list_diag_kind_none(), err_code: "", err_message: "", err: "", graph: g };
@@ -104,6 +132,24 @@ fn push_unique_sorted(xs0: Vec[String], x: String) -> Vec[String] {
   let mut xs: Vec[String] = xs0;
   xs.push(x);
   return sort_strings(xs);
+}
+
+fn type_name_text(tn: ast.TypeName) -> String {
+  if tn.parts.len() == 0 { return "?"; }
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < tn.parts.len() {
+    if i > 0 { out = out.concat("."); }
+    out = out.concat(tn.parts.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn func_id(mod_path: String, kind: String, owner: String, name: String) -> String {
+  let mut out: String = mod_path.concat("::").concat(kind).concat("::");
+  if owner != "" { out = out.concat(owner).concat("::"); }
+  return out.concat(name);
 }
 
 fn add_import_targets(xs0: Vec[String], imps: tc.Imports) -> Vec[String] {
@@ -227,6 +273,112 @@ fn module_caps(m: tc.WorldModule) -> ModuleCaps {
   };
 }
 
+fn function_node_insert_sorted(xs0: Vec[FunctionNode], x0: FunctionNode) -> Vec[FunctionNode] {
+  let mut out: Vec[FunctionNode] = Vec();
+  let mut inserted: bool = false;
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    let cur: FunctionNode = xs0.get(i);
+    if !inserted && x0.id < cur.id {
+      out.push(x0);
+      inserted = true;
+    }
+    out.push(cur);
+    i = i + 1;
+  }
+  if !inserted { out.push(x0); }
+  return out;
+}
+
+fn collect_module_functions(m: tc.WorldModule) -> Vec[FunctionNode] {
+  let mut out: Vec[FunctionNode] = Vec();
+
+  let mut fi: i32 = 0;
+  while fi < m.prog.funcs.len() {
+    let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+    let caps: ModuleCaps = ModuleCaps {
+      effects: sort_strings(cap_collect_effects_from_attrs(Vec(), fd.effects)),
+      resource_reads: sort_strings(cap_collect_resources_from_attrs(Vec(), fd.resources, ast.resource_read())),
+      resource_writes: sort_strings(cap_collect_resources_from_attrs(Vec(), fd.resources, ast.resource_write())),
+    };
+    let id: String = func_id(m.path, "fn", "", fd.name);
+    out = function_node_insert_sorted(out, FunctionNode {
+      id: id,
+      module_path: m.path,
+      kind: "fn",
+      owner: "",
+      name: fd.name,
+      effects: caps.effects,
+      resource_reads: caps.resource_reads,
+      resource_writes: caps.resource_writes,
+    });
+    fi = fi + 1;
+  }
+
+  let mut ii: i32 = 0;
+  while ii < m.prog.impls.len() {
+    let id: ast.ImplDecl = m.prog.impls.get(ii);
+    let owner: String =
+      if id.is_inherent {
+        type_name_text(id.for_ty)
+      } else {
+        type_name_text(id.trait_name).concat(" for ").concat(type_name_text(id.for_ty))
+      };
+    let mut mi: i32 = 0;
+    while mi < id.methods.len() {
+      let md: ast.FuncDecl = id.methods.get(mi);
+      let caps2: ModuleCaps = ModuleCaps {
+        effects: sort_strings(cap_collect_effects_from_attrs(Vec(), md.effects)),
+        resource_reads: sort_strings(cap_collect_resources_from_attrs(Vec(), md.resources, ast.resource_read())),
+        resource_writes: sort_strings(cap_collect_resources_from_attrs(Vec(), md.resources, ast.resource_write())),
+      };
+      let id2: String = func_id(m.path, "impl_method", owner, md.name);
+      out = function_node_insert_sorted(out, FunctionNode {
+        id: id2,
+        module_path: m.path,
+        kind: "impl_method",
+        owner: owner,
+        name: md.name,
+        effects: caps2.effects,
+        resource_reads: caps2.resource_reads,
+        resource_writes: caps2.resource_writes,
+      });
+      mi = mi + 1;
+    }
+    ii = ii + 1;
+  }
+
+  let mut ti: i32 = 0;
+  while ti < m.prog.traits.len() {
+    let td: ast.TraitDecl = m.prog.traits.get(ti);
+    let owner2: String = td.name;
+    let mut mi2: i32 = 0;
+    while mi2 < td.methods.len() {
+      let md2: ast.TraitMethodDecl = td.methods.get(mi2);
+      let caps3: ModuleCaps = ModuleCaps {
+        effects: sort_strings(cap_collect_effects_from_attrs(Vec(), md2.effects)),
+        resource_reads: sort_strings(cap_collect_resources_from_attrs(Vec(), md2.resources, ast.resource_read())),
+        resource_writes: sort_strings(cap_collect_resources_from_attrs(Vec(), md2.resources, ast.resource_write())),
+      };
+      let id3: String = func_id(m.path, "trait_method", owner2, md2.name);
+      out = function_node_insert_sorted(out, FunctionNode {
+        id: id3,
+        module_path: m.path,
+        kind: "trait_method",
+        owner: owner2,
+        name: md2.name,
+        effects: caps3.effects,
+        resource_reads: caps3.resource_reads,
+        resource_writes: caps3.resource_writes,
+      });
+      mi2 = mi2 + 1;
+    }
+    ti = ti + 1;
+  }
+
+  return out;
+}
+
 fn edge_exists(edges: Vec[Edge], from_path: String, to_path: String) -> bool {
   let mut i: i32 = 0;
   while i < edges.len() {
@@ -339,6 +491,89 @@ fn build_resource_conflicts(mods: Vec[ModuleNode]) -> Vec[ResourceConflict] {
   return out;
 }
 
+fn function_conflict_exists(xs: Vec[FunctionResourceConflict], x: FunctionResourceConflict) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let cur: FunctionResourceConflict = xs.get(i);
+    if cur.left_fn == x.left_fn && cur.right_fn == x.right_fn && cur.resource == x.resource && cur.mode == x.mode {
+      return true;
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn function_conflict_insert_sorted(xs0: Vec[FunctionResourceConflict], x0: FunctionResourceConflict) -> Vec[FunctionResourceConflict] {
+  if function_conflict_exists(xs0, x0) { return xs0; }
+  let mut out: Vec[FunctionResourceConflict] = Vec();
+  let mut inserted: bool = false;
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    let cur: FunctionResourceConflict = xs0.get(i);
+    let less: bool =
+      if x0.left_fn < cur.left_fn {
+        true
+      } else if x0.left_fn > cur.left_fn {
+        false
+      } else if x0.right_fn < cur.right_fn {
+        true
+      } else if x0.right_fn > cur.right_fn {
+        false
+      } else if x0.resource < cur.resource {
+        true
+      } else if x0.resource > cur.resource {
+        false
+      } else {
+        x0.mode < cur.mode
+      };
+    if !inserted && less {
+      out.push(x0);
+      inserted = true;
+    }
+    out.push(cur);
+    i = i + 1;
+  }
+  if !inserted { out.push(x0); }
+  return out;
+}
+
+fn build_function_resource_conflicts(funcs: Vec[FunctionNode]) -> Vec[FunctionResourceConflict] {
+  let mut out: Vec[FunctionResourceConflict] = Vec();
+  let mut i: i32 = 0;
+  while i < funcs.len() {
+    let a: FunctionNode = funcs.get(i);
+    let mut j: i32 = i + 1;
+    while j < funcs.len() {
+      let b: FunctionNode = funcs.get(j);
+
+      let mut wi: i32 = 0;
+      while wi < a.resource_writes.len() {
+        let r: String = a.resource_writes.get(wi);
+        if has_str(b.resource_reads, r) {
+          out = function_conflict_insert_sorted(out, FunctionResourceConflict { left_fn: a.id, right_fn: b.id, resource: r, mode: "rw" });
+        }
+        if has_str(b.resource_writes, r) {
+          out = function_conflict_insert_sorted(out, FunctionResourceConflict { left_fn: a.id, right_fn: b.id, resource: r, mode: "ww" });
+        }
+        wi = wi + 1;
+      }
+
+      let mut ri: i32 = 0;
+      while ri < a.resource_reads.len() {
+        let r2: String = a.resource_reads.get(ri);
+        if has_str(b.resource_writes, r2) {
+          out = function_conflict_insert_sorted(out, FunctionResourceConflict { left_fn: a.id, right_fn: b.id, resource: r2, mode: "rw" });
+        }
+        ri = ri + 1;
+      }
+
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
 fn module_insert_sorted(xs0: Vec[ModuleNode], x0: ModuleNode) -> Vec[ModuleNode] {
   let mut out: Vec[ModuleNode] = Vec();
   let mut inserted: bool = false;
@@ -359,6 +594,7 @@ fn module_insert_sorted(xs0: Vec[ModuleNode], x0: ModuleNode) -> Vec[ModuleNode]
 pub fn graph_from_world(w: tc.World) -> BuildResult {
   let mut mods: Vec[ModuleNode] = Vec();
   let mut edges: Vec[Edge] = Vec();
+  let mut funcs: Vec[FunctionNode] = Vec();
 
   let mut i: i32 = 0;
   while i < w.mods.len() {
@@ -387,6 +623,12 @@ pub fn graph_from_world(w: tc.World) -> BuildResult {
       resource_writes: caps.resource_writes,
     };
     mods = module_insert_sorted(mods, node);
+    let mfuncs: Vec[FunctionNode] = collect_module_functions(m);
+    let mut mfi: i32 = 0;
+    while mfi < mfuncs.len() {
+      funcs = function_node_insert_sorted(funcs, mfuncs.get(mfi));
+      mfi = mfi + 1;
+    }
 
     let mut ei: i32 = 0;
     while ei < imports_sorted.len() {
@@ -398,7 +640,14 @@ pub fn graph_from_world(w: tc.World) -> BuildResult {
   }
 
   let conflicts: Vec[ResourceConflict] = build_resource_conflicts(mods);
-  return ok(Graph { modules: mods, edges: edges, resource_conflicts: conflicts });
+  let fn_conflicts: Vec[FunctionResourceConflict] = build_function_resource_conflicts(funcs);
+  return ok(Graph {
+    modules: mods,
+    edges: edges,
+    resource_conflicts: conflicts,
+    functions: funcs,
+    function_resource_conflicts: fn_conflicts,
+  });
 }
 
 pub fn graph_from_files(files: Vec[ld.SourceFile]) -> BuildResult {
@@ -485,6 +734,40 @@ pub fn graph_to_json(g: Graph) -> String {
   }
   out = out.concat("]");
 
+  out = out.concat(",\"functions\":[");
+  i = 0;
+  while i < g.functions.len() {
+    if i > 0 { out = out.concat(","); }
+    let f: FunctionNode = g.functions.get(i);
+    out = out
+      .concat("{\"id\":").concat(json_quote(f.id))
+      .concat(",\"module\":").concat(json_quote(f.module_path))
+      .concat(",\"kind\":").concat(json_quote(f.kind))
+      .concat(",\"owner\":").concat(json_quote(f.owner))
+      .concat(",\"name\":").concat(json_quote(f.name))
+      .concat(",\"effects\":").concat(json_array_str(f.effects))
+      .concat(",\"resource_reads\":").concat(json_array_str(f.resource_reads))
+      .concat(",\"resource_writes\":").concat(json_array_str(f.resource_writes))
+      .concat("}");
+    i = i + 1;
+  }
+  out = out.concat("]");
+
+  out = out.concat(",\"function_resource_conflicts\":[");
+  i = 0;
+  while i < g.function_resource_conflicts.len() {
+    if i > 0 { out = out.concat(","); }
+    let c2: FunctionResourceConflict = g.function_resource_conflicts.get(i);
+    out = out
+      .concat("{\"left\":").concat(json_quote(c2.left_fn))
+      .concat(",\"right\":").concat(json_quote(c2.right_fn))
+      .concat(",\"resource\":").concat(json_quote(c2.resource))
+      .concat(",\"mode\":").concat(json_quote(c2.mode))
+      .concat("}");
+    i = i + 1;
+  }
+  out = out.concat("]");
+
   return out.concat("}");
 }
 
@@ -531,6 +814,29 @@ pub fn graph_to_text(g: Graph) -> String {
       .concat("[resource_conflict] ")
       .concat(c.left_mod).concat(" <-> ").concat(c.right_mod)
       .concat(" : ").concat(c.resource).concat(" (").concat(c.mode).concat(")\n");
+    i = i + 1;
+  }
+
+  out = out.concat("[functions] ").concat(g.functions.len().to_string()).concat("\n");
+  i = 0;
+  while i < g.functions.len() {
+    let f2: FunctionNode = g.functions.get(i);
+    out = out
+      .concat("[function] ").concat(f2.id).concat("\n")
+      .concat("  effects: ").concat(join_with_sep(f2.effects, ",")).concat("\n")
+      .concat("  resource_reads: ").concat(join_with_sep(f2.resource_reads, ",")).concat("\n")
+      .concat("  resource_writes: ").concat(join_with_sep(f2.resource_writes, ",")).concat("\n");
+    i = i + 1;
+  }
+
+  out = out.concat("[function_resource_conflicts] ").concat(g.function_resource_conflicts.len().to_string()).concat("\n");
+  i = 0;
+  while i < g.function_resource_conflicts.len() {
+    let c3: FunctionResourceConflict = g.function_resource_conflicts.get(i);
+    out = out
+      .concat("[function_resource_conflict] ")
+      .concat(c3.left_fn).concat(" <-> ").concat(c3.right_fn)
+      .concat(" : ").concat(c3.resource).concat(" (").concat(c3.mode).concat(")\n");
     i = i + 1;
   }
 
