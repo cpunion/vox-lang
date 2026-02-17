@@ -3,6 +3,7 @@
 
 import "vox/loader" as ld
 import "vox/typecheck" as tc
+import "vox/ast" as ast
 
 pub struct Edge {
   pub from_mod: String,
@@ -13,6 +14,9 @@ pub struct ModuleNode {
   pub path: String,
   pub files: Vec[String],
   pub imports: Vec[String],
+  pub effects: Vec[String],
+  pub resource_reads: Vec[String],
+  pub resource_writes: Vec[String],
 }
 
 pub struct Graph {
@@ -132,6 +136,89 @@ fn module_import_files(m: tc.WorldModule) -> Vec[String] {
   return out;
 }
 
+struct ModuleCaps {
+  effects: Vec[String],
+  resource_reads: Vec[String],
+  resource_writes: Vec[String],
+}
+
+fn cap_add_unique(xs0: Vec[String], s: String) -> Vec[String] {
+  if s == "" { return xs0; }
+  return push_unique_sorted(xs0, s);
+}
+
+fn cap_collect_effects_from_attrs(xs0: Vec[String], attrs: Vec[ast.EffectAttr]) -> Vec[String] {
+  let mut xs: Vec[String] = xs0;
+  let mut i: i32 = 0;
+  while i < attrs.len() {
+    xs = cap_add_unique(xs, attrs.get(i).name);
+    i = i + 1;
+  }
+  return xs;
+}
+
+fn cap_collect_resources_from_attrs(xs0: Vec[String], attrs: Vec[ast.ResourceAttr], kind: i32) -> Vec[String] {
+  let mut xs: Vec[String] = xs0;
+  let mut i: i32 = 0;
+  while i < attrs.len() {
+    let a: ast.ResourceAttr = attrs.get(i);
+    if a.kind == kind {
+      xs = cap_add_unique(xs, a.name);
+    }
+    i = i + 1;
+  }
+  return xs;
+}
+
+fn module_caps(m: tc.WorldModule) -> ModuleCaps {
+  let mut effects: Vec[String] = Vec();
+  let mut reads: Vec[String] = Vec();
+  let mut writes: Vec[String] = Vec();
+
+  let mut fi: i32 = 0;
+  while fi < m.prog.funcs.len() {
+    let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+    effects = cap_collect_effects_from_attrs(effects, fd.effects);
+    reads = cap_collect_resources_from_attrs(reads, fd.resources, ast.resource_read());
+    writes = cap_collect_resources_from_attrs(writes, fd.resources, ast.resource_write());
+    fi = fi + 1;
+  }
+
+  let mut ii: i32 = 0;
+  while ii < m.prog.impls.len() {
+    let id: ast.ImplDecl = m.prog.impls.get(ii);
+    let mut mi: i32 = 0;
+    while mi < id.methods.len() {
+      let md: ast.FuncDecl = id.methods.get(mi);
+      effects = cap_collect_effects_from_attrs(effects, md.effects);
+      reads = cap_collect_resources_from_attrs(reads, md.resources, ast.resource_read());
+      writes = cap_collect_resources_from_attrs(writes, md.resources, ast.resource_write());
+      mi = mi + 1;
+    }
+    ii = ii + 1;
+  }
+
+  let mut ti: i32 = 0;
+  while ti < m.prog.traits.len() {
+    let td: ast.TraitDecl = m.prog.traits.get(ti);
+    let mut mi2: i32 = 0;
+    while mi2 < td.methods.len() {
+      let md2: ast.TraitMethodDecl = td.methods.get(mi2);
+      effects = cap_collect_effects_from_attrs(effects, md2.effects);
+      reads = cap_collect_resources_from_attrs(reads, md2.resources, ast.resource_read());
+      writes = cap_collect_resources_from_attrs(writes, md2.resources, ast.resource_write());
+      mi2 = mi2 + 1;
+    }
+    ti = ti + 1;
+  }
+
+  return ModuleCaps {
+    effects: sort_strings(effects),
+    resource_reads: sort_strings(reads),
+    resource_writes: sort_strings(writes),
+  };
+}
+
 fn edge_exists(edges: Vec[Edge], from_path: String, to_path: String) -> bool {
   let mut i: i32 = 0;
   while i < edges.len() {
@@ -199,7 +286,15 @@ pub fn graph_from_world(w: tc.World) -> BuildResult {
     }
 
     let imports_sorted: Vec[String] = sort_strings(imports);
-    let node: ModuleNode = ModuleNode { path: m.path, files: files, imports: imports_sorted };
+    let caps: ModuleCaps = module_caps(m);
+    let node: ModuleNode = ModuleNode {
+      path: m.path,
+      files: files,
+      imports: imports_sorted,
+      effects: caps.effects,
+      resource_reads: caps.resource_reads,
+      resource_writes: caps.resource_writes,
+    };
     mods = module_insert_sorted(mods, node);
 
     let mut ei: i32 = 0;
@@ -262,6 +357,9 @@ pub fn graph_to_json(g: Graph) -> String {
       .concat("{\"path\":").concat(json_quote(m.path))
       .concat(",\"files\":").concat(json_array_str(m.files))
       .concat(",\"imports\":").concat(json_array_str(m.imports))
+      .concat(",\"effects\":").concat(json_array_str(m.effects))
+      .concat(",\"resource_reads\":").concat(json_array_str(m.resource_reads))
+      .concat(",\"resource_writes\":").concat(json_array_str(m.resource_writes))
       .concat("}");
     i = i + 1;
   }
@@ -304,6 +402,9 @@ pub fn graph_to_text(g: Graph) -> String {
     out = out.concat("[module] ").concat(m.path).concat("\n");
     out = out.concat("  files: ").concat(join_with_sep(m.files, ",")).concat("\n");
     out = out.concat("  imports: ").concat(join_with_sep(m.imports, ",")).concat("\n");
+    out = out.concat("  effects: ").concat(join_with_sep(m.effects, ",")).concat("\n");
+    out = out.concat("  resource_reads: ").concat(join_with_sep(m.resource_reads, ",")).concat("\n");
+    out = out.concat("  resource_writes: ").concat(join_with_sep(m.resource_writes, ",")).concat("\n");
     i = i + 1;
   }
 

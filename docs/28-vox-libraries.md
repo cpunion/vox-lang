@@ -168,6 +168,8 @@ fn list_smoke() -> String {
 }
 ```
 
+说明：`graph_to_json` 的每个 module 节点除 `path/files/imports` 外，还包含模块内声明聚合的 `effects/resource_reads/resource_writes` 字段，可直接用于依赖图工具和调度分析。
+
 ## 6. 当前落地状态
 
 1. [x] Stable 层最小示例：见本章第 5 节。
@@ -176,4 +178,4 @@ fn list_smoke() -> String {
 4. [x] `vox/types` façade 初版（`Config + CheckResult + Info`，后端复用 `vox/typecheck`）。
 5. [x] `vox/internal/*` 首批下沉：`vox/internal/text`，并在 `vox/manifest` 中复用。
 6. [x] Stable/Experimental 模块统一头注释（稳定性级别 + 迁移策略）。
-7. [x] `vox/list`（go list 对标）：输出完整包依赖图（模块、导入边、可选 JSON）。
+7. [x] `vox/list`（go list 对标）：输出完整包依赖图（模块、导入边、可选 JSON），并附带模块级 effect/resource 能力聚合信息。

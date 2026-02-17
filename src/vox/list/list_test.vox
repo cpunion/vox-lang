@@ -13,6 +13,23 @@ fn contains(s: String, part: String) -> bool {
   return false;
 }
 
+fn find_module(g: lst.Graph, path: String) -> lst.ModuleNode {
+  let mut i: i32 = 0;
+  while i < g.modules.len() {
+    let m: lst.ModuleNode = g.modules.get(i);
+    if m.path == path { return m; }
+    i = i + 1;
+  }
+  return lst.ModuleNode {
+    path: "",
+    files: Vec(),
+    imports: Vec(),
+    effects: Vec(),
+    resource_reads: Vec(),
+    resource_writes: Vec(),
+  };
+}
+
 fn test_list_graph_from_files_smoke() -> () {
   let mut files: Vec[ld.SourceFile] = Vec();
   files.push(ld.SourceFile {
@@ -59,10 +76,41 @@ fn test_list_graph_json_and_text_output() -> () {
   t.assert(contains(j, "\"modules\""));
   t.assert(contains(j, "\"edges\""));
   t.assert(contains(j, "\"from\":\"main\""));
+  t.assert(contains(j, "\"effects\""));
+  t.assert(contains(j, "\"resource_reads\""));
+  t.assert(contains(j, "\"resource_writes\""));
 
   let txt: String = lst.graph_to_text(r.graph);
   t.assert(contains(txt, "[module] main"));
+  t.assert(contains(txt, "effects:"));
+  t.assert(contains(txt, "resource_reads:"));
+  t.assert(contains(txt, "resource_writes:"));
   t.assert(contains(txt, "[edge] main -> util"));
+}
+
+fn test_list_graph_module_caps_smoke() -> () {
+  let mut files: Vec[ld.SourceFile] = Vec();
+  files.push(ld.SourceFile {
+    path: "src/main.vox",
+    text:
+      "@effect(FsRead)\n"
+      .concat("@resource(read, Fs)\n")
+      .concat("fn read() -> i32 { return 1; }\n")
+      .concat("struct I { v: i32 }\n")
+      .concat("impl I { @resource(write, Db) fn set(x: I) -> i32 { return x.v; } }\n")
+      .concat("fn main() -> i32 { return read(); }\n"),
+  });
+
+  let r: lst.BuildResult = lst.graph_from_files(files);
+  t.assert_with(r.ok, r.err);
+  let m: lst.ModuleNode = find_module(r.graph, "main");
+  t.assert_eq(m.path, "main");
+  t.assert_eq(m.effects.len(), 1);
+  t.assert_eq(m.effects.get(0), "FsRead");
+  t.assert_eq(m.resource_reads.len(), 1);
+  t.assert_eq(m.resource_reads.get(0), "Fs");
+  t.assert_eq(m.resource_writes.len(), 1);
+  t.assert_eq(m.resource_writes.get(0), "Db");
 }
 
 fn test_list_graph_loader_error_meta() -> () {

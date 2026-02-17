@@ -133,8 +133,10 @@ Governance from now on:
     - call-site resource checking in typecheck (`resource check failed` diagnostics).
     - trait impl methods must match trait method resource read/write sets.
   - [ ] D04-3 Resource/effect advanced model pending:
-    - resource scheduling/ordering constraints and declarative dependency graph integration.
-    - effect classes/executor integration (IO/GPU/etc.) and optimization semantics.
+    - [x] D04-3a Declarative graph integration baseline:
+      - `vox/list` module graph now exports module-level capability summaries (`effects`, `resource_reads`, `resource_writes`) for tooling and scheduling analysis.
+    - [ ] D04-3b resource scheduling/ordering constraints.
+    - [ ] D04-3c effect classes/executor integration (IO/GPU/etc.) and optimization semantics.
   - Source: `docs/00-overview.md`.
 
 - [x] D05 FFI/WASM detailed ABI/attribute model.
