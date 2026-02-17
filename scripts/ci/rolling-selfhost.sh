@@ -204,12 +204,21 @@ pick_bootstrap() {
 
 build_from_bootstrap() {
   local bootstrap_bin="$1"
+  local help_text=""
+  help_text="$("$bootstrap_bin" 2>&1 || true)"
   (
     cd "$WORK_DIR"
-    if "$bootstrap_bin" build --driver=tool "$OUT_REL"; then
-      :
+    # Bootstrap compatibility:
+    # - old CLI: build-pkg <out.bin>
+    # - new CLI: build [out.bin]
+    if [[ "$help_text" == *"build-pkg <out.bin>"* ]]; then
+      if "$bootstrap_bin" build-pkg --driver=tool "$OUT_REL"; then
+        :
+      else
+        "$bootstrap_bin" build-pkg "$OUT_REL"
+      fi
     else
-      "$bootstrap_bin" build-pkg --driver=tool "$OUT_REL"
+      "$bootstrap_bin" build --driver=tool "$OUT_REL"
     fi
   )
 }
