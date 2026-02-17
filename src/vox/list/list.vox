@@ -17,6 +17,13 @@ pub struct ResourceConflict {
   pub mode: String, // "rw" (read/write) or "ww" (write/write)
 }
 
+pub struct ResourceOrder {
+  pub from_mod: String,
+  pub to_mod: String,
+  pub resource: String,
+  pub mode: String, // inherited from conflict mode
+}
+
 pub struct FunctionNode {
   pub id: String,
   pub module_path: String,
@@ -48,6 +55,7 @@ pub struct Graph {
   pub modules: Vec[ModuleNode],
   pub edges: Vec[Edge],
   pub resource_conflicts: Vec[ResourceConflict],
+  pub resource_orders: Vec[ResourceOrder],
   pub functions: Vec[FunctionNode],
   pub function_resource_conflicts: Vec[FunctionResourceConflict],
 }
@@ -71,6 +79,7 @@ fn empty_graph() -> Graph {
     modules: Vec(),
     edges: Vec(),
     resource_conflicts: Vec(),
+    resource_orders: Vec(),
     functions: Vec(),
     function_resource_conflicts: Vec(),
   };
@@ -491,6 +500,79 @@ fn build_resource_conflicts(mods: Vec[ModuleNode]) -> Vec[ResourceConflict] {
   return out;
 }
 
+fn resource_order_exists(xs: Vec[ResourceOrder], x: ResourceOrder) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let cur: ResourceOrder = xs.get(i);
+    if cur.from_mod == x.from_mod && cur.to_mod == x.to_mod && cur.resource == x.resource && cur.mode == x.mode {
+      return true;
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn resource_order_insert_sorted(xs0: Vec[ResourceOrder], x0: ResourceOrder) -> Vec[ResourceOrder] {
+  if resource_order_exists(xs0, x0) { return xs0; }
+  let mut out: Vec[ResourceOrder] = Vec();
+  let mut inserted: bool = false;
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    let cur: ResourceOrder = xs0.get(i);
+    let less: bool =
+      if x0.from_mod < cur.from_mod {
+        true
+      } else if x0.from_mod > cur.from_mod {
+        false
+      } else if x0.to_mod < cur.to_mod {
+        true
+      } else if x0.to_mod > cur.to_mod {
+        false
+      } else if x0.resource < cur.resource {
+        true
+      } else if x0.resource > cur.resource {
+        false
+      } else {
+        x0.mode < cur.mode
+      };
+    if !inserted && less {
+      out.push(x0);
+      inserted = true;
+    }
+    out.push(cur);
+    i = i + 1;
+  }
+  if !inserted { out.push(x0); }
+  return out;
+}
+
+fn build_resource_orders(edges: Vec[Edge], conflicts: Vec[ResourceConflict]) -> Vec[ResourceOrder] {
+  let mut out: Vec[ResourceOrder] = Vec();
+  let mut i: i32 = 0;
+  while i < conflicts.len() {
+    let c: ResourceConflict = conflicts.get(i);
+    // If A imports B, B must be available before A; orient order as B -> A.
+    if edge_exists(edges, c.left_mod, c.right_mod) {
+      out = resource_order_insert_sorted(out, ResourceOrder {
+        from_mod: c.right_mod,
+        to_mod: c.left_mod,
+        resource: c.resource,
+        mode: c.mode,
+      });
+    }
+    if edge_exists(edges, c.right_mod, c.left_mod) {
+      out = resource_order_insert_sorted(out, ResourceOrder {
+        from_mod: c.left_mod,
+        to_mod: c.right_mod,
+        resource: c.resource,
+        mode: c.mode,
+      });
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
 fn function_conflict_exists(xs: Vec[FunctionResourceConflict], x: FunctionResourceConflict) -> bool {
   let mut i: i32 = 0;
   while i < xs.len() {
@@ -640,11 +722,13 @@ pub fn graph_from_world(w: tc.World) -> BuildResult {
   }
 
   let conflicts: Vec[ResourceConflict] = build_resource_conflicts(mods);
+  let orders: Vec[ResourceOrder] = build_resource_orders(edges, conflicts);
   let fn_conflicts: Vec[FunctionResourceConflict] = build_function_resource_conflicts(funcs);
   return ok(Graph {
     modules: mods,
     edges: edges,
     resource_conflicts: conflicts,
+    resource_orders: orders,
     functions: funcs,
     function_resource_conflicts: fn_conflicts,
   });
@@ -734,6 +818,21 @@ pub fn graph_to_json(g: Graph) -> String {
   }
   out = out.concat("]");
 
+  out = out.concat(",\"resource_orders\":[");
+  i = 0;
+  while i < g.resource_orders.len() {
+    if i > 0 { out = out.concat(","); }
+    let o: ResourceOrder = g.resource_orders.get(i);
+    out = out
+      .concat("{\"from\":").concat(json_quote(o.from_mod))
+      .concat(",\"to\":").concat(json_quote(o.to_mod))
+      .concat(",\"resource\":").concat(json_quote(o.resource))
+      .concat(",\"mode\":").concat(json_quote(o.mode))
+      .concat("}");
+    i = i + 1;
+  }
+  out = out.concat("]");
+
   out = out.concat(",\"functions\":[");
   i = 0;
   while i < g.functions.len() {
@@ -814,6 +913,17 @@ pub fn graph_to_text(g: Graph) -> String {
       .concat("[resource_conflict] ")
       .concat(c.left_mod).concat(" <-> ").concat(c.right_mod)
       .concat(" : ").concat(c.resource).concat(" (").concat(c.mode).concat(")\n");
+    i = i + 1;
+  }
+
+  out = out.concat("[resource_orders] ").concat(g.resource_orders.len().to_string()).concat("\n");
+  i = 0;
+  while i < g.resource_orders.len() {
+    let o2: ResourceOrder = g.resource_orders.get(i);
+    out = out
+      .concat("[resource_order] ")
+      .concat(o2.from_mod).concat(" -> ").concat(o2.to_mod)
+      .concat(" : ").concat(o2.resource).concat(" (").concat(o2.mode).concat(")\n");
     i = i + 1;
   }
 
