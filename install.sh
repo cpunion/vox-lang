@@ -4,7 +4,7 @@ set -euo pipefail
 REPO="${VOX_INSTALL_REPO:-cpunion/vox-lang}"
 MODE="" # download | local (auto if empty)
 VERSION="${VOX_INSTALL_VERSION:-}"
-DEFAULT_VERSION="${VOX_INSTALL_DEFAULT_VERSION:-v0.2.9}"
+DEFAULT_VERSION="${VOX_INSTALL_DEFAULT_VERSION:-v0.2.10}"
 PLATFORM="${VOX_INSTALL_PLATFORM:-}"
 INSTALL_DIR="${VOX_INSTALL_DIR:-$HOME/.vox}"
 BIN_DIR="${VOX_INSTALL_BIN_DIR:-$INSTALL_DIR/bin}"
@@ -26,15 +26,15 @@ Install vox compiler.
 Usage:
   bash install.sh [--local|--download] [--version vX.Y.Z] [--platform <os-arch>]
   curl -fsSL https://raw.githubusercontent.com/cpunion/vox-lang/main/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/cpunion/vox-lang/main/install.sh | bash -s -- --version v0.2.9
+  curl -fsSL https://raw.githubusercontent.com/cpunion/vox-lang/main/install.sh | bash -s -- --version v0.2.10
 
 Options:
   --local                 Build from local vox-lang repo (rolling selfhost) then install.
   --download              Force release-binary install.
-  --version <tag>         Release tag, e.g. v0.2.9 (default: latest).
+  --version <tag>         Release tag, e.g. v0.2.10 (default: latest).
   --platform <os-arch>    e.g. darwin-arm64, linux-amd64, windows-amd64.
   --repo <owner/repo>     GitHub repo (default: cpunion/vox-lang).
-  --default-version <tag> Fallback tag when latest query fails (default: v0.2.9).
+  --default-version <tag> Fallback tag when latest query fails (default: v0.2.10).
   --bin-dir <dir>         Install bin dir (default: ~/.vox/bin).
   --cache-dir <dir>       Download cache dir (default: ~/.vox/cache/downloads).
   --no-cache              Disable download cache.
