@@ -10,6 +10,13 @@ pub struct Edge {
   pub to_mod: String,
 }
 
+pub struct ResourceConflict {
+  pub left_mod: String,
+  pub right_mod: String,
+  pub resource: String,
+  pub mode: String, // "rw" (read/write) or "ww" (write/write)
+}
+
 pub struct ModuleNode {
   pub path: String,
   pub files: Vec[String],
@@ -22,6 +29,7 @@ pub struct ModuleNode {
 pub struct Graph {
   pub modules: Vec[ModuleNode],
   pub edges: Vec[Edge],
+  pub resource_conflicts: Vec[ResourceConflict],
 }
 
 pub struct BuildResult {
@@ -38,7 +46,7 @@ pub fn list_diag_kind_loader() -> i32 { return 1; }
 pub fn list_diag_kind_import() -> i32 { return 2; }
 pub fn list_diag_kind_type() -> i32 { return 3; }
 
-fn empty_graph() -> Graph { return Graph { modules: Vec(), edges: Vec() }; }
+fn empty_graph() -> Graph { return Graph { modules: Vec(), edges: Vec(), resource_conflicts: Vec() }; }
 
 fn ok(g: Graph) -> BuildResult {
   return BuildResult { ok: true, err_kind: list_diag_kind_none(), err_code: "", err_message: "", err: "", graph: g };
@@ -248,6 +256,89 @@ fn edge_insert_sorted(edges0: Vec[Edge], e0: Edge) -> Vec[Edge] {
   return out;
 }
 
+fn conflict_exists(xs: Vec[ResourceConflict], x: ResourceConflict) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let cur: ResourceConflict = xs.get(i);
+    if cur.left_mod == x.left_mod && cur.right_mod == x.right_mod && cur.resource == x.resource && cur.mode == x.mode {
+      return true;
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn conflict_insert_sorted(xs0: Vec[ResourceConflict], x0: ResourceConflict) -> Vec[ResourceConflict] {
+  if conflict_exists(xs0, x0) { return xs0; }
+  let mut out: Vec[ResourceConflict] = Vec();
+  let mut inserted: bool = false;
+  let mut i: i32 = 0;
+  while i < xs0.len() {
+    let cur: ResourceConflict = xs0.get(i);
+    let less: bool =
+      if x0.left_mod < cur.left_mod {
+        true
+      } else if x0.left_mod > cur.left_mod {
+        false
+      } else if x0.right_mod < cur.right_mod {
+        true
+      } else if x0.right_mod > cur.right_mod {
+        false
+      } else if x0.resource < cur.resource {
+        true
+      } else if x0.resource > cur.resource {
+        false
+      } else {
+        x0.mode < cur.mode
+      };
+    if !inserted && less {
+      out.push(x0);
+      inserted = true;
+    }
+    out.push(cur);
+    i = i + 1;
+  }
+  if !inserted { out.push(x0); }
+  return out;
+}
+
+fn build_resource_conflicts(mods: Vec[ModuleNode]) -> Vec[ResourceConflict] {
+  let mut out: Vec[ResourceConflict] = Vec();
+  let mut i: i32 = 0;
+  while i < mods.len() {
+    let a: ModuleNode = mods.get(i);
+    let mut j: i32 = i + 1;
+    while j < mods.len() {
+      let b: ModuleNode = mods.get(j);
+
+      let mut wi: i32 = 0;
+      while wi < a.resource_writes.len() {
+        let r: String = a.resource_writes.get(wi);
+        if has_str(b.resource_reads, r) {
+          out = conflict_insert_sorted(out, ResourceConflict { left_mod: a.path, right_mod: b.path, resource: r, mode: "rw" });
+        }
+        if has_str(b.resource_writes, r) {
+          out = conflict_insert_sorted(out, ResourceConflict { left_mod: a.path, right_mod: b.path, resource: r, mode: "ww" });
+        }
+        wi = wi + 1;
+      }
+
+      let mut ri: i32 = 0;
+      while ri < a.resource_reads.len() {
+        let r2: String = a.resource_reads.get(ri);
+        if has_str(b.resource_writes, r2) {
+          out = conflict_insert_sorted(out, ResourceConflict { left_mod: a.path, right_mod: b.path, resource: r2, mode: "rw" });
+        }
+        ri = ri + 1;
+      }
+
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
 fn module_insert_sorted(xs0: Vec[ModuleNode], x0: ModuleNode) -> Vec[ModuleNode] {
   let mut out: Vec[ModuleNode] = Vec();
   let mut inserted: bool = false;
@@ -306,7 +397,8 @@ pub fn graph_from_world(w: tc.World) -> BuildResult {
     i = i + 1;
   }
 
-  return ok(Graph { modules: mods, edges: edges });
+  let conflicts: Vec[ResourceConflict] = build_resource_conflicts(mods);
+  return ok(Graph { modules: mods, edges: edges, resource_conflicts: conflicts });
 }
 
 pub fn graph_from_files(files: Vec[ld.SourceFile]) -> BuildResult {
@@ -378,6 +470,21 @@ pub fn graph_to_json(g: Graph) -> String {
   }
   out = out.concat("]");
 
+  out = out.concat(",\"resource_conflicts\":[");
+  i = 0;
+  while i < g.resource_conflicts.len() {
+    if i > 0 { out = out.concat(","); }
+    let c: ResourceConflict = g.resource_conflicts.get(i);
+    out = out
+      .concat("{\"left\":").concat(json_quote(c.left_mod))
+      .concat(",\"right\":").concat(json_quote(c.right_mod))
+      .concat(",\"resource\":").concat(json_quote(c.resource))
+      .concat(",\"mode\":").concat(json_quote(c.mode))
+      .concat("}");
+    i = i + 1;
+  }
+  out = out.concat("]");
+
   return out.concat("}");
 }
 
@@ -413,6 +520,17 @@ pub fn graph_to_text(g: Graph) -> String {
   while i < g.edges.len() {
     let e: Edge = g.edges.get(i);
     out = out.concat("[edge] ").concat(e.from_mod).concat(" -> ").concat(e.to_mod).concat("\n");
+    i = i + 1;
+  }
+
+  out = out.concat("[resource_conflicts] ").concat(g.resource_conflicts.len().to_string()).concat("\n");
+  i = 0;
+  while i < g.resource_conflicts.len() {
+    let c: ResourceConflict = g.resource_conflicts.get(i);
+    out = out
+      .concat("[resource_conflict] ")
+      .concat(c.left_mod).concat(" <-> ").concat(c.right_mod)
+      .concat(" : ").concat(c.resource).concat(" (").concat(c.mode).concat(")\n");
     i = i + 1;
   }
 

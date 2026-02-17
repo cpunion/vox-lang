@@ -168,7 +168,7 @@ fn list_smoke() -> String {
 }
 ```
 
-说明：`graph_to_json` 的每个 module 节点除 `path/files/imports` 外，还包含模块内声明聚合的 `effects/resource_reads/resource_writes` 字段，可直接用于依赖图工具和调度分析。
+说明：`graph_to_json` 的每个 module 节点除 `path/files/imports` 外，还包含模块内声明聚合的 `effects/resource_reads/resource_writes` 字段；同时图级别输出 `resource_conflicts`（`rw`/`ww`）供并行调度与依赖分析使用。
 
 ## 6. 当前落地状态
 
