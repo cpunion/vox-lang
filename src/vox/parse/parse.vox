@@ -248,6 +248,7 @@ struct ParseTypeResult { p: Parser, ty: ast.TypeName }
 		struct ParseProgramResult { p: Parser, prog: ast.Program }
 	struct ParseImportResult { p: Parser, imp: ast.ImportDecl }
 	struct ParseStringResult { p: Parser, s: String, at: i32 }
+struct ParseCharResult { p: Parser, text: String, at: i32 }
 struct DecodeStringResult { ok: bool, text: String, err: String }
 struct LineIndentInfo { blank: bool, has_tab_indent: bool, indent: i32 }
 struct ParseImportNameResult { p: Parser, nm: ast.ImportName }
@@ -707,6 +708,45 @@ fn unescape_relaxed(s: String) -> DecodeStringResult {
   return DecodeStringResult { ok: true, text: out, err: "" };
 }
 
+fn decode_char_lit_relaxed(lit: String) -> String {
+  // Expected source forms:
+  //   'a' '\n' '\'' '你'
+  if lit.len() < 3 { return "0"; }
+  let s: String = lit.slice(1, lit.len() - 1);
+  if s.len() == 0 { return "0"; }
+
+  if s.byte_at(0) == 92 { // '\'
+    if s.len() < 2 { return "92"; }
+    let e: i32 = s.byte_at(1);
+    if e == 110 { return "10"; } // n
+    if e == 114 { return "13"; } // r
+    if e == 116 { return "9"; }  // t
+    if e == 48 { return "0"; }   // 0
+    if e == 39 { return "39"; }  // '
+    if e == 34 { return "34"; }  // "
+    if e == 92 { return "92"; }  // \
+    // Backward-compatible: unknown escape keeps escaped byte.
+    return e.to_string();
+  }
+
+  let b0: i32 = s.byte_at(0);
+  if b0 <= 127 { return b0.to_string(); }
+  if b0 >= 194 && b0 <= 223 && s.len() >= 2 && is_utf8_cont_byte(s.byte_at(1)) {
+    let cp: i32 = ((b0 & 31) << 6) | (s.byte_at(1) & 63);
+    return cp.to_string();
+  }
+  if b0 >= 224 && b0 <= 239 && s.len() >= 3 && is_utf8_cont_byte(s.byte_at(1)) && is_utf8_cont_byte(s.byte_at(2)) {
+    let cp: i32 = ((b0 & 15) << 12) | ((s.byte_at(1) & 63) << 6) | (s.byte_at(2) & 63);
+    return cp.to_string();
+  }
+  if b0 >= 240 && b0 <= 244 && s.len() >= 4 && is_utf8_cont_byte(s.byte_at(1)) && is_utf8_cont_byte(s.byte_at(2)) && is_utf8_cont_byte(s.byte_at(3)) {
+    let cp: i32 = ((b0 & 7) << 18) | ((s.byte_at(1) & 63) << 12) | ((s.byte_at(2) & 63) << 6) | (s.byte_at(3) & 63);
+    return cp.to_string();
+  }
+
+  return b0.to_string();
+}
+
 fn decode_string_lit(lit: String) -> DecodeStringResult {
   if !str_is_triple_quoted(lit) {
     let mut s0: String = lit;
@@ -772,6 +812,13 @@ fn parse_string_inner(p: Parser) -> ParseStringResult {
     return ParseStringResult { p: q, s: "", at: at };
   }
   return ParseStringResult { p: ar.p, s: d.text, at: at };
+}
+
+fn parse_char_inner(p: Parser) -> ParseCharResult {
+  let ar: AdvanceResult = expect(p, lex.TokenKind.Char);
+  let at: i32 = ar.tok.start;
+  let lit: String = lexeme(ar.p, ar.tok);
+  return ParseCharResult { p: ar.p, text: decode_char_lit_relaxed(lit), at: at };
 }
 
 fn parse_import_name(p: Parser) -> ParseImportNameResult {
@@ -1104,6 +1151,12 @@ fn parse_primary(p: Parser) -> ParseExprResult {
     let ar: AdvanceResult = advance(p);
     let tok: lex.Token = ar.tok;
     return add_expr(ar.p, span_tok(p, tok), ast.ExprNode.Float(lexeme(ar.p, tok)));
+  }
+
+  if kind_is(k, lex.TokenKind.Char) {
+    let sp0: ast.Span = span_tok(p, peek(p));
+    let r: ParseCharResult = parse_char_inner(p);
+    return add_expr(r.p, sp0, ast.ExprNode.Int(r.text));
   }
 
   if kind_is(k, lex.TokenKind.KwTrue) {
@@ -1453,6 +1506,10 @@ fn parse_pat(p: Parser) -> ParsePatResult {
     let ar1: AdvanceResult = advance(p);
     let tok: lex.Token = ar1.tok;
     return ParsePatResult { p: ar1.p, pat: ast.Pat.Int(sp0, lexeme(ar1.p, tok)) };
+  }
+  if kind_is(k, lex.TokenKind.Char) {
+    let r: ParseCharResult = parse_char_inner(p);
+    return ParsePatResult { p: r.p, pat: ast.Pat.Int(sp0, r.text) };
   }
   if kind_is(k, lex.TokenKind.Str) {
     let r: ParseStringResult = parse_string_inner(p);
