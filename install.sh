@@ -7,8 +7,9 @@ VERSION="${VOX_INSTALL_VERSION:-}"
 PLATFORM="${VOX_INSTALL_PLATFORM:-}"
 INSTALL_DIR="${VOX_INSTALL_DIR:-$HOME/.vox}"
 BIN_DIR="${VOX_INSTALL_BIN_DIR:-$INSTALL_DIR/bin}"
+CACHE_DIR="${VOX_INSTALL_CACHE_DIR:-$INSTALL_DIR/cache/downloads}"
 SKIP_RC=0
-FORCE=0
+USE_CACHE=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -32,8 +33,10 @@ Options:
   --platform <os-arch>    e.g. darwin-arm64, linux-amd64, windows-amd64.
   --repo <owner/repo>     GitHub repo (default: cpunion/vox-lang).
   --bin-dir <dir>         Install bin dir (default: ~/.vox/bin).
+  --cache-dir <dir>       Download cache dir (default: ~/.vox/cache/downloads).
+  --no-cache              Disable download cache.
   --skip-rc               Do not modify shell rc files.
-  --force                 Overwrite existing binary.
+  --force                 Deprecated (overwrite is default).
   -h, --help              Show help.
 USAGE
 }
@@ -57,6 +60,58 @@ http_get() {
     return 0
   fi
   die "curl or wget is required"
+}
+
+download_resume() {
+  local url="$1"
+  local out="$2"
+  local part="${out}.part"
+  mkdir -p "$(dirname "$out")"
+  if have_cmd curl; then
+    if [[ -f "$part" ]]; then
+      log "resume download ${url}"
+    else
+      log "download ${url}"
+    fi
+    curl -fL --retry 3 --retry-delay 1 --continue-at - "$url" -o "$part"
+    mv -f "$part" "$out"
+    return 0
+  fi
+  if have_cmd wget; then
+    if [[ -f "$part" ]]; then
+      log "resume download ${url}"
+    else
+      log "download ${url}"
+    fi
+    wget -c -O "$part" "$url"
+    mv -f "$part" "$out"
+    return 0
+  fi
+  die "curl or wget is required"
+}
+
+download_with_cache() {
+  local url="$1"
+  local out="$2"
+  local base key cache_file
+  if [[ "$USE_CACHE" -ne 1 ]]; then
+    download_resume "$url" "$out"
+    return 0
+  fi
+
+  mkdir -p "$CACHE_DIR"
+  base="$(basename "$url")"
+  key="$(printf '%s' "$url" | cksum | awk '{print $1}')"
+  cache_file="${CACHE_DIR}/${key}-${base}"
+
+  if [[ -s "$cache_file" ]]; then
+    log "cache hit ${cache_file}"
+    cp "$cache_file" "$out"
+    return 0
+  fi
+
+  download_resume "$url" "$cache_file"
+  cp "$cache_file" "$out"
 }
 
 detect_platform() {
@@ -130,8 +185,7 @@ extract_release_binary_to() {
   tmp="$(mktemp -d)"
   archive="${tmp}/${asset}"
 
-  log "download ${url}"
-  http_get "$url" "$archive"
+  download_with_cache "$url" "$archive"
   tar -xzf "$archive" -C "$tmp"
 
   found="$(find "$tmp" -type f \( -path '*/bin/vox' -o -path '*/bin/vox.exe' -o -name 'vox' -o -name 'vox.exe' \) | head -n 1 || true)"
@@ -194,6 +248,7 @@ ensure_path_in_rc() {
 # >>> vox-lang >>>
 export VOX_HOME="$HOME/.vox"
 export PATH="$VOX_HOME/bin:$PATH"
+export VOX_STDLIB="${VOX_STDLIB:-$VOX_HOME/lib}"
 # <<< vox-lang <<<
 EOF_RC
 }
@@ -202,13 +257,63 @@ install_binary() {
   local src="$1"
   local dst_name="$2"
   local dst="$BIN_DIR/$dst_name"
+  local tmp_dst="$BIN_DIR/.${dst_name}.install.$$"
   mkdir -p "$BIN_DIR"
-  if [[ -f "$dst" && "$FORCE" -ne 1 ]]; then
-    die "target exists: $dst (use --force to overwrite)"
-  fi
-  cp "$src" "$dst"
-  chmod +x "$dst" || true
+  rm -f "$tmp_dst"
+  cp "$src" "$tmp_dst"
+  chmod +x "$tmp_dst" || true
+  mv -f "$tmp_dst" "$dst"
   log "installed: $dst"
+}
+
+sanity_check_binary() {
+  local bin="$1"
+  local out rc
+  set +e
+  out="$("$bin" version 2>&1)"
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    warn "installed binary sanity check failed (exit=$rc): $bin version"
+    if [[ -n "$out" ]]; then
+      printf '%s\n' "$out" >&2
+    fi
+    return 0
+  fi
+  if [[ -n "$out" ]]; then
+    printf '%s\n' "$out"
+  fi
+}
+
+install_stdlib_tree() {
+  local src_std_dir="$1"
+  local dst_root="$INSTALL_DIR/lib/src"
+  [[ -d "$src_std_dir" ]] || die "stdlib src/std dir not found: $src_std_dir"
+  mkdir -p "$dst_root"
+  rm -rf "$dst_root/std"
+  cp -R "$src_std_dir" "$dst_root/"
+  log "stdlib installed: $dst_root/std"
+}
+
+install_stdlib_from_release() {
+  local version="$1"
+  local asset url tmp archive src_std
+  asset="vox-lang-src-${version}.tar.gz"
+  url="https://github.com/${REPO}/releases/download/${version}/${asset}"
+  tmp="$(mktemp -d)"
+  archive="${tmp}/${asset}"
+
+  download_with_cache "$url" "$archive"
+  tar -xzf "$archive" -C "$tmp"
+  src_std="$(find "$tmp" -type d -path '*/src/std' | head -n 1 || true)"
+  [[ -n "$src_std" ]] || die "stdlib src/std not found in ${asset}"
+  install_stdlib_tree "$src_std"
+  rm -rf "$tmp"
+}
+
+install_stdlib_from_local() {
+  local repo_root="$1"
+  install_stdlib_tree "$repo_root/src/std"
 }
 
 install_from_release() {
@@ -223,6 +328,7 @@ install_from_release() {
 
   extract_release_binary_to "$version" "$platform" "$tmp_bin"
   install_binary "$tmp_bin" "$bin_name"
+  install_stdlib_from_release "$version"
   rm -f "$tmp_bin"
   log "release installed: ${version} (${platform})"
 }
@@ -293,6 +399,7 @@ install_from_local_build() {
 
   bin_name="$(platform_bin_name "$platform")"
   install_binary "$built" "$bin_name"
+  install_stdlib_from_local "$repo_root"
   log "local build installed (${platform})"
 }
 
@@ -326,12 +433,21 @@ while [[ $# -gt 0 ]]; do
       BIN_DIR="$2"
       shift 2
       ;;
+    --cache-dir)
+      [[ $# -ge 2 ]] || die "missing value for --cache-dir"
+      CACHE_DIR="$2"
+      shift 2
+      ;;
+    --no-cache)
+      USE_CACHE=0
+      shift
+      ;;
     --skip-rc)
       SKIP_RC=1
       shift
       ;;
     --force)
-      FORCE=1
+      warn "--force is deprecated; overwrite is already the default behavior"
       shift
       ;;
     -h|--help)
@@ -363,15 +479,16 @@ if [[ "$SKIP_RC" -ne 1 ]]; then
 fi
 
 export PATH="$BIN_DIR:$PATH"
+export VOX_STDLIB="${VOX_STDLIB:-$INSTALL_DIR/lib}"
 log "current shell PATH updated: $BIN_DIR"
 
 if have_cmd vox; then
   log "vox in PATH: $(command -v vox)"
 fi
 if [[ -x "$BIN_DIR/vox" ]]; then
-  "$BIN_DIR/vox" version || true
+  sanity_check_binary "$BIN_DIR/vox"
 elif [[ -x "$BIN_DIR/vox.exe" ]]; then
-  "$BIN_DIR/vox.exe" version || true
+  sanity_check_binary "$BIN_DIR/vox.exe"
 fi
 
 cat <<EOF_DONE

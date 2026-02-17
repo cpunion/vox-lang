@@ -31,6 +31,15 @@ vox version | --version | -V
 
 产物类型：`--artifact=exe|static|shared`，默认 `exe`。
 
+标准库定位：
+
+- 优先级 1：`VOX_STDLIB=<path>`（支持 `<path>`、`<path>/src`、`<path>/src/std`）。
+- 优先级 2：编译器二进制旁路：`<bin>/../src/std`。
+- 优先级 3：构建时嵌入的源码目录（`buildinfo.BUILD_SOURCE_ROOT`）。
+- 兜底：本地开发布局自动推导（如仓库 `target/debug` 场景）。
+
+`vox toolchain install` 会同时安装 `bin/vox` 与 `src/std`，确保优先级 2 可直接生效。
+
 ## 仓库布局
 
 - 源码：`src/`

@@ -140,31 +140,64 @@ function formatText(src) {
 }
 
 function parseCompilerDiagnostics(output) {
+  return parseCompilerDiagnosticsForTarget(output, '');
+}
+
+function normalizeSlashes(p) {
+  return String(p || '').replace(/\\/g, '/');
+}
+
+function isWorkspaceFile(docPath) {
+  if (!docPath) return false;
+  const rel = normalizeSlashes(path.relative(workspaceRoot, docPath));
+  if (!rel || rel === '.') return false;
+  if (rel.startsWith('../') || rel === '..') return false;
+  return true;
+}
+
+function relWorkspacePath(docPath) {
+  return normalizeSlashes(path.relative(workspaceRoot, docPath));
+}
+
+function isPkgSourceRelPath(rel) {
+  if (!rel) return false;
+  if (rel.startsWith('src/')) return true;
+  if (rel.startsWith('tests/')) return true;
+  return false;
+}
+
+function parseCompilerDiagnosticsForTarget(output, targetRelPath) {
   const out = [];
+  const targetRel = normalizeSlashes(targetRelPath || '');
   const lines = String(output || '').split(/\r?\n/);
   for (const line0 of lines) {
     const line = line0.trim();
     if (!line) continue;
-    let m = line.match(/:(\d+):(\d+):\s*(.+)$/);
+    let work = line;
+    if (work.startsWith('compile failed:')) {
+      work = work.slice('compile failed:'.length).trim();
+    }
+    let filePath = '';
+    let m = work.match(/^(.+?):(\d+):(\d+):\s*(.+)$/);
     let msg = '';
     let row = 1;
     let col = 1;
     if (m) {
-      row = Number(m[1]);
-      col = Number(m[2]);
-      msg = m[3];
-    } else if (line.startsWith('compile failed:')) {
-      const rest = line.slice('compile failed:'.length).trim();
-      m = rest.match(/:(\d+):(\d+):\s*(.+)$/);
-      if (m) {
-        row = Number(m[1]);
-        col = Number(m[2]);
-        msg = m[3];
-      } else {
-        msg = rest || line;
+      filePath = normalizeSlashes(m[1]);
+      row = Number(m[2]);
+      col = Number(m[3]);
+      msg = m[4];
+      if (targetRel) {
+        let rel = filePath;
+        if (path.isAbsolute(filePath)) {
+          rel = normalizeSlashes(path.relative(workspaceRoot, filePath));
+        }
+        if (rel !== targetRel) {
+          continue;
+        }
       }
     } else {
-      msg = line;
+      msg = work || line;
     }
     out.push({
       range: {
@@ -180,14 +213,18 @@ function parseCompilerDiagnostics(output) {
   return out;
 }
 
-function runDiagnostics(text) {
+function runDiagnosticsSingleFile(text) {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vox-lsp-'));
-  const src = path.join(tmpRoot, 'main.vox');
-  const outC = path.join(tmpRoot, 'main.c');
+  const srcDir = path.join(tmpRoot, 'src');
+  const src = path.join(srcDir, 'main.vox');
+  const outBin = path.join(tmpRoot, 'main.bin');
+  const manifest = path.join(tmpRoot, 'vox.toml');
+  fs.mkdirSync(srcDir, { recursive: true });
+  fs.writeFileSync(manifest, '[package]\nname = "vox_lsp_tmp"\nversion = "0.0.0"\nedition = "2026"\n', 'utf8');
   fs.writeFileSync(src, text, 'utf8');
   const voxBin = process.env.VOX_BIN || 'vox';
-  const cp = spawnSync(voxBin, ['emit-c', outC, src], {
-    cwd: workspaceRoot,
+  const cp = spawnSync(voxBin, ['build-pkg', outBin], {
+    cwd: tmpRoot,
     encoding: 'utf8',
   });
   try {
@@ -196,13 +233,37 @@ function runDiagnostics(text) {
     // ignore cleanup failure
   }
   if (cp.status === 0) return [];
-  return parseCompilerDiagnostics(`${cp.stdout || ''}\n${cp.stderr || ''}`);
+  return parseCompilerDiagnosticsForTarget(`${cp.stdout || ''}\n${cp.stderr || ''}`, 'src/main.vox');
+}
+
+function runDiagnosticsWorkspace(docFsPath) {
+  if (!isWorkspaceFile(docFsPath)) return null;
+  const rel = relWorkspacePath(docFsPath);
+  if (!isPkgSourceRelPath(rel)) return null;
+  if (!fs.existsSync(path.join(workspaceRoot, 'vox.toml'))) return null;
+  if (!fs.existsSync(path.join(workspaceRoot, 'src'))) return null;
+
+  const voxBin = process.env.VOX_BIN || 'vox';
+  const outBin = path.join(workspaceRoot, 'target', 'debug', '.vox_lsp_diag');
+  const cp = spawnSync(voxBin, ['build-pkg', outBin], {
+    cwd: workspaceRoot,
+    encoding: 'utf8',
+  });
+  if (cp.status === 0) return [];
+  return parseCompilerDiagnosticsForTarget(`${cp.stdout || ''}\n${cp.stderr || ''}`, rel);
+}
+
+function runDiagnostics(uri, text) {
+  const docFsPath = uriToFsPath(uri);
+  const wsDiagnostics = runDiagnosticsWorkspace(docFsPath);
+  if (wsDiagnostics !== null) return wsDiagnostics;
+  return runDiagnosticsSingleFile(text);
 }
 
 function publishDiagnostics(uri) {
   const d = docs.get(uri);
   if (!d) return;
-  const diagnostics = runDiagnostics(d.text);
+  const diagnostics = runDiagnostics(uri, d.text);
   notify('textDocument/publishDiagnostics', { uri, diagnostics });
 }
 

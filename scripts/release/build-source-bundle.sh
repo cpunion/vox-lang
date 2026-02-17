@@ -49,9 +49,11 @@ cat > "$BUILDINFO_PATH" <<EOF_BUILDINFO
 
 pub const VERSION: String = "$VERSION_CORE";
 pub const CHANNEL: String = "release";
+pub const BUILD_SOURCE_ROOT: String = "";
 
 pub fn version() -> String { return VERSION; }
 pub fn channel() -> String { return CHANNEL; }
+pub fn build_source_root() -> String { return BUILD_SOURCE_ROOT; }
 EOF_BUILDINFO
 
 rm -f "$ARCHIVE_PATH" "$CHECKSUM_PATH"
