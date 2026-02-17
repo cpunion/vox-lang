@@ -1,9 +1,21 @@
-import "std/fs" as fs
-import "std/dotenv" as dotenv
-import "std/net" as net
-import "std/process" as proc
-import "std/string" as s
-import "openai" as openai
+import "std:fs" as fs
+import "std:dotenv" as dotenv
+import "std:process" as proc
+import "std:string" as s
+
+pub fn default_model() -> String { return "gpt-5-nano"; }
+pub fn default_host() -> String { return "api.openai.com"; }
+pub fn default_path() -> String { return "/v1/chat/completions"; }
+
+pub fn endpoint_url(host: String, path: String) -> String {
+  return "https://".concat(host).concat(path);
+}
+
+pub fn load_api_key(dotenv_path: String) -> String {
+  let env_key: String = proc.getenv("OPENAI_API_KEY");
+  if env_key != "" { return env_key; }
+  return dotenv.value(dotenv_path, "OPENAI_API_KEY");
+}
 
 fn json_escape(raw: String) -> String {
   let mut out: String = "";
@@ -83,6 +95,7 @@ fn json_first_string_field(line: String, field: String) -> String {
   }
   if i >= line.len() || line.byte_at(i) != 34 { return ""; }
   i = i + 1;
+
   let mut raw: String = "";
   while i < line.len() {
     let ch: i32 = line.byte_at(i);
@@ -96,6 +109,14 @@ fn json_first_string_field(line: String, field: String) -> String {
     }
   }
   return json_unescape(raw);
+}
+
+fn chat_body(model: String, prompt: String) -> String {
+  return "{\"model\":\""
+    .concat(json_escape(model))
+    .concat("\",\"messages\":[{\"role\":\"user\",\"content\":\"")
+    .concat(json_escape(prompt))
+    .concat("\"}]}");
 }
 
 fn shell_quote(raw: String) -> String {
@@ -118,43 +139,45 @@ fn limit_text(raw: String, max_n: i32) -> String {
   return raw.slice(0, max_n - 3).concat("...");
 }
 
-fn chat_body(model: String, prompt: String) -> String {
-  return "{\"model\":\""
-    .concat(json_escape(model))
-    .concat("\",\"messages\":[{\"role\":\"user\",\"content\":\"")
-    .concat(json_escape(prompt))
-    .concat("\"}]}");
-}
-
-pub fn endpoint_url(host: String, path: String) -> String {
-  return openai.endpoint_url(host, path);
-}
-
-pub fn dotenv_value(path: String, key: String) -> String {
-  return dotenv.value(path, key);
-}
-
-pub fn openai_api_key(dotenv_path: String) -> String {
-  return openai.load_api_key(dotenv_path);
-}
-
-pub fn build_chat_request(host: String, path: String, model: String, prompt: String, token: String) -> net.HttpRequest {
-  let mut req: net.HttpRequest = net.http_request("POST", host, path);
-  req = req.with_header("Content-Type", "application/json");
-  req = req.with_header("Authorization", "Bearer ".concat(token));
-  req = req.with_header("Connection", "close");
-  req = req.with_body(chat_body(model, prompt));
-  return req;
-}
-
-pub fn render_chat_http(host: String, path: String, model: String, prompt: String, token: String) -> String {
-  return build_chat_request(host, path, model, prompt, token).render();
-}
-
-pub fn parse_status(raw_http: String) -> i32 {
-  return net.parse_status_code(raw_http);
-}
-
 pub fn chat_complete_text(host: String, path: String, model: String, prompt: String, token: String, workspace: String) -> String {
-  return openai.chat_complete_text(host, path, model, prompt, token, workspace);
+  fs.mkdir_p(workspace);
+
+  let payload: String = workspace.concat("/chat_request.json");
+  let headers: String = workspace.concat("/chat_headers.txt");
+  let response: String = workspace.concat("/chat_response.json");
+
+  fs.write_string(payload, chat_body(model, prompt));
+  let hs: String = "Authorization: Bearer "
+    .concat(token)
+    .concat("\nContent-Type: application/json\n");
+  fs.write_string(headers, hs);
+
+  let cmd: String = "curl -sS "
+    .concat(shell_quote(endpoint_url(host, path)))
+    .concat(" -H @")
+    .concat(shell_quote(headers))
+    .concat(" --data-binary @")
+    .concat(shell_quote(payload))
+    .concat(" > ")
+    .concat(shell_quote(response));
+
+  let rc: i32 = proc.exec(cmd);
+  if rc != 0 {
+    return "ERROR: curl exit=".concat(rc.to_string());
+  }
+  if !fs.exists(response) {
+    return "ERROR: missing response file";
+  }
+
+  let raw: String = fs.read_to_string(response);
+  let content: String = json_first_string_field(raw, "content");
+  if content != "" { return content; }
+
+  let msg: String = json_first_string_field(raw, "message");
+  if msg != "" { return "ERROR: ".concat(msg); }
+  return "ERROR: missing content in response: ".concat(limit_text(raw, 320));
+}
+
+pub fn chat_complete_default(model: String, prompt: String, token: String, workspace: String) -> String {
+  return chat_complete_text(default_host(), default_path(), model, prompt, token, workspace);
 }
