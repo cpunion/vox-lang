@@ -43,6 +43,12 @@ pub struct FunctionResourceConflict {
   pub mode: String, // "rw" (read/write) or "ww" (write/write)
 }
 
+pub struct ExecutorLane {
+  pub class: String,
+  pub executor: String,
+  pub modules: Vec[String],
+}
+
 pub struct ModuleNode {
   pub path: String,
   pub files: Vec[String],
@@ -58,6 +64,7 @@ pub struct Graph {
   pub edges: Vec[Edge],
   pub resource_conflicts: Vec[ResourceConflict],
   pub resource_orders: Vec[ResourceOrder],
+  pub executor_lanes: Vec[ExecutorLane],
   pub functions: Vec[FunctionNode],
   pub function_resource_conflicts: Vec[FunctionResourceConflict],
 }
@@ -82,6 +89,7 @@ fn empty_graph() -> Graph {
     edges: Vec(),
     resource_conflicts: Vec(),
     resource_orders: Vec(),
+    executor_lanes: Vec(),
     functions: Vec(),
     function_resource_conflicts: Vec(),
   };
@@ -250,6 +258,46 @@ fn effect_classes_from_effects(effects: Vec[String]) -> Vec[String] {
     i = i + 1;
   }
   return sort_strings(out);
+}
+
+fn lane_executor_for_class(cls: String) -> String {
+  if cls == "IO" { return "io_event_loop"; }
+  if cls == "GPU" { return "gpu_queue"; }
+  if cls == "Async" { return "poll_runtime"; }
+  return "default";
+}
+
+fn build_executor_lanes(mods: Vec[ModuleNode]) -> Vec[ExecutorLane] {
+  let mut classes: Vec[String] = Vec();
+  classes.push("Async");
+  classes.push("GPU");
+  classes.push("IO");
+  classes.push("Other");
+
+  let mut lanes: Vec[ExecutorLane] = Vec();
+  let mut i: i32 = 0;
+  while i < classes.len() {
+    let cls: String = classes.get(i);
+    let mut members: Vec[String] = Vec();
+    let mut j: i32 = 0;
+    while j < mods.len() {
+      let m: ModuleNode = mods.get(j);
+      if has_str(m.effect_classes, cls) {
+        members = push_unique_sorted(members, m.path);
+      }
+      j = j + 1;
+    }
+    if members.len() > 0 {
+      let exname: String = lane_executor_for_class(classes.get(i));
+      lanes.push(ExecutorLane {
+        class: cls,
+        executor: exname,
+        modules: members,
+      });
+    }
+    i = i + 1;
+  }
+  return lanes;
 }
 
 fn cap_collect_resources_from_attrs(xs0: Vec[String], attrs: Vec[ast.ResourceAttr], kind: i32) -> Vec[String] {
@@ -766,12 +814,14 @@ pub fn graph_from_world(w: tc.World) -> BuildResult {
 
   let conflicts: Vec[ResourceConflict] = build_resource_conflicts(mods);
   let orders: Vec[ResourceOrder] = build_resource_orders(edges, conflicts);
+  let lanes: Vec[ExecutorLane] = build_executor_lanes(mods);
   let fn_conflicts: Vec[FunctionResourceConflict] = build_function_resource_conflicts(funcs);
   return ok(Graph {
     modules: mods,
     edges: edges,
     resource_conflicts: conflicts,
     resource_orders: orders,
+    executor_lanes: lanes,
     functions: funcs,
     function_resource_conflicts: fn_conflicts,
   });
@@ -877,6 +927,20 @@ pub fn graph_to_json(g: Graph) -> String {
   }
   out = out.concat("]");
 
+  out = out.concat(",\"executor_lanes\":[");
+  i = 0;
+  while i < g.executor_lanes.len() {
+    if i > 0 { out = out.concat(","); }
+    let ex: ExecutorLane = g.executor_lanes.get(i);
+    out = out
+      .concat("{\"class\":").concat(json_quote(ex.class))
+      .concat(",\"executor\":").concat(json_quote(ex.executor))
+      .concat(",\"modules\":").concat(json_array_str(ex.modules))
+      .concat("}");
+    i = i + 1;
+  }
+  out = out.concat("]");
+
   out = out.concat(",\"functions\":[");
   i = 0;
   while i < g.functions.len() {
@@ -970,6 +1034,18 @@ pub fn graph_to_text(g: Graph) -> String {
       .concat("[resource_order] ")
       .concat(o2.from_mod).concat(" -> ").concat(o2.to_mod)
       .concat(" : ").concat(o2.resource).concat(" (").concat(o2.mode).concat(")\n");
+    i = i + 1;
+  }
+
+  out = out.concat("[executor_lanes] ").concat(g.executor_lanes.len().to_string()).concat("\n");
+  i = 0;
+  while i < g.executor_lanes.len() {
+    let ex2: ExecutorLane = g.executor_lanes.get(i);
+    out = out
+      .concat("[executor_lane] ")
+      .concat(ex2.class).concat(" via ").concat(ex2.executor)
+      .concat(" : ").concat(join_with_sep(ex2.modules, ","))
+      .concat("\n");
     i = i + 1;
   }
 
