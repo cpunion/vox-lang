@@ -264,7 +264,12 @@ struct ParseBracedExprResult { p: Parser, id: i32 }
 struct ParseTypeDeclResult { p: Parser, is_union: bool, t: ast.TypeAliasDecl, e: ast.EnumDecl }
 struct ParsePubResult { p: Parser, vis: i32, is_pub: bool }
 struct ParseConstDefaultResult { p: Parser, ok: bool, text: String }
-struct ParseTopFnAttrsResult { p: Parser, ffi_imports: Vec[ast.FfiImportAttr], ffi_exports: Vec[ast.FfiExportAttr] }
+struct ParseTopFnAttrsResult {
+  p: Parser,
+  ffi_imports: Vec[ast.FfiImportAttr],
+  ffi_exports: Vec[ast.FfiExportAttr],
+  effects: Vec[ast.EffectAttr]
+}
 
 fn dummy_token() -> lex.Token {
   return lex.Token { kind: lex.TokenKind.Eof, start: 0, end: 0, line: 1, col: 1 };
@@ -1941,7 +1946,8 @@ fn parse_fn_decl(
   vis: i32,
   is_pub: bool,
   ffi_imports: Vec[ast.FfiImportAttr],
-  ffi_exports: Vec[ast.FfiExportAttr]
+  ffi_exports: Vec[ast.FfiExportAttr],
+  effects: Vec[ast.EffectAttr]
 ) -> ParseFnResult {
   let mut q0: Parser = p;
   let mut is_async: bool = false;
@@ -2033,6 +2039,7 @@ fn parse_fn_decl(
       ret: r8.ty,
       ffi_imports: ffi_imports,
       ffi_exports: ffi_exports,
+      effects: effects,
       body: body,
     },
   };
@@ -2751,7 +2758,7 @@ fn parse_impl_decl(p: Parser) -> ParseImplResult {
       q = ar.p;
       assoc_types.push(ar.a);
     } else {
-      let r: ParseFnResult = parse_fn_decl(q, ast.vis_private(), false, Vec(), Vec());
+      let r: ParseFnResult = parse_fn_decl(q, ast.vis_private(), false, Vec(), Vec(), Vec());
       q = r.p;
       methods.push(r.f);
     }
@@ -2901,10 +2908,25 @@ fn is_ffi_target(s: String) -> bool {
   return s == "c" || s == "wasm";
 }
 
+fn parse_attr_arg_text(p: Parser) -> ParseStringResult {
+  if kind_is(peek_kind(p), lex.TokenKind.Str) {
+    return parse_string_inner(p);
+  }
+  if kind_is(peek_kind(p), lex.TokenKind.Ident) {
+    let ri: ParseIdentResult = parse_ident(p);
+    return ParseStringResult { p: ri.p, s: ri.name, at: ri.at };
+  }
+  let mut q: Parser = p;
+  q.has_err = true;
+  q.err = ParseError.InvalidType(peek(p).start, "bad function attribute arguments");
+  return ParseStringResult { p: q, s: "", at: peek(p).start };
+}
+
 fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
   let mut q: Parser = p;
   let mut ffi_imports: Vec[ast.FfiImportAttr] = Vec();
   let mut ffi_exports: Vec[ast.FfiExportAttr] = Vec();
+  let mut effects: Vec[ast.EffectAttr] = Vec();
 
   while !q.has_err && kind_is(peek_kind(q), lex.TokenKind.At) {
     let ar_at: AdvanceResult = expect(q, lex.TokenKind.At);
@@ -2916,8 +2938,11 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
 
     if !kind_is(peek_kind(qa), lex.TokenKind.RParen) {
       while !qa.has_err {
-        let rs: ParseStringResult = parse_string_inner(qa);
+        let rs: ParseStringResult = parse_attr_arg_text(qa);
         qa = rs.p;
+        if qa.has_err {
+          return ParseTopFnAttrsResult { p: qa, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects };
+        }
         args.push(rs.s);
         if kind_is(peek_kind(qa), lex.TokenKind.Comma) {
           let ar_c: AdvanceResult = advance(qa);
@@ -2931,7 +2956,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
     let ar_r: AdvanceResult = expect(qa, lex.TokenKind.RParen);
     q = ar_r.p;
     if q.has_err {
-      return ParseTopFnAttrsResult { p: q, ffi_imports: ffi_imports, ffi_exports: ffi_exports };
+      return ParseTopFnAttrsResult { p: q, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects };
     }
 
     if rn.name == "ffi_import" {
@@ -2943,7 +2968,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
         let mut qe: Parser = q;
         qe.has_err = true;
         qe.err = ParseError.InvalidType(rn.at, "bad ffi attribute arguments");
-        return ParseTopFnAttrsResult { p: qe, ffi_imports: ffi_imports, ffi_exports: ffi_exports };
+        return ParseTopFnAttrsResult { p: qe, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects };
       }
     } else if rn.name == "ffi_export" {
       if args.len() == 2 && is_ffi_target(args.get(0)) {
@@ -2952,17 +2977,26 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
         let mut qe2: Parser = q;
         qe2.has_err = true;
         qe2.err = ParseError.InvalidType(rn.at, "bad ffi attribute arguments");
-        return ParseTopFnAttrsResult { p: qe2, ffi_imports: ffi_imports, ffi_exports: ffi_exports };
+        return ParseTopFnAttrsResult { p: qe2, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects };
+      }
+    } else if rn.name == "effect" {
+      if args.len() == 1 && args.get(0) != "" {
+        effects.push(ast.EffectAttr { sp: sp0, name: args.get(0) });
+      } else {
+        let mut qe4: Parser = q;
+        qe4.has_err = true;
+        qe4.err = ParseError.InvalidType(rn.at, "bad effect attribute arguments");
+        return ParseTopFnAttrsResult { p: qe4, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects };
       }
     } else {
       let mut qe3: Parser = q;
       qe3.has_err = true;
       qe3.err = ParseError.InvalidType(rn.at, "unknown function attribute");
-      return ParseTopFnAttrsResult { p: qe3, ffi_imports: ffi_imports, ffi_exports: ffi_exports };
+      return ParseTopFnAttrsResult { p: qe3, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects };
     }
   }
 
-  return ParseTopFnAttrsResult { p: q, ffi_imports: ffi_imports, ffi_exports: ffi_exports };
+  return ParseTopFnAttrsResult { p: q, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects };
 }
 
 fn parse_pub_marker(p: Parser) -> ParsePubResult {
@@ -3021,7 +3055,7 @@ fn parse_pub_marker(p: Parser) -> ParsePubResult {
     let vis: i32 = pr.vis;
 
     let k: lex.TokenKind = peek_kind(q);
-    let has_fn_attrs: bool = ar.ffi_imports.len() != 0 || ar.ffi_exports.len() != 0;
+    let has_fn_attrs: bool = ar.ffi_imports.len() != 0 || ar.ffi_exports.len() != 0 || ar.effects.len() != 0;
     if has_fn_attrs && !kind_is(k, lex.TokenKind.KwFn) && !kind_is(k, lex.TokenKind.KwAsync) {
       let mut qe: Parser = q;
       qe.has_err = true;
@@ -3059,7 +3093,7 @@ fn parse_pub_marker(p: Parser) -> ParsePubResult {
       q = r.p;
       impls.push(r.i);
     } else {
-      let r: ParseFnResult = parse_fn_decl(q, vis, is_pub, ar.ffi_imports, ar.ffi_exports);
+      let r: ParseFnResult = parse_fn_decl(q, vis, is_pub, ar.ffi_imports, ar.ffi_exports, ar.effects);
       q = r.p;
       funcs.push(r.f);
     }

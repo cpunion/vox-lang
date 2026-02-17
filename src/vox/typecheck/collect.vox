@@ -1132,9 +1132,46 @@ fn builtin_func_sym(
       type_param_packs: Vec(),
       const_params: const_params,
       type_param_bounds: Vec(),
+      effects: Vec(),
       const_where_bounds: Vec(),
     },
   };
+}
+
+fn contains_str_collect(xs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if xs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+struct CollectEffectsResult { ok: bool, err: TcError, effects: Vec[String] }
+
+fn collect_effects_ok(effects: Vec[String]) -> CollectEffectsResult {
+  return CollectEffectsResult { ok: true, err: TcError.None, effects: effects };
+}
+
+fn collect_effects_err(err: TcError) -> CollectEffectsResult {
+  return CollectEffectsResult { ok: false, err: err, effects: Vec() };
+}
+
+fn collect_fn_effects(fd: ast.FuncDecl) -> CollectEffectsResult {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < fd.effects.len() {
+    let ef: ast.EffectAttr = fd.effects.get(i);
+    if ef.name == "" {
+      return collect_effects_err(type_error_at(ef.sp, "effect name must not be empty"));
+    }
+    if contains_str_collect(out, ef.name) {
+      return collect_effects_err(type_error_at(ef.sp, "duplicate effect on function: ".concat(ef.name)));
+    }
+    out.push(ef.name);
+    i = i + 1;
+  }
+  return collect_effects_ok(out);
 }
 
 fn ffi_ty_allowed(ctx: Ctx, ty: i32) -> bool {
@@ -1562,9 +1599,14 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
         type_param_packs: fd.type_param_packs,
         const_params: cps,
         type_param_bounds: tbs,
+        effects: Vec(),
         const_where_bounds: cwr.bounds,
       };
-      c.funcs.push(FuncSym { mod_path: m.path, name: fd.name, sig: sig });
+      let efr: CollectEffectsResult = collect_fn_effects(fd);
+      if !efr.ok { return TcCtxResult { ok: false, err: efr.err, ctx: c }; }
+      let mut sig2: FuncSig = sig;
+      sig2.effects = efr.effects;
+      c.funcs.push(FuncSym { mod_path: m.path, name: fd.name, sig: sig2 });
       fi = fi + 1;
     }
     mi = mi + 1;
