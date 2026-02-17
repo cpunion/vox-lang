@@ -170,6 +170,7 @@ fn list_smoke() -> String {
 
 说明：`graph_to_json` 的每个 module 节点除 `path/files/imports` 外，还包含模块内声明聚合的 `effects/resource_reads/resource_writes` 字段；图级别还输出：
 - `resource_conflicts`（模块级 `rw`/`ww`）。
+- `resource_orders`（模块级冲突在已知依赖边下的保守顺序建议，方向 `from -> to`）。
 - `functions`（函数级能力快照：`id/module/kind/owner/name/effects/resource_reads/resource_writes`）。
 - `function_resource_conflicts`（函数级 `rw`/`ww`）。
 
