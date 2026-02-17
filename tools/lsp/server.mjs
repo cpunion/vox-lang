@@ -150,7 +150,9 @@ function normalizeSlashes(p) {
 function isWorkspaceFile(docPath) {
   if (!docPath) return false;
   const rel = normalizeSlashes(path.relative(workspaceRoot, docPath));
-  return !!rel && rel !== '.' && !rel.startsWith('../');
+  if (!rel || rel === '.') return false;
+  if (rel.startsWith('../') || rel === '..') return false;
+  return true;
 }
 
 function relWorkspacePath(docPath) {
@@ -158,7 +160,10 @@ function relWorkspacePath(docPath) {
 }
 
 function isPkgSourceRelPath(rel) {
-  return !!rel && (rel.startsWith('src/') || rel.startsWith('tests/'));
+  if (!rel) return false;
+  if (rel.startsWith('src/')) return true;
+  if (rel.startsWith('tests/')) return true;
+  return false;
 }
 
 function parseCompilerDiagnosticsForTarget(output, targetRelPath) {

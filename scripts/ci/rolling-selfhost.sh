@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK_DIR="$ROOT"
 OUT_REL="${VOX_SELFHOST_OUT:-target/debug/vox_rolling}"
 FORCE_REBUILD="${VOX_SELFHOST_FORCE_REBUILD:-0}"
+BUILDINFO_FILE="$ROOT/src/vox/buildinfo/buildinfo.vox"
+BUILDINFO_BACKUP=""
 
 usage() {
   cat >&2 <<USAGE
@@ -15,6 +17,58 @@ modes:
   test       build compiler, then run test-pkg smoke
   print-bin  build compiler and print its absolute path
 USAGE
+}
+
+vox_escape_for_string() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '%s' "$s"
+}
+
+prepare_buildinfo() {
+  if [[ ! -f "$BUILDINFO_FILE" ]]; then
+    return 0
+  fi
+
+  local version="0.0.0"
+  local channel="dev"
+  local line=""
+
+  line="$(grep -E '^pub const VERSION: String = "' "$BUILDINFO_FILE" | head -n 1 || true)"
+  if [[ -n "$line" ]]; then
+    version="${line#*\"}"
+    version="${version%%\"*}"
+  fi
+  line="$(grep -E '^pub const CHANNEL: String = "' "$BUILDINFO_FILE" | head -n 1 || true)"
+  if [[ -n "$line" ]]; then
+    channel="${line#*\"}"
+    channel="${channel%%\"*}"
+  fi
+
+  BUILDINFO_BACKUP="$(mktemp "${TMPDIR:-/tmp}/vox-buildinfo-selfhost.XXXXXX")"
+  cp "$BUILDINFO_FILE" "$BUILDINFO_BACKUP"
+  local root_escaped
+  root_escaped="$(vox_escape_for_string "$ROOT")"
+  cat > "$BUILDINFO_FILE" <<EOF_BUILDINFO
+// Build metadata embedded in the compiler executable.
+// Default channel is "dev" for repository builds; release scripts override this file.
+
+pub const VERSION: String = "$version";
+pub const CHANNEL: String = "$channel";
+pub const BUILD_SOURCE_ROOT: String = "$root_escaped";
+
+pub fn version() -> String { return VERSION; }
+pub fn channel() -> String { return CHANNEL; }
+pub fn build_source_root() -> String { return BUILD_SOURCE_ROOT; }
+EOF_BUILDINFO
+}
+
+cleanup_buildinfo() {
+  if [[ -n "$BUILDINFO_BACKUP" && -f "$BUILDINFO_BACKUP" ]]; then
+    cp "$BUILDINFO_BACKUP" "$BUILDINFO_FILE"
+    rm -f "$BUILDINFO_BACKUP"
+  fi
 }
 
 resolve_bin() {
@@ -172,6 +226,9 @@ if ! BOOTSTRAP_BIN="$(pick_bootstrap)"; then
   echo "[selfhost] set VOX_BOOTSTRAP or prepare target/bootstrap/vox_prev" >&2
   exit 1
 fi
+
+trap cleanup_buildinfo EXIT
+prepare_buildinfo
 
 echo "[selfhost] bootstrap: $BOOTSTRAP_BIN"
 if should_rebuild_selfhost "$BOOTSTRAP_BIN"; then

@@ -24,6 +24,7 @@
 二进制平台包包含：
 
 - `bin/vox[.exe]`
+- `src/std/**`（标准库源码，供 `bin/../src/std` 自动发现）
 - `VERSION`
 - `BOOTSTRAP_MODE`（必须为 `rolling`）
 

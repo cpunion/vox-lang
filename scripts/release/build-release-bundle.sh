@@ -204,9 +204,11 @@ cat > "$BUILDINFO_FILE" <<EOF_BUILDINFO
 
 pub const VERSION: String = "$VERSION_CORE";
 pub const CHANNEL: String = "release";
+pub const BUILD_SOURCE_ROOT: String = "";
 
 pub fn version() -> String { return VERSION; }
 pub fn channel() -> String { return CHANNEL; }
+pub fn build_source_root() -> String { return BUILD_SOURCE_ROOT; }
 EOF_BUILDINFO
 
 mkdir -p "$DIST_DIR"
@@ -279,6 +281,10 @@ CHECKSUM_PATH="${ARCHIVE_PATH}.sha256"
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/bin"
 cp "$TOOL_BIN" "$BUNDLE_DIR/bin/vox${EXE_SUFFIX}"
+if [[ -d "$ROOT/src/std" ]]; then
+  mkdir -p "$BUNDLE_DIR/src"
+  cp -R "$ROOT/src/std" "$BUNDLE_DIR/src/std"
+fi
 printf '%s\n' "$VERSION" > "$BUNDLE_DIR/VERSION"
 printf '%s\n' "$BOOTSTRAP_MODE" > "$BUNDLE_DIR/BOOTSTRAP_MODE"
 

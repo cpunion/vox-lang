@@ -93,6 +93,7 @@ require_file() {
 }
 
 require_file "$BUNDLE_DIR/bin/vox${EXE_SUFFIX}"
+require_file "$BUNDLE_DIR/src/std/testing/testing.vox"
 require_file "$BUNDLE_DIR/VERSION"
 require_file "$BUNDLE_DIR/BOOTSTRAP_MODE"
 

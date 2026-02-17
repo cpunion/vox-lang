@@ -588,6 +588,7 @@ fn usage() -> () {
   print("env:\n");
   print("  VOX_CC_DEBUG=1      enable C compiler debug symbols (-g / /Zi)\n");
   print("  VOX_PROFILE=1       print compile/cc phase timings for build commands\n");
+  print("  VOX_STDLIB=<path>   stdlib root override (highest priority; supports root, root/src, root/src/std)\n");
   print("  VOX_NODE=<path>     node executable for `vox lsp` (default: node)\n");
 }
 
@@ -684,6 +685,20 @@ fn path_join(a: String, b: String) -> String {
   if b == "" { return a; }
   if a.byte_at(a.len() - 1) == 47 { return a.concat(b); }
   return a.concat("/").concat(b);
+}
+
+fn path_with_forward_slashes(p0: String) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < p0.len() {
+    if p0.byte_at(i) == 92 { // '\\'
+      out = out.concat("/");
+    } else {
+      out = out.concat(p0.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  return out;
 }
 
 fn stage1_root() -> String {
@@ -2190,8 +2205,7 @@ fn load_files(paths: Vec[String]) -> Vec[ld.SourceFile] {
   return out;
 }
 
-fn load_stage1_std() -> Vec[ld.SourceFile] {
-  let root: String = stage1_root();
+fn load_stage1_std_from_repo_root(root: String) -> Vec[ld.SourceFile] {
   let rels: Vec[String] = fs.walk_vox_files(root);
   let mut out: Vec[ld.SourceFile] = Vec();
   let mut i: i32 = 0;
@@ -2204,6 +2218,53 @@ fn load_stage1_std() -> Vec[ld.SourceFile] {
     i = i + 1;
   }
   return out;
+}
+
+fn normalize_std_search_root(root0: String) -> String {
+  let root: String = path_with_forward_slashes(root0);
+  if has_suffix(root, "/src/std") {
+    return dir_name(dir_name(root));
+  }
+  if has_suffix(root, "/src") {
+    return dir_name(root);
+  }
+  return root;
+}
+
+fn load_stage1_std_from_root(root0: String) -> Vec[ld.SourceFile] {
+  let root: String = normalize_std_search_root(root0);
+  return load_stage1_std_from_repo_root(root);
+}
+
+fn load_stage1_std() -> Vec[ld.SourceFile] {
+  let env_root: String = trim_space_main(proc.getenv("VOX_STDLIB"));
+  if env_root != "" {
+    let from_env: Vec[ld.SourceFile] = load_stage1_std_from_root(env_root);
+    if from_env.len() > 0 { return from_env; }
+  }
+
+  // Prefer bundled std layout next to installed binary: <bin>/../src/std.
+  let exe: String = normalize_host_fs_path(proc.exe_path());
+  let bin_dir: String = dir_name(exe);
+  let from_bin_near: Vec[ld.SourceFile] = load_stage1_std_from_root(path_join(bin_dir, "../src/std"));
+  if from_bin_near.len() > 0 { return from_bin_near; }
+
+  // Then fallback to build-time embedded source root.
+  let embed_root: String = trim_space_main(path_with_forward_slashes(bi.build_source_root()));
+  if embed_root != "" {
+    let from_embed: Vec[ld.SourceFile] = load_stage1_std_from_root(embed_root);
+    if from_embed.len() > 0 { return from_embed; }
+  }
+
+  // Finally use runtime-derived repo roots for local developer builds.
+  let root: String = stage1_root();
+  let from_root: Vec[ld.SourceFile] = load_stage1_std_from_root(root);
+  if from_root.len() > 0 { return from_root; }
+  let from_src: Vec[ld.SourceFile] = load_stage1_std_from_root(path_join(root, "src"));
+  if from_src.len() > 0 { return from_src; }
+  let from_lib: Vec[ld.SourceFile] = load_stage1_std_from_root(path_join(root, "lib"));
+  if from_lib.len() > 0 { return from_lib; }
+  return Vec();
 }
 
 fn slice_vec(xs: Vec[String], start: i32) -> Vec[String] {
