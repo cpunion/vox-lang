@@ -14,7 +14,7 @@ usage: $(basename "$0") <build|test|print-bin>
 
 modes:
   build      build compiler via rolling bootstrap
-  test       build compiler, then run test-pkg smoke
+  test       build compiler, then run test smoke
   print-bin  build compiler and print its absolute path
 USAGE
 }
@@ -206,7 +206,11 @@ build_from_bootstrap() {
   local bootstrap_bin="$1"
   (
     cd "$WORK_DIR"
-    "$bootstrap_bin" build-pkg --driver=tool "$OUT_REL"
+    if "$bootstrap_bin" build --driver=tool "$OUT_REL"; then
+      :
+    else
+      "$bootstrap_bin" build-pkg --driver=tool "$OUT_REL"
+    fi
   )
 }
 
@@ -255,15 +259,15 @@ JOBS="${VOX_TEST_JOBS:-8}"
 TEST_OUT_REL="${VOX_TEST_OUT:-}"
 if [[ -z "$TEST_OUT_REL" ]]; then
   # Default output path is derived from the run glob to avoid cache races when
-  # multiple test-pkg invocations run concurrently.
+  # multiple test invocations run concurrently.
   TEST_HASH="$(printf '%s' "$RUN_GLOB" | sha256_text | cut -c1-12)"
   TEST_OUT_REL="target/debug/vox.test.${TEST_HASH}"
 fi
 
-echo "[selfhost] test-pkg: run=$RUN_GLOB jobs=$JOBS"
+echo "[selfhost] test: run=$RUN_GLOB jobs=$JOBS"
 (
   cd "$WORK_DIR"
-  "$SELF_BIN" test-pkg "--jobs=$JOBS" "--run=$RUN_GLOB" "$TEST_OUT_REL"
+  "$SELF_BIN" test "--jobs=$JOBS" "--run=$RUN_GLOB" "$TEST_OUT_REL"
 )
 
 echo "[selfhost] ok"

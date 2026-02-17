@@ -9,12 +9,12 @@
 
 ## CLI
 
-`vox build/test/install`（兼容别名：`build-pkg/test-pkg`）支持目标平台参数：
+`vox build/test/run/install` 支持目标平台参数：
 
 - `--target=<value>`
 - `--target <value>`
 
-`vox build/install`（兼容别名：`build-pkg/install-pkg`）额外支持产物参数：
+`vox build/run/install` 额外支持产物参数：
 
 - `--artifact=<kind>`
 - `--artifact <kind>`
@@ -41,7 +41,7 @@
   - `wasm32-unknown-emscripten`
 - `host` / `native` / 空值：使用当前宿主平台
 
-说明：`emit-c` / `emit-pkg-c` / `list-pkg` / `fmt` / `lsp` 不接受 `--target`。
+说明：`list` / `fmt` / `lsp` 不接受 `--target`；`build/test/run` 通过 `--emit-c` 输出 C 代码。
 
 ## Windows ABI
 
@@ -88,10 +88,10 @@ Windows 目标支持两条工具链：
 ## 组合约束
 
 - 当前不支持 `darwin-x86`（已在 `--target` 解析阶段拒绝）。
-- `test`（兼容别名：`test-pkg`）对 wasm 仅支持 `wasm32-wasi`。
+- `test` 对 wasm 仅支持 `wasm32-wasi`。
 - wasm 测试 runner 通过环境变量 `WASM_RUNNER` 指定（默认 `wasmtime`）。
 - `wasm` 目标当前仅支持 `--artifact=exe`。
-- `install`（兼容别名：`install-pkg`）当前仅支持宿主平台目标（不支持跨目标安装）。
+- `install` 当前仅支持宿主平台目标（不支持跨目标安装）。
 
 ## 链接与宏
 

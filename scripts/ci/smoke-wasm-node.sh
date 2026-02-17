@@ -42,7 +42,7 @@ echo "[wasm-smoke] compiler: ${COMPILER_BIN}"
 echo "[wasm-smoke] build wasm example"
 (
   cd "${EXAMPLE_DIR}"
-  "${COMPILER_BIN}" build-pkg --target=wasm32-unknown-unknown target/vox_wasm_demo.wasm
+  "${COMPILER_BIN}" build --target=wasm32-unknown-unknown target/vox_wasm_demo.wasm
 )
 
 echo "[wasm-smoke] node call"
