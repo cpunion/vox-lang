@@ -142,6 +142,7 @@ Governance from now on:
     - [ ] D04-3c effect classes/executor integration (IO/GPU/etc.) and optimization semantics.
       - [x] `vox/list` 基线 effect class 分类输出：模块级/函数级新增 `effect_classes`（当前按 effect 命名约定映射 `IO/GPU/Async/Other`）。
       - [x] `vox/list` 基线执行器 lane 建议输出：`executor_lanes`（`class/executor/modules`），用于外部调度器按 effect class 分流。
+      - [x] `vox/list` 基线模块调度提示输出：`module_schedule_hints`（`parallel_ok/serial_guarded`），结合资源冲突给出保守串并行建议。
   - Source: `docs/00-overview.md`.
 
 - [x] D05 FFI/WASM detailed ABI/attribute model.

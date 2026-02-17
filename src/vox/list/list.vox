@@ -49,6 +49,13 @@ pub struct ExecutorLane {
   pub modules: Vec[String],
 }
 
+pub struct ModuleScheduleHint {
+  pub module: String,
+  pub class: String,
+  pub executor: String,
+  pub mode: String, // "parallel_ok" | "serial_guarded"
+}
+
 pub struct ModuleNode {
   pub path: String,
   pub files: Vec[String],
@@ -65,6 +72,7 @@ pub struct Graph {
   pub resource_conflicts: Vec[ResourceConflict],
   pub resource_orders: Vec[ResourceOrder],
   pub executor_lanes: Vec[ExecutorLane],
+  pub module_schedule_hints: Vec[ModuleScheduleHint],
   pub functions: Vec[FunctionNode],
   pub function_resource_conflicts: Vec[FunctionResourceConflict],
 }
@@ -90,6 +98,7 @@ fn empty_graph() -> Graph {
     resource_conflicts: Vec(),
     resource_orders: Vec(),
     executor_lanes: Vec(),
+    module_schedule_hints: Vec(),
     functions: Vec(),
     function_resource_conflicts: Vec(),
   };
@@ -298,6 +307,48 @@ fn build_executor_lanes(mods: Vec[ModuleNode]) -> Vec[ExecutorLane] {
     i = i + 1;
   }
   return lanes;
+}
+
+fn module_primary_effect_class(classes: Vec[String]) -> String {
+  if has_str(classes, "Async") { return "Async"; }
+  if has_str(classes, "GPU") { return "GPU"; }
+  if has_str(classes, "IO") { return "IO"; }
+  if has_str(classes, "Other") { return "Other"; }
+  return "Other";
+}
+
+fn module_has_resource_conflict(conflicts: Vec[ResourceConflict], mod_path: String) -> bool {
+  let mut i: i32 = 0;
+  while i < conflicts.len() {
+    let c: ResourceConflict = conflicts.get(i);
+    if c.left_mod == mod_path || c.right_mod == mod_path { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn build_module_schedule_hints(mods: Vec[ModuleNode], conflicts: Vec[ResourceConflict]) -> Vec[ModuleScheduleHint] {
+  let mut out: Vec[ModuleScheduleHint] = Vec();
+  let mut i: i32 = 0;
+  while i < mods.len() {
+    let m: ModuleNode = mods.get(i);
+    let cls: String = module_primary_effect_class(m.effect_classes);
+    let exname: String = lane_executor_for_class(module_primary_effect_class(m.effect_classes));
+    let mode: String =
+      if module_has_resource_conflict(conflicts, m.path) {
+        "serial_guarded"
+      } else {
+        "parallel_ok"
+      };
+    out.push(ModuleScheduleHint {
+      module: m.path,
+      class: cls,
+      executor: exname,
+      mode: mode,
+    });
+    i = i + 1;
+  }
+  return out;
 }
 
 fn cap_collect_resources_from_attrs(xs0: Vec[String], attrs: Vec[ast.ResourceAttr], kind: i32) -> Vec[String] {
@@ -815,6 +866,7 @@ pub fn graph_from_world(w: tc.World) -> BuildResult {
   let conflicts: Vec[ResourceConflict] = build_resource_conflicts(mods);
   let orders: Vec[ResourceOrder] = build_resource_orders(edges, conflicts);
   let lanes: Vec[ExecutorLane] = build_executor_lanes(mods);
+  let hints: Vec[ModuleScheduleHint] = build_module_schedule_hints(mods, conflicts);
   let fn_conflicts: Vec[FunctionResourceConflict] = build_function_resource_conflicts(funcs);
   return ok(Graph {
     modules: mods,
@@ -822,6 +874,7 @@ pub fn graph_from_world(w: tc.World) -> BuildResult {
     resource_conflicts: conflicts,
     resource_orders: orders,
     executor_lanes: lanes,
+    module_schedule_hints: hints,
     functions: funcs,
     function_resource_conflicts: fn_conflicts,
   });
@@ -941,6 +994,21 @@ pub fn graph_to_json(g: Graph) -> String {
   }
   out = out.concat("]");
 
+  out = out.concat(",\"module_schedule_hints\":[");
+  i = 0;
+  while i < g.module_schedule_hints.len() {
+    if i > 0 { out = out.concat(","); }
+    let h: ModuleScheduleHint = g.module_schedule_hints.get(i);
+    out = out
+      .concat("{\"module\":").concat(json_quote(h.module))
+      .concat(",\"class\":").concat(json_quote(h.class))
+      .concat(",\"executor\":").concat(json_quote(h.executor))
+      .concat(",\"mode\":").concat(json_quote(h.mode))
+      .concat("}");
+    i = i + 1;
+  }
+  out = out.concat("]");
+
   out = out.concat(",\"functions\":[");
   i = 0;
   while i < g.functions.len() {
@@ -1045,6 +1113,19 @@ pub fn graph_to_text(g: Graph) -> String {
       .concat("[executor_lane] ")
       .concat(ex2.class).concat(" via ").concat(ex2.executor)
       .concat(" : ").concat(join_with_sep(ex2.modules, ","))
+      .concat("\n");
+    i = i + 1;
+  }
+
+  out = out.concat("[module_schedule_hints] ").concat(g.module_schedule_hints.len().to_string()).concat("\n");
+  i = 0;
+  while i < g.module_schedule_hints.len() {
+    let h2: ModuleScheduleHint = g.module_schedule_hints.get(i);
+    out = out
+      .concat("[module_schedule_hint] ")
+      .concat(h2.module).concat(" : class=").concat(h2.class)
+      .concat(", executor=").concat(h2.executor)
+      .concat(", mode=").concat(h2.mode)
       .concat("\n");
     i = i + 1;
   }

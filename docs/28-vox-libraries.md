@@ -172,6 +172,7 @@ fn list_smoke() -> String {
 - `resource_conflicts`（模块级 `rw`/`ww`）。
 - `resource_orders`（模块级冲突在已知依赖边下的保守顺序建议，方向 `from -> to`）。
 - `executor_lanes`（按 `effect_classes` 聚合的执行器 lane 建议：`class/executor/modules`）。
+- `module_schedule_hints`（模块级保守调度提示：`module/class/executor/mode`，其中 `mode` 为 `parallel_ok` 或 `serial_guarded`）。
 - `functions`（函数级能力快照：`id/module/kind/owner/name/effects/effect_classes/resource_reads/resource_writes`）。
 - `function_resource_conflicts`（函数级 `rw`/`ww`）。
 
