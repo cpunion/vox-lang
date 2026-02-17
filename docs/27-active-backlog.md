@@ -140,6 +140,7 @@ Governance from now on:
       - [x] `vox/list` 增加函数级能力与冲突输出（`functions` / `function_resource_conflicts`），用于更细粒度调度分析。
       - [x] `vox/list` 增加模块级资源顺序建议输出（`resource_orders`，方向为 `dep -> importer`），用于在已知依赖边下给出冲突资源的保守串行顺序。
     - [ ] D04-3c effect classes/executor integration (IO/GPU/etc.) and optimization semantics.
+      - [x] `vox/list` 基线 effect class 分类输出：模块级/函数级新增 `effect_classes`（当前按 effect 命名约定映射 `IO/GPU/Async/Other`）。
   - Source: `docs/00-overview.md`.
 
 - [x] D05 FFI/WASM detailed ABI/attribute model.

@@ -31,6 +31,7 @@ pub struct FunctionNode {
   pub owner: String, // empty for top-level fn
   pub name: String,
   pub effects: Vec[String],
+  pub effect_classes: Vec[String],
   pub resource_reads: Vec[String],
   pub resource_writes: Vec[String],
 }
@@ -47,6 +48,7 @@ pub struct ModuleNode {
   pub files: Vec[String],
   pub imports: Vec[String],
   pub effects: Vec[String],
+  pub effect_classes: Vec[String],
   pub resource_reads: Vec[String],
   pub resource_writes: Vec[String],
 }
@@ -201,6 +203,7 @@ fn module_import_files(m: tc.WorldModule) -> Vec[String] {
 
 struct ModuleCaps {
   effects: Vec[String],
+  effect_classes: Vec[String],
   resource_reads: Vec[String],
   resource_writes: Vec[String],
 }
@@ -218,6 +221,35 @@ fn cap_collect_effects_from_attrs(xs0: Vec[String], attrs: Vec[ast.EffectAttr]) 
     i = i + 1;
   }
   return xs;
+}
+
+fn starts_with(s: String, p: String) -> bool {
+  if p.len() == 0 { return true; }
+  if s.len() < p.len() { return false; }
+  return s.slice(0, p.len()) == p;
+}
+
+fn effect_class_of(name: String) -> String {
+  if starts_with(name, "Fs") || starts_with(name, "IO") || starts_with(name, "Io") || starts_with(name, "Net") {
+    return "IO";
+  }
+  if starts_with(name, "Gpu") || starts_with(name, "GPU") || starts_with(name, "Cuda") || starts_with(name, "Metal") || starts_with(name, "Vulkan") || starts_with(name, "Wgpu") {
+    return "GPU";
+  }
+  if starts_with(name, "Async") || starts_with(name, "Poll") || starts_with(name, "Wake") {
+    return "Async";
+  }
+  return "Other";
+}
+
+fn effect_classes_from_effects(effects: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < effects.len() {
+    out = cap_add_unique(out, effect_class_of(effects.get(i)));
+    i = i + 1;
+  }
+  return sort_strings(out);
 }
 
 fn cap_collect_resources_from_attrs(xs0: Vec[String], attrs: Vec[ast.ResourceAttr], kind: i32) -> Vec[String] {
@@ -277,6 +309,7 @@ fn module_caps(m: tc.WorldModule) -> ModuleCaps {
 
   return ModuleCaps {
     effects: sort_strings(effects),
+    effect_classes: effect_classes_from_effects(effects),
     resource_reads: sort_strings(reads),
     resource_writes: sort_strings(writes),
   };
@@ -307,9 +340,11 @@ fn collect_module_functions(m: tc.WorldModule) -> Vec[FunctionNode] {
     let fd: ast.FuncDecl = m.prog.funcs.get(fi);
     let caps: ModuleCaps = ModuleCaps {
       effects: sort_strings(cap_collect_effects_from_attrs(Vec(), fd.effects)),
+      effect_classes: Vec(),
       resource_reads: sort_strings(cap_collect_resources_from_attrs(Vec(), fd.resources, ast.resource_read())),
       resource_writes: sort_strings(cap_collect_resources_from_attrs(Vec(), fd.resources, ast.resource_write())),
     };
+    let cls: Vec[String] = effect_classes_from_effects(caps.effects);
     let id: String = func_id(m.path, "fn", "", fd.name);
     out = function_node_insert_sorted(out, FunctionNode {
       id: id,
@@ -318,6 +353,7 @@ fn collect_module_functions(m: tc.WorldModule) -> Vec[FunctionNode] {
       owner: "",
       name: fd.name,
       effects: caps.effects,
+      effect_classes: cls,
       resource_reads: caps.resource_reads,
       resource_writes: caps.resource_writes,
     });
@@ -338,9 +374,11 @@ fn collect_module_functions(m: tc.WorldModule) -> Vec[FunctionNode] {
       let md: ast.FuncDecl = id.methods.get(mi);
       let caps2: ModuleCaps = ModuleCaps {
         effects: sort_strings(cap_collect_effects_from_attrs(Vec(), md.effects)),
+        effect_classes: Vec(),
         resource_reads: sort_strings(cap_collect_resources_from_attrs(Vec(), md.resources, ast.resource_read())),
         resource_writes: sort_strings(cap_collect_resources_from_attrs(Vec(), md.resources, ast.resource_write())),
       };
+      let cls2: Vec[String] = effect_classes_from_effects(caps2.effects);
       let id2: String = func_id(m.path, "impl_method", owner, md.name);
       out = function_node_insert_sorted(out, FunctionNode {
         id: id2,
@@ -349,6 +387,7 @@ fn collect_module_functions(m: tc.WorldModule) -> Vec[FunctionNode] {
         owner: owner,
         name: md.name,
         effects: caps2.effects,
+        effect_classes: cls2,
         resource_reads: caps2.resource_reads,
         resource_writes: caps2.resource_writes,
       });
@@ -366,9 +405,11 @@ fn collect_module_functions(m: tc.WorldModule) -> Vec[FunctionNode] {
       let md2: ast.TraitMethodDecl = td.methods.get(mi2);
       let caps3: ModuleCaps = ModuleCaps {
         effects: sort_strings(cap_collect_effects_from_attrs(Vec(), md2.effects)),
+        effect_classes: Vec(),
         resource_reads: sort_strings(cap_collect_resources_from_attrs(Vec(), md2.resources, ast.resource_read())),
         resource_writes: sort_strings(cap_collect_resources_from_attrs(Vec(), md2.resources, ast.resource_write())),
       };
+      let cls3: Vec[String] = effect_classes_from_effects(caps3.effects);
       let id3: String = func_id(m.path, "trait_method", owner2, md2.name);
       out = function_node_insert_sorted(out, FunctionNode {
         id: id3,
@@ -377,6 +418,7 @@ fn collect_module_functions(m: tc.WorldModule) -> Vec[FunctionNode] {
         owner: owner2,
         name: md2.name,
         effects: caps3.effects,
+        effect_classes: cls3,
         resource_reads: caps3.resource_reads,
         resource_writes: caps3.resource_writes,
       });
@@ -701,6 +743,7 @@ pub fn graph_from_world(w: tc.World) -> BuildResult {
       files: files,
       imports: imports_sorted,
       effects: caps.effects,
+      effect_classes: caps.effect_classes,
       resource_reads: caps.resource_reads,
       resource_writes: caps.resource_writes,
     };
@@ -783,6 +826,7 @@ pub fn graph_to_json(g: Graph) -> String {
       .concat(",\"files\":").concat(json_array_str(m.files))
       .concat(",\"imports\":").concat(json_array_str(m.imports))
       .concat(",\"effects\":").concat(json_array_str(m.effects))
+      .concat(",\"effect_classes\":").concat(json_array_str(m.effect_classes))
       .concat(",\"resource_reads\":").concat(json_array_str(m.resource_reads))
       .concat(",\"resource_writes\":").concat(json_array_str(m.resource_writes))
       .concat("}");
@@ -845,6 +889,7 @@ pub fn graph_to_json(g: Graph) -> String {
       .concat(",\"owner\":").concat(json_quote(f.owner))
       .concat(",\"name\":").concat(json_quote(f.name))
       .concat(",\"effects\":").concat(json_array_str(f.effects))
+      .concat(",\"effect_classes\":").concat(json_array_str(f.effect_classes))
       .concat(",\"resource_reads\":").concat(json_array_str(f.resource_reads))
       .concat(",\"resource_writes\":").concat(json_array_str(f.resource_writes))
       .concat("}");
@@ -892,6 +937,7 @@ pub fn graph_to_text(g: Graph) -> String {
     out = out.concat("  files: ").concat(join_with_sep(m.files, ",")).concat("\n");
     out = out.concat("  imports: ").concat(join_with_sep(m.imports, ",")).concat("\n");
     out = out.concat("  effects: ").concat(join_with_sep(m.effects, ",")).concat("\n");
+    out = out.concat("  effect_classes: ").concat(join_with_sep(m.effect_classes, ",")).concat("\n");
     out = out.concat("  resource_reads: ").concat(join_with_sep(m.resource_reads, ",")).concat("\n");
     out = out.concat("  resource_writes: ").concat(join_with_sep(m.resource_writes, ",")).concat("\n");
     i = i + 1;
@@ -934,6 +980,7 @@ pub fn graph_to_text(g: Graph) -> String {
     out = out
       .concat("[function] ").concat(f2.id).concat("\n")
       .concat("  effects: ").concat(join_with_sep(f2.effects, ",")).concat("\n")
+      .concat("  effect_classes: ").concat(join_with_sep(f2.effect_classes, ",")).concat("\n")
       .concat("  resource_reads: ").concat(join_with_sep(f2.resource_reads, ",")).concat("\n")
       .concat("  resource_writes: ").concat(join_with_sep(f2.resource_writes, ",")).concat("\n");
     i = i + 1;
