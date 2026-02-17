@@ -2551,7 +2551,7 @@ fn parse_enum_decl(p: Parser, vis: i32, is_pub: bool) -> ParseEnumResult {
 	  };
 }
 
-fn parse_trait_method_decl(p: Parser) -> ParseTraitMethodResult {
+fn parse_trait_method_decl(p: Parser, effects: Vec[ast.EffectAttr]) -> ParseTraitMethodResult {
   let mut q0: Parser = p;
   let mut is_async: bool = false;
   if kind_is(peek_kind(q0), lex.TokenKind.KwAsync) {
@@ -2628,6 +2628,7 @@ fn parse_trait_method_decl(p: Parser) -> ParseTraitMethodResult {
       const_where_bounds: cwbs2,
       params: r4.params,
       ret: r7.ty,
+      effects: effects,
       has_body: has_body,
       body: body,
     },
@@ -2701,7 +2702,13 @@ fn parse_trait_decl(p: Parser, vis: i32, is_pub: bool) -> ParseTraitResult {
         q = ar.p;
         assocs.push(ar.a);
       } else {
-        let mr: ParseTraitMethodResult = parse_trait_method_decl(q);
+        let ar: ParseTopFnAttrsResult = parse_top_fn_attrs(q);
+        q = ar.p;
+        if ar.ffi_imports.len() != 0 || ar.ffi_exports.len() != 0 {
+          q = set_method_ffi_attr_error(q);
+          continue;
+        }
+        let mr: ParseTraitMethodResult = parse_trait_method_decl(q, ar.effects);
         q = mr.p;
         ms.push(mr.m);
       }
@@ -2758,7 +2765,13 @@ fn parse_impl_decl(p: Parser) -> ParseImplResult {
       q = ar.p;
       assoc_types.push(ar.a);
     } else {
-      let r: ParseFnResult = parse_fn_decl(q, ast.vis_private(), false, Vec(), Vec(), Vec());
+      let ar0: ParseTopFnAttrsResult = parse_top_fn_attrs(q);
+      q = ar0.p;
+      if ar0.ffi_imports.len() != 0 || ar0.ffi_exports.len() != 0 {
+        q = set_method_ffi_attr_error(q);
+        continue;
+      }
+      let r: ParseFnResult = parse_fn_decl(q, ast.vis_private(), false, Vec(), Vec(), ar0.effects);
       q = r.p;
       methods.push(r.f);
     }
@@ -2920,6 +2933,13 @@ fn parse_attr_arg_text(p: Parser) -> ParseStringResult {
   q.has_err = true;
   q.err = ParseError.InvalidType(peek(p).start, "bad function attribute arguments");
   return ParseStringResult { p: q, s: "", at: peek(p).start };
+}
+
+fn set_method_ffi_attr_error(p: Parser) -> Parser {
+  let mut q: Parser = p;
+  q.has_err = true;
+  q.err = ParseError.InvalidType(peek(p).start, "ffi attributes are only allowed on top-level fn");
+  return q;
 }
 
 fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {

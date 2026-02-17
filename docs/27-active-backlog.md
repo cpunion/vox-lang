@@ -124,6 +124,13 @@ Governance from now on:
   - Source: `docs/09-async-model.md`.
 
 - [ ] D04 Effect/resource system.
+  - [x] D04-1 Effect baseline landed:
+    - `@effect(...)` on top-level functions, trait methods, and impl methods.
+    - call-site effect checking in typecheck (`missing effect(s)` diagnostics).
+    - trait impl methods must match trait method effect set.
+  - [ ] D04-2 Resource/effect advanced model pending:
+    - resource read/write set declaration and scheduling constraints.
+    - effect classes/executor integration (IO/GPU/etc.) and optimization semantics.
   - Source: `docs/00-overview.md`.
 
 - [x] D05 FFI/WASM detailed ABI/attribute model.

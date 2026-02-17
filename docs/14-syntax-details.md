@@ -67,6 +67,14 @@
 - 支持在类型位置引用 `Self.Assoc`（trait/impl 方法签名）以及 `T.Assoc`（泛型签名，`T` 为类型参数）。
 - `T.Assoc` 约束规则：`T` 的 trait bounds 中必须且只能有一个 trait 声明该关联类型，否则报错（unknown/ambiguous projection）。
 
+## 函数属性（当前实现）
+
+- `@effect(Name)`：声明函数需要的 effect 能力。
+  - 顶层函数支持：`@effect(FsRead) fn read() -> i32 { ... }`
+  - trait 方法支持：`trait R { @effect(FsRead) fn read(x: Self) -> i32; }`
+  - impl 方法支持：`impl I { @effect(FsRead) fn read(x: I) -> i32 { ... } }`
+- `@ffi_import/@ffi_export` 仅允许出现在顶层函数上；trait/impl 方法位置会报错。
+
 ## 运算符优先级
 
 当前已实现子集的优先级（从高到低）：

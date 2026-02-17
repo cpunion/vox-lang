@@ -108,6 +108,27 @@ fn trait_assoc_type_exists(as0: Vec[TraitAssocTypeSig], name: String) -> bool {
   return false;
 }
 
+fn effect_join_names(xs: Vec[String], sep: String) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if i > 0 { out = out.concat(sep); }
+    out = out.concat(xs.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn effect_set_equal(a: Vec[String], b: Vec[String]) -> bool {
+  if a.len() != b.len() { return false; }
+  let mut i: i32 = 0;
+  while i < a.len() {
+    if !contains_str_local(b, a.get(i)) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
 fn impl_assoc_type_exists(as0: Vec[ImplAssocTypeSig], name: String) -> bool {
   let mut i: i32 = 0;
   while i < as0.len() {
@@ -1189,6 +1210,10 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         if !cwr.ok {
           return TcCtxResult { ok: false, err: cwr.err, ctx: c };
         }
+        let efr: CollectEffectsResult = collect_effect_names(md.effects);
+        if !efr.ok {
+          return TcCtxResult { ok: false, err: efr.err, ctx: c };
+        }
         let has_variadic_md: bool = cti_has_variadic_param_decl(md.params);
         let variadic_elem_md: i32 = if has_variadic_md { vec_elem(c, ps.get(ps.len() - 1)) } else { -1 };
         ms.push(TraitMethodSig {
@@ -1205,7 +1230,7 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
             type_param_packs: md.type_param_packs,
             const_params: cps,
             type_param_bounds: tbs,
-            effects: Vec(),
+            effects: efr.effects,
             const_where_bounds: cwr.bounds,
           },
           is_async: md.is_async,
@@ -1428,6 +1453,8 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
 
           let cwr_inh: CollectConstWhereResult = collect_const_where_bounds(md_inh.sp, concat_strs(id.type_params, md_inh.type_params), cps_inh, md_inh.const_where_bounds);
           if !cwr_inh.ok { return TcCtxResult { ok: false, err: cwr_inh.err, ctx: c }; }
+          let efr_inh: CollectEffectsResult = collect_fn_effects(md_inh);
+          if !efr_inh.ok { return TcCtxResult { ok: false, err: efr_inh.err, ctx: c }; }
 
           let has_variadic_inh: bool = cti_has_variadic_param_decl(md_inh.params);
           let variadic_elem_inh: i32 = if has_variadic_inh { vec_elem(c, ps_inh.get(ps_inh.len() - 1)) } else { -1 };
@@ -1444,7 +1471,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
             type_param_packs: md_inh.type_param_packs,
             const_params: cps_inh,
             type_param_bounds: concat_bounds(head_tpbs, got_tbs_inh),
-            effects: Vec(),
+            effects: efr_inh.effects,
             const_where_bounds: cwr_inh.bounds,
           };
           let lowered_inh: String = fresh_inherent_lowered_name(c, m.path, md_inh.name, c.impls.len() * 1000 + mdi_inh);
@@ -1636,6 +1663,17 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         c = wr1.ctx;
         if !wr1.ok { return TcCtxResult { ok: false, err: type_error_at(md.sp, "trait method type substitution failed"), ctx: c }; }
         let want: FuncSig = wr1.sig;
+        let efr_md: CollectEffectsResult = collect_fn_effects(md);
+        if !efr_md.ok { return TcCtxResult { ok: false, err: efr_md.err, ctx: c }; }
+        if !effect_set_equal(efr_md.effects, want.effects) {
+          let msg_eff: String =
+            "impl method effect set mismatch: expected ["
+              .concat(effect_join_names(want.effects, ", "))
+              .concat("], got [")
+              .concat(effect_join_names(efr_md.effects, ", "))
+              .concat("]");
+          return TcCtxResult { ok: false, err: type_error_at(md.sp, msg_eff), ctx: c };
+        }
         if md.const_params.len() != want.const_params.len() {
           return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param count mismatch"), ctx: c };
         }
