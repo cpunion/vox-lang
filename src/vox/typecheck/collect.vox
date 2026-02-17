@@ -1133,6 +1133,8 @@ fn builtin_func_sym(
       const_params: const_params,
       type_param_bounds: Vec(),
       effects: Vec(),
+      resource_reads: Vec(),
+      resource_writes: Vec(),
       const_where_bounds: Vec(),
     },
   };
@@ -1148,6 +1150,7 @@ fn contains_str_collect(xs: Vec[String], s: String) -> bool {
 }
 
 struct CollectEffectsResult { ok: bool, err: TcError, effects: Vec[String] }
+struct CollectResourcesResult { ok: bool, err: TcError, reads: Vec[String], writes: Vec[String] }
 
 fn collect_effects_ok(effects: Vec[String]) -> CollectEffectsResult {
   return CollectEffectsResult { ok: true, err: TcError.None, effects: effects };
@@ -1176,6 +1179,45 @@ fn collect_effect_names(attrs: Vec[ast.EffectAttr]) -> CollectEffectsResult {
 
 fn collect_fn_effects(fd: ast.FuncDecl) -> CollectEffectsResult {
   return collect_effect_names(fd.effects);
+}
+
+fn collect_resources_ok(reads: Vec[String], writes: Vec[String]) -> CollectResourcesResult {
+  return CollectResourcesResult { ok: true, err: TcError.None, reads: reads, writes: writes };
+}
+
+fn collect_resources_err(err: TcError) -> CollectResourcesResult {
+  return CollectResourcesResult { ok: false, err: err, reads: Vec(), writes: Vec() };
+}
+
+fn collect_resource_names(attrs: Vec[ast.ResourceAttr]) -> CollectResourcesResult {
+  let mut reads: Vec[String] = Vec();
+  let mut writes: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < attrs.len() {
+    let ra: ast.ResourceAttr = attrs.get(i);
+    if ra.name == "" {
+      return collect_resources_err(type_error_at(ra.sp, "resource name must not be empty"));
+    }
+    if ra.kind == ast.resource_read() {
+      if contains_str_collect(reads, ra.name) {
+        return collect_resources_err(type_error_at(ra.sp, "duplicate read resource on function: ".concat(ra.name)));
+      }
+      reads.push(ra.name);
+    } else if ra.kind == ast.resource_write() {
+      if contains_str_collect(writes, ra.name) {
+        return collect_resources_err(type_error_at(ra.sp, "duplicate write resource on function: ".concat(ra.name)));
+      }
+      writes.push(ra.name);
+    } else {
+      return collect_resources_err(type_error_at(ra.sp, "unknown resource kind"));
+    }
+    i = i + 1;
+  }
+  return collect_resources_ok(reads, writes);
+}
+
+fn collect_fn_resources(fd: ast.FuncDecl) -> CollectResourcesResult {
+  return collect_resource_names(fd.resources);
 }
 
 fn ffi_ty_allowed(ctx: Ctx, ty: i32) -> bool {
@@ -1604,12 +1646,18 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
         const_params: cps,
         type_param_bounds: tbs,
         effects: Vec(),
+        resource_reads: Vec(),
+        resource_writes: Vec(),
         const_where_bounds: cwr.bounds,
       };
       let efr: CollectEffectsResult = collect_fn_effects(fd);
       if !efr.ok { return TcCtxResult { ok: false, err: efr.err, ctx: c }; }
+      let rfr: CollectResourcesResult = collect_fn_resources(fd);
+      if !rfr.ok { return TcCtxResult { ok: false, err: rfr.err, ctx: c }; }
       let mut sig2: FuncSig = sig;
       sig2.effects = efr.effects;
+      sig2.resource_reads = rfr.reads;
+      sig2.resource_writes = rfr.writes;
       c.funcs.push(FuncSym { mod_path: m.path, name: fd.name, sig: sig2 });
       fi = fi + 1;
     }

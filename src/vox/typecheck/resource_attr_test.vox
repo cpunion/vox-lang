@@ -1,0 +1,106 @@
+import "std/testing" as t
+import "vox/parse" as p
+import "vox/typecheck" as tc
+
+fn resource_tc_add_mod(w: tc.World, path: String, src: String) -> tc.World {
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(r.err == p.ParseError.None);
+  return tc.world_add(w, path, r.prog);
+}
+
+fn resource_tc_run_main(src: String) -> tc.TcResult {
+  let mut w: tc.World = tc.world();
+  w = resource_tc_add_mod(w, "main", src);
+  return tc.typecheck_world(w);
+}
+
+fn test_typecheck_resource_read_missing_rejected() -> () {
+  let src: String =
+    "@resource(read, Fs)\n"
+    .concat("fn read() -> i32 { return 1; }\n")
+    .concat("fn caller() -> i32 { return read(); }\n")
+    .concat("fn main() -> i32 { return 0; }\n");
+  let r: tc.TcResult = resource_tc_run_main(src);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "resource check failed"), msg);
+  t.assert_with(contains(msg, "missing read resource(s): Fs"), msg);
+}
+
+fn test_typecheck_resource_read_declared_ok() -> () {
+  let src: String =
+    "@resource(read, Fs)\n"
+    .concat("fn read() -> i32 { return 1; }\n")
+    .concat("@resource(read, Fs)\n")
+    .concat("fn caller() -> i32 { return read(); }\n")
+    .concat("fn main() -> i32 { return 0; }\n");
+  let r: tc.TcResult = resource_tc_run_main(src);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_resource_write_missing_rejected() -> () {
+  let src: String =
+    "@resource(write, Db)\n"
+    .concat("fn write() -> i32 { return 1; }\n")
+    .concat("fn caller() -> i32 { return write(); }\n")
+    .concat("fn main() -> i32 { return 0; }\n");
+  let r: tc.TcResult = resource_tc_run_main(src);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "resource check failed"), msg);
+  t.assert_with(contains(msg, "missing write resource(s): Db"), msg);
+}
+
+fn test_typecheck_resource_write_declared_ok() -> () {
+  let src: String =
+    "@resource(write, Db)\n"
+    .concat("fn write() -> i32 { return 1; }\n")
+    .concat("@resource(write, Db)\n")
+    .concat("fn caller() -> i32 { return write(); }\n")
+    .concat("fn main() -> i32 { return 0; }\n");
+  let r: tc.TcResult = resource_tc_run_main(src);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_resource_duplicate_read_rejected() -> () {
+  let src: String =
+    "@resource(read, Fs)\n"
+    .concat("@resource(read, Fs)\n")
+    .concat("fn read() -> i32 { return 1; }\n")
+    .concat("fn main() -> i32 { return 0; }\n");
+  let r: tc.TcResult = resource_tc_run_main(src);
+  t.assert(!r.ok);
+  t.assert(contains(tc.tc_error_to_string(r.err), "duplicate read resource on function"));
+}
+
+fn test_typecheck_resource_duplicate_write_rejected() -> () {
+  let src: String =
+    "@resource(write, Fs)\n"
+    .concat("@resource(write, Fs)\n")
+    .concat("fn write() -> i32 { return 1; }\n")
+    .concat("fn main() -> i32 { return 0; }\n");
+  let r: tc.TcResult = resource_tc_run_main(src);
+  t.assert(!r.ok);
+  t.assert(contains(tc.tc_error_to_string(r.err), "duplicate write resource on function"));
+}
+
+fn test_typecheck_trait_method_resource_read_match_smoke() -> () {
+  let src: String =
+    "trait Read { @resource(read, Fs) fn read(x: Self) -> i32; }\n"
+    .concat("struct I { v: i32 }\n")
+    .concat("impl Read for I { @resource(read, Fs) fn read(x: I) -> i32 { return x.v; } }\n")
+    .concat("fn main() -> i32 { return 0; }\n");
+  let r: tc.TcResult = resource_tc_run_main(src);
+  t.assert(r.ok);
+}
+
+fn test_typecheck_trait_method_resource_read_mismatch_rejected() -> () {
+  let src: String =
+    "trait Read { @resource(read, Fs) fn read(x: Self) -> i32; }\n"
+    .concat("struct I { v: i32 }\n")
+    .concat("impl Read for I { fn read(x: I) -> i32 { return x.v; } }\n")
+    .concat("fn main() -> i32 { return 0; }\n");
+  let r: tc.TcResult = resource_tc_run_main(src);
+  t.assert(!r.ok);
+  t.assert(contains(tc.tc_error_to_string(r.err), "impl method read resource set mismatch"));
+}
