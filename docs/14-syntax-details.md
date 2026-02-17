@@ -243,6 +243,21 @@ type Value = I32: i32 | Str: String;
   - 例如 `type Value = I32: i32 | Str: String;` 等价于 `enum Value { I32(i32), Str(String) }`。
   - 因此 `Value.I32(1)`、以及在期望类型已知时的简写 `.I32(1)` 都可用。
 
+## 字符字面量
+
+语法：
+
+- `'a'`
+- `'\n'`、`'\t'`、`'\r'`、`'\0'`
+- `'\''`、`'\"'`、`'\\'`
+- `'你'`（单个 Unicode 标量）
+
+当前实现（Stage0/Stage1 v0）：
+
+- lexer 提供 `char` token，parser 将其 lowering 为对应码点整数常量（例如 `'A' -> 65`、`'你' -> 20320`）。
+- 结合当前类型系统 `char -> u32` 别名语义，`char` 字面量可直接用于 `char`/`u32` 上下文与 `@range(... ) char`。
+- 不满足“单个字符/单个转义”的单引号形式不会当作 `char` 字面量处理，仍按 `'`（tick）语义参与后续解析（例如 `&'static`）。
+
 ## 字符串字面量
 
 语法：
@@ -296,7 +311,7 @@ type Small = @range(-5..=5) i32;
 
 Stage0/Stage1 v0 当前实现限制：
 
-- `T` 仅支持整数类型（当前 stage0/stage1 实现：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`）。
+- `T` 仅支持整数类型（当前 stage0/stage1 实现：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`，以及别名 `char -> u32`）。
 - `lo/hi` 仅支持十进制整数字面量（允许前缀 `-`）。
 
 ## 枚举构造子点前缀简写（已定）
