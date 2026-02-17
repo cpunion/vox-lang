@@ -51,6 +51,88 @@ fn trim_right_ws(s: String) -> String {
   return "";
 }
 
+fn strip_line_comment(s: String) -> String {
+  let mut i: i32 = 0;
+  while i < s.len() {
+    if i + 1 < s.len() && s.byte_at(i) == 47 && s.byte_at(i + 1) == 47 {
+      return s.slice(0, i);
+    }
+    if s.byte_at(i) == 34 { // string
+      i = i + 1;
+      while i < s.len() {
+        let b: i32 = s.byte_at(i);
+        if b == 92 { // escape
+          i = i + 2;
+          continue;
+        }
+        if b == 34 {
+          i = i + 1;
+          break;
+        }
+        i = i + 1;
+      }
+      continue;
+    }
+    i = i + 1;
+  }
+  return s;
+}
+
+fn line_starts_with_continuation(s0: String) -> bool {
+  let s: String = trim_left_ws(strip_line_comment(s0));
+  if s.len() == 0 { return false; }
+  // '.' chain line, or infix boolean continuation.
+  if s.byte_at(0) == 46 { return true; } // '.'
+  if s.len() >= 2 && s.byte_at(0) == 124 && s.byte_at(1) == 124 { return true; } // "||"
+  if s.len() >= 2 && s.byte_at(0) == 38 && s.byte_at(1) == 38 { return true; } // "&&"
+  return false;
+}
+
+fn line_ends_with_scope_start(s0: String) -> bool {
+  let s: String = trim_right_ws(strip_line_comment(s0));
+  if s.len() == 0 { return false; }
+  let n: i32 = s.len();
+  let c1: i32 = s.byte_at(n - 1);
+  let c0: i32 = if n >= 2 { s.byte_at(n - 2) } else { -1 };
+  // assignment "=" (not comparison), and match arm "=>".
+  if c1 == 61 {
+    if c0 == 61 || c0 == 33 || c0 == 60 || c0 == 62 { return false; }
+    return true;
+  }
+  if c1 == 62 && c0 == 61 { return true; }
+  return false;
+}
+
+fn line_ends_with_scope_end(s0: String) -> bool {
+  let s: String = trim_right_ws(strip_line_comment(s0));
+  if s.len() == 0 { return false; }
+  let c1: i32 = s.byte_at(s.len() - 1);
+  return c1 == 59 || c1 == 44; // ';' or ','
+}
+
+fn line_ends_with_continuation(s0: String) -> bool {
+  let s: String = trim_right_ws(strip_line_comment(s0));
+  if s.len() == 0 { return false; }
+
+  let n: i32 = s.len();
+  let c1: i32 = s.byte_at(n - 1);
+  let c0: i32 = if n >= 2 { s.byte_at(n - 2) } else { -1 };
+
+  // obvious continue markers: open paren/bracket, member-chain dot.
+  if c1 == 40 || c1 == 91 || c1 == 46 { return true; } // "([."
+  // assignment "=", but not "==", "!=", "<=", ">=".
+  if c1 == 61 {
+    if c0 == 61 || c0 == 33 || c0 == 60 || c0 == 62 { return false; }
+    return true;
+  }
+  // match arm "=>", boolean chains, and arithmetic infix endings.
+  if c1 == 62 && c0 == 61 { return true; } // "=>"
+  if c1 == 124 && c0 == 124 { return true; } // "||"
+  if c1 == 38 && c0 == 38 { return true; } // "&&"
+  if c1 == 43 || c1 == 45 || c1 == 42 || c1 == 47 || c1 == 37 { return true; } // "+-*/%"
+  return false;
+}
+
 fn repeat_spaces(n0: i32) -> String {
   let mut n: i32 = n0;
   if n < 0 { n = 0; }
@@ -130,6 +212,8 @@ pub fn format_text(src: String) -> String {
   let mut indent: i32 = 0;
   let mut in_triple: bool = false;
   let mut blank_run: i32 = 0;
+  let mut continue_next: bool = false;
+  let mut continuation_scope: i32 = 0;
 
   let mut line_start: i32 = 0;
   let mut i: i32 = 0;
@@ -158,13 +242,19 @@ pub fn format_text(src: String) -> String {
       if blank_run <= 1 {
         out = out.concat("\n");
       }
+      continue_next = false;
       continue;
     }
     blank_run = 0;
 
     let mut line_indent: i32 = indent;
-    if content.len() > 0 && content.byte_at(0) == 125 && line_indent > 0 { // '}'
+    let is_closing_brace: bool = content.len() > 0 && content.byte_at(0) == 125;
+    if is_closing_brace && line_indent > 0 { // '}'
       line_indent = line_indent - 1;
+    }
+    let continuation_here: bool = continuation_scope > 0 || continue_next || line_starts_with_continuation(content);
+    if continuation_here && (!is_closing_brace || continuation_scope > 0) {
+      line_indent = line_indent + 1;
     }
     out = out.concat(repeat_spaces(line_indent * 2)).concat(content).concat("\n");
 
@@ -172,6 +262,13 @@ pub fn format_text(src: String) -> String {
     indent = indent + st.delta;
     if indent < 0 { indent = 0; }
     in_triple = st.in_triple;
+    continue_next = line_ends_with_continuation(content);
+    if line_ends_with_scope_start(content) {
+      continuation_scope = continuation_scope + 1;
+    }
+    if continuation_scope > 0 && line_ends_with_scope_end(content) {
+      continuation_scope = continuation_scope - 1;
+    }
   }
 
   // Keep a single trailing newline and no trailing blank line run.

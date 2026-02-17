@@ -6,6 +6,7 @@
 vox build     [--driver=user|tool] [--artifact=exe|static|shared] [--target=<value>] [out.bin]
 vox test      [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] [out.bin]
 vox run       [--driver=user|tool] [--artifact=exe] [--target=<value>] [--emit-c[=<path>]] [out.bin]
+vox run fmt   [--check] [path...]
 vox install   [--target=<value>] [out.bin]
 vox list      [--json]
 vox fmt       [--check] [path...]
@@ -19,7 +20,11 @@ vox version | --version | -V
 - `vox build`：构建当前项目（`./src`），默认输出 `target/debug/<package_name>`。
 - `vox test`：测试当前项目（`./src` + `./tests`），默认输出 `target/debug/<package_name>`。
 - `vox run`：按 `vox build` 构建后运行产物（二进制或 `wasm32-wasi` runner）。
+- `vox run fmt`：`vox fmt` 别名（开发态便捷入口）。
 - `vox install`：先按 `vox build` 构建，再安装到 `~/.vox/bin/<package_name>`（仅宿主目标）。
+
+在 `vox-lang` 仓库根目录，`vox fmt` 与 `vox install` 会先走 `scripts/ci/rolling-selfhost.sh` 构建本地最新编译器，再由新编译器执行命令。
+如需关闭该行为可设置：`VOX_DEV_SELFHOST_DISABLE=1`。
 
 `vox version` 解析顺序：`VOX_BUILD_VERSION`（若设置）优先；否则在 git 仓库中推导为 `X.Y.Z[-dirty]-<n>+g<sha>`（命中 tag 且干净时输出 `X.Y.Z`）；无 git 时 `release` 构建输出 `X.Y.Z`，普通源码包输出 `X.Y.Z+src`。
 
