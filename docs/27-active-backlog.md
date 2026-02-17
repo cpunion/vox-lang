@@ -99,7 +99,7 @@ Governance from now on:
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.
-  - Landed: build/test/install（兼容别名：build-pkg/test-pkg）accept `--target`; parser supports GNU/MinGW + MSVC Windows triples; codegen chooses toolchain/flags/link options by target and compiler family.
+  - Landed: build/test/run/install accept `--target`; parser supports GNU/MinGW + MSVC Windows triples; codegen chooses toolchain/flags/link options by target and compiler family.
   - Source: `docs/16-platform-support.md`.
 
 - [x] D02 Thread-safety model (`Send/Sync` auto-derivation policy).

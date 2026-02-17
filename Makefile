@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-p0p1 test-intrinsics \
+.PHONY: fmt fmt-check test test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-intrinsics \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run \
 	release-source-bundle release-source-verify
 
@@ -40,11 +40,7 @@ test-selfhost-smoke:
 test-public-api:
 	@set -e; \
 	COMPILER_BIN=$$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1); \
-	"$$COMPILER_BIN" test-pkg --run='*public_api*' target/debug/vox.public_api
-
-# P0/P1 closure gate (docs/archive/25-p0p1-closure.md).
-test-p0p1:
-	./scripts/ci/verify-p0p1.sh
+	"$$COMPILER_BIN" test --run='*public_api*' target/debug/vox.public_api
 
 # Example package smoke uses rolling-built compiler.
 test-examples:
@@ -52,9 +48,9 @@ test-examples:
 	start=$$(date +%s); \
 	COMPILER_BIN=$$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1); \
 	cd examples/c_demo; \
-	"$$COMPILER_BIN" test-pkg target/compiler_examples.test; \
+	"$$COMPILER_BIN" test target/compiler_examples.test; \
 	end=$$(date +%s); \
-	echo "[time] compiler test-pkg examples/c_demo: $$((end-start))s"
+	echo "[time] compiler test examples/c_demo: $$((end-start))s"
 
 # Audit long lines in Vox sources (default max width: 140, override with MAX=<n>).
 audit-vox-lines:

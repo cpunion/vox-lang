@@ -122,16 +122,16 @@ import "std/testing" as t
 fn test_basic() -> () { t.assert(true); }
 VOX
 
-echo "[smoke] compiler build-pkg"
+echo "[smoke] compiler build"
 (
   cd "$TMP_DIR"
-  "$TOOL_BIN" build-pkg target/smoke_tool
+  "$TOOL_BIN" build target/smoke_tool
 )
 
-echo "[smoke] compiler test-pkg"
+echo "[smoke] compiler test"
 (
   cd "$TMP_DIR"
-  "$TOOL_BIN" test-pkg --run='*test_basic*' target/smoke_tool_tests
+  "$TOOL_BIN" test --run='*test_basic*' target/smoke_tool_tests
 )
 
 echo "[smoke] ok"

@@ -246,15 +246,15 @@ fi
 set +e
 (
   cd "$ROOT"
-  if [[ "$GOOS" == "windows" && "$IS_CROSS" == "0" && -n "$CC_BASH" ]]; then
-    if "$BOOTSTRAP_BIN" emit-pkg-c --driver=tool target/release/vox.c; then
-      "$CC_BASH" -v -std=c11 -O0 -g target/release/vox.c -o target/release/vox -lws2_32 -static -Wl,--stack,8388608
+  if [[ -n "$TARGET_ARG" ]]; then
+    if "$BOOTSTRAP_BIN" build --driver=tool "$TARGET_ARG" target/release/vox; then
+      :
     else
-      "$BOOTSTRAP_BIN" build-pkg --driver=tool target/release/vox
+      "$BOOTSTRAP_BIN" build-pkg --driver=tool "$TARGET_ARG" target/release/vox
     fi
   else
-    if [[ -n "$TARGET_ARG" ]]; then
-      "$BOOTSTRAP_BIN" build-pkg --driver=tool "$TARGET_ARG" target/release/vox
+    if "$BOOTSTRAP_BIN" build --driver=tool target/release/vox; then
+      :
     else
       "$BOOTSTRAP_BIN" build-pkg --driver=tool target/release/vox
     fi

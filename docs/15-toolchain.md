@@ -3,14 +3,13 @@
 主命令：`vox`（默认构建输出名）
 
 ```bash
-vox emit-c    [--driver=user|tool] <out.c>   <src...>
 vox build     [--driver=user|tool] [--artifact=exe|static|shared] [--target=<value>] [out.bin]
 vox test      [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] [out.bin]
+vox run       [--driver=user|tool] [--artifact=exe] [--target=<value>] [--emit-c[=<path>]] [out.bin]
 vox install   [--target=<value>] [out.bin]
-vox build-src [--driver=user|tool] [--artifact=exe|static|shared] [--target=<value>] <out.bin> <src...>
-vox build-pkg [out.bin]   # 兼容别名
-vox test-pkg  [out.bin]   # 兼容别名
-vox list-pkg  [--json]
+vox list      [--json]
+vox fmt       [--check] [path...]
+vox lsp
 vox toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
 vox version | --version | -V
 ```
@@ -19,17 +18,14 @@ vox version | --version | -V
 
 - `vox build`：构建当前项目（`./src`），默认输出 `target/debug/<package_name>`。
 - `vox test`：测试当前项目（`./src` + `./tests`），默认输出 `target/debug/<package_name>`。
+- `vox run`：按 `vox build` 构建后运行产物（二进制或 `wasm32-wasi` runner）。
 - `vox install`：先按 `vox build` 构建，再安装到 `~/.vox/bin/<package_name>`（仅宿主目标）。
-- `vox build-src`：显式源码列表构建（旧 `build <out> <src...>` 语义）。
-
-兼容别名：
-
-- `vox build-pkg` 等价于 `vox build`
-- `vox test-pkg` 等价于 `vox test`
 
 `vox version` 解析顺序：`VOX_BUILD_VERSION`（若设置）优先；否则在 git 仓库中推导为 `X.Y.Z[-dirty]-<n>+g<sha>`（命中 tag 且干净时输出 `X.Y.Z`）；无 git 时 `release` 构建输出 `X.Y.Z`，普通源码包输出 `X.Y.Z+src`。
 
 产物类型：`--artifact=exe|static|shared`，默认 `exe`。
+
+生成 C：`vox build/test/run --emit-c[=<path>]`。
 
 标准库定位：
 
@@ -63,7 +59,6 @@ make test          # test-active + examples smoke
 - `scripts/ci/check-std-intrinsics.sh`
   - 校验 `src/std` 中使用的保留 intrinsic（`__*`）是否在 `scripts/release/bootstrap-intrinsics.allow` 中。
   - 防止标准库提前依赖尚未进入锁定 bootstrap 的 intrinsic，导致滚动自举首跳失败。
-- `scripts/ci/verify-p0p1.sh`
 
 ## 发布与滚动自举
 

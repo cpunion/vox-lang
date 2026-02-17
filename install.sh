@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="${VOX_INSTALL_REPO:-cpunion/vox-lang}"
-MODE="download" # download | local
+MODE="" # download | local (auto if empty)
 VERSION="${VOX_INSTALL_VERSION:-}"
 PLATFORM="${VOX_INSTALL_PLATFORM:-}"
 INSTALL_DIR="${VOX_INSTALL_DIR:-$HOME/.vox}"
@@ -10,6 +10,7 @@ BIN_DIR="${VOX_INSTALL_BIN_DIR:-$INSTALL_DIR/bin}"
 CACHE_DIR="${VOX_INSTALL_CACHE_DIR:-$INSTALL_DIR/cache/downloads}"
 SKIP_RC=0
 USE_CACHE=1
+MODE_SET=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -22,13 +23,13 @@ usage() {
 Install vox compiler.
 
 Usage:
-  bash install.sh [--local] [--version vX.Y.Z] [--platform <os-arch>]
+  bash install.sh [--local|--download] [--version vX.Y.Z] [--platform <os-arch>]
   curl -fsSL https://raw.githubusercontent.com/cpunion/vox-lang/main/install.sh | bash
   curl -fsSL https://raw.githubusercontent.com/cpunion/vox-lang/main/install.sh | bash -s -- --version v0.2.8
 
 Options:
-  --local                 Build from local repo (rolling selfhost) then install.
-  --download              Download release binary (default).
+  --local                 Build from local vox-lang repo (rolling selfhost) then install.
+  --download              Force release-binary install.
   --version <tag>         Release tag, e.g. v0.2.8 (default: latest).
   --platform <os-arch>    e.g. darwin-arm64, linux-amd64, windows-amd64.
   --repo <owner/repo>     GitHub repo (default: cpunion/vox-lang).
@@ -36,8 +37,11 @@ Options:
   --cache-dir <dir>       Download cache dir (default: ~/.vox/cache/downloads).
   --no-cache              Disable download cache.
   --skip-rc               Do not modify shell rc files.
-  --force                 Deprecated (overwrite is default).
   -h, --help              Show help.
+
+Default mode:
+  - Local mode when install.sh lives in vox-lang repo root.
+  - Download mode otherwise (including curl | bash).
 USAGE
 }
 
@@ -253,6 +257,20 @@ export VOX_STDLIB="${VOX_STDLIB:-$VOX_HOME/lib}"
 EOF_RC
 }
 
+is_local_vox_repo_root() {
+  [[ -f "$SCRIPT_DIR/vox.toml" ]] || return 1
+  [[ -f "$SCRIPT_DIR/src/main.vox" ]] || return 1
+  grep -Eq '^[[:space:]]*name[[:space:]]*=[[:space:]]*"vox"[[:space:]]*$' "$SCRIPT_DIR/vox.toml"
+}
+
+detect_default_mode() {
+  if is_local_vox_repo_root; then
+    printf 'local\n'
+  else
+    printf 'download\n'
+  fi
+}
+
 install_binary() {
   local src="$1"
   local dst_name="$2"
@@ -407,10 +425,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --local)
       MODE="local"
+      MODE_SET=1
       shift
       ;;
     --download)
       MODE="download"
+      MODE_SET=1
       shift
       ;;
     --version)
@@ -446,10 +466,6 @@ while [[ $# -gt 0 ]]; do
       SKIP_RC=1
       shift
       ;;
-    --force)
-      warn "--force is deprecated; overwrite is already the default behavior"
-      shift
-      ;;
     -h|--help)
       usage
       exit 0
@@ -461,6 +477,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 require_cmd tar
+
+if [[ "$MODE_SET" -ne 1 ]]; then
+  MODE="$(detect_default_mode)"
+fi
 
 if [[ "$MODE" == "local" ]]; then
   install_from_local_build
