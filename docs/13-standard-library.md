@@ -10,7 +10,7 @@
 - `std::process`：最小进程能力（args/exec/exe_path/getenv；用于 编译器工具链自举）
 - `std::time`：最小时钟能力（`now_ns`；用于测试与工具链计时）
 - `std::sync`：并发原语（`Mutex[T]/Atomic[T]` 泛型 API）
-- `std::async`：pull 模型异步核心（`Poll[T]`、`Future`、`Context`、`Waker`）
+- `std::async`：pull 模型异步核心（`Poll[T]`、`Future`、`Context`、`Waker`、`Runtime`、`pending_wait_with`）
 - `std::collections`：`Vec`、`Map` 等
 - `std::io`：输出 + 最小文件抽象 + 最小 TCP 抽象
 - `std::net`：URL/Query/HTTP 文本编解码 + 基于 TCP 的最小 HTTP roundtrip
