@@ -1,113 +1,5 @@
-import "std/fs" as fs
-import "std/dotenv" as dotenv
 import "std/process" as proc
-import "std/string" as s
-
-fn load_openai_api_key() -> String {
-  let env_key: String = proc.getenv("OPENAI_API_KEY");
-  if env_key != "" { return env_key; }
-
-  let local: String = dotenv.value(".env", "OPENAI_API_KEY");
-  if local != "" { return local; }
-
-  let sibling: String = dotenv.value("../vox_claw/.env", "OPENAI_API_KEY");
-  if sibling != "" { return sibling; }
-
-  return dotenv.value("../../.env", "OPENAI_API_KEY");
-}
-
-fn json_escape(raw: String) -> String {
-  let mut out: String = "";
-  let mut i: i32 = 0;
-  while i < raw.len() {
-    let ch: i32 = raw.byte_at(i);
-    if ch == 34 {
-      out = out.concat("\\\"");
-    } else if ch == 92 {
-      out = out.concat("\\\\");
-    } else if ch == 10 {
-      out = out.concat("\\n");
-    } else if ch == 13 {
-      out = out.concat("\\r");
-    } else if ch == 9 {
-      out = out.concat("\\t");
-    } else {
-      out = out.concat(raw.slice(i, i + 1));
-    }
-    i = i + 1;
-  }
-  return out;
-}
-
-fn json_unescape(raw: String) -> String {
-  let mut out: String = "";
-  let mut i: i32 = 0;
-  while i < raw.len() {
-    let ch: i32 = raw.byte_at(i);
-    if ch == 92 && i + 1 < raw.len() {
-      let nx: i32 = raw.byte_at(i + 1);
-      if nx == 110 {
-        out = out.concat("\n");
-      } else if nx == 114 {
-        out = out.concat("\r");
-      } else if nx == 116 {
-        out = out.concat("\t");
-      } else if nx == 34 {
-        out = out.concat("\"");
-      } else if nx == 92 {
-        out = out.concat("\\");
-      } else {
-        out = out.concat(raw.slice(i + 1, i + 2));
-      }
-      i = i + 2;
-    } else {
-      out = out.concat(raw.slice(i, i + 1));
-      i = i + 1;
-    }
-  }
-  return out;
-}
-
-fn json_first_string_field(line: String, field: String) -> String {
-  let key: String = "\"".concat(field).concat("\"");
-  let at: i32 = s.index_of(s.view_all(line), key);
-  if at < 0 { return ""; }
-
-  let mut i: i32 = at + key.len();
-  while i < line.len() {
-    let ch: i32 = line.byte_at(i);
-    if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
-      i = i + 1;
-    } else {
-      break;
-    }
-  }
-  if i >= line.len() || line.byte_at(i) != 58 { return ""; }
-  i = i + 1;
-  while i < line.len() {
-    let ch: i32 = line.byte_at(i);
-    if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
-      i = i + 1;
-    } else {
-      break;
-    }
-  }
-  if i >= line.len() || line.byte_at(i) != 34 { return ""; }
-  i = i + 1;
-  let mut raw: String = "";
-  while i < line.len() {
-    let ch: i32 = line.byte_at(i);
-    if ch == 34 { return json_unescape(raw); }
-    if ch == 92 && i + 1 < line.len() {
-      raw = raw.concat("\\").concat(line.slice(i + 1, i + 2));
-      i = i + 2;
-    } else {
-      raw = raw.concat(line.slice(i, i + 1));
-      i = i + 1;
-    }
-  }
-  return json_unescape(raw);
-}
+import "llm" as llm
 
 fn prompt_from_args() -> String {
   let argv: Vec[String] = proc.args();
@@ -130,66 +22,20 @@ fn main() -> i32 {
     return 2;
   }
 
-  let key: String = load_openai_api_key();
-  if key == "" {
+  let client: llm.Client = llm.new("openai:gpt-5-nano");
+  if !llm.has_api_key(client) {
     print("missing OPENAI_API_KEY (env or .env)\n");
     return 3;
   }
 
-  let base: String = "target/llmdemo";
-  let payload: String = base.concat("/request.json");
-  let headers: String = base.concat("/headers.txt");
-  let response: String = base.concat("/response.json");
-
-  fs.mkdir_p(base);
-
-  let body: String = "{\"model\":\"gpt-5-nano\",\"messages\":[{\"role\":\"user\",\"content\":\""
-    .concat(json_escape(prompt))
-    .concat("\"}]}");
-  fs.write_string(payload, body);
-
-  let hs: String = "Authorization: Bearer "
-    .concat(key)
-    .concat("\nContent-Type: application/json\n");
-  fs.write_string(headers, hs);
-
-  let cmd: String = "curl -sS https://api.openai.com/v1/chat/completions -H @"
-    .concat(headers)
-    .concat(" --data-binary @")
-    .concat(payload)
-    .concat(" > ")
-    .concat(response);
-
-  let rc: i32 = proc.exec(cmd);
-  if rc != 0 {
-    print("request failed, curl exit=");
-    print(rc.to_string());
+  let reply: String = llm.complete(client, prompt);
+  if llm.response_is_error(reply) {
+    print(reply);
     print("\n");
     return 4;
   }
 
-  if !fs.exists(response) {
-    print("request failed: response file missing\n");
-    return 5;
-  }
-
-  let raw: String = fs.read_to_string(response);
-  let content: String = json_first_string_field(raw, "content");
-  if content != "" {
-    print(content);
-    print("\n");
-    return 0;
-  }
-
-  let msg: String = json_first_string_field(raw, "message");
-  if msg != "" {
-    print("openai error: ");
-    print(msg);
-    print("\n");
-    return 6;
-  }
-
-  print(raw);
+  print(reply);
   print("\n");
   return 0;
 }

@@ -26,6 +26,7 @@ Stage1 当前可解析：
 ```
 my_app/
   vox.toml
+  pkgs/        # optional reusable packages workspace
   src/
     main.vox   # 可执行入口
   tests/
@@ -43,7 +44,7 @@ Stage1 当前能力：
 
 ## 锁文件：`vox.lock`
 
-Stage2 在 `build` / `test`（兼容别名：`build-pkg` / `test-pkg`）成功解析依赖后会写出 `vox.lock`，并在后续构建时做完整性校验。当前字段包含：
+Stage2 在 `build` / `test` 成功解析依赖后会写出 `vox.lock`，并在后续构建时做完整性校验。当前字段包含：
 
 - `name`
 - `source`（`path` / `git` / `registry`）
@@ -61,6 +62,6 @@ Stage2 在 `build` / `test`（兼容别名：`build-pkg` / `test-pkg`）成功�
   - `missing dependency in vox.lock: dep`
   - `unexpected dependency in vox.lock: dep`
   - `dependency count mismatch: lock=1 resolved=2`
-- `build` 与 `test`（兼容别名同样生效）会输出一致 remediation hint：
+- `build` 与 `test` 会输出一致 remediation hint：
   - `hint: refresh lockfile after dependency changes: remove vox.lock then rerun build/test.`
 - 这样可以防止“依赖内容悄悄变化但版本号不变”的非可复现构建。

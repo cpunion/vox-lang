@@ -1,8 +1,7 @@
 // Vox compiler entry.
 //
-// Minimal CLI (v0):
-// - emit-c <out.c> <src1.vox> <src2.vox> ...
-// - build  <out.bin> <src1.vox> <src2.vox> ...
+// Minimal CLI:
+// - build/test/run/install/list/fmt/lsp/version
 
 import "std/process" as proc
 import "std/fs" as fs
@@ -547,11 +546,15 @@ fn cc_cmdline_for_target(host_os: String, host_arch: String, target_os: String, 
 }
 
 fn cmd_supports_target(cmd: String) -> bool {
-  return cmd == "build" || cmd == "build-pkg" || cmd == "build-src" || cmd == "test" || cmd == "test-pkg" || cmd == "install" || cmd == "install-pkg";
+  return cmd == "build" || cmd == "test" || cmd == "run" || cmd == "install";
 }
 
 fn cmd_supports_artifact(cmd: String) -> bool {
-  return cmd == "build" || cmd == "build-pkg" || cmd == "build-src" || cmd == "install" || cmd == "install-pkg";
+  return cmd == "build" || cmd == "run" || cmd == "install";
+}
+
+fn cmd_supports_emit_c(cmd: String) -> bool {
+  return cmd == "build" || cmd == "test" || cmd == "run";
 }
 
 fn usage() -> () {
@@ -559,42 +562,41 @@ fn usage() -> () {
   print(bin.concat(" usage:\n"));
   print("  ".concat(bin).concat(" build [--driver=user|tool] [--artifact=exe|static|shared] [--target=<value>] [out.bin]\n"));
   print("  ".concat(bin).concat(" test  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] [out.bin]\n"));
+  print("  ".concat(bin).concat(" run   [--driver=user|tool] [--artifact=exe] [--target=<value>] [out.bin]\n"));
   print("  ".concat(bin).concat(" install [--target=<value>] [out.bin]   # build local pkg and install to ~/.vox/bin\n"));
+  print("  ".concat(bin).concat(" list [--json]       # print package module dependency graph\n"));
   print("  ".concat(bin).concat(" fmt [--check] [path...]\n"));
   print("  ".concat(bin).concat(" lsp                   # start language server (stdio)\n"));
-  print("  ".concat(bin).concat(" build-src <out.bin> <src...>           # explicit source-list build (legacy)\n"));
-  print("  ".concat(bin).concat(" emit-c <out.c> <src...>\n"));
-  print("  ".concat(bin).concat(" emit-pkg-c <out.c>   # emit C from ./src\n"));
-  print("  ".concat(bin).concat(" build-pkg [out.bin]   # build from ./src (compat)\n"));
-  print("  ".concat(bin).concat(" test-pkg  [out.bin]   # build+run tests from ./src and ./tests (compat)\n"));
-  print("  ".concat(bin).concat(" list-pkg              # print package module dependency graph\n"));
   print("  ".concat(bin).concat(" toolchain <subcmd>    # install/use/pin/current/list\n"));
   print("  ".concat(bin).concat(" version               # print embedded compiler version\n"));
   print("\n");
   print("flags:\n");
   print("  --driver=user|tool  driver main mode for emitted binaries (default: user)\n");
-  print("  --module=<glob>     test-pkg: keep tests by module glob (e.g. typecheck, parse, root)\n");
-  print("  --run=<glob>        test-pkg: run tests by glob on qualified/short name (*, ?)\n");
-  print("  --filter=<text>     test-pkg: keep tests whose name contains text\n");
-  print("  --jobs=N, -j N      test-pkg: module-level parallelism; module-internal remains serial\n");
-  print("  --fail-fast         test-pkg: stop scheduling new tests after first failure\n");
-  print("  --list              test-pkg: list selected tests and exit\n");
-  print("  --rerun-failed      test-pkg: run only previously failed tests\n");
-  print("  --json              test-pkg/list-pkg: print JSON report\n");
-  print("  --target=<value>    build/test/install: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc, i686-w64-mingw32, wasm32-unknown-unknown)\n");
-  print("  --artifact=<kind>   build/build-pkg/install: artifact kind (exe|static|shared)\n");
+  print("  --module=<glob>     test: keep tests by module glob (e.g. typecheck, parse, root)\n");
+  print("  --run=<glob>        test: run tests by glob on qualified/short name (*, ?)\n");
+  print("  --filter=<text>     test: keep tests whose name contains text\n");
+  print("  --jobs=N, -j N      test: module-level parallelism; module-internal remains serial\n");
+  print("  --fail-fast         test: stop scheduling new tests after first failure\n");
+  print("  --list              test: list selected tests and exit\n");
+  print("  --rerun-failed      test: run only previously failed tests\n");
+  print("  --json              test/list: print JSON report\n");
+  print("  --target=<value>    build/test/run/install: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc, i686-w64-mingw32, wasm32-unknown-unknown)\n");
+  print("  --artifact=<kind>   build/run/install: artifact kind (exe|static|shared)\n");
+  print("  --emit-c[=<path>]   build/test/run: write generated C (default keeps compiler C output path)\n");
+  print("  -x                  print external commands before execution\n");
   print("  --version, -V       print embedded compiler version\n");
   print("\n");
   print("env:\n");
   print("  VOX_CC_DEBUG=1      enable C compiler debug symbols (-g / /Zi)\n");
   print("  VOX_PROFILE=1       print compile/cc phase timings for build commands\n");
+  print("  VOX_ROOT=<path>     source root override for loading src/std and src/vox\n");
   print("  VOX_STDLIB=<path>   stdlib root override (highest priority; supports root, root/src, root/src/std)\n");
   print("  VOX_NODE=<path>     node executable for `vox lsp` (default: node)\n");
 }
 
 fn print_invalid_lock_error(msg: String) -> () {
   print("invalid vox.lock: ".concat(msg).concat("\n"));
-  print("hint: refresh lockfile after dependency changes: remove vox.lock then rerun build-pkg/test-pkg.\n");
+  print("hint: refresh lockfile after dependency changes: remove vox.lock then rerun build/test.\n");
 }
 
 fn has_prefix(s: String, pre: String) -> bool {
@@ -623,6 +625,15 @@ fn has_std_under_src(paths: Vec[String]) -> bool {
   let mut i: i32 = 0;
   while i < paths.len() {
     if has_prefix(paths.get(i), "src/std/") { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn has_vox_under_src(paths: Vec[String]) -> bool {
+  let mut i: i32 = 0;
+  while i < paths.len() {
+    if has_prefix(paths.get(i), "src/vox/") { return true; }
     i = i + 1;
   }
   return false;
@@ -670,7 +681,7 @@ fn dir_name(p: String) -> String {
 
 fn build_rerun_hint(out: String, jobs: i32, fail_fast: bool) -> String {
   let exe_name: String = path_base_name(proc.exe_path());
-  let mut cmd: String = exe_name.concat(" test-pkg --rerun-failed");
+  let mut cmd: String = exe_name.concat(" test --rerun-failed");
   if jobs > 1 {
     cmd = cmd.concat(" --jobs=").concat(jobs.to_string());
   }
@@ -678,6 +689,28 @@ fn build_rerun_hint(out: String, jobs: i32, fail_fast: bool) -> String {
     cmd = cmd.concat(" --fail-fast");
   }
   return cmd.concat(" ").concat(out);
+}
+
+fn exec_cmd(cmd: String, trace: bool) -> i32 {
+  if trace {
+    print("+ ".concat(cmd).concat("\n"));
+  }
+  return proc.exec(cmd);
+}
+
+fn write_emit_c_text(enabled: bool, emit_path: String, default_cpath: String, c_text: String) -> () {
+  if !enabled { return; }
+  if emit_path == "" || emit_path == default_cpath { return; }
+  fs.mkdir_p(dir_name(emit_path));
+  fs.write_string(emit_path, c_text);
+}
+
+fn copy_emit_c_from_file(enabled: bool, emit_path: String, default_cpath: String) -> () {
+  if !enabled { return; }
+  if emit_path == "" || emit_path == default_cpath { return; }
+  if !fs.exists(default_cpath) { return; }
+  fs.mkdir_p(dir_name(emit_path));
+  fs.write_string(emit_path, fs.read_to_string(default_cpath));
 }
 
 fn path_join(a: String, b: String) -> String {
@@ -1454,7 +1487,7 @@ fn pick_runnable_queue_idx(qs: Vec[ModuleQueue], rs: Vec[RunningJob]) -> i32 {
   return -1;
 }
 
-fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test_name: String, runner_cmd: String) -> RunningJob {
+fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test_name: String, runner_cmd: String, trace: bool) -> RunningJob {
   let tag: String = module_idx.to_string().concat("_").concat(seq.to_string());
   let rc_file: String = path_join(run_dir, "job_".concat(tag).concat(".rc"));
   let log_file: String = path_join(run_dir, "job_".concat(tag).concat(".log"));
@@ -1471,7 +1504,7 @@ fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test
   let log_redir: String = " > ".concat(shell_quote(shell_exec_path(log_file))).concat(" 2>&1");
   if host_is_windows() {
     let run_cmd_win: String = cmd_head_win.concat(" > ").concat(shell_exec_path(log_file)).concat(" 2>&1");
-    let rc: i32 = proc.exec(run_cmd_win);
+    let rc: i32 = exec_cmd(run_cmd_win, trace);
     fs.write_string(rc_file, if rc == 0 { "0" } else { "1" });
     return RunningJob {
       module_idx: module_idx,
@@ -1486,7 +1519,7 @@ fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test
   .concat(" && echo 0 > ").concat(shell_quote(shell_exec_path(rc_file)))
   .concat(" || echo 1 > ").concat(shell_quote(shell_exec_path(rc_file)));
   let bg_cmd: String = "( ".concat(run_cmd).concat(" ) &");
-  let _rc: i32 = proc.exec(bg_cmd);
+  let _rc: i32 = exec_cmd(bg_cmd, trace);
   return RunningJob {
     module_idx: module_idx,
     name: test_name,
@@ -2220,6 +2253,21 @@ fn load_stage1_std_from_repo_root(root: String) -> Vec[ld.SourceFile] {
   return out;
 }
 
+fn load_stage1_vox_from_repo_root(root: String) -> Vec[ld.SourceFile] {
+  let rels: Vec[String] = fs.walk_vox_files(root);
+  let mut out: Vec[ld.SourceFile] = Vec();
+  let mut i: i32 = 0;
+  while i < rels.len() {
+    let rel: String = rels.get(i);
+    if has_prefix(rel, "src/vox/") && !is_test_path(rel) {
+      let full: String = path_join(root, rel);
+      out.push(ld.SourceFile { path: rel, text: fs.read_to_string(full) });
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
 fn normalize_std_search_root(root0: String) -> String {
   let root: String = path_with_forward_slashes(root0);
   if has_suffix(root, "/src/std") {
@@ -2236,7 +2284,18 @@ fn load_stage1_std_from_root(root0: String) -> Vec[ld.SourceFile] {
   return load_stage1_std_from_repo_root(root);
 }
 
+fn load_stage1_vox_from_root(root0: String) -> Vec[ld.SourceFile] {
+  let root: String = normalize_std_search_root(root0);
+  return load_stage1_vox_from_repo_root(root);
+}
+
 fn load_stage1_std() -> Vec[ld.SourceFile] {
+  let env_vox_root: String = trim_space_main(proc.getenv("VOX_ROOT"));
+  if env_vox_root != "" {
+    let from_root_env: Vec[ld.SourceFile] = load_stage1_std_from_root(env_vox_root);
+    if from_root_env.len() > 0 { return from_root_env; }
+  }
+
   let env_root: String = trim_space_main(proc.getenv("VOX_STDLIB"));
   if env_root != "" {
     let from_env: Vec[ld.SourceFile] = load_stage1_std_from_root(env_root);
@@ -2264,6 +2323,15 @@ fn load_stage1_std() -> Vec[ld.SourceFile] {
   if from_src.len() > 0 { return from_src; }
   let from_lib: Vec[ld.SourceFile] = load_stage1_std_from_root(path_join(root, "lib"));
   if from_lib.len() > 0 { return from_lib; }
+  return Vec();
+}
+
+fn load_stage1_vox() -> Vec[ld.SourceFile] {
+  let env_vox_root: String = trim_space_main(proc.getenv("VOX_ROOT"));
+  if env_vox_root != "" {
+    let from_env_root: Vec[ld.SourceFile] = load_stage1_vox_from_root(env_vox_root);
+    if from_env_root.len() > 0 { return from_env_root; }
+  }
   return Vec();
 }
 
@@ -2387,7 +2455,7 @@ fn default_install_bin_dir() -> String {
   return path_join(path_join(home_dir_main(), ".vox"), "bin");
 }
 
-fn copy_file_host(src: String, dst: String) -> bool {
+fn copy_file_host(src: String, dst: String, trace: bool) -> bool {
   let mut cmd: String = "";
   if host_is_windows() {
     cmd =
@@ -2402,7 +2470,7 @@ fn copy_file_host(src: String, dst: String) -> bool {
     .concat(" ")
     .concat(shell_quote(shell_exec_path(dst)));
   }
-  return proc.exec(cmd) == 0;
+  return exec_cmd(cmd, trace) == 0;
 }
 
 fn fmt_args_paths(args: Vec[String]) -> Vec[String] {
@@ -2488,7 +2556,7 @@ fn lsp_server_script() -> String {
   return "";
 }
 
-fn cmd_lsp() -> i32 {
+fn cmd_lsp(trace: bool) -> i32 {
   let script: String = lsp_server_script();
   if script == "" {
     print("lsp server script not found under tools/lsp or tools/vscode/vox-lang/server\n");
@@ -2500,7 +2568,7 @@ fn cmd_lsp() -> i32 {
   shell_quote(node)
   .concat(" ")
   .concat(shell_quote(shell_exec_path(script)));
-  let rc: i32 = proc.exec(cmd);
+  let rc: i32 = exec_cmd(cmd, trace);
   if rc != 0 {
     print("lsp server exited with code ".concat(rc.to_string()).concat("\n"));
   }
@@ -2508,12 +2576,21 @@ fn cmd_lsp() -> i32 {
 }
 
 fn main() -> i32 {
-  let args: Vec[String] = proc.args();
+  let raw_args: Vec[String] = proc.args();
+  let mut trace_exec: bool = false;
+  let mut args: Vec[String] = raw_args;
+  if args.len() > 0 && args.get(0) == "-x" {
+    trace_exec = true;
+    args = slice_vec(args, 1);
+  }
   let mut args_for_route: Vec[String] = Vec();
   let mut ari: i32 = 0;
   while ari < args.len() {
     args_for_route.push(args.get(ari));
     ari = ari + 1;
+  }
+  if trace_exec {
+    args_for_route.push("-x");
   }
   let routed: ToolchainRouteResult = maybe_handle_toolchain_or_reroute(args_for_route);
   if routed.handled { return routed.code; }
@@ -2528,26 +2605,37 @@ fn main() -> i32 {
     return 0;
   }
   let mut cmd: String = cmd_in;
-  if cmd == "test" { cmd = "test-pkg"; }
-  if cmd == "install" { cmd = "install-pkg"; }
-  if cmd == "build" { cmd = "build-pkg"; }
   if cmd == "fmt" {
     let mut fmt_args: Vec[String] = Vec();
     let mut i_fmt: i32 = 1;
     while i_fmt < args.len() {
-      fmt_args.push(args.get(i_fmt));
+      if args.get(i_fmt) == "-x" {
+        trace_exec = true;
+      } else {
+        fmt_args.push(args.get(i_fmt));
+      }
       i_fmt = i_fmt + 1;
     }
     return cmd_fmt(fmt_args);
   }
   if cmd == "lsp" {
+    if args.len() == 2 && args.get(1) == "-x" {
+      trace_exec = true;
+      return cmd_lsp(trace_exec);
+    }
     if args.len() != 1 {
       usage();
       print("unexpected args for lsp\n");
       return 1;
     }
-    return cmd_lsp();
+    return cmd_lsp(trace_exec);
   }
+  if cmd != "build" && cmd != "test" && cmd != "run" && cmd != "install" && cmd != "list" {
+    usage();
+    print("unknown command\n");
+    return 1;
+  }
+
   let mut driver: cg.DriverMainKind = cg.DriverMainKind.User;
   let mut test_module_pat: String = "";
   let mut test_run_pat: String = "";
@@ -2559,11 +2647,17 @@ fn main() -> i32 {
   let mut test_json: bool = false;
   let mut target_flag: String = "";
   let mut artifact_flag: String = "";
+  let mut emit_c_enabled: bool = false;
+  let mut emit_c_path: String = "";
   let mut out: String = "";
-  let mut src_start: i32 = -1;
   let mut i: i32 = 1;
   while i < args.len() {
     let a: String = args.get(i);
+    if a == "-x" {
+      trace_exec = true;
+      i = i + 1;
+      continue;
+    }
     if has_prefix(a, "--driver=") {
       let v: String = a.slice(9, a.len());
       if v == "user" { driver = cg.DriverMainKind.User; i = i + 1; continue; }
@@ -2573,7 +2667,7 @@ fn main() -> i32 {
       return 1;
     }
     if has_prefix(a, "--run=") {
-      if cmd != "test-pkg" {
+      if cmd != "test" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2583,7 +2677,7 @@ fn main() -> i32 {
       continue;
     }
     if a == "--run" {
-      if cmd != "test-pkg" {
+      if cmd != "test" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2598,7 +2692,7 @@ fn main() -> i32 {
       continue;
     }
     if has_prefix(a, "--module=") {
-      if cmd != "test-pkg" {
+      if cmd != "test" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2608,7 +2702,7 @@ fn main() -> i32 {
       continue;
     }
     if a == "--module" {
-      if cmd != "test-pkg" {
+      if cmd != "test" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2623,7 +2717,7 @@ fn main() -> i32 {
       continue;
     }
     if a == "-j" || a == "--jobs" {
-      if cmd != "test-pkg" {
+      if cmd != "test" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2644,7 +2738,7 @@ fn main() -> i32 {
       continue;
     }
     if has_prefix(a, "--jobs=") {
-      if cmd != "test-pkg" {
+      if cmd != "test" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2660,7 +2754,7 @@ fn main() -> i32 {
       continue;
     }
     if has_prefix(a, "--filter=") {
-      if cmd != "test-pkg" {
+      if cmd != "test" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2670,7 +2764,7 @@ fn main() -> i32 {
       continue;
     }
     if a == "--filter" {
-      if cmd != "test-pkg" {
+      if cmd != "test" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2685,7 +2779,7 @@ fn main() -> i32 {
       continue;
     }
     if a == "--fail-fast" {
-      if cmd != "test-pkg" {
+      if cmd != "test" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2695,7 +2789,7 @@ fn main() -> i32 {
       continue;
     }
     if a == "--list" {
-      if cmd != "test-pkg" {
+      if cmd != "test" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2705,7 +2799,7 @@ fn main() -> i32 {
       continue;
     }
     if a == "--rerun-failed" {
-      if cmd != "test-pkg" {
+      if cmd != "test" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2715,7 +2809,7 @@ fn main() -> i32 {
       continue;
     }
     if a == "--json" {
-      if cmd != "test-pkg" && cmd != "list-pkg" {
+      if cmd != "test" && cmd != "list" {
         usage();
         print("unknown flag: ".concat(a).concat("\n"));
         return 1;
@@ -2774,40 +2868,49 @@ fn main() -> i32 {
       i = i + 2;
       continue;
     }
+    if has_prefix(a, "--emit-c=") {
+      if !cmd_supports_emit_c(cmd.slice(0, cmd.len())) {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      emit_c_enabled = true;
+      emit_c_path = a.slice(9, a.len());
+      i = i + 1;
+      continue;
+    }
+    if a == "--emit-c" {
+      if !cmd_supports_emit_c(cmd.slice(0, cmd.len())) {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      emit_c_enabled = true;
+      i = i + 1;
+      continue;
+    }
     if has_prefix(a, "-") {
       usage();
       print("unknown flag: ".concat(a).concat("\n"));
       return 1;
     }
-    if cmd == "test-pkg" || cmd == "install-pkg" {
-      if out != "" {
-        usage();
-        print("unexpected positional arg for ".concat(cmd).concat(": ").concat(a).concat("\n"));
-        return 1;
-      }
-      out = a;
-      i = i + 1;
-      continue;
-    }
-    if cmd == "list-pkg" {
+    if cmd == "list" {
       usage();
-      print("unexpected positional arg for list-pkg: ".concat(a).concat("\n"));
+      print("unexpected positional arg for list: ".concat(a).concat("\n"));
+      return 1;
+    }
+    if out != "" {
+      usage();
+      print("unexpected positional arg for ".concat(cmd).concat(": ").concat(a).concat("\n"));
       return 1;
     }
     out = a;
-    src_start = i + 1;
-    i = args.len();
-    continue;
-  }
-  if (cmd == "build-pkg" || cmd == "install-pkg") && src_start >= 0 && src_start < args.len() {
-    usage();
-    print("unexpected positional args for ".concat(cmd).concat(": use `build-src` for explicit source files\n"));
-    return 1;
+    i = i + 1;
   }
   if out == "" {
-    if cmd == "build-pkg" || cmd == "test-pkg" || cmd == "install-pkg" {
+    if cmd == "build" || cmd == "test" || cmd == "run" || cmd == "install" {
       out = default_pkg_out_base();
-    } else if cmd != "list-pkg" {
+    } else if cmd != "list" {
       usage();
       print("missing out path\n");
       return 1;
@@ -2838,9 +2941,14 @@ fn main() -> i32 {
   let profile_on: bool = compile_profile_enabled();
 
   if target_os == "wasm" {
-    if cmd == "test-pkg" && target_abi != "wasi" {
+    if cmd == "test" && target_abi != "wasi" {
       usage();
-      print("invalid --target for test-pkg: wasm target requires wasm32-wasi runner mode\n");
+      print("invalid --target for test: wasm target requires wasm32-wasi runner mode\n");
+      return 1;
+    }
+    if cmd == "run" && target_abi != "wasi" {
+      usage();
+      print("invalid --target for run: wasm run requires wasm32-wasi\n");
       return 1;
     }
     if cmd_supports_artifact(cmd) && artifact != "exe" {
@@ -2849,8 +2957,13 @@ fn main() -> i32 {
       return 1;
     }
   }
+  if cmd == "run" && target_os != "wasm" && (target_os != host_os || target_arch != host_arch) {
+    usage();
+    print("invalid --target for run: only host target is supported\n");
+    return 1;
+  }
 
-  if cmd == "list-pkg" {
+  if cmd == "list" {
     let all: Vec[String] = fs.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_sources(all);
     let mut paths_for_std: Vec[String] = Vec();
@@ -2859,7 +2972,21 @@ fn main() -> i32 {
       paths_for_std.push(paths.get(psi));
       psi = psi + 1;
     }
+    let mut paths_for_vox: Vec[String] = Vec();
+    let mut psv: i32 = 0;
+    while psv < paths_for_std.len() {
+      paths_for_vox.push(paths_for_std.get(psv));
+      psv = psv + 1;
+    }
     let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths_for_std) { Vec() } else { load_stage1_std() };
+    if !has_vox_under_src(paths_for_vox) {
+      let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
+      let mut pvi: i32 = 0;
+      while pvi < preload_vox.len() {
+        files.push(preload_vox.get(pvi));
+        pvi = pvi + 1;
+      }
+    }
     let dr: DepsResult = load_deps_from_manifest();
     if !dr.ok {
       print("invalid vox.toml: ".concat(dr.err).concat("\n"));
@@ -2884,81 +3011,7 @@ fn main() -> i32 {
     return 0;
   }
 
-  if cmd == "emit-c" {
-    let mut srcs_emit: Vec[String] = Vec();
-    if src_start >= 0 {
-      let mut sei: i32 = src_start;
-      while sei < args.len() {
-        srcs_emit.push(args.get(sei));
-        sei = sei + 1;
-      }
-    }
-    if srcs_emit.len() == 0 { usage(); print("missing sources\n"); return 1; }
-    let mut files: Vec[ld.SourceFile] = load_stage1_std();
-    let user: Vec[ld.SourceFile] = load_files(srcs_emit);
-    let mut ui: i32 = 0;
-    while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let cp: c.CompileProfileResult =
-    c.compile_files_to_c_profile(files, cg.EmitOptions { emit_driver_main: true, driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
-    let r: c.CompileResult = cp.r;
-    if !r.ok {
-      print("compile failed: ".concat(r.err).concat("\n"));
-      return 1;
-    }
-    if profile_on { print_compile_profile("compile", cp.p); }
-    fs.write_string(out, r.c);
-    return 0;
-  }
-  if cmd == "build-src" {
-    let mut srcs_build: Vec[String] = Vec();
-    if src_start >= 0 {
-      let mut sbi: i32 = src_start;
-      while sbi < args.len() {
-        srcs_build.push(args.get(sbi));
-        sbi = sbi + 1;
-      }
-    }
-    if srcs_build.len() == 0 { usage(); print("missing sources\n"); return 1; }
-    let mut files: Vec[ld.SourceFile] = load_stage1_std();
-    let user: Vec[ld.SourceFile] = load_files(srcs_build);
-    let mut ui: i32 = 0;
-    while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let cpath: String = out.concat(".c");
-    let mut files_for_cache: Vec[ld.SourceFile] = Vec();
-    let mut fci: i32 = 0;
-    while fci < files.len() {
-      files_for_cache.push(files.get(fci));
-      fci = fci + 1;
-    }
-    let driver_key: String = if driver == cg.DriverMainKind.Tool { "tool" } else { "user" };
-    let emit_driver_key: String = if artifact == "exe" { "1" } else { "0" };
-    let build_mode: String = build_mode_text("build-src", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi, artifact);
-    let build_key: String = build_cache_key(files_for_cache, build_mode);
-    if !build_cache_hit(out, build_key, cpath, out) {
-      let cp: c.CompileProfileResult =
-      c.compile_files_to_c_profile(files, cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
-      let r: c.CompileResult = cp.r;
-      if !r.ok {
-        print("compile failed: ".concat(r.err).concat("\n"));
-        return 1;
-      }
-      if profile_on { print_compile_profile("compile", cp.p); }
-      fs.write_string(cpath, r.c);
-      let cmdline: String = cc_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), artifact, cpath, out);
-      let cc_t0: i64 = tm.now_ns();
-      let code: i32 = proc.exec(cmdline);
-      let cc_ns: i64 = dur_nonneg_ns(cc_t0, tm.now_ns());
-      if profile_on { print("[profile] cc: ".concat(format_duration_ns(cc_ns)).concat("\n")); }
-      if code != 0 {
-        print("cc failed: ".concat(cmdline).concat("\n"));
-        print("cc exit: ".concat(code.to_string()).concat("\n"));
-        return 1;
-      }
-      write_build_cache(out, build_key);
-    }
-    return 0;
-  }
-  if cmd == "emit-pkg-c" {
+  if cmd == "build" {
     let all: Vec[String] = fs.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_sources(all);
     let mut paths_for_std: Vec[String] = Vec();
@@ -2967,44 +3020,21 @@ fn main() -> i32 {
       paths_for_std.push(paths.get(psi));
       psi = psi + 1;
     }
-    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths_for_std) { Vec() } else { load_stage1_std() };
-    let dr: DepsResult = load_deps_from_manifest();
-    if !dr.ok {
-      print("invalid vox.toml: ".concat(dr.err).concat("\n"));
-      return 1;
-    }
-    let vr: LockVerifyResult = verify_lockfile_or_ok(dr.resolved);
-    if !vr.ok {
-      print_invalid_lock_error(vr.err);
-      return 1;
-    }
-    write_lockfile(dr.resolved);
-    let mut di: i32 = 0;
-    while di < dr.files.len() { files.push(dr.files.get(di)); di = di + 1; }
-    let user: Vec[ld.SourceFile] = load_files(paths);
-    let mut ui: i32 = 0;
-    while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let cp: c.CompileProfileResult =
-    c.compile_files_to_c_profile(files, cg.EmitOptions { emit_driver_main: true, driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
-    let r: c.CompileResult = cp.r;
-    if !r.ok {
-      print("compile failed: ".concat(r.err).concat("\n"));
-      return 1;
-    }
-    if profile_on { print_compile_profile("compile", cp.p); }
-    fs.write_string(out, r.c);
-    return 0;
-  }
-  if cmd == "build-pkg" {
-    let all: Vec[String] = fs.walk_vox_files(".");
-    let paths: Vec[String] = filter_pkg_sources(all);
-    let mut paths_for_std: Vec[String] = Vec();
-    let mut psi: i32 = 0;
-    while psi < paths.len() {
-      paths_for_std.push(paths.get(psi));
-      psi = psi + 1;
+    let mut paths_for_vox: Vec[String] = Vec();
+    let mut psv: i32 = 0;
+    while psv < paths_for_std.len() {
+      paths_for_vox.push(paths_for_std.get(psv));
+      psv = psv + 1;
     }
     let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths_for_std) { Vec() } else { load_stage1_std() };
+    if !has_vox_under_src(paths_for_vox) {
+      let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
+      let mut pvi: i32 = 0;
+      while pvi < preload_vox.len() {
+        files.push(preload_vox.get(pvi));
+        pvi = pvi + 1;
+      }
+    }
     let dr: DepsResult = load_deps_from_manifest();
     if !dr.ok {
       print("invalid vox.toml: ".concat(dr.err).concat("\n"));
@@ -3030,7 +3060,7 @@ fn main() -> i32 {
     }
     let driver_key: String = if driver == cg.DriverMainKind.Tool { "tool" } else { "user" };
     let emit_driver_key: String = if artifact == "exe" { "1" } else { "0" };
-    let build_mode: String = build_mode_text("build-pkg", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi, artifact);
+    let build_mode: String = build_mode_text("build", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi, artifact);
     let build_key: String = build_cache_key(files_for_cache, build_mode);
     if !build_cache_hit(out, build_key, cpath, out) {
       let cp: c.CompileProfileResult =
@@ -3042,9 +3072,10 @@ fn main() -> i32 {
       }
       if profile_on { print_compile_profile("compile", cp.p); }
       fs.write_string(cpath, r.c);
+      write_emit_c_text(emit_c_enabled, emit_c_path, cpath, r.c);
       let cmdline: String = cc_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), artifact, cpath, out);
       let cc_t0: i64 = tm.now_ns();
-      let code: i32 = proc.exec(cmdline);
+      let code: i32 = exec_cmd(cmdline, trace_exec);
       let cc_ns: i64 = dur_nonneg_ns(cc_t0, tm.now_ns());
       if profile_on { print("[profile] cc: ".concat(format_duration_ns(cc_ns)).concat("\n")); }
       if code != 0 {
@@ -3053,10 +3084,67 @@ fn main() -> i32 {
         return 1;
       }
       write_build_cache(out, build_key);
+    } else {
+      copy_emit_c_from_file(emit_c_enabled, emit_c_path, cpath);
     }
     return 0;
   }
-  if cmd == "install-pkg" {
+  if cmd == "run" {
+    if artifact != "exe" {
+      usage();
+      print("invalid --artifact for run: expected exe\n");
+      return 1;
+    }
+
+    let self_bin: String = normalize_host_fs_path(proc.exe_path());
+    let mut cmdline: String =
+    shell_quote(shell_exec_path(self_bin))
+    .concat(" build ")
+    .concat(shell_quote(out));
+    if driver == cg.DriverMainKind.Tool {
+      cmdline = cmdline.concat(" --driver=tool");
+    }
+    if target_flag != "" {
+      cmdline = cmdline.concat(" --target=").concat(shell_quote(target_flag));
+    }
+    if artifact_flag != "" {
+      cmdline = cmdline.concat(" --artifact=").concat(shell_quote(artifact_flag));
+    }
+    if emit_c_enabled {
+      if emit_c_path != "" {
+        cmdline = cmdline.concat(" --emit-c=").concat(shell_quote(emit_c_path));
+      } else {
+        cmdline = cmdline.concat(" --emit-c");
+      }
+    }
+    if trace_exec {
+      cmdline = cmdline.concat(" -x");
+    }
+    let rc_build: i32 = exec_cmd(cmdline, trace_exec);
+    if rc_build != 0 {
+      print("run build failed\n");
+      return rc_build;
+    }
+
+    let mut built: String = out;
+    if !fs.exists(built) {
+      let out_exe: String = out.concat(".exe");
+      if fs.exists(out_exe) { built = out_exe; }
+    }
+    if !fs.exists(built) {
+      print("run failed: built binary not found: ".concat(built).concat("\n"));
+      return 1;
+    }
+
+    let mut run_cmd: String = shell_quote(shell_exec_path(built));
+    if target_os == "wasm" && target_abi == "wasi" {
+      let mut runner: String = trim_space_main(proc.getenv("WASM_RUNNER"));
+      if runner == "" { runner = "wasmtime"; }
+      run_cmd = shell_quote(shell_exec_path(runner)).concat(" ").concat(shell_quote(shell_exec_path(built)));
+    }
+    return exec_cmd(run_cmd, trace_exec);
+  }
+  if cmd == "install" {
     if artifact != "exe" {
       usage();
       print("invalid --artifact for install: expected exe\n");
@@ -3071,7 +3159,7 @@ fn main() -> i32 {
     let self_bin: String = normalize_host_fs_path(proc.exe_path());
     let mut cmdline: String =
     shell_quote(shell_exec_path(self_bin))
-    .concat(" build-pkg ")
+    .concat(" build ")
     .concat(shell_quote(out));
     if driver == cg.DriverMainKind.Tool {
       cmdline = cmdline.concat(" --driver=tool");
@@ -3079,7 +3167,10 @@ fn main() -> i32 {
     if target_flag != "" {
       cmdline = cmdline.concat(" --target=").concat(shell_quote(target_flag));
     }
-    let rc_build: i32 = proc.exec(cmdline);
+    if trace_exec {
+      cmdline = cmdline.concat(" -x");
+    }
+    let rc_build: i32 = exec_cmd(cmdline, trace_exec);
     if rc_build != 0 {
       print("install build failed\n");
       return rc_build;
@@ -3103,14 +3194,14 @@ fn main() -> i32 {
       dst_name = dst_name.concat(".exe");
     }
     let dst: String = path_join(install_dir, dst_name);
-    if !copy_file_host(built, dst) {
+    if !copy_file_host(built, dst, trace_exec) {
       print("install failed: copy error\n");
       return 1;
     }
     print("[install] ".concat(dst).concat("\n"));
     return 0;
   }
-  if cmd == "test-pkg" {
+  if cmd == "test" {
     let all: Vec[String] = fs.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_test_sources(all);
     let mut paths_for_std_test: Vec[String] = Vec();
@@ -3118,6 +3209,12 @@ fn main() -> i32 {
     while pst < paths.len() {
       paths_for_std_test.push(paths.get(pst));
       pst = pst + 1;
+    }
+    let mut paths_for_vox_test: Vec[String] = Vec();
+    let mut pvt: i32 = 0;
+    while pvt < paths_for_std_test.len() {
+      paths_for_vox_test.push(paths_for_std_test.get(pvt));
+      pvt = pvt + 1;
     }
 
     let prev_failed: Vec[String] = if test_rerun_failed { read_failed_tests() } else { Vec() };
@@ -3192,6 +3289,14 @@ fn main() -> i32 {
     }
 
     let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths_for_std_test) { Vec() } else { load_stage1_std() };
+    if !has_vox_under_src(paths_for_vox_test) {
+      let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
+      let mut pvi: i32 = 0;
+      while pvi < preload_vox.len() {
+        files.push(preload_vox.get(pvi));
+        pvi = pvi + 1;
+      }
+    }
     let dr: DepsResult = load_deps_from_manifest();
     if !dr.ok {
       print("invalid vox.toml: ".concat(dr.err).concat("\n"));
@@ -3250,9 +3355,10 @@ fn main() -> i32 {
       if profile_on { print_compile_profile("test-compile", cp.p); }
 
       fs.write_string(cpath, r.c);
+      write_emit_c_text(emit_c_enabled, emit_c_path, cpath, r.c);
       let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, bin);
       let cc_t0: i64 = tm.now_ns();
-      let code: i32 = proc.exec(cmdline);
+      let code: i32 = exec_cmd(cmdline, trace_exec);
       let cc_ns: i64 = dur_nonneg_ns(cc_t0, tm.now_ns());
       if profile_on { print("[profile] test-cc: ".concat(format_duration_ns(cc_ns)).concat("\n")); }
       if code != 0 {
@@ -3261,6 +3367,8 @@ fn main() -> i32 {
         return 1;
       }
       write_test_build_cache(out, build_key, tests_for_compile);
+    } else {
+      copy_emit_c_from_file(emit_c_enabled, emit_c_path, cpath);
     }
 
     // Run tests by module-level parallel queues, keeping module-internal order.
@@ -3302,7 +3410,7 @@ fn main() -> i32 {
         let q: ModuleQueue = queues.get(qi);
         let name: String = q.tests.get(q.next);
         queues = set_module_queue_next(queues, qi, q.next + 1);
-        let job: RunningJob = launch_test_job(bin, run_dir, qi, launch_seq, name, test_runner_cmd);
+        let job: RunningJob = launch_test_job(bin, run_dir, qi, launch_seq, name, test_runner_cmd, trace_exec);
         running.push(job);
         launch_seq = launch_seq + 1;
       }
