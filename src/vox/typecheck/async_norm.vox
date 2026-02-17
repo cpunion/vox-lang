@@ -319,19 +319,35 @@ fn lift_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, l0: Locals, ex
 
   // Root await stays in place when allowed; otherwise lift into a temp.
   if match n { ast.ExprNode.Await(_x) => true, _ => false } {
-    if allow_root_await {
-      // Still ensure operand doesn't contain another await (unsupported).
-      let op: i32 = match n { ast.ExprNode.Await(x) => x, _ => -1 };
-      if expr_has_await(exprs0, op) { return lift_err(exprs0, "await operand contains await (unsupported)".concat(""), tmp0); }
-      return lift_ok(exprs0, Vec(), eid, tmp0);
-    }
-    // Lift: let __await$N = <await-expr>; use __await$N
-    let nm: String = tmp_name(tmp0);
-    let r_id: ast.AddExprResult = add_ident(exprs0, sp, nm);
-    let mut p: ast.ExprPool = r_id.pool;
+    let op: i32 = match n { ast.ExprNode.Await(x) => x, _ => -1 };
+    let ro: LiftExprResult = lift_expr(ctx, w, mod_path, imps, l0, exprs0, op, tmp0, sp, false);
+    if !ro.ok { return ro; }
+
+    let mut p: ast.ExprPool = ro.exprs;
     let mut pre: Vec[ast.Stmt] = Vec();
-    pre.push(ast.Stmt.Let(sp, false, nm, false, ast.TypeName { parts: Vec(), args: Vec() }, eid));
-    return lift_ok(p, pre, r_id.id, tmp0 + 1);
+    let mut i: i32 = 0;
+    while i < ro.prefix.len() {
+      pre.push(ro.prefix.get(i));
+      i = i + 1;
+    }
+
+    let mut await_id: i32 = eid;
+    if !(ro.prefix.len() == 0 && ro.id == op) {
+      let r_await: ast.AddExprResult = add_expr(p, ast.ExprNode.Await(ro.id), sp);
+      p = r_await.pool;
+      await_id = r_await.id;
+    }
+
+    if allow_root_await {
+      return lift_ok(p, pre, await_id, ro.next_tmp);
+    }
+
+    // Lift: let __await$N = <await-expr>; use __await$N
+    let nm: String = tmp_name(ro.next_tmp);
+    let r_id: ast.AddExprResult = add_ident(p, sp, nm);
+    p = r_id.pool;
+    pre.push(ast.Stmt.Let(sp, false, nm, false, ast.TypeName { parts: Vec(), args: Vec() }, await_id));
+    return lift_ok(p, pre, r_id.id, ro.next_tmp + 1);
   }
 
   // Root try-await stays in place when allowed; otherwise lift into a temp.
@@ -339,17 +355,41 @@ fn lift_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, l0: Locals, ex
     let x: i32 = match n { ast.ExprNode.Try(y) => y, _ => -1 };
     let nx: ast.ExprNode = ast.expr_pool_get(exprs0, x);
     if match nx { ast.ExprNode.Await(_y) => true, _ => false } {
-      if allow_root_await {
-        let op: i32 = match nx { ast.ExprNode.Await(y) => y, _ => -1 };
-        if expr_has_await(exprs0, op) { return lift_err(exprs0, "await operand contains await (unsupported)", tmp0); }
-        return lift_ok(exprs0, Vec(), eid, tmp0);
-      }
-      let nm: String = tmp_name(tmp0);
-      let r_id: ast.AddExprResult = add_ident(exprs0, sp, nm);
-      let mut p: ast.ExprPool = r_id.pool;
+      let op: i32 = match nx { ast.ExprNode.Await(y) => y, _ => -1 };
+      let ro: LiftExprResult = lift_expr(ctx, w, mod_path, imps, l0, exprs0, op, tmp0, sp, false);
+      if !ro.ok { return ro; }
+
+      let mut p: ast.ExprPool = ro.exprs;
       let mut pre: Vec[ast.Stmt] = Vec();
-      pre.push(ast.Stmt.Let(sp, false, nm, false, ast.TypeName { parts: Vec(), args: Vec() }, eid));
-      return lift_ok(p, pre, r_id.id, tmp0 + 1);
+      let mut i: i32 = 0;
+      while i < ro.prefix.len() {
+        pre.push(ro.prefix.get(i));
+        i = i + 1;
+      }
+
+      let mut await_id: i32 = x;
+      if !(ro.prefix.len() == 0 && ro.id == op) {
+        let r_await: ast.AddExprResult = add_expr(p, ast.ExprNode.Await(ro.id), sp);
+        p = r_await.pool;
+        await_id = r_await.id;
+      }
+
+      let mut try_id: i32 = eid;
+      if !(ro.prefix.len() == 0 && await_id == x) {
+        let r_try: ast.AddExprResult = add_expr(p, ast.ExprNode.Try(await_id), sp);
+        p = r_try.pool;
+        try_id = r_try.id;
+      }
+
+      if allow_root_await {
+        return lift_ok(p, pre, try_id, ro.next_tmp);
+      }
+
+      let nm: String = tmp_name(ro.next_tmp);
+      let r_id: ast.AddExprResult = add_ident(p, sp, nm);
+      p = r_id.pool;
+      pre.push(ast.Stmt.Let(sp, false, nm, false, ast.TypeName { parts: Vec(), args: Vec() }, try_id));
+      return lift_ok(p, pre, r_id.id, ro.next_tmp + 1);
     }
   }
 
