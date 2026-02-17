@@ -79,6 +79,7 @@
   - impl 方法支持：`impl I { @resource(read, Fs) fn read(x: I) -> i32 { ... } }`
   - 调用点会做资源集合检查（缺失时报 `resource check failed`）。
   - 能力关系：`write(Name)` 视为覆盖 `read(Name)`（调用 `read` 资源需求时可由 `write` 满足）；`write` 需求仍必须由 `write` 满足。
+  - 同一函数中同名资源不能同时声明 `read` 与 `write`；需要写能力时应仅声明 `write`。
   - `impl Trait for T` 方法需与 trait 方法声明的资源集合一致（按 read/write 集合匹配）。
 - `@ffi_import/@ffi_export` 仅允许出现在顶层函数上；trait/impl 方法位置会报错。
 
