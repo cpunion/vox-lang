@@ -13,6 +13,75 @@ fn contains(s: String, part: String) -> bool {
   return false;
 }
 
+fn find_module(g: lst.Graph, path: String) -> lst.ModuleNode {
+  let mut i: i32 = 0;
+  while i < g.modules.len() {
+    let m: lst.ModuleNode = g.modules.get(i);
+    if m.path == path { return m; }
+    i = i + 1;
+  }
+  return lst.ModuleNode {
+    path: "",
+    files: Vec(),
+    imports: Vec(),
+    effects: Vec(),
+    effect_classes: Vec(),
+    resource_reads: Vec(),
+    resource_writes: Vec(),
+  };
+}
+
+fn has_function_conflict(g: lst.Graph, left_part: String, right_part: String, resource: String, mode: String) -> bool {
+  let mut i: i32 = 0;
+  while i < g.function_resource_conflicts.len() {
+    let c: lst.FunctionResourceConflict = g.function_resource_conflicts.get(i);
+    let lr: bool =
+      (contains(c.left_fn, left_part) && contains(c.right_fn, right_part)) ||
+      (contains(c.left_fn, right_part) && contains(c.right_fn, left_part));
+    if lr && c.resource == resource && c.mode == mode { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn has_module_order(g: lst.Graph, from_mod: String, to_mod: String, resource: String, mode: String) -> bool {
+  let mut i: i32 = 0;
+  while i < g.resource_orders.len() {
+    let o: lst.ResourceOrder = g.resource_orders.get(i);
+    if o.from_mod == from_mod && o.to_mod == to_mod && o.resource == resource && o.mode == mode {
+      return true;
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn has_executor_lane(g: lst.Graph, class0: String, exec: String, mod0: String) -> bool {
+  let mut i: i32 = 0;
+  while i < g.executor_lanes.len() {
+    let x: lst.ExecutorLane = g.executor_lanes.get(i);
+    if x.class == class0 && x.executor == exec {
+      let mut j: i32 = 0;
+      while j < x.modules.len() {
+        if x.modules.get(j) == mod0 { return true; }
+        j = j + 1;
+      }
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn has_schedule_hint(g: lst.Graph, mod0: String, class0: String, exec: String, mode: String) -> bool {
+  let mut i: i32 = 0;
+  while i < g.module_schedule_hints.len() {
+    let h: lst.ModuleScheduleHint = g.module_schedule_hints.get(i);
+    if h.module == mod0 && h.class == class0 && h.executor == exec && h.mode == mode { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn test_list_graph_from_files_smoke() -> () {
   let mut files: Vec[ld.SourceFile] = Vec();
   files.push(ld.SourceFile {
@@ -58,11 +127,113 @@ fn test_list_graph_json_and_text_output() -> () {
   let j: String = lst.graph_to_json(r.graph);
   t.assert(contains(j, "\"modules\""));
   t.assert(contains(j, "\"edges\""));
+  t.assert(contains(j, "\"resource_conflicts\""));
+  t.assert(contains(j, "\"resource_orders\""));
+  t.assert(contains(j, "\"executor_lanes\""));
+  t.assert(contains(j, "\"module_schedule_hints\""));
+  t.assert(contains(j, "\"functions\""));
+  t.assert(contains(j, "\"function_resource_conflicts\""));
   t.assert(contains(j, "\"from\":\"main\""));
+  t.assert(contains(j, "\"effects\""));
+  t.assert(contains(j, "\"effect_classes\""));
+  t.assert(contains(j, "\"resource_reads\""));
+  t.assert(contains(j, "\"resource_writes\""));
 
   let txt: String = lst.graph_to_text(r.graph);
   t.assert(contains(txt, "[module] main"));
+  t.assert(contains(txt, "effects:"));
+  t.assert(contains(txt, "effect_classes:"));
+  t.assert(contains(txt, "resource_reads:"));
+  t.assert(contains(txt, "resource_writes:"));
   t.assert(contains(txt, "[edge] main -> util"));
+  t.assert(contains(txt, "[resource_conflicts]"));
+  t.assert(contains(txt, "[resource_orders]"));
+  t.assert(contains(txt, "[executor_lanes]"));
+  t.assert(contains(txt, "[module_schedule_hints]"));
+  t.assert(contains(txt, "[functions]"));
+  t.assert(contains(txt, "[function_resource_conflicts]"));
+}
+
+fn test_list_graph_module_caps_smoke() -> () {
+  let mut files: Vec[ld.SourceFile] = Vec();
+  files.push(ld.SourceFile {
+    path: "src/main.vox",
+    text:
+      "@effect(FsRead)\n"
+      .concat("@resource(read, Fs)\n")
+      .concat("fn read() -> i32 { return 1; }\n")
+      .concat("struct I { v: i32 }\n")
+      .concat("impl I { @resource(write, Db) fn set(x: I) -> i32 { return x.v; } }\n")
+      .concat("fn main() -> i32 { return read(); }\n"),
+  });
+
+  let r: lst.BuildResult = lst.graph_from_files(files);
+  t.assert_with(r.ok, r.err);
+  let m: lst.ModuleNode = find_module(r.graph, "main");
+  t.assert_eq(m.path, "main");
+  t.assert_eq(m.effects.len(), 1);
+  t.assert_eq(m.effects.get(0), "FsRead");
+  t.assert_eq(m.effect_classes.len(), 1);
+  t.assert_eq(m.effect_classes.get(0), "IO");
+  t.assert_eq(m.resource_reads.len(), 1);
+  t.assert_eq(m.resource_reads.get(0), "Fs");
+  t.assert_eq(m.resource_writes.len(), 1);
+  t.assert_eq(m.resource_writes.get(0), "Db");
+  t.assert(has_executor_lane(r.graph, "IO", "io_event_loop", "main"));
+  t.assert(has_schedule_hint(r.graph, "main", "IO", "io_event_loop", "parallel_ok"));
+}
+
+fn test_list_graph_resource_conflicts_smoke() -> () {
+  let mut files: Vec[ld.SourceFile] = Vec();
+  files.push(ld.SourceFile {
+    path: "src/main.vox",
+    text:
+      "import \"util\"\n"
+      .concat("@resource(write, Fs) fn write_main() -> i32 { return 1; }\n")
+      .concat("fn main() -> i32 { return util.read_util(); }\n"),
+  });
+  files.push(ld.SourceFile {
+    path: "src/util/u.vox",
+    text:
+      "@resource(read, Fs) pub fn read_util() -> i32 { return 1; }\n"
+      .concat("@resource(write, Fs) pub fn write_util() -> i32 { return 2; }\n"),
+  });
+
+  let r: lst.BuildResult = lst.graph_from_files(files);
+  t.assert_with(r.ok, r.err);
+  t.assert_eq(r.graph.resource_conflicts.len(), 2);
+  t.assert_eq(r.graph.resource_conflicts.get(0).left_mod, "main");
+  t.assert_eq(r.graph.resource_conflicts.get(0).right_mod, "util");
+  t.assert_eq(r.graph.resource_conflicts.get(0).resource, "Fs");
+  t.assert_eq(r.graph.resource_conflicts.get(0).mode, "rw");
+  t.assert_eq(r.graph.resource_conflicts.get(1).mode, "ww");
+  t.assert_eq(r.graph.resource_orders.len(), 2);
+  t.assert(has_module_order(r.graph, "util", "main", "Fs", "rw"));
+  t.assert(has_module_order(r.graph, "util", "main", "Fs", "ww"));
+  t.assert(has_schedule_hint(r.graph, "main", "Other", "default", "serial_guarded"));
+  t.assert(has_schedule_hint(r.graph, "util", "Other", "default", "serial_guarded"));
+}
+
+fn test_list_graph_function_resource_conflicts_smoke() -> () {
+  let mut files: Vec[ld.SourceFile] = Vec();
+  files.push(ld.SourceFile {
+    path: "src/main.vox",
+    text:
+      "@resource(write, Fs) fn write_main() -> i32 { return 1; }\n"
+      .concat("fn main() -> i32 { return 0; }\n"),
+  });
+  files.push(ld.SourceFile {
+    path: "src/util/u.vox",
+    text:
+      "@resource(read, Fs) pub fn read_util() -> i32 { return 1; }\n"
+      .concat("@resource(write, Fs) pub fn write_util() -> i32 { return 2; }\n"),
+  });
+
+  let r: lst.BuildResult = lst.graph_from_files(files);
+  t.assert_with(r.ok, r.err);
+  t.assert(r.graph.functions.len() >= 4);
+  t.assert(has_function_conflict(r.graph, "write_main", "read_util", "Fs", "rw"));
+  t.assert(has_function_conflict(r.graph, "write_main", "write_util", "Fs", "ww"));
 }
 
 fn test_list_graph_loader_error_meta() -> () {

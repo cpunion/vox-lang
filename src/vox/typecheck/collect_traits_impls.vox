@@ -119,6 +119,10 @@ fn effect_join_names(xs: Vec[String], sep: String) -> String {
   return out;
 }
 
+fn resource_join_names(xs: Vec[String], sep: String) -> String {
+  return effect_join_names(xs, sep);
+}
+
 fn effect_set_equal(a: Vec[String], b: Vec[String]) -> bool {
   if a.len() != b.len() { return false; }
   let mut i: i32 = 0;
@@ -127,6 +131,10 @@ fn effect_set_equal(a: Vec[String], b: Vec[String]) -> bool {
     i = i + 1;
   }
   return true;
+}
+
+fn resource_set_equal(a: Vec[String], b: Vec[String]) -> bool {
+  return effect_set_equal(a, b);
 }
 
 fn impl_assoc_type_exists(as0: Vec[ImplAssocTypeSig], name: String) -> bool {
@@ -682,6 +690,8 @@ fn trait_method_sig_for(ctx0: Ctx, ms: TraitMethodSig, for_ty: i32, assocs: Vec[
       const_params: ms.sig.const_params,
       type_param_bounds: ms.sig.type_param_bounds,
       effects: ms.sig.effects,
+      resource_reads: ms.sig.resource_reads,
+      resource_writes: ms.sig.resource_writes,
       const_where_bounds: ms.sig.const_where_bounds,
     },
     async_output_ty: aout,
@@ -726,6 +736,8 @@ fn impl_method_emit_sig(head_tps: Vec[String], head_tpbs: Vec[TypeParamBoundSig]
     const_params: want.const_params,
     type_param_bounds: concat_bounds(head_tpbs, want.type_param_bounds),
     effects: want.effects,
+    resource_reads: want.resource_reads,
+    resource_writes: want.resource_writes,
     const_where_bounds: want.const_where_bounds,
   };
 }
@@ -1214,6 +1226,10 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
         if !efr.ok {
           return TcCtxResult { ok: false, err: efr.err, ctx: c };
         }
+        let rfr: CollectResourcesResult = collect_resource_names(md.resources);
+        if !rfr.ok {
+          return TcCtxResult { ok: false, err: rfr.err, ctx: c };
+        }
         let has_variadic_md: bool = cti_has_variadic_param_decl(md.params);
         let variadic_elem_md: i32 = if has_variadic_md { vec_elem(c, ps.get(ps.len() - 1)) } else { -1 };
         ms.push(TraitMethodSig {
@@ -1231,6 +1247,8 @@ fn collect_traits(ctx: Ctx, w: World) -> TcCtxResult {
             const_params: cps,
             type_param_bounds: tbs,
             effects: efr.effects,
+            resource_reads: rfr.reads,
+            resource_writes: rfr.writes,
             const_where_bounds: cwr.bounds,
           },
           is_async: md.is_async,
@@ -1455,6 +1473,8 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           if !cwr_inh.ok { return TcCtxResult { ok: false, err: cwr_inh.err, ctx: c }; }
           let efr_inh: CollectEffectsResult = collect_fn_effects(md_inh);
           if !efr_inh.ok { return TcCtxResult { ok: false, err: efr_inh.err, ctx: c }; }
+          let rfr_inh: CollectResourcesResult = collect_fn_resources(md_inh);
+          if !rfr_inh.ok { return TcCtxResult { ok: false, err: rfr_inh.err, ctx: c }; }
 
           let has_variadic_inh: bool = cti_has_variadic_param_decl(md_inh.params);
           let variadic_elem_inh: i32 = if has_variadic_inh { vec_elem(c, ps_inh.get(ps_inh.len() - 1)) } else { -1 };
@@ -1472,6 +1492,8 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
             const_params: cps_inh,
             type_param_bounds: concat_bounds(head_tpbs, got_tbs_inh),
             effects: efr_inh.effects,
+            resource_reads: rfr_inh.reads,
+            resource_writes: rfr_inh.writes,
             const_where_bounds: cwr_inh.bounds,
           };
           let lowered_inh: String = fresh_inherent_lowered_name(c, m.path, md_inh.name, c.impls.len() * 1000 + mdi_inh);
@@ -1665,6 +1687,8 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let want: FuncSig = wr1.sig;
         let efr_md: CollectEffectsResult = collect_fn_effects(md);
         if !efr_md.ok { return TcCtxResult { ok: false, err: efr_md.err, ctx: c }; }
+        let rfr_md: CollectResourcesResult = collect_fn_resources(md);
+        if !rfr_md.ok { return TcCtxResult { ok: false, err: rfr_md.err, ctx: c }; }
         if !effect_set_equal(efr_md.effects, want.effects) {
           let msg_eff: String =
             "impl method effect set mismatch: expected ["
@@ -1673,6 +1697,24 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
               .concat(effect_join_names(efr_md.effects, ", "))
               .concat("]");
           return TcCtxResult { ok: false, err: type_error_at(md.sp, msg_eff), ctx: c };
+        }
+        if !resource_set_equal(rfr_md.reads, want.resource_reads) {
+          let msg_rr: String =
+            "impl method read resource set mismatch: expected ["
+              .concat(resource_join_names(want.resource_reads, ", "))
+              .concat("], got [")
+              .concat(resource_join_names(rfr_md.reads, ", "))
+              .concat("]");
+          return TcCtxResult { ok: false, err: type_error_at(md.sp, msg_rr), ctx: c };
+        }
+        if !resource_set_equal(rfr_md.writes, want.resource_writes) {
+          let msg_rw: String =
+            "impl method write resource set mismatch: expected ["
+              .concat(resource_join_names(want.resource_writes, ", "))
+              .concat("], got [")
+              .concat(resource_join_names(rfr_md.writes, ", "))
+              .concat("]");
+          return TcCtxResult { ok: false, err: type_error_at(md.sp, msg_rw), ctx: c };
         }
         if md.const_params.len() != want.const_params.len() {
           return TcCtxResult { ok: false, err: type_error_at(md.sp, "impl method const param count mismatch"), ctx: c };

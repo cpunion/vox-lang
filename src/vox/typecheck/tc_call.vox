@@ -62,6 +62,47 @@ fn effect_check_call(call_sp: ast.Span, l0: Locals, callee_effects: Vec[String])
   return type_error_at(call_sp, msg);
 }
 
+fn resource_missing_tc_call(req: Vec[String], have: Vec[String]) -> Vec[String] {
+  let mut missing: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < req.len() {
+    let r: String = req.get(i);
+    if !contains_str_tc_call(have, r) && !contains_str_tc_call(missing, r) {
+      missing.push(r);
+    }
+    i = i + 1;
+  }
+  return missing;
+}
+
+fn resource_have_reads_tc_call(l0: Locals) -> Vec[String] {
+  // write capability is stronger than read for the same resource key.
+  let mut out: Vec[String] = l0.fn_resource_reads;
+  let mut i: i32 = 0;
+  while i < l0.fn_resource_writes.len() {
+    let r: String = l0.fn_resource_writes.get(i);
+    if !contains_str_tc_call(out, r) { out.push(r); }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn resource_check_call(call_sp: ast.Span, l0: Locals, callee_reads: Vec[String], callee_writes: Vec[String]) -> TcError {
+  if callee_reads.len() == 0 && callee_writes.len() == 0 { return TcError.None; }
+  let have_reads: Vec[String] = resource_have_reads_tc_call(l0);
+  let mr: Vec[String] = resource_missing_tc_call(callee_reads, have_reads);
+  let mw: Vec[String] = resource_missing_tc_call(callee_writes, l0.fn_resource_writes);
+  if mr.len() == 0 && mw.len() == 0 { return TcError.None; }
+  let mut parts: Vec[String] = Vec();
+  if mr.len() != 0 {
+    parts.push("missing read resource(s): ".concat(join_strs_tc_call(mr, ", ")));
+  }
+  if mw.len() != 0 {
+    parts.push("missing write resource(s): ".concat(join_strs_tc_call(mw, ", ")));
+  }
+  return type_error_at(call_sp, "resource check failed: ".concat(join_strs_tc_call(parts, "; ")));
+}
+
 fn compile_error_arg_text(exprs: ast.ExprPool, id: i32) -> String {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
   return match n { ast.ExprNode.Str(s) => s, _ => "compile_error triggered" };
@@ -743,6 +784,8 @@ pub fn materialize_pack_sig_types(
     const_params: sig.const_params,
     type_param_bounds: tbr.bounds,
     effects: sig.effects,
+    resource_reads: sig.resource_reads,
+    resource_writes: sig.resource_writes,
     const_where_bounds: cwr.bounds,
   };
   return MaterializePackSigResult { ok: true, err: "", sig: out };
@@ -1351,6 +1394,8 @@ fn subst_self_in_sig(ctx: Ctx, sig: FuncSig, recv_ty: i32) -> FuncSig {
     const_params: sig.const_params,
     type_param_bounds: sig.type_param_bounds,
     effects: sig.effects,
+    resource_reads: sig.resource_reads,
+    resource_writes: sig.resource_writes,
     const_where_bounds: sig.const_where_bounds,
   };
 }
@@ -2347,6 +2392,10 @@ fn tc_call_func_sig(
     if eck0 != TcError.None {
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: eck0 };
     }
+    let rck0: TcError = resource_check_call(call_sp, l0, sig.resource_reads, sig.resource_writes);
+    if rck0 != TcError.None {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: rck0 };
+    }
     return ExprTyResult { ok: true, ty: sig.ret, err: TcError.None };
   }
 
@@ -2655,6 +2704,10 @@ fn tc_call_func_sig(
   let eck: TcError = effect_check_call(call_sp, l0, sig_use.effects);
   if eck != TcError.None {
     return ExprTyResult { ok: false, ty: ctx.ty_bad, err: eck };
+  }
+  let rck: TcError = resource_check_call(call_sp, l0, sig_use.resource_reads, sig_use.resource_writes);
+  if rck != TcError.None {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: rck };
   }
   return ExprTyResult { ok: true, ty: out_ty, err: TcError.None };
 }

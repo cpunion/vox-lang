@@ -11,7 +11,7 @@
 
 ## 非目标（当前阶段）
 
-1. effect/IO/资源系统：完整模型（资源读写集、调度/并行语义）仍延后；当前仅有 `@effect(...)` 声明与调用链检查基线。
+1. effect/IO/资源系统：完整模型（调度/并行语义、effect 类别与执行器融合）仍延后；当前已有 `@effect(...)` 与 `@resource(read|write, ...)` 声明、调用链检查与 trait/impl 集合一致性检查基线。
 2. async runtime/executor 细节：语言层 async/await 已落地，执行器调度策略与 effect 融合延后。
 
 ## 核心设计决策（已定）
