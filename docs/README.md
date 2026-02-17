@@ -18,6 +18,8 @@ Documents:
 - `docs/05-comptime-detailed.md`
 - `docs/06-advanced-generics.md`
 - `docs/07-memory-management.md`
+- `docs/08-thread-safety.md`
+- `docs/09-async-model.md`
 - `docs/10-macro-system.md`
 - `docs/11-package-management.md`
 - `docs/12-testing-framework.md`
@@ -32,6 +34,7 @@ Documents:
 - `docs/24-release-process.md`
 - `docs/27-active-backlog.md`
 - `docs/28-vox-libraries.md`
+- `docs/29-async-expr-await.md`
 
 Archive:
 

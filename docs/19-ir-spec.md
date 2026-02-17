@@ -1,11 +1,12 @@
-# IR 规范（v0，Stage0）
+# IR 规范（v0，当前实现）
 
-本章定义 Vox 的 IR v0（stage0 使用），用于：
+本章定义 Vox 的 IR v0，用于：
 
-- 作为 stage0 后端与可执行文件生成的稳定接口
-- 作为 stage1 自举编译器可对齐的中间层
+- 作为当前 C 后端与可执行文件生成的稳定接口
+- 作为编译前端到后端之间的中间层约束
 
-注意：IR v0 只覆盖 stage0 子集，不包含 comptime/宏/trait/泛型等。
+注意：IR v0 重点描述基础 lowering 子集；高级能力（comptime/宏/trait 高级分派等）会在上层阶段处理后再降入本 IR。
+文中出现的 `stage0/stage1` 属于历史术语，用于解释演进背景，不代表当前仓库结构。
 
 ## 1. 文件格式
 
@@ -21,7 +22,7 @@ block entry:
 
 ## 2. 标识符
 
-- 函数名：stage0 当前允许包含模块/包限定名（例如 `mathlib::one`、`utils.io::read`）。
+- 函数名：当前允许包含模块/包限定名（例如 `mathlib::one`、`utils.io::read`）。
   - 规范化表示：以 `::` 分隔包/模块与成员名；模块路径内部可用 `.` 连接。
 - 块名：同函数名
 - 临时值：`%t<number>`（例如 `%t0`）
@@ -30,9 +31,9 @@ block entry:
 
 ## 3. 类型
 
-IR v0 只定义 stage0 必需类型：
+IR v0 基础类型：
 
-- `i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`（stage0 v0 目前实现的整数类型）
+- `i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`（当前实现支持的整数类型）
 - `f32/f64`
 - `bool`
 - `unit`
@@ -46,9 +47,9 @@ Stage2（编译器内部类型池）补充说明：
 - 当前编译器已将 `Ref` 非擦除地保留到 IR（函数签名、slot/temp/call 类型索引可见借用形状）；`Range` 仍按 v0 设计在 irgen 侧降到基类型并通过 `range_check` 表达约束。
 - C 后端把 `Ref` 作为透明包装映射到底层 C 类型，并在比较/名义等值路径中按底层类型语义处理。
 
-说明（Stage0 实现策略）：
+说明（当前实现策略）：
 
-- `enum` 在 stage0 C 后端降低为 tagged union：
+  - `enum` 在 C 后端降低为 tagged union：
   - `tag: i32`（variant index）
   - `union { ... } payload`（每个 variant 一个 union member；每个 member 是一个 `struct`，字段名为 `_%d`；payload arity 支持 0..N）
 
@@ -74,21 +75,6 @@ Stage2（编译器内部类型池）补充说明：
 ### 5.2 整数运算
 
 ```
-
-### 5.2.1 浮点运算（Stage0/Stage1 v0）
-
-`f32/f64` 复用 `add/sub/mul/div` 与比较指令：
-
-```
-%t0 = const f64 1.5
-%t1 = const f64 2.0
-%t2 = add f64 %t0 %t1
-%t3 = cmp_lt f64 %t0 %t1
-```
-
-约束：
-
-- `%`、`bitand/bitor/bitxor/shl/shr` 不适用于浮点类型。
 %t2 = add i64 %t0 %t1
 %t3 = sub i64 %t0 %t1
 %t4 = mul i64 %t0 %t1
@@ -106,6 +92,21 @@ Stage2（编译器内部类型池）补充说明：
 - `add/sub/mul`：wrapping（按位宽截断）。
 - `div/mod`：除零必须 panic；有符号 `MIN / -1` 与 `MIN % -1` 必须 panic。
 - `shl/shr`：移位位数越界必须 panic（`shift count out of range`）。
+
+### 5.2.1 浮点运算（v0）
+
+`f32/f64` 复用 `add/sub/mul/div` 与比较指令：
+
+```
+%t0 = const f64 1.5
+%t1 = const f64 2.0
+%t2 = add f64 %t0 %t1
+%t3 = cmp_lt f64 %t0 %t1
+```
+
+约束：
+
+- `%`、`bitand/bitor/bitxor/shl/shr` 不适用于浮点类型。
 
 ### 5.3 比较
 
@@ -173,7 +174,7 @@ range_check i64 0 3 %t0
 - `range_check` 的类型参数当前允许所有整数标量类型：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`。
 - `range_check` 还要求 `lo <= hi`（非法区间在 IR 校验阶段报错）。
 
-### 5.4.3 IR 校验（Stage1）
+### 5.4.3 IR 校验（当前实现）
 
 在 Stage1 编译管线中，IR 进入后端前会执行 `verify`：
 
@@ -250,9 +251,9 @@ store_field $v0 .x %t1
 %t4 = enum_payload i32 %t2 Pair 1
 ```
 
-### 5.9 Vec（Stage0 内建容器）
+### 5.9 Vec（v0 内建容器）
 
-Stage0 将 `Vec[T]` 作为内建类型，降低到 C 运行时的 `vox_vec`（元素按值拷贝，v0 暂无 drop glue）。
+`Vec[T]` 在 v0 中作为内建类型，降低到 C 运行时的 `vox_vec`（元素按值拷贝，v0 暂无 drop glue）。
 
 构造新 vec：
 
@@ -279,9 +280,9 @@ len/get：
 %t3 = vec_str_join $v1 ","
 ```
 
-### 5.10 字符串运行时指令（Stage0）
+### 5.10 字符串运行时指令（v0）
 
-Stage0 的 `String` 在 C 后端中当前降低为 `const char*`，并提供最小运行时指令集：
+`String` 在 C 后端中当前降低为 `const char*`，并提供最小运行时指令集：
 
 ```
 %t0 = str_len %t1

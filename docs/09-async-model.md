@@ -12,7 +12,7 @@
 
 1. 关键字保留：`async`、`await`。
 2. `async fn` 语法已接入 parser，AST 有 `FuncDecl.is_async`。
-3. 语义部分开启（D03-3 scaffold）：
+3. 语义已完整接入（D03 主体已完成）：
    - `async fn`（无 `await`）已进入正常 typecheck/codegen 管线（当前行为仍等价同步函数）
    - `await` 表达式已解析为 AST 节点（`ExprNode.Await`），并已接入 typecheck/irgen：仅允许在 `async fn` 中使用；推荐表面语法为 `e.await`（同时保留前缀 `await e` 兼容）。当前阶段支持通过 frame 状态机保留进度（frame.state + frame.a0/a1/...），`Pending => return Pending`，`Ready(v) => v`。
    - `trait async fn` 已支持（无 default body），并通过“隐式关联类型投影” desugar：对每个 async 方法自动引入 `type __async$<method>`，并把方法返回类型改写为 `Self.__async$<method>`；实现侧由编译器自动把该关联类型绑定到 lowering 后的 frame 类型。
@@ -61,9 +61,7 @@ trait Future {
    - 子 future `Ready(v)`：恢复并继续执行。
    - 函数返回：`Ready(ret)`。
 
-## 5. await 的类型/语义规则
-
-当前阶段（已落地，scaffold）：
+## 5. await 的类型/语义规则（当前实现）
 
 1. `e.await`（或兼容语法 `await e`）可用于：
    - Poll-shaped 枚举 `{ Pending, Ready(T) }`
@@ -72,18 +70,11 @@ trait Future {
 3. lowering 语义：`Ready(v) => v`；`Pending` 时从 enclosing `poll` 返回 `Pending`，并通过 async frame（state + aN 字段）保留进度。
 4. `await` 只能出现在 async 上下文（`async fn`，`async` block 后续引入）。
 5. 当前 lowering 支持 `await` 出现在嵌套的语句块里（`if`/`while` 的 body 内），编译器会把控制流拆分成状态机分支/回边。
-6. 当前也支持有限的“表达式边界”归一化：
-   - `block` 表达式：`{ ...; expr_with_await }` 会被提升为当前语句列表中的前置语句序列。
-   - `if` 表达式：当它处在语句上下文（`let`/赋值/表达式语句/`return`）且需要 join 时，编译器会把它改写为语句级 `if` + 临时变量（通过内部 `@uninit()`）。
-   - `match` 表达式：当它处在语句上下文（`let`/表达式语句/`return`）时，允许其 arm 内包含 `await`；编译器会把它改写为语句级 `if` 链 + 临时变量/绑定提取（通过内部 `@enum_is/@enum_payload/@uninit()`）。
-7. 仍不支持的 `await` 位置（会报错）：`try` block 表达式、`match` 表达式在任意表达式位置（非语句上下文）内部、以及宏调用参数内部。
-8. 由于当前 capture rewrite 仍是基于名字（`l_<name>`）的实现细节，`async fn` 暂不支持局部变量 shadowing（同名 `let`）。
-9. 无生命周期标注的约束：`async fn` 会返回一个可逃逸的 Future/frame 值，因此其 **参数/输出类型中禁止出现非 `&'static` 的借用**（包括嵌套在 `Vec[...]`、struct/enum 字段中的借用）。否则借用将随 frame 逃逸，无法在类型系统中表达其有效期。
-
-目标阶段（D03-3b 之后）：
-
-1. 支持更一般的 `await` 归一化：允许 `await` 出现在更多表达式位置（如 `if/match` 表达式内部），并且能在 lowering 中正确拆分控制流。
-2. drop/cancel 语义与资源释放细节补齐。
+6. `await` 已支持一般表达式控制流场景：
+   - `block` / `if` / `match` / `try` 表达式内部。
+   - 宏调用参数内部。
+7. 由于当前 capture rewrite 仍是基于名字（`l_<name>`）的实现细节，`async fn` 暂不支持局部变量 shadowing（同名 `let`）。
+8. 无生命周期标注的约束：`async fn` 会返回一个可逃逸的 Future/frame 值，因此其 **参数/输出类型中禁止出现非 `&'static` 的借用**（包括嵌套在 `Vec[...]`、struct/enum 字段中的借用）。否则借用将随 frame 逃逸，无法在类型系统中表达其有效期。
 
 ## 6. push 与 pull 的转换
 
@@ -135,10 +126,7 @@ trait Sink {
 - 用户不写 `'a`。
 - 编译器内部完成跨挂起点的借用安全检查。
 
-## 9. 分阶段计划
+## 9. 当前剩余工作
 
-1. D03-1/2：关键字 + deferred 诊断（已完成）。
-2. D03-3：Future 表示 + lowering + await typecheck/irgen。
-3. D03-4：跨 await 借用约束与诊断。
-
-在 D03-4 完成前，跨 `await` 的借用约束仍是简化版本；但 D03-3 已支持 async lowering 与 `await` 的 `Pending` 挂起恢复（通过 frame 状态机保留进度）。
+1. runtime/executor 体验增强（`wake/park` 集成，超出当前最小 polling hook）。
+2. drop/cancel 语义继续细化与验证。

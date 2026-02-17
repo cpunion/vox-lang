@@ -1,6 +1,6 @@
 # 诊断与错误消息（v0）
 
-本章定义 Vox v0（Stage0/Stage1 自举期）的最小诊断输出约定，目标是：
+本章定义 Vox v0 在当前主线编译器中的最小诊断输出约定，目标是：
 
 - 错误消息可用于定位：至少包含 `file:line:col`
 - 输出稳定：便于测试用例断言与回归
@@ -18,20 +18,18 @@
 
 - `file`：源码路径（VFS 虚拟路径也可，如依赖包文件 `dep/src/x.vox`）
 - `line/col`：1-based
-- `col`：
-  - Stage0：按 rune（Unicode code point）计数
-  - Stage1：按 rune（Unicode code point）计数
+- `col`：按 rune（Unicode code point）计数
 
 ## 2. 解析错误（parse/lex）
 
-Stage1 的 lexer/parser 会产出 byte offset（`at`）。对外输出时应转换为 `line/col`（其中 `col` 为 rune 列）：
+当前 lexer/parser 会产出 byte offset（`at`）。对外输出时应转换为 `line/col`（其中 `col` 为 rune 列）：
 
 ```text
 src/main.vox:2:1: parse error: unexpected token: expected fn, got else
 src/main.vox:3:5: lex error: unexpected char
 ```
 
-Stage1 `parse` 除文本渲染外，也提供结构化诊断元信息（从 `ParseError` 派生）：
+`parse` 除文本渲染外，也提供结构化诊断元信息（从 `ParseError` 派生）：
 
 - `kind`：`none/parse/lex`
 - `code`：稳定错误码（`E_PARSE_0001`、`E_LEX_0001`）
@@ -40,7 +38,7 @@ Stage1 `parse` 除文本渲染外，也提供结构化诊断元信息（从 `Par
 
 ## 3. 类型检查与后续阶段
 
-Stage1 v0 的 typecheck/irgen 错误以字符串为主，**但当 AST 节点拥有 span 信息时**，必须输出精确的 `file:line:col`。
+当前实现的 typecheck/irgen 错误以字符串为主，**但当 AST 节点拥有 span 信息时**，必须输出精确的 `file:line:col`。
 
 建议优先级：
 
@@ -83,7 +81,7 @@ Stage1 v0 的 typecheck/irgen 错误以字符串为主，**但当 AST 节点拥�
 
 ## 4. 错误分层（kind/code）
 
-Stage1 `typecheck` 对外保留文本渲染，同时在内部错误对象中附带结构化信息，便于测试与后续工具链扩展：
+`typecheck` 对外保留文本渲染，同时在内部错误对象中附带结构化信息，便于测试与后续工具链扩展：
 
 - `kind`：错误类别（`none/type/import`）
 - `code`：稳定错误码（如 `E_TYPE_0001`）
@@ -100,7 +98,7 @@ Stage1 `typecheck` 对外保留文本渲染，同时在内部错误对象中附�
 
 这样上层工具可在不解析错误字符串的前提下完成分流、统计和重试策略。
 
-后续计划（Stage1 诊断升级）：
+后续计划（诊断升级）：
 
 - AST/expr pool 节点携带最小 span（至少包含 `file/line/col`；byte offset 可选）
 - typecheck/irgen 错误携带 span，并按本章格式渲染；缺失 span 时回退到 `1:1`

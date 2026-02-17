@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/cpunion/vox-lang/main/install.sh | 
 常用参数：
 
 ```bash
-bash install.sh --version v0.2.8
+bash install.sh --version v0.2.10
 bash install.sh --platform darwin-arm64
 bash install.sh --cache-dir ~/.vox/cache/downloads
 bash install.sh --no-cache
@@ -140,9 +140,9 @@ rolling selfhost：
 ```bash
 vox toolchain current
 vox toolchain list
-vox toolchain install v0.2.8
-vox toolchain use v0.2.8
-vox toolchain pin v0.2.8
+vox toolchain install v0.2.10
+vox toolchain use v0.2.10
+vox toolchain pin v0.2.10
 ```
 
 ## LSP 与 VSCode
