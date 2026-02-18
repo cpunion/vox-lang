@@ -77,6 +77,13 @@ Governance from now on:
     - Landed in `src/std/async/async.vox` + `src/std/async/async_test.vox`.
   - Source: `docs/09-async-model.md`.
 
+- [x] A16 Async cancel/drop 细化：frame 重绑定钩子
+  - [x] A16-1 async entry/test wrapper 在取消分支新增可选 `cancel_drop_with/cancel_drop` 调用，并固定顺序为 `cancel_drop -> cancel_cleanup -> cancel_return`。
+    - Landed in `src/vox/compile/compile.vox` with regressions in `src/vox/compile/async_test.vox`.
+  - [x] A16-2 `std/async` 增加默认 no-op 的 `cancel_drop_with/cancel_drop`，并补标准库回归。
+    - Landed in `src/std/async/async.vox` + `src/std/async/async_test.vox`.
+  - Source: `docs/09-async-model.md`.
+
 - [x] A01 Real generic pack expansion (type/value packs), not declaration-only.
   - [x] A01-1 Trailing explicit type args can bind a single trailing type pack.
     - Landed in `src/vox/typecheck/tc_call.vox`, `src/vox/irgen/gen_call_match.vox`, and `src/vox/typecheck/consts.vox`, with compile/typecheck tests covering both runtime and const-call paths.
