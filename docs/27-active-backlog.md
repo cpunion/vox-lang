@@ -52,7 +52,7 @@ Governance from now on:
   - [x] A02-5 Call-arg mismatch diagnostics are now borrow-aware: expected type text preserves borrow form (`&T`/`&mut T`/`&'static T`/`&'static mut T`) instead of showing erased base type.
     - Covered in `src/vox/typecheck/tc_call.vox`, `src/vox/typecheck/typecheck_test.vox`, and `src/vox/compile/compile_test.vox`.
   - [x] A02-6 closure note: borrow remains signature-metadata based in this stage; first-class borrow IR/type representation is deferred to `D06`.
-  - Sources: `docs/13-standard-library.md`, `docs/archive/21-stage1-compiler.md`, `docs/19-ir-spec.md`.
+  - Sources: `docs/13-standard-library.md`, `docs/20-bootstrap.md`, `docs/19-ir-spec.md`.
 
 - [x] A03 Runtime memory model convergence (compiler scope).
   - [x] A03-1 Runtime tracked allocations now support early release via `vox_rt_free`; non-escaping temp path buffers in `mkdir_p`/`walk_vox_files` are released eagerly instead of waiting for process exit.
@@ -66,11 +66,11 @@ Governance from now on:
   - [x] A03-5 Sync-handle registry nodes now use tracked runtime allocation (`vox_rt_malloc/vox_rt_free`), so undisposed-handle paths do not leave untracked registry memory behind.
     - Covered in `src/vox/codegen/c_runtime.vox` and `src/vox/codegen/c_emit_test.vox`.
   - [x] A03-6 closure note: full ownership/move/drop for general values/containers is deferred to `D07` to keep rolling-bootstrap stable.
-  - Source: `docs/archive/21-stage1-compiler.md`.
+  - Source: `docs/20-bootstrap.md`.
 
 - [x] A04 Package registry remoteization.
   - [x] A04-1 Registry dependencies now support remote git-backed registry roots (`git+...`/URL/`.git`) with clone/fetch cache under `.vox/deps/registry_remote`, then resolve `name/version` from cached checkout.
-    - Covered in `src/main.vox` and selfhost integration `archive/stage0-stage1:compiler/stage0/cmd/vox/stage1_integration_test.go` (`TestStage1BuildsStage2SupportsVersionDependencyFromRemoteRegistryGit`).
+    - Covered in `src/main.vox`; historical selfhost integration evidence is archived.
   - Source: `docs/11-package-management.md`.
 
 ### P1
@@ -159,7 +159,7 @@ Governance from now on:
   - Source: `docs/19-ir-spec.md`, `docs/13-standard-library.md`.
 
 - [x] D07 Full ownership/move/drop semantics for general values/containers.
-  - [x] D07-1 Remove bootstrap-safe `std/collections/map` fallback: switch to direct `Vec.set/remove/clear` implementation and keep `stage1 -> compiler` gate green.
+  - [x] D07-1 Remove bootstrap-safe `std/collections/map` fallback: switch to direct `Vec.set/remove/clear` implementation and keep `bootstrap -> compiler` gate green.
   - [x] D07-2 Container-level deterministic release model (Vec/String/Map) that is alias-safe under current value-copy semantics.
     - [x] D07-2a Deep-clone baseline landed: `Clone` trait + `impl[T: Clone] Clone for Vec[T]` + `impl[K: Eq + Clone, V: Clone] Clone for Map[K,V]` for explicit non-aliasing copy paths.
     - [x] D07-2b Add deterministic release semantics compatible with the current value-copy model (no UAF on alias copies).
@@ -174,4 +174,4 @@ Governance from now on:
     - [x] D07-3g UFCS release parity: `Release.release(x)` now participates in move-source detection with the same moved-value diagnostics/self-rebind behavior as `release(x)` and `x.release()`.
     - [x] D07-3h Multi-source release tracking: expressions containing multiple release paths now mark all consumed roots (including call-arg fanout and `assign field` RHS), so moved diagnostics are not silently dropped for later sources.
   - Extracted from A03 closure note.
-  - Source: `docs/archive/21-stage1-compiler.md`.
+  - Source: `docs/20-bootstrap.md`.

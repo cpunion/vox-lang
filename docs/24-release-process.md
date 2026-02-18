@@ -5,7 +5,7 @@
 - 发布产物：`vox`（单一可执行）
 - 平台覆盖：`linux` / `darwin` / `windows`（含 `x86` 扩展包）
 - 构建链路：`compiler(locked release) -> compiler(new)`
-- 禁止链路：发布与 CI 门禁不再使用 `stage1` fallback
+- 禁止链路：发布与 CI 门禁不再使用 legacy fallback
 
 ## 1. 发布产物
 
@@ -44,7 +44,7 @@
 要求：
 
 - 必须提供 rolling bootstrap 二进制（`VOX_BOOTSTRAP` 或 `target/bootstrap/vox_prev`）。
-- 缺失 bootstrap 二进制时构建直接失败，不允许回退到 `stage1`。
+- 缺失 bootstrap 二进制时构建直接失败，不允许回退到 legacy fallback。
 
 ## 3. 锁文件
 

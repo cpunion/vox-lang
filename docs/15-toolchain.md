@@ -89,5 +89,5 @@ make release-verify VERSION=v0.2.0-rc1
 
 ## 历史说明
 
-- `stage0` / `stage1` 不再保留在 `main`。
-- 历史 bootstrap 代码见分支：`archive/stage0-stage1`。
+- `main` 只保留单主线编译器实现。
+- 历史 bootstrap 代码已归档到 `archive` 分支。

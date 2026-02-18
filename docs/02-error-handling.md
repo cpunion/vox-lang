@@ -26,7 +26,7 @@ let f = match File::open(path) {
 };
 ```
 
-Stage1 当前实现（v0）：
+当前实现（v0）：
 
 - `expr?` 已接入，语义上支持两种容器：
   - `Result[T, E]`：`Ok(v)` 继续，`Err(e)` 提前返回 `Err(e)`。
@@ -52,7 +52,7 @@ fn load() -> Result[Data, Error] {
 }
 ```
 
-Stage1 当前实现（v0）：
+当前实现（v0）：
 
 - `try { ... }` 已接入为表达式语法，具备块级传播语义：
   - 块内 `?` 失败时会提前结束 `try` 块并返回残差（`Err/None`），不会直接结束外层函数。

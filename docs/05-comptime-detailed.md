@@ -29,7 +29,7 @@ fn crc_table() -> [u32; 256] { ... }
 
 含义：要求该函数必须满足 comptime 约束；若包含不允许的操作（IO/随机/系统时间等）则直接报错。
 
-## 反射内建（Stage1 已实现子集）
+## 反射内建（已实现子集）
 
 当前已实现：
 
@@ -74,8 +74,8 @@ fn crc_table() -> [u32; 256] { ... }
   - `@name(A, B)`：`@same_type/@assignable_to/@castable_to/@eq_comparable_with/@ordered_with/@same_layout/@bitcastable`
   - 以上三种形态均允许尾逗号（例如 `@is_integer(i32,)`、`@same_type(i32, i64,)`）。
 - 可用于普通表达式与 `const` 初始化（均会折叠为常量）。
-- `@size_of/@align_of` 当前按 Stage1 C 后端目标布局模型计算。
-- `@type` 返回编译期 `TypeId`（Stage1 当前表示为 `usize`）。
+- `@size_of/@align_of` 当前按 C 后端目标布局模型计算。
+- `@type` 返回编译期 `TypeId`（当前表示为 `usize`）。
 - `@type_name` 返回编译器的类型显示字符串。
 - `@field_count` 当前支持 `struct/enum`（分别返回字段数/variant 数）。
 - `@field_name` 当前支持 `struct/enum`（分别返回字段名/variant 名），`I` 为 `usize` const 实参。
@@ -85,7 +85,7 @@ fn crc_table() -> [u32; 256] { ... }
 - `@castable_to(Src, Dst)` 复用当前 `as` 显式转换规则（int/float/range 相关）。
 - `@eq_comparable_with(A, B)` 与 `==/!=` 二元规则对齐。
 - `@ordered_with(A, B)` 与 `< <= > >=` 二元规则对齐。
-- `@same_layout(A, B)` 判断两类型在当前 Stage1 布局模型下是否同尺寸且同对齐。
+- `@same_layout(A, B)` 判断两类型在当前布局模型下是否同尺寸且同对齐。
 - `@bitcastable(A, B)` 当前与 `@same_layout` 等价（可按位重解释的最小判定）。
 - `@is_*` 返回类型分类判定（当前要求 `T` 为 concrete type）。
 - `@is_eq_comparable` 与 `==/!=` 能力对齐（含递归 struct/enum 字段检查）。
@@ -109,7 +109,7 @@ type F0 = @field_type(S, 0)
 - `enum`：`I` 对应 variant 索引；unit variant 返回 `()`；单 payload variant 返回该 payload 类型。
 - 多 payload enum variant 在当前阶段会被拒绝（尚无 tuple 类型语法承载该结果）。
 
-## comptime 报错（Stage1 已实现）
+## comptime 报错（已实现）
 
 ```vox
 @compile_error(msg: String)
