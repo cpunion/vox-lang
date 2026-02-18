@@ -19,9 +19,9 @@
 4. async 入口与测试可运行（最小执行器，v0）：
    - 当构建可执行文件启用 driver main 时：若用户定义 `async fn main() -> T`，编译器在编译期生成一个同步 `fn main() -> T` wrapper。
    - 当构建测试二进制启用 test main 时：若发现 `async fn test_*() -> ()`，编译器为该 test 生成一个同步 wrapper 并交给测试运行器调用。
-   - wrapper 内部使用 tight loop 轮询 `poll` 直到 `Ready`；`Pending` 分支优先调用 `std/async::park_until_wake(iter, cx)`，再回退 `park(iter, cx)`、`pending_wait(iter, cx)`、`spin_wait(iter)`，最后纯 continue，用于保证 `async fn main` 与 async tests 在无完整 runtime 的阶段也能端到端跑通。
-   - 若 `std/async` 提供 `cancel_requested(cx) -> bool`，wrapper 会在 `Pending` 路径轮询该钩子；返回 `true` 时触发 `panic(\"async cancelled\")` 终止运行（v0 取消语义基线）。
-   - 当前不做真正的 blocking/parking；这部分留给后续 runtime/executor（或宿主）实现。
+   - wrapper 内部使用轮询 `poll` 直到 `Ready`；`Pending` 分支优先使用 runtime 注入路径：若存在 `default_runtime()`，优先调用 `park_until_wake_with(rt, iter, cx)`，再回退 `park_with(rt, iter, cx)`、`pending_wait_with(rt, iter, cx)`；若不存在 runtime 注入路径，则回退 `park_until_wake(iter, cx)`、`park(iter, cx)`、`pending_wait(iter, cx)`、`spin_wait(iter)`，最后 pure continue。
+   - 取消轮询同样优先 runtime 注入路径：`cancel_requested_with(rt, cx)`，其次回退 `cancel_requested(cx)`。
+   - 当前 cancellation v1 基线为“可恢复返回”：命中取消时 wrapper 不再 panic，而是直接返回（`()` 或返回类型默认值）。
 
 ## 2. 为什么核心选 pull
 
@@ -45,9 +45,12 @@ trait Future {
 
 trait Runtime {
   fn pending_wait(rt: Self, i: i32, c: Context) -> ();
+  fn park_until_wake(rt: Self, i: i32, c: Context) -> bool;
+  fn cancel_requested(rt: Self, c: Context) -> bool;
 }
 
 fn wake(c: Context) -> ();
+fn default_runtime() -> SpinRuntime;
 fn park_until_wake(i: i32, c: Context) -> bool;
 fn park(i: i32, c: Context) -> ();
 fn pending_wait(i: i32, c: Context) -> (); // 兼容别名，默认转到 park
@@ -59,7 +62,7 @@ fn cancel_requested(c: Context) -> bool;
 1. `Pending` 表示当前不能继续，需要由 waker 驱动下一次 poll。
 2. `Ready(T)` 表示完成，返回结果。
 3. `Context/Waker` 定义最小执行器接口契约；具体调度策略由 runtime/宿主决定。
-4. `Runtime` trait 定义“Pending 时如何等待/让出”的最小 runtime 分层接口，当前标准库提供 `SpinRuntime`（tight-loop + `yield_now`）默认实现，并暴露 `park_with(rt, i, cx)` / `pending_wait_with(rt, i, cx)` 供宿主自定义 runtime 接入。
+4. `Runtime` trait 定义“Pending 时如何等待/让出 + 取消轮询”的 runtime 分层接口，当前标准库提供 `SpinRuntime`（`yield_now`）默认实现，并暴露 `default_runtime()` + `*_with(rt, ...)` 供宿主注入自定义 runtime。
 
 ## 4. lowering 设计（D03-3 目标）
 
@@ -125,7 +128,7 @@ trait Sink {
 1. 编译器生成的 frame 在 drop 时释放已初始化字段。
 2. 必须保证“未初始化字段不 drop”。
 3. 取消语义保持幂等（重复取消不出错）。
-4. 当前 v0 已落地取消轮询钩子：生成的 async entry/test wrapper 会在 `Pending` 路径查询 `cancel_requested(cx)`，命中后执行 `panic(\"async cancelled\")`。
+4. 当前 v1 已落地取消轮询钩子：生成的 async entry/test wrapper 会在 `Pending` 路径查询取消钩子（优先 `cancel_requested_with(rt, cx)`，其次 `cancel_requested(cx)`），命中后立即返回（不 panic）。
 
 ## 8. 与借用规则的关系（D03-4 目标）
 
@@ -141,5 +144,5 @@ trait Sink {
 
 ## 9. 当前剩余工作
 
-1. runtime/executor 体验继续增强（`wake/park` 入口已就位；后续补事件循环/epoll/IOCP 等更完整执行器能力）。
-2. drop/cancel 语义继续细化与验证（当前已具备 `cancel_requested` 钩子基线；后续补真正可恢复的取消传播与资源回收策略）。
+1. runtime/executor 体验继续增强（当前已支持 `default_runtime + *_with` 注入；后续补事件循环/epoll/IOCP 等更完整执行器能力）。
+2. drop/cancel 语义继续细化与验证（当前已从 panic 升级到“可恢复返回”基线；后续补可配置取消结果传播与更细粒度资源回收策略）。
