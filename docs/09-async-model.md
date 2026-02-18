@@ -19,7 +19,7 @@
 4. async 入口与测试可运行（最小执行器，v0）：
    - 当构建可执行文件启用 driver main 时：若用户定义 `async fn main() -> T`，编译器在编译期生成一个同步 `fn main() -> T` wrapper。
    - 当构建测试二进制启用 test main 时：若发现 `async fn test_*() -> ()`，编译器为该 test 生成一个同步 wrapper 并交给测试运行器调用。
-   - wrapper 内部使用 tight loop 轮询 `poll` 直到 `Ready`；`Pending` 分支优先调用 `std/async::pending_wait(iter, cx)`（若不存在则回退到 `spin_wait(iter)`，再回退到纯 continue），用于保证 `async fn main` 与 async tests 在无完整 runtime 的阶段也能端到端跑通。
+   - wrapper 内部使用 tight loop 轮询 `poll` 直到 `Ready`；`Pending` 分支优先调用 `std/async::park(iter, cx)`（若不存在则回退 `pending_wait(iter, cx)`，再回退 `spin_wait(iter)`，最后纯 continue），用于保证 `async fn main` 与 async tests 在无完整 runtime 的阶段也能端到端跑通。
    - 当前不做真正的 blocking/parking；这部分留给后续 runtime/executor（或宿主）实现。
 
 ## 2. 为什么核心选 pull
@@ -45,6 +45,10 @@ trait Future {
 trait Runtime {
   fn pending_wait(rt: Self, i: i32, c: Context) -> ();
 }
+
+fn wake(c: Context) -> ();
+fn park(i: i32, c: Context) -> ();
+fn pending_wait(i: i32, c: Context) -> (); // 兼容别名，默认转到 park
 ```
 
 说明：
@@ -52,7 +56,7 @@ trait Runtime {
 1. `Pending` 表示当前不能继续，需要由 waker 驱动下一次 poll。
 2. `Ready(T)` 表示完成，返回结果。
 3. `Context/Waker` 定义最小执行器接口契约；具体调度策略由 runtime/宿主决定。
-4. `Runtime` trait 定义“Pending 时如何等待/让出”的最小 runtime 分层接口，当前标准库提供 `SpinRuntime`（tight-loop + `yield_now`）默认实现，并暴露 `pending_wait_with(rt, i, cx)` 供宿主自定义 runtime 接入。
+4. `Runtime` trait 定义“Pending 时如何等待/让出”的最小 runtime 分层接口，当前标准库提供 `SpinRuntime`（tight-loop + `yield_now`）默认实现，并暴露 `park_with(rt, i, cx)` / `pending_wait_with(rt, i, cx)` 供宿主自定义 runtime 接入。
 
 ## 4. lowering 设计（D03-3 目标）
 
@@ -133,5 +137,5 @@ trait Sink {
 
 ## 9. 当前剩余工作
 
-1. runtime/executor 体验继续增强（当前已有 `Runtime` 最小分层；后续补 `wake/park`、事件循环/epoll/IOCP 等更完整执行器能力）。
+1. runtime/executor 体验继续增强（`wake/park` 入口已就位；后续补事件循环/epoll/IOCP 等更完整执行器能力）。
 2. drop/cancel 语义继续细化与验证。
