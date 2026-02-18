@@ -58,8 +58,9 @@ Governance from now on:
 
 - [ ] A14 Async 事件驱动执行器（epoll/kqueue/IOCP + 多源就绪队列）
   - [ ] A14-0 发布链路前置解锁（rolling bootstrap 两阶段）
-    - [ ] A14-0a 先发布包含 `__wake_notify/__wake_wait` 编译器支持的新版本（标准库暂不调用）。
-    - [ ] A14-0b 更新 `scripts/release/bootstrap.lock` 到该版本并通过 rolling 门禁。
+    - [x] A14-0a 先发布包含 `__wake_notify/__wake_wait` 编译器支持的新版本（标准库暂不调用）。
+      - Released: `v0.2.11` (2026-02-18).
+    - [x] A14-0b 更新 `scripts/release/bootstrap.lock` 到该版本并通过 rolling 门禁。
     - [ ] A14-0c 再放开 `src/std` 调用与 `bootstrap-intrinsics.allow`，确保第一跳不被旧 bootstrap 卡住。
   - [ ] A14-1 `EventRuntime` 接入 wake token 通路（`wake` -> `__wake_notify`，`park_until_wake` -> `__wake_wait`）。
   - [ ] A14-2 事件源抽象与多源就绪队列（为 epoll/kqueue/IOCP 统一接口做准备）。
