@@ -60,6 +60,7 @@ vox build
 vox test --run='*'
 vox run
 vox install
+vox run fmt --check
 ```
 
 ## CLI 概览
@@ -70,6 +71,7 @@ vox install
 vox build [--driver=user|tool] [--artifact=exe|static|shared] [--target=<value>] [out.bin]
 vox test  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] [out.bin]
 vox run   [--driver=user|tool] [--artifact=exe] [--target=<value>] [--emit-c[=<path>]] [out.bin]
+vox run fmt [--check] [path...]
 vox install [--target=<value>] [out.bin]
 vox list [--json]
 vox fmt [--check] [path...]
@@ -77,6 +79,11 @@ vox lsp
 vox toolchain current|list|install <vX.Y.Z>|use <vX.Y.Z>|pin <vX.Y.Z>
 vox version | --version | -V
 ```
+
+开发态说明（在 `vox-lang` 仓库根目录）：
+
+- `vox fmt`、`vox install` 会先通过 `scripts/ci/rolling-selfhost.sh` 构建本地最新编译器，再由新编译器执行命令。
+- `vox run fmt ...` 是 `vox fmt ...` 的别名，便于显式触发“先构建再执行”。
 
 ## 常用参数
 
@@ -98,6 +105,7 @@ vox version | --version | -V
 - `VOX_STDLIB=<path>`：标准库覆盖路径（支持 `<path>`、`<path>/src`、`<path>/src/std`）
 - `VOX_NODE=<path>`：`vox lsp` 的 node 可执行路径
 - `VOX_TOOLCHAIN`：覆盖当前工具链版本选择
+- `VOX_DEV_SELFHOST_DISABLE=1`：关闭仓库开发态 `fmt/install` 本地自举重路由
 
 标准库查找优先级：
 

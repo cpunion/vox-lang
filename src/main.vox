@@ -563,6 +563,7 @@ fn usage() -> () {
   print("  ".concat(bin).concat(" build [--driver=user|tool] [--artifact=exe|static|shared] [--target=<value>] [out.bin]\n"));
   print("  ".concat(bin).concat(" test  [--module=<glob>] [--run=<glob>] [--filter=<text>] [--jobs=N|-j N] [--fail-fast] [--list] [--rerun-failed] [--json] [out.bin]\n"));
   print("  ".concat(bin).concat(" run   [--driver=user|tool] [--artifact=exe] [--target=<value>] [out.bin]\n"));
+  print("  ".concat(bin).concat(" run fmt [--check] [path...] # alias of `vox fmt` in compiler repo\n"));
   print("  ".concat(bin).concat(" install [--target=<value>] [out.bin]   # build local pkg and install to ~/.vox/bin\n"));
   print("  ".concat(bin).concat(" list [--json]       # print package module dependency graph\n"));
   print("  ".concat(bin).concat(" fmt [--check] [path...]\n"));
@@ -592,6 +593,7 @@ fn usage() -> () {
   print("  VOX_ROOT=<path>     source root override for loading src/std and src/vox\n");
   print("  VOX_STDLIB=<path>   stdlib root override (highest priority; supports root, root/src, root/src/std)\n");
   print("  VOX_NODE=<path>     node executable for `vox lsp` (default: node)\n");
+  print("  VOX_DEV_SELFHOST_DISABLE=1  disable local repo selfhost reroute for fmt/install\n");
 }
 
 fn print_invalid_lock_error(msg: String) -> () {
@@ -1515,9 +1517,9 @@ fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test
     };
   }
   let run_cmd: String =
-  cmd_head.concat(log_redir)
-  .concat(" && echo 0 > ").concat(shell_quote(shell_exec_path(rc_file)))
-  .concat(" || echo 1 > ").concat(shell_quote(shell_exec_path(rc_file)));
+    cmd_head.concat(log_redir)
+      .concat(" && echo 0 > ").concat(shell_quote(shell_exec_path(rc_file)))
+      .concat(" || echo 1 > ").concat(shell_quote(shell_exec_path(rc_file)));
   let bg_cmd: String = "( ".concat(run_cmd).concat(" ) &");
   let _rc: i32 = exec_cmd(bg_cmd, trace);
   return RunningJob {
@@ -1580,10 +1582,10 @@ fn json_of_results(rs: Vec[TestRunResult]) -> String {
     if i > 0 { out = out.concat(","); }
     let r: TestRunResult = rs.get(i);
     out = out
-    .concat("{\"name\":").concat(json_quote(r.name))
-    .concat(",\"module\":").concat(json_quote(r.module))
-    .concat(",\"status\":").concat(json_quote(if r.ok { "ok" } else { "fail" }))
-    .concat(",\"duration_us\":").concat(duration_us(r.dur_ns).to_string());
+      .concat("{\"name\":").concat(json_quote(r.name))
+      .concat(",\"module\":").concat(json_quote(r.module))
+      .concat(",\"status\":").concat(json_quote(if r.ok { "ok" } else { "fail" }))
+      .concat(",\"duration_us\":").concat(duration_us(r.dur_ns).to_string());
     if r.err != "" {
       out = out.concat(",\"error\":").concat(json_quote(r.err));
     }
@@ -1603,11 +1605,11 @@ fn json_of_modules(ms: Vec[ModuleSummary]) -> String {
     if i > 0 { out = out.concat(","); }
     let m: ModuleSummary = ms.get(i);
     out = out
-    .concat("{\"module\":").concat(json_quote(m.module))
-    .concat(",\"passed\":").concat(m.passed.to_string())
-    .concat(",\"failed\":").concat(m.failed.to_string())
-    .concat(",\"duration_us\":").concat(duration_us(m.dur_ns).to_string())
-    .concat("}");
+      .concat("{\"module\":").concat(json_quote(m.module))
+      .concat(",\"passed\":").concat(m.passed.to_string())
+      .concat(",\"failed\":").concat(m.failed.to_string())
+      .concat(",\"duration_us\":").concat(duration_us(m.dur_ns).to_string())
+      .concat("}");
     i = i + 1;
   }
   return out.concat("]");
@@ -1620,13 +1622,13 @@ fn json_of_module_details(ds: Vec[ModuleDetail]) -> String {
     if i > 0 { out = out.concat(","); }
     let d: ModuleDetail = ds.get(i);
     out = out
-    .concat("{\"module\":").concat(json_quote(d.module))
-    .concat(",\"tests\":").concat(json_of_tests(d.tests))
-    .concat(",\"failed_tests\":").concat(json_of_tests(d.failed_tests))
-    .concat(",\"passed\":").concat(d.passed.to_string())
-    .concat(",\"failed\":").concat(d.failed.to_string())
-    .concat(",\"duration_us\":").concat(duration_us(d.dur_ns).to_string())
-    .concat("}");
+      .concat("{\"module\":").concat(json_quote(d.module))
+      .concat(",\"tests\":").concat(json_of_tests(d.tests))
+      .concat(",\"failed_tests\":").concat(json_of_tests(d.failed_tests))
+      .concat(",\"passed\":").concat(d.passed.to_string())
+      .concat(",\"failed\":").concat(d.failed.to_string())
+      .concat(",\"duration_us\":").concat(duration_us(d.dur_ns).to_string())
+      .concat("}");
     i = i + 1;
   }
   return out.concat("]");
@@ -1639,38 +1641,38 @@ fn json_of_slowest(xs: Vec[NamedDuration]) -> String {
     if i > 0 { out = out.concat(","); }
     let x: NamedDuration = xs.get(i);
     out = out
-    .concat("{\"name\":").concat(json_quote(x.name))
-    .concat(",\"module\":").concat(json_quote(x.module))
-    .concat(",\"duration_us\":").concat(duration_us(x.dur_ns).to_string())
-    .concat("}");
+      .concat("{\"name\":").concat(json_quote(x.name))
+      .concat(",\"module\":").concat(json_quote(x.module))
+      .concat(",\"duration_us\":").concat(duration_us(x.dur_ns).to_string())
+      .concat("}");
     i = i + 1;
   }
   return out.concat("]");
 }
 
 fn print_json_report(
-discovered: i32,
-selected: i32,
-module_pat: String,
-run_pat: String,
-filter: String,
-jobs: i32,
-fail_fast: bool,
-rerun_failed: bool,
-rerun_failed_count: i32,
-list_only: bool,
-selected_tests: Vec[String],
-results: Vec[TestRunResult],
-modules: Vec[ModuleSummary],
-module_details: Vec[ModuleDetail],
-slowest: Vec[NamedDuration],
-failed_tests: Vec[String],
-hint: String,
-message: String,
-passed: i32,
-failed: i32,
-skipped: i32,
-total_ns: i64
+  discovered: i32,
+  selected: i32,
+  module_pat: String,
+  run_pat: String,
+  filter: String,
+  jobs: i32,
+  fail_fast: bool,
+  rerun_failed: bool,
+  rerun_failed_count: i32,
+  list_only: bool,
+  selected_tests: Vec[String],
+  results: Vec[TestRunResult],
+  modules: Vec[ModuleSummary],
+  module_details: Vec[ModuleDetail],
+  slowest: Vec[NamedDuration],
+  failed_tests: Vec[String],
+  hint: String,
+  message: String,
+  passed: i32,
+  failed: i32,
+  skipped: i32,
+  total_ns: i64,
 ) -> () {
   let mut selected_tests_for_modules: Vec[String] = Vec();
   let mut stmi: i32 = 0;
@@ -2346,6 +2348,21 @@ fn is_version_cmd(cmd: String) -> bool {
   return cmd == "version" || cmd == "--version" || cmd == "-V";
 }
 
+fn rewrite_run_alias(args0: Vec[String]) -> Vec[String] {
+  if args0.len() < 2 { return args0; }
+  if !local_dev_repo_has_selfhost() { return args0; }
+  if args0.get(0) != "run" { return args0; }
+  if args0.get(1) != "fmt" { return args0; }
+  let mut out: Vec[String] = Vec();
+  out.push("fmt");
+  let mut i: i32 = 2;
+  while i < args0.len() {
+    out.push(args0.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
 fn normalize_cli_version(v0: String) -> String {
   let v: String = trim_space_main(v0);
   if v == "" { return ""; }
@@ -2398,6 +2415,103 @@ fn git_exact_base_tag(root: String, base: String) -> bool {
   let tag: String = "v".concat(base);
   let got: String = run_git_capture(root, "exact_tag", "describe --tags --exact-match --match ".concat(shell_quote(tag)));
   return got == tag;
+}
+
+struct LocalSelfhostPrintBinResult { ok: bool, err: String, bin: String }
+
+fn local_dev_repo_has_selfhost() -> bool {
+  if !fs.exists("vox.toml") { return false; }
+  if !fs.exists("src/main.vox") { return false; }
+  if !fs.exists("scripts/ci/rolling-selfhost.sh") { return false; }
+  return true;
+}
+
+fn local_dev_selfhost_cmd(cmd: String) -> bool {
+  return cmd == "fmt" || cmd == "install";
+}
+
+fn is_local_selfhost_bin(exe0: String) -> bool {
+  let exe: String = path_with_forward_slashes(normalize_host_fs_path(exe0));
+  if has_suffix(exe, "/target/debug/vox_rolling") { return true; }
+  if has_suffix(exe, "/target/debug/vox_rolling.exe") { return true; }
+  if has_suffix(exe, "target/debug/vox_rolling") { return true; }
+  if has_suffix(exe, "target/debug/vox_rolling.exe") { return true; }
+  return false;
+}
+
+fn last_non_empty_line(text: String) -> String {
+  let lines: Vec[String] = split_lines(text);
+  if lines.len() == 0 { return ""; }
+  let mut i: i32 = lines.len() - 1;
+  while i >= 0 {
+    let s: String = trim_space_main(lines.get(i));
+    if s != "" { return s; }
+    i = i - 1;
+  }
+  return "";
+}
+
+fn exec_cmd_with_env_once(cmdline: String, key: String, value: String, trace: bool) -> i32 {
+  if host_is_windows() {
+    let wrapped: String = "set ".concat(key).concat("=").concat(value).concat("&& ").concat(cmdline);
+    return exec_cmd("cmd /C ".concat(shell_quote(wrapped)), trace);
+  }
+  let wrapped: String = key.concat("=").concat(shell_quote(value)).concat(" ").concat(cmdline);
+  return exec_cmd(wrapped, trace);
+}
+
+fn local_selfhost_print_bin(trace_exec: bool) -> LocalSelfhostPrintBinResult {
+  if !local_dev_repo_has_selfhost() {
+    return LocalSelfhostPrintBinResult { ok: false, err: "not in vox-lang repo root", bin: "" };
+  }
+  fs.mkdir_p("target/debug");
+  let out: String = "target/debug/.vox_local_selfhost_print_bin.log";
+  let script: String = shell_exec_path("scripts/ci/rolling-selfhost.sh");
+  let cmd: String =
+    "bash "
+      .concat(shell_quote(script))
+      .concat(" print-bin > ")
+      .concat(shell_quote(shell_exec_path(out)))
+      .concat(" 2>&1");
+  let rc: i32 = exec_cmd(cmd, trace_exec);
+  let txt: String = if fs.exists(out) { fs.read_to_string(out) } else { "" };
+  if rc != 0 {
+    if txt != "" {
+      return LocalSelfhostPrintBinResult { ok: false, err: txt, bin: "" };
+    }
+    return LocalSelfhostPrintBinResult { ok: false, err: "rolling selfhost build failed", bin: "" };
+  }
+  let bin: String = last_non_empty_line(txt);
+  if bin == "" {
+    return LocalSelfhostPrintBinResult { ok: false, err: "rolling selfhost did not print compiler path", bin: "" };
+  }
+  if !fs.exists(bin) {
+    return LocalSelfhostPrintBinResult { ok: false, err: "rolling selfhost binary missing: ".concat(bin), bin: "" };
+  }
+  return LocalSelfhostPrintBinResult { ok: true, err: "", bin: bin };
+}
+
+fn maybe_handle_local_dev_selfhost(args: Vec[String], trace_exec: bool) -> ToolchainRouteResult {
+  if args.len() == 0 { return tc_route_no(); }
+  if trim_space_main(proc.getenv("VOX_DEV_SELFHOST_DISABLE")) == "1" {
+    return tc_route_no();
+  }
+  let cmd: String = args.get(0);
+  if !local_dev_selfhost_cmd(cmd) { return tc_route_no(); }
+  if !local_dev_repo_has_selfhost() { return tc_route_no(); }
+  if is_local_selfhost_bin(proc.exe_path()) {
+    return tc_route_no();
+  }
+
+  let pr: LocalSelfhostPrintBinResult = local_selfhost_print_bin(trace_exec);
+  if !pr.ok {
+    print("local selfhost failed\n");
+    if pr.err != "" { print(pr.err.concat("\n")); }
+    return tc_route_yes(1);
+  }
+  let cmdline: String = tc_build_exec_cmd(pr.bin, args);
+  let rc: i32 = exec_cmd_with_env_once(cmdline, "VOX_DEV_SELFHOST_DISABLE", "1", trace_exec);
+  return tc_route_yes(rc);
 }
 
 fn resolve_cli_version() -> String {
@@ -2459,16 +2573,16 @@ fn copy_file_host(src: String, dst: String, trace: bool) -> bool {
   let mut cmd: String = "";
   if host_is_windows() {
     cmd =
-    "copy /Y "
-    .concat(shell_quote(shell_exec_path(src)))
-    .concat(" ")
-    .concat(shell_quote(shell_exec_path(dst)));
+      "copy /Y "
+        .concat(shell_quote(shell_exec_path(src)))
+        .concat(" ")
+        .concat(shell_quote(shell_exec_path(dst)));
   } else {
     cmd =
-    "cp "
-    .concat(shell_quote(shell_exec_path(src)))
-    .concat(" ")
-    .concat(shell_quote(shell_exec_path(dst)));
+      "cp "
+        .concat(shell_quote(shell_exec_path(src)))
+        .concat(" ")
+        .concat(shell_quote(shell_exec_path(dst)));
   }
   return exec_cmd(cmd, trace) == 0;
 }
@@ -2565,9 +2679,9 @@ fn cmd_lsp(trace: bool) -> i32 {
   let mut node: String = trim_space_main(proc.getenv("VOX_NODE"));
   if node == "" { node = "node"; }
   let cmd: String =
-  shell_quote(node)
-  .concat(" ")
-  .concat(shell_quote(shell_exec_path(script)));
+    shell_quote(node)
+      .concat(" ")
+      .concat(shell_quote(shell_exec_path(script)));
   let rc: i32 = exec_cmd(cmd, trace);
   if rc != 0 {
     print("lsp server exited with code ".concat(rc.to_string()).concat("\n"));
@@ -2583,17 +2697,27 @@ fn main() -> i32 {
     trace_exec = true;
     args = slice_vec(args, 1);
   }
+  args = rewrite_run_alias(args);
   let mut args_for_route: Vec[String] = Vec();
   let mut ari: i32 = 0;
   while ari < args.len() {
     args_for_route.push(args.get(ari));
     ari = ari + 1;
   }
+  let mut args_for_local_route: Vec[String] = Vec();
+  let mut arl: i32 = 0;
+  while arl < args_for_route.len() {
+    args_for_local_route.push(args_for_route.get(arl));
+    arl = arl + 1;
+  }
   if trace_exec {
     args_for_route.push("-x");
+    args_for_local_route.push("-x");
   }
   let routed: ToolchainRouteResult = maybe_handle_toolchain_or_reroute(args_for_route);
   if routed.handled { return routed.code; }
+  let local_routed: ToolchainRouteResult = maybe_handle_local_dev_selfhost(args_for_local_route, trace_exec);
+  if local_routed.handled { return local_routed.code; }
   if args.len() < 1 {
     usage();
     print("invalid args\n");
@@ -3064,7 +3188,7 @@ fn main() -> i32 {
     let build_key: String = build_cache_key(files_for_cache, build_mode);
     if !build_cache_hit(out, build_key, cpath, out) {
       let cp: c.CompileProfileResult =
-      c.compile_files_to_c_profile(files, cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
+        c.compile_files_to_c_profile(files, cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() });
       let r: c.CompileResult = cp.r;
       if !r.ok {
         print("compile failed: ".concat(r.err).concat("\n"));
@@ -3098,9 +3222,9 @@ fn main() -> i32 {
 
     let self_bin: String = normalize_host_fs_path(proc.exe_path());
     let mut cmdline: String =
-    shell_quote(shell_exec_path(self_bin))
-    .concat(" build ")
-    .concat(shell_quote(out));
+      shell_quote(shell_exec_path(self_bin))
+        .concat(" build ")
+        .concat(shell_quote(out));
     if driver == cg.DriverMainKind.Tool {
       cmdline = cmdline.concat(" --driver=tool");
     }
@@ -3158,9 +3282,9 @@ fn main() -> i32 {
 
     let self_bin: String = normalize_host_fs_path(proc.exe_path());
     let mut cmdline: String =
-    shell_quote(shell_exec_path(self_bin))
-    .concat(" build ")
-    .concat(shell_quote(out));
+      shell_quote(shell_exec_path(self_bin))
+        .concat(" build ")
+        .concat(shell_quote(out));
     if driver == cg.DriverMainKind.Tool {
       cmdline = cmdline.concat(" --driver=tool");
     }
@@ -3346,7 +3470,7 @@ fn main() -> i32 {
     let tests_for_compile: Vec[String] = merge_unique_strings(cached_tests, tests_for_selected);
     if !test_build_cache_hit(out, build_key, cpath, bin, tests_for_hit) {
       let cp: c.CompileProfileResult =
-      c.compile_files_to_c_profile(files, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile });
+        c.compile_files_to_c_profile(files, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile });
       let r: c.CompileResult = cp.r;
       if !r.ok {
         print("compile failed: ".concat(r.err).concat("\n"));
