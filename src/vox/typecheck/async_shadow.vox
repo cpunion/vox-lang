@@ -1,0 +1,485 @@
+import "vox/ast" as ast
+
+// Async lowering currently tracks captures by local name (`l_<name>` fields).
+// To allow lexical shadowing without changing the frame/capture model, we first
+// rewrite async bodies so each local binding name is unique in lexical scope.
+
+struct ShadowBind { name: String, out: String, depth: i32 }
+struct ShadowEnv { binds: Vec[ShadowBind], next_id: i32 }
+struct FreshShadowNameResult { env: ShadowEnv, out: String }
+struct RewriteExprResult { exprs: ast.ExprPool, id: i32, env: ShadowEnv }
+struct RewritePatResult { pat: ast.Pat, env: ShadowEnv }
+struct RewriteStmtSeqResult { exprs: ast.ExprPool, stmts: Vec[ast.Stmt], env: ShadowEnv }
+struct RewriteExprBlockResult { exprs: ast.ExprPool, block: ast.ExprBlock, env: ShadowEnv }
+
+pub struct AsyncShadowRenameResult { pub exprs: ast.ExprPool, pub body: ast.Block }
+
+fn add_expr(p0: ast.ExprPool, n: ast.ExprNode, sp: ast.Span) -> ast.AddExprResult {
+  return ast.expr_pool_add(p0, n, sp);
+}
+
+fn env_lookup_out(env: ShadowEnv, name: String) -> String {
+  let mut i: i32 = env.binds.len() - 1;
+  while i >= 0 {
+    let b: ShadowBind = env.binds.get(i);
+    if b.name == name { return b.out; }
+    i = i - 1;
+  }
+  return name;
+}
+
+fn env_has_name(env: ShadowEnv, name: String) -> bool {
+  let mut i: i32 = env.binds.len() - 1;
+  while i >= 0 {
+    if env.binds.get(i).name == name { return true; }
+    i = i - 1;
+  }
+  return false;
+}
+
+fn env_has_out(env: ShadowEnv, out: String) -> bool {
+  let mut i: i32 = env.binds.len() - 1;
+  while i >= 0 {
+    if env.binds.get(i).out == out { return true; }
+    i = i - 1;
+  }
+  return false;
+}
+
+fn env_push(env0: ShadowEnv, name: String, out: String, depth: i32) -> ShadowEnv {
+  let mut env: ShadowEnv = env0;
+  env.binds.push(ShadowBind { name: name, out: out, depth: depth });
+  return env;
+}
+
+fn env_take(xs: Vec[ShadowBind], n: i32) -> Vec[ShadowBind] {
+  let mut out: Vec[ShadowBind] = Vec();
+  let mut i: i32 = 0;
+  while i < n && i < xs.len() {
+    out.push(xs.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn env_trim_to(env0: ShadowEnv, n: i32) -> ShadowEnv {
+  let mut env: ShadowEnv = env0;
+  env.binds = env_take(env.binds, n);
+  return env;
+}
+
+fn env_seed_from_locals(l0: Locals) -> ShadowEnv {
+  let mut env: ShadowEnv = ShadowEnv { binds: Vec(), next_id: 0 };
+  let mut i: i32 = 0;
+  while i < l0.vars.len() {
+    let v: VarEntry = l0.vars.get(i);
+    if v.depth <= l0.depth {
+      env.binds.push(ShadowBind { name: v.name, out: v.name, depth: v.depth });
+    }
+    i = i + 1;
+  }
+  return env;
+}
+
+fn fresh_shadow_name(env0: ShadowEnv, base: String) -> FreshShadowNameResult {
+  let mut env: ShadowEnv = env0;
+  while true {
+    let cand: String = base.concat("__async_shadow_").concat(env.next_id.to_string());
+    env.next_id = env.next_id + 1;
+    if !env_has_out(env, cand) {
+      return FreshShadowNameResult { env: env, out: cand };
+    }
+  }
+  return FreshShadowNameResult { env: env, out: base };
+}
+
+fn rewrite_pat(env0: ShadowEnv, pat0: ast.Pat, depth: i32) -> RewritePatResult {
+  let mut env: ShadowEnv = env0;
+  return match pat0 {
+    ast.Pat.Wild(sp) => RewritePatResult { pat: ast.Pat.Wild(sp), env: env },
+    ast.Pat.Bool(sp, b) => RewritePatResult { pat: ast.Pat.Bool(sp, b), env: env },
+    ast.Pat.Int(sp, s) => RewritePatResult { pat: ast.Pat.Int(sp, s), env: env },
+    ast.Pat.Str(sp, s) => RewritePatResult { pat: ast.Pat.Str(sp, s), env: env },
+    ast.Pat.Bind(sp, name) => {
+      let mut out_name: String = name;
+      if env_has_name(env, name) {
+        let fr: FreshShadowNameResult = fresh_shadow_name(env, name);
+        env = fr.env;
+        out_name = fr.out;
+      }
+      env = env_push(env, name, out_name, depth);
+      RewritePatResult { pat: ast.Pat.Bind(sp, out_name), env: env }
+    },
+    ast.Pat.EnumVariant(sp, enum_parts, variant, args0) => {
+      let mut args: Vec[ast.Pat] = Vec();
+      let mut i: i32 = 0;
+      while i < args0.len() {
+        let rr: RewritePatResult = rewrite_pat(env, args0.get(i), depth);
+        env = rr.env;
+        args.push(rr.pat);
+        i = i + 1;
+      }
+      RewritePatResult { pat: ast.Pat.EnumVariant(sp, enum_parts, variant, args), env: env }
+    },
+  };
+}
+
+fn rewrite_expr(env0: ShadowEnv, p0: ast.ExprPool, eid: i32, depth: i32) -> RewriteExprResult {
+  let mut p: ast.ExprPool = p0;
+  let mut env: ShadowEnv = env0;
+  let sp: ast.Span = ast.expr_pool_span(p, eid);
+  let n: ast.ExprNode = ast.expr_pool_get(p, eid);
+
+  if match n { ast.ExprNode.Int(_v) => true, _ => false } {
+    let v: String = match n { ast.ExprNode.Int(v0) => v0, _ => "" };
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Int(v), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.Float(_v) => true, _ => false } {
+    let v: String = match n { ast.ExprNode.Float(v0) => v0, _ => "" };
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Float(v), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.Bool(_b) => true, _ => false } {
+    let b: bool = match n { ast.ExprNode.Bool(v0) => v0, _ => false };
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Bool(b), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.Str(_s) => true, _ => false } {
+    let s: String = match n { ast.ExprNode.Str(v0) => v0, _ => "" };
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Str(s), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.DotIdent(_s) => true, _ => false } {
+    let s: String = match n { ast.ExprNode.DotIdent(v0) => v0, _ => "" };
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.DotIdent(s), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.Ident(_s) => true, _ => false } {
+    let name: String = match n { ast.ExprNode.Ident(v0) => v0, _ => "" };
+    let out_name: String = env_lookup_out(env, name);
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Ident(out_name), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.Unary(_op, _a) => true, _ => false } {
+    let op: ast.UnaryOp = match n { ast.ExprNode.Unary(op0, _a0) => op0, _ => ast.UnaryOp.Pos };
+    let a: i32 = match n { ast.ExprNode.Unary(_op0, a0) => a0, _ => -1 };
+    let ra: RewriteExprResult = rewrite_expr(env, p, a, depth);
+    p = ra.exprs;
+    env = ra.env;
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Unary(op, ra.id), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.As(_a, _tn) => true, _ => false } {
+    let a: i32 = match n { ast.ExprNode.As(a0, _tn0) => a0, _ => -1 };
+    let tn: ast.TypeName = match n { ast.ExprNode.As(_a0, tn0) => tn0, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+    let ra: RewriteExprResult = rewrite_expr(env, p, a, depth);
+    p = ra.exprs;
+    env = ra.env;
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.As(ra.id, tn), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.Binary(_op, _l, _r) => true, _ => false } {
+    let op: ast.BinaryOp = match n { ast.ExprNode.Binary(op0, _l0, _r0) => op0, _ => ast.BinaryOp.Add };
+    let l: i32 = match n { ast.ExprNode.Binary(_op0, l0, _r0) => l0, _ => -1 };
+    let r0: i32 = match n { ast.ExprNode.Binary(_op0, _l0, r1) => r1, _ => -1 };
+    let rl: RewriteExprResult = rewrite_expr(env, p, l, depth);
+    p = rl.exprs;
+    env = rl.env;
+    let rr: RewriteExprResult = rewrite_expr(env, p, r0, depth);
+    p = rr.exprs;
+    env = rr.env;
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Binary(op, rl.id, rr.id), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.Member(_recv, _f) => true, _ => false } {
+    let recv: i32 = match n { ast.ExprNode.Member(recv0, _f0) => recv0, _ => -1 };
+    let f: String = match n { ast.ExprNode.Member(_recv0, f0) => f0, _ => "" };
+    let rr: RewriteExprResult = rewrite_expr(env, p, recv, depth);
+    p = rr.exprs;
+    env = rr.env;
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Member(rr.id, f), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.Call(_c, _t, _a) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.Call(c0, _t0, _a0) => c0, _ => -1 };
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c0, t0, _a0) => t0, _ => Vec() };
+    let args0: Vec[i32] = match n { ast.ExprNode.Call(_c0, _t0, a0) => a0, _ => Vec() };
+    let rc: RewriteExprResult = rewrite_expr(env, p, callee, depth);
+    p = rc.exprs;
+    env = rc.env;
+    let mut args: Vec[i32] = Vec();
+    let mut i: i32 = 0;
+    while i < args0.len() {
+      let ra: RewriteExprResult = rewrite_expr(env, p, args0.get(i), depth);
+      p = ra.exprs;
+      env = ra.env;
+      args.push(ra.id);
+      i = i + 1;
+    }
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Call(rc.id, targs, args), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.MacroCall(_c, _t, _a) => true, _ => false } {
+    let callee: i32 = match n { ast.ExprNode.MacroCall(c0, _t0, _a0) => c0, _ => -1 };
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.MacroCall(_c0, t0, _a0) => t0, _ => Vec() };
+    let args0: Vec[i32] = match n { ast.ExprNode.MacroCall(_c0, _t0, a0) => a0, _ => Vec() };
+    let rc: RewriteExprResult = rewrite_expr(env, p, callee, depth);
+    p = rc.exprs;
+    env = rc.env;
+    let mut args: Vec[i32] = Vec();
+    let mut i: i32 = 0;
+    while i < args0.len() {
+      let ra: RewriteExprResult = rewrite_expr(env, p, args0.get(i), depth);
+      p = ra.exprs;
+      env = ra.env;
+      args.push(ra.id);
+      i = i + 1;
+    }
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.MacroCall(rc.id, targs, args), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.Try(_x) => true, _ => false } {
+    let x: i32 = match n { ast.ExprNode.Try(x0) => x0, _ => -1 };
+    let rx: RewriteExprResult = rewrite_expr(env, p, x, depth);
+    p = rx.exprs;
+    env = rx.env;
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Try(rx.id), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.Await(_x) => true, _ => false } {
+    let x: i32 = match n { ast.ExprNode.Await(x0) => x0, _ => -1 };
+    let rx: RewriteExprResult = rewrite_expr(env, p, x, depth);
+    p = rx.exprs;
+    env = rx.env;
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Await(rx.id), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.TryBlock(_bid) => true, _ => false } {
+    let bid: i32 = match n { ast.ExprNode.TryBlock(b0) => b0, _ => -1 };
+    let rb: RewriteExprResult = rewrite_expr(env, p, bid, depth);
+    p = rb.exprs;
+    env = rb.env;
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.TryBlock(rb.id), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.StructLit(_t, _fs) => true, _ => false } {
+    let ty_expr: i32 = match n { ast.ExprNode.StructLit(t0, _fs0) => t0, _ => -1 };
+    let fs0: Vec[ast.StructLitField] = match n { ast.ExprNode.StructLit(_t0, fs1) => fs1, _ => Vec() };
+    let rt: RewriteExprResult = rewrite_expr(env, p, ty_expr, depth);
+    p = rt.exprs;
+    env = rt.env;
+    let mut fs: Vec[ast.StructLitField] = Vec();
+    let mut i: i32 = 0;
+    while i < fs0.len() {
+      let f0: ast.StructLitField = fs0.get(i);
+      let rf: RewriteExprResult = rewrite_expr(env, p, f0.expr, depth);
+      p = rf.exprs;
+      env = rf.env;
+      fs.push(ast.StructLitField { name: f0.name, expr: rf.id });
+      i = i + 1;
+    }
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.StructLit(rt.id, fs), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.If(_c, _t, _e) => true, _ => false } {
+    let c: i32 = match n { ast.ExprNode.If(c0, _t0, _e0) => c0, _ => -1 };
+    let t0: i32 = match n { ast.ExprNode.If(_c0, t1, _e0) => t1, _ => -1 };
+    let e0: i32 = match n { ast.ExprNode.If(_c0, _t1, e1) => e1, _ => -1 };
+    let rc: RewriteExprResult = rewrite_expr(env, p, c, depth);
+    p = rc.exprs;
+    env = rc.env;
+    let rt: RewriteExprResult = rewrite_expr(env, p, t0, depth);
+    p = rt.exprs;
+    env = rt.env;
+    let re: RewriteExprResult = rewrite_expr(env, p, e0, depth);
+    p = re.exprs;
+    env = re.env;
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.If(rc.id, rt.id, re.id), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  if match n { ast.ExprNode.Match(_s, _arms) => true, _ => false } {
+    let scrut: i32 = match n { ast.ExprNode.Match(s0, _a0) => s0, _ => -1 };
+    let arms0: Vec[ast.MatchArm] = match n { ast.ExprNode.Match(_s0, a0) => a0, _ => Vec() };
+    let rs: RewriteExprResult = rewrite_expr(env, p, scrut, depth);
+    p = rs.exprs;
+    let mut env_base: ShadowEnv = rs.env;
+    let mut arms: Vec[ast.MatchArm] = Vec();
+    let mut i: i32 = 0;
+    while i < arms0.len() {
+      let a0: ast.MatchArm = arms0.get(i);
+      let base_len: i32 = env_base.binds.len();
+      let rp: RewritePatResult = rewrite_pat(env_base, a0.pat, depth + 1);
+      let re: RewriteExprResult = rewrite_expr(rp.env, p, a0.expr, depth + 1);
+      p = re.exprs;
+      arms.push(ast.MatchArm { pat: rp.pat, expr: re.id });
+      env_base = env_trim_to(re.env, base_len);
+      i = i + 1;
+    }
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Match(rs.id, arms), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env_base };
+  }
+  if match n { ast.ExprNode.Block(_b) => true, _ => false } {
+    let b0: ast.ExprBlock = match n { ast.ExprNode.Block(b1) => b1, _ => ast.ExprBlock { stmts: Vec(), has_tail: false, tail: -1 } };
+    let rb: RewriteExprBlockResult = rewrite_expr_block(env, p, b0, depth + 1);
+    p = rb.exprs;
+    env = rb.env;
+    let r: ast.AddExprResult = add_expr(p, ast.ExprNode.Block(rb.block), sp);
+    return RewriteExprResult { exprs: r.pool, id: r.id, env: env };
+  }
+  return RewriteExprResult { exprs: p, id: eid, env: env };
+}
+
+fn rewrite_stmt_seq(env0: ShadowEnv, p0: ast.ExprPool, ss0: Vec[ast.Stmt], depth: i32) -> RewriteStmtSeqResult {
+  let mut env: ShadowEnv = env0;
+  let mut p: ast.ExprPool = p0;
+  let mut out: Vec[ast.Stmt] = Vec();
+  let mut i: i32 = 0;
+  while i < ss0.len() {
+    let st: ast.Stmt = ss0.get(i);
+    if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.Let(sp0, _m0, _n0, _ha0, _ann0, _e0) => sp0, _ => ast.span0() };
+      let m0: bool = match st { ast.Stmt.Let(_sp0, m1, _n0, _ha0, _ann0, _e0) => m1, _ => false };
+      let n0: String = match st { ast.Stmt.Let(_sp0, _m1, n1, _ha0, _ann0, _e0) => n1, _ => "" };
+      let ha0: bool = match st { ast.Stmt.Let(_sp0, _m1, _n1, ha1, _ann0, _e0) => ha1, _ => false };
+      let ann0: ast.TypeName = match st { ast.Stmt.Let(_sp0, _m1, _n1, _ha1, ann1, _e0) => ann1, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+      let init0: i32 = match st { ast.Stmt.Let(_sp0, _m1, _n1, _ha1, _ann1, e1) => e1, _ => -1 };
+      let ri: RewriteExprResult = rewrite_expr(env, p, init0, depth);
+      p = ri.exprs;
+      env = ri.env;
+      let mut out_name: String = n0;
+      if env_has_name(env, n0) {
+        let fr: FreshShadowNameResult = fresh_shadow_name(env, n0);
+        env = fr.env;
+        out_name = fr.out;
+      }
+      env = env_push(env, n0, out_name, depth);
+      out.push(ast.Stmt.Let(sp, m0, out_name, ha0, ann0, ri.id));
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.Assign(_sp, _n, _e) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.Assign(sp0, _n0, _e0) => sp0, _ => ast.span0() };
+      let n0: String = match st { ast.Stmt.Assign(_sp0, n1, _e0) => n1, _ => "" };
+      let e0: i32 = match st { ast.Stmt.Assign(_sp0, _n1, e1) => e1, _ => -1 };
+      let re: RewriteExprResult = rewrite_expr(env, p, e0, depth);
+      p = re.exprs;
+      env = re.env;
+      out.push(ast.Stmt.Assign(sp, env_lookup_out(env, n0), re.id));
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.AssignField(_sp, _r, _f, _e) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.AssignField(sp0, _r0, _f0, _e0) => sp0, _ => ast.span0() };
+      let recv: String = match st { ast.Stmt.AssignField(_sp0, r0, _f0, _e0) => r0, _ => "" };
+      let f0: String = match st { ast.Stmt.AssignField(_sp0, _r0, f1, _e0) => f1, _ => "" };
+      let e0: i32 = match st { ast.Stmt.AssignField(_sp0, _r0, _f1, e1) => e1, _ => -1 };
+      let re: RewriteExprResult = rewrite_expr(env, p, e0, depth);
+      p = re.exprs;
+      env = re.env;
+      out.push(ast.Stmt.AssignField(sp, env_lookup_out(env, recv), f0, re.id));
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.ExprStmt(sp0, _e0) => sp0, _ => ast.span0() };
+      let e0: i32 = match st { ast.Stmt.ExprStmt(_sp0, e1) => e1, _ => -1 };
+      let re: RewriteExprResult = rewrite_expr(env, p, e0, depth);
+      p = re.exprs;
+      env = re.env;
+      out.push(ast.Stmt.ExprStmt(sp, re.id));
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.IfStmt(_sp, _c, _t, _h, _e) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.IfStmt(sp0, _c0, _t0, _h0, _e0) => sp0, _ => ast.span0() };
+      let c0: i32 = match st { ast.Stmt.IfStmt(_sp0, c1, _t0, _h0, _e0) => c1, _ => -1 };
+      let t0: ast.Block = match st { ast.Stmt.IfStmt(_sp0, _c1, t1, _h0, _e0) => t1, _ => ast.Block { stmts: Vec() } };
+      let h0: bool = match st { ast.Stmt.IfStmt(_sp0, _c1, _t1, h1, _e0) => h1, _ => false };
+      let e0: ast.Block = match st { ast.Stmt.IfStmt(_sp0, _c1, _t1, _h1, e1) => e1, _ => ast.Block { stmts: Vec() } };
+
+      let rc: RewriteExprResult = rewrite_expr(env, p, c0, depth);
+      p = rc.exprs;
+      env = rc.env;
+
+      let base_len_t: i32 = env.binds.len();
+      let rt: RewriteStmtSeqResult = rewrite_stmt_seq(env, p, t0.stmts, depth + 1);
+      p = rt.exprs;
+      let mut env_t: ShadowEnv = env_trim_to(rt.env, base_len_t);
+
+      let mut else_block: ast.Block = ast.Block { stmts: Vec() };
+      if h0 {
+        let base_len_e: i32 = env_t.binds.len();
+        let re_b: RewriteStmtSeqResult = rewrite_stmt_seq(env_t, p, e0.stmts, depth + 1);
+        p = re_b.exprs;
+        env_t = env_trim_to(re_b.env, base_len_e);
+        else_block = ast.Block { stmts: re_b.stmts };
+      }
+      env = env_t;
+      out.push(ast.Stmt.IfStmt(sp, rc.id, ast.Block { stmts: rt.stmts }, h0, else_block));
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.WhileStmt(_sp, _c, _b) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.WhileStmt(sp0, _c0, _b0) => sp0, _ => ast.span0() };
+      let c0: i32 = match st { ast.Stmt.WhileStmt(_sp0, c1, _b0) => c1, _ => -1 };
+      let b0: ast.Block = match st { ast.Stmt.WhileStmt(_sp0, _c1, b1) => b1, _ => ast.Block { stmts: Vec() } };
+      let rc: RewriteExprResult = rewrite_expr(env, p, c0, depth);
+      p = rc.exprs;
+      env = rc.env;
+      let base_len_b: i32 = env.binds.len();
+      let rb: RewriteStmtSeqResult = rewrite_stmt_seq(env, p, b0.stmts, depth + 1);
+      p = rb.exprs;
+      env = env_trim_to(rb.env, base_len_b);
+      out.push(ast.Stmt.WhileStmt(sp, rc.id, ast.Block { stmts: rb.stmts }));
+      i = i + 1;
+      continue;
+    }
+    if match st { ast.Stmt.ReturnStmt(_sp, _h, _e) => true, _ => false } {
+      let sp: ast.Span = match st { ast.Stmt.ReturnStmt(sp0, _h0, _e0) => sp0, _ => ast.span0() };
+      let h0: bool = match st { ast.Stmt.ReturnStmt(_sp0, h1, _e0) => h1, _ => false };
+      let e0: i32 = match st { ast.Stmt.ReturnStmt(_sp0, _h1, e1) => e1, _ => -1 };
+      if !h0 {
+        out.push(ast.Stmt.ReturnStmt(sp, false, -1));
+      } else {
+        let re: RewriteExprResult = rewrite_expr(env, p, e0, depth);
+        p = re.exprs;
+        env = re.env;
+        out.push(ast.Stmt.ReturnStmt(sp, true, re.id));
+      }
+      i = i + 1;
+      continue;
+    }
+
+    // Internal stmt kinds should not appear before async normalization; passthrough.
+    out.push(st);
+    i = i + 1;
+  }
+  return RewriteStmtSeqResult { exprs: p, stmts: out, env: env };
+}
+
+fn rewrite_expr_block(env0: ShadowEnv, p0: ast.ExprPool, b0: ast.ExprBlock, depth: i32) -> RewriteExprBlockResult {
+  let base_len: i32 = env0.binds.len();
+  let rs: RewriteStmtSeqResult = rewrite_stmt_seq(env0, p0, b0.stmts, depth);
+  let mut p: ast.ExprPool = rs.exprs;
+  let mut env: ShadowEnv = rs.env;
+  let mut tail_id: i32 = b0.tail;
+  if b0.has_tail {
+    let rt: RewriteExprResult = rewrite_expr(env, p, b0.tail, depth);
+    p = rt.exprs;
+    env = rt.env;
+    tail_id = rt.id;
+  }
+  env = env_trim_to(env, base_len);
+  return RewriteExprBlockResult {
+    exprs: p,
+    block: ast.ExprBlock { stmts: rs.stmts, has_tail: b0.has_tail, tail: tail_id },
+    env: env,
+  };
+}
+
+pub fn async_shadow_rename_block(exprs0: ast.ExprPool, b0: ast.Block, l0: Locals) -> AsyncShadowRenameResult {
+  let env0: ShadowEnv = env_seed_from_locals(l0);
+  let rs: RewriteStmtSeqResult = rewrite_stmt_seq(env0, exprs0, b0.stmts, l0.depth);
+  return AsyncShadowRenameResult { exprs: rs.exprs, body: ast.Block { stmts: rs.stmts } };
+}
