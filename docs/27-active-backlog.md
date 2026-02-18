@@ -56,7 +56,7 @@ Governance from now on:
   - [x] A13-3 `docs/10-macro-system.md` 补充 missing-callee 直错规则。
   - Source: `docs/09-async-model.md`, `docs/14-syntax-details.md`, `docs/10-macro-system.md`.
 
-- [ ] A14 Async 事件驱动执行器（epoll/kqueue/IOCP + 多源就绪队列）
+- [x] A14 Async 事件驱动执行器（epoll/kqueue/IOCP + 多源就绪队列）
   - [x] A14-0 发布链路前置解锁（rolling bootstrap 两阶段）
     - [x] A14-0a 先发布包含 `__wake_notify/__wake_wait` 编译器支持的新版本（标准库暂不调用）。
       - Released: `v0.2.11` (2026-02-18).
@@ -67,7 +67,8 @@ Governance from now on:
     - Landed in `src/std/async/async.vox` + `src/std/async/async_test.vox`.
   - [x] A14-2 事件源抽象与多源就绪队列（为 epoll/kqueue/IOCP 统一接口做准备）。
     - Baseline landed: `EventSource` + `ReadyPoll` + `ReadyQueue` and queue bridge helpers in `std/async`.
-  - [ ] A14-3 平台实现补齐与回归（linux/macOS/windows + wasm 行为约束）。
+  - [x] A14-3 平台实现补齐与回归（linux/macOS/windows + wasm 行为约束）。
+    - Landed: wake runtime platform constraints documented in `docs/16-platform-support.md` and locked by codegen regressions in `src/vox/codegen/c_emit_test.vox`.
   - Scope: 在保持现有 `Runtime` trait 兼容前提下，把 `EventRuntime` 从 timeout-yield 基线升级为真正事件驱动。
   - Source: `docs/09-async-model.md`, `docs/29-async-expr-await.md`.
 
