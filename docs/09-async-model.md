@@ -82,6 +82,7 @@ fn cancel_return[T](c: Context) -> T; // 可选钩子；不提供时回退默认
 5. `EventSource + ReadyQueue` 提供“事件源抽象 + 多源就绪队列”基线：
    - `EventSource.wait(...)` 统一“单次等待 -> ReadyPoll”接口；
    - `ReadyQueue` 提供 token 队列（push/pop）作为多源事件汇聚结构；
+   - `drain_ready_once(...)` 提供“多 context 单轮扫描并入队”基线，避免宿主重复拼接轮询样板；
    - 现阶段先用于接口收敛，后续由平台后端（epoll/kqueue/IOCP）填充具体事件源实现。
 
 ## 4. lowering 设计（D03-3 目标）
@@ -164,5 +165,5 @@ trait Sink {
 
 ## 9. 当前剩余工作
 
-1. runtime/executor 体验继续增强（当前已支持 `default_runtime + *_with` 注入，默认 runtime 已切到 wake-token 超时等待基线，且有 `EventSource + ReadyQueue` 统一接口；后续补真正的 epoll/kqueue/IOCP 事件源实现与接线）。
+1. runtime/executor 体验继续增强（当前已支持 `default_runtime + *_with` 注入，默认 runtime 已切到 wake-token 超时等待基线，且有 `EventSource + ReadyQueue + drain_ready_once` 统一接口；后续补真正的 epoll/kqueue/IOCP 事件源实现与接线）。
 2. drop/cancel 语义继续细化与验证（当前已支持“可恢复返回 + 可选清理/传播钩子”基线；后续补更细粒度资源回收策略）。

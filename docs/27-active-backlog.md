@@ -72,6 +72,11 @@ Governance from now on:
   - Scope: 在保持现有 `Runtime` trait 兼容前提下，把 `EventRuntime` 从 timeout-yield 基线升级为真正事件驱动。
   - Source: `docs/09-async-model.md`, `docs/29-async-expr-await.md`.
 
+- [x] A15 Async 事件源多 context 扫描接线基线
+  - [x] A15-1 `std/async` 新增 `drain_ready_once`，将多个 `Context` 的单轮 `EventSource.wait` 结果统一入 `ReadyQueue`，减少宿主重复样板。
+    - Landed in `src/std/async/async.vox` + `src/std/async/async_test.vox`.
+  - Source: `docs/09-async-model.md`.
+
 - [x] A01 Real generic pack expansion (type/value packs), not declaration-only.
   - [x] A01-1 Trailing explicit type args can bind a single trailing type pack.
     - Landed in `src/vox/typecheck/tc_call.vox`, `src/vox/irgen/gen_call_match.vox`, and `src/vox/typecheck/consts.vox`, with compile/typecheck tests covering both runtime and const-call paths.
