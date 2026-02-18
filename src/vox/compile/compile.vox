@@ -246,7 +246,9 @@ fn mk_async_poll_loop_body(
   async_alias: String,
   inner_name: String,
   ret: ast.TypeName,
+  has_park_until_wake: bool,
   has_park: bool,
+  has_cancel_requested: bool,
   has_pending_wait: bool,
   has_spin_wait: bool,
 ) -> MkAsyncPollLoopBodyResult {
@@ -283,7 +285,7 @@ fn mk_async_poll_loop_body(
   prog = r_f_init.prog;
   let s_f: ast.Stmt = ast.Stmt.Let(sp, true, "f", false, dummy_type_name(), r_f_init.id);
   let mut s_spins: ast.Stmt = ast.Stmt.ExprStmt(sp, r_dummy.id);
-  if has_park || has_pending_wait || has_spin_wait {
+  if has_park_until_wake || has_park || has_pending_wait || has_spin_wait {
     let r_spins0: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Int("0"));
     prog = r_spins0.prog;
     s_spins = ast.Stmt.Let(sp, true, "spins", false, dummy_type_name(), r_spins0.id);
@@ -309,7 +311,22 @@ fn mk_async_poll_loop_body(
   prog = r_p.prog;
 
   let mut pend_stmts: Vec[ast.Stmt] = Vec();
-  if has_park {
+  if has_park_until_wake {
+    let r_a2: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+    prog = r_a2.prog;
+    let r_parkw: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a2.id, "park_until_wake"));
+    prog = r_parkw.prog;
+    let r_spinsv: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("spins"));
+    prog = r_spinsv.prog;
+    let r_cx2: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+    prog = r_cx2.prog;
+    let mut parkw_args: Vec[i32] = Vec();
+    parkw_args.push(r_spinsv.id);
+    parkw_args.push(r_cx2.id);
+    let r_parkw_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_parkw.id, Vec(), parkw_args));
+    prog = r_parkw_call.prog;
+    pend_stmts.push(ast.Stmt.ExprStmt(sp, r_parkw_call.id));
+  } else if has_park {
     let r_a2: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
     prog = r_a2.prog;
     let r_park: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a2.id, "park"));
@@ -361,6 +378,30 @@ fn mk_async_poll_loop_body(
     prog = r_next.prog;
     pend_stmts.push(ast.Stmt.Assign(sp, "spins", r_next.id));
   }
+  if has_cancel_requested {
+    let r_a3: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+    prog = r_a3.prog;
+    let r_cancel_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a3.id, "cancel_requested"));
+    prog = r_cancel_fn.prog;
+    let r_cx3: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+    prog = r_cx3.prog;
+    let mut cancel_args: Vec[i32] = Vec();
+    cancel_args.push(r_cx3.id);
+    let r_cancel_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_cancel_fn.id, Vec(), cancel_args));
+    prog = r_cancel_call.prog;
+
+    let r_panic: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("panic"));
+    prog = r_panic.prog;
+    let r_msg: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Str("async cancelled"));
+    prog = r_msg.prog;
+    let mut panic_args: Vec[i32] = Vec();
+    panic_args.push(r_msg.id);
+    let r_panic_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_panic.id, Vec(), panic_args));
+    prog = r_panic_call.prog;
+    let mut then_stmts: Vec[ast.Stmt] = Vec();
+    then_stmts.push(ast.Stmt.ExprStmt(sp, r_panic_call.id));
+    pend_stmts.push(ast.Stmt.IfStmt(sp, r_cancel_call.id, ast.Block { stmts: then_stmts }, false, ast.Block { stmts: Vec() }));
+  }
   pend_stmts.push(ast.Stmt.Continue(sp));
   let r_pend_blk: AddExprToProgResult =
     add_expr_to_prog(prog, sp, ast.ExprNode.Block(ast.ExprBlock { stmts: pend_stmts, has_tail: false, tail: r_dummy.id }));
@@ -396,7 +437,7 @@ fn mk_async_poll_loop_body(
   let mut ss: Vec[ast.Stmt] = Vec();
   ss.push(s_cx);
   ss.push(s_f);
-  if has_park || has_pending_wait || has_spin_wait {
+  if has_park_until_wake || has_park || has_pending_wait || has_spin_wait {
     ss.push(s_spins);
   }
   ss.push(s_while);
@@ -412,7 +453,9 @@ fn rewrite_async_main_and_tests_in_program(
   prog0: ast.Program,
   emit_driver_main: bool,
   emit_test_main: bool,
+  has_park_until_wake: bool,
   has_park: bool,
+  has_cancel_requested: bool,
   has_pending_wait: bool,
   has_spin_wait: bool,
 ) -> ast.Program {
@@ -439,7 +482,9 @@ fn rewrite_async_main_and_tests_in_program(
           ir.alias,
           inner_name,
           fd0.ret,
+          has_park_until_wake,
           has_park,
+          has_cancel_requested,
           has_pending_wait,
           has_spin_wait,
         );
@@ -478,7 +523,9 @@ fn rewrite_async_main_and_tests_in_program(
 
 fn rewrite_async_entrypoints(w0: tc.World, opts: cg.EmitOptions) -> tc.World {
   if !opts.emit_driver_main && !opts.emit_test_main { return w0; }
+  let has_park_until_wake: bool = world_mod_has_func(w0, "std/async", "park_until_wake");
   let has_park: bool = world_mod_has_func(w0, "std/async", "park");
+  let has_cancel_requested: bool = world_mod_has_func(w0, "std/async", "cancel_requested");
   let has_pending_wait: bool = world_mod_has_func(w0, "std/async", "pending_wait");
   let has_spin_wait: bool = world_mod_has_func(w0, "std/async", "spin_wait");
   let mut w: tc.World = tc.world();
@@ -490,7 +537,9 @@ fn rewrite_async_entrypoints(w0: tc.World, opts: cg.EmitOptions) -> tc.World {
         m.prog,
         opts.emit_driver_main,
         opts.emit_test_main,
+        has_park_until_wake,
         has_park,
+        has_cancel_requested,
         has_pending_wait,
         has_spin_wait,
       );

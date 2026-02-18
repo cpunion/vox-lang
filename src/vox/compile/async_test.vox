@@ -62,6 +62,37 @@ fn std_async_file_with_park() -> ld.SourceFile {
   };
 }
 
+fn std_async_file_with_park_until_wake() -> ld.SourceFile {
+  return ld.SourceFile {
+    path: "src/std/async/async.vox",
+    text: """
+      pub enum Poll[T] { Pending, Ready(T) }
+      pub struct Waker { pub token: i64 }
+      pub struct Context { pub waker: Waker }
+      pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+      pub fn waker(token: i64) -> Waker { return Waker { token: token }; }
+      pub fn context(w: Waker) -> Context { return Context { waker: w }; }
+      pub fn park_until_wake(i: i32, c: Context) -> bool { return false; }
+    """,
+  };
+}
+
+fn std_async_file_with_cancel_requested() -> ld.SourceFile {
+  return ld.SourceFile {
+    path: "src/std/async/async.vox",
+    text: """
+      pub enum Poll[T] { Pending, Ready(T) }
+      pub struct Waker { pub token: i64 }
+      pub struct Context { pub waker: Waker }
+      pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+      pub fn waker(token: i64) -> Waker { return Waker { token: token }; }
+      pub fn context(w: Waker) -> Context { return Context { waker: w }; }
+      pub fn park(i: i32, c: Context) -> () { return; }
+      pub fn cancel_requested(c: Context) -> bool { return false; }
+    """,
+  };
+}
+
 fn std_async_file_spin_only() -> ld.SourceFile {
   return ld.SourceFile {
     path: "src/std/async/async.vox",
@@ -358,6 +389,26 @@ fn test_compile_async_main_driver_uses_park_hook_when_available() -> () {
   t.assert(contains(r.c, "park("));
 }
 
+fn test_compile_async_main_driver_uses_park_until_wake_hook_when_available() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file_with_park_until_wake());
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      async fn main() -> i32 { return 7; }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+  t.assert(contains(r.c, "park_5funtil_5fwake("));
+}
+
 fn test_compile_async_main_driver_keeps_compat_without_spin_wait() -> () {
   let mut fs: Vec[ld.SourceFile] = Vec();
   fs.push(std_async_file_without_spin_wait());
@@ -436,6 +487,47 @@ fn test_compile_async_test_wrapper_uses_park_hook_when_available() -> () {
   });
   t.assert_with(r.ok, r.err);
   t.assert(contains(r.c, "park("));
+}
+
+fn test_compile_async_test_wrapper_uses_park_until_wake_hook_when_available() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file_with_park_until_wake());
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      async fn test_async_smoke() -> () { return; }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: true,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+  t.assert(contains(r.c, "park_5funtil_5fwake("));
+}
+
+fn test_compile_async_main_driver_checks_cancel_hook_when_available() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file_with_cancel_requested());
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      async fn main() -> i32 { return 7; }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+  t.assert(contains(r.c, "cancel_5frequested("));
+  t.assert(contains(r.c, "async cancelled"));
 }
 
 fn test_compile_async_match_expr_with_await_in_arms_smoke() -> () {

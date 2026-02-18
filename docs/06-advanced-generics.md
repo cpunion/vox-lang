@@ -132,3 +132,8 @@ where
 后续增强（非阻塞）：
 
 - 基于 arity/shape 的进一步专门化优化与代码体积控制策略。
+
+当前已落地的代码体积控制基线：
+
+- 对需要 materialization 的 type-pack 调用增加 arity 上限（`16`），超出时报错：
+  - `type pack arity exceeds materialization limit: <n> > 16`

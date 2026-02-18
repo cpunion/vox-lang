@@ -19,7 +19,8 @@
 4. async 入口与测试可运行（最小执行器，v0）：
    - 当构建可执行文件启用 driver main 时：若用户定义 `async fn main() -> T`，编译器在编译期生成一个同步 `fn main() -> T` wrapper。
    - 当构建测试二进制启用 test main 时：若发现 `async fn test_*() -> ()`，编译器为该 test 生成一个同步 wrapper 并交给测试运行器调用。
-   - wrapper 内部使用 tight loop 轮询 `poll` 直到 `Ready`；`Pending` 分支优先调用 `std/async::park(iter, cx)`（若不存在则回退 `pending_wait(iter, cx)`，再回退 `spin_wait(iter)`，最后纯 continue），用于保证 `async fn main` 与 async tests 在无完整 runtime 的阶段也能端到端跑通。
+   - wrapper 内部使用 tight loop 轮询 `poll` 直到 `Ready`；`Pending` 分支优先调用 `std/async::park_until_wake(iter, cx)`，再回退 `park(iter, cx)`、`pending_wait(iter, cx)`、`spin_wait(iter)`，最后纯 continue，用于保证 `async fn main` 与 async tests 在无完整 runtime 的阶段也能端到端跑通。
+   - 若 `std/async` 提供 `cancel_requested(cx) -> bool`，wrapper 会在 `Pending` 路径轮询该钩子；返回 `true` 时触发 `panic(\"async cancelled\")` 终止运行（v0 取消语义基线）。
    - 当前不做真正的 blocking/parking；这部分留给后续 runtime/executor（或宿主）实现。
 
 ## 2. 为什么核心选 pull
@@ -47,8 +48,10 @@ trait Runtime {
 }
 
 fn wake(c: Context) -> ();
+fn park_until_wake(i: i32, c: Context) -> bool;
 fn park(i: i32, c: Context) -> ();
 fn pending_wait(i: i32, c: Context) -> (); // 兼容别名，默认转到 park
+fn cancel_requested(c: Context) -> bool;
 ```
 
 说明：
@@ -122,6 +125,7 @@ trait Sink {
 1. 编译器生成的 frame 在 drop 时释放已初始化字段。
 2. 必须保证“未初始化字段不 drop”。
 3. 取消语义保持幂等（重复取消不出错）。
+4. 当前 v0 已落地取消轮询钩子：生成的 async entry/test wrapper 会在 `Pending` 路径查询 `cancel_requested(cx)`，命中后执行 `panic(\"async cancelled\")`。
 
 ## 8. 与借用规则的关系（D03-4 目标）
 
@@ -138,4 +142,4 @@ trait Sink {
 ## 9. 当前剩余工作
 
 1. runtime/executor 体验继续增强（`wake/park` 入口已就位；后续补事件循环/epoll/IOCP 等更完整执行器能力）。
-2. drop/cancel 语义继续细化与验证。
+2. drop/cancel 语义继续细化与验证（当前已具备 `cancel_requested` 钩子基线；后续补真正可恢复的取消传播与资源回收策略）。
