@@ -38,7 +38,6 @@ Documents:
 
 Archive:
 
-- `docs/archive/21-stage1-compiler.md`
 - `docs/archive/22-backlog.md`
 - `docs/archive/23-backlog-next.md`
 - `docs/archive/25-p0p1-closure.md`
@@ -47,4 +46,4 @@ Archive:
 Current policy:
 
 - Mainline uses a single compiler implementation with rolling selfhost.
-- Historical bootstrap (`stage0/stage1`) is archived in branch `archive/stage0-stage1`.
+- Historical bootstrap notes are archived under `docs/archive/` and archive branches.

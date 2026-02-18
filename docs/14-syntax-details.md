@@ -32,11 +32,11 @@
 
 ## 泛型语法
 
-- 泛型（Stage0 最小子集）：
+- 泛型（最小子集）：
   - 泛型函数声明：`fn id[T](x: T) -> T { ... }`
   - 泛型参数 trait 约束：`fn eq[T: Eq + Show](x: T) -> bool { ... }`
   - `where` 约束：`fn eq[T](x: T) -> bool where T: Eq + Show { ... }`
-  - `where comptime` 约束（Stage1 已实现子集）：`fn addn[const N: i32](x: i32) -> i32 where comptime N > 0, comptime N <= 8 { ... }`
+  - `where comptime` 约束（已实现子集）：`fn addn[const N: i32](x: i32) -> i32 where comptime N > 0, comptime N <= 8 { ... }`
   - `where comptime` 右值可为常量参数：`fn f[const N: i32, const M: i32](x: i32) -> i32 where comptime N < M { ... }`
   - `where comptime` 右值可为反射项：`fn f[T, U](x: T, y: U) -> i32 where comptime @size_of(T) <= @align_of(U) { ... }`
   - `where comptime` 支持类型布局反射约束：`fn fit[T](x: T) -> i32 where comptime @size_of(T) <= 64, comptime @align_of(T) <= 8 { ... }`
@@ -50,9 +50,9 @@
   - pack/variadic 语法（Stage2 当前实现）：`fn zip[T...](xs: T...) -> i32 { ... }`
     - `xs: T...` 会在类型检查阶段降级为 `Vec[T]`，并可进入 IR/codegen。
     - `T...`（type param pack 声明）支持实质参与类型系统：可进行异构逐位置物化与 `Pack.N` 投影（细节见 `docs/06-advanced-generics.md`）。
-- 其它（Stage0 暂不实现）：`impl[T] ...` 等。
+- 其它（暂不实现）：`impl[T] ...` 等。
 
-## Trait 语法（Stage1 v0）
+## Trait 语法（当前版本）
 
 - trait 方法声明（无默认实现）：`trait Eq { fn eq(a: Self, b: Self) -> bool; }`
 - trait 方法可带泛型参数与约束：`trait Wrap { fn wrap[T: Eq](x: Self, v: T) -> T where T: Show; }`
@@ -108,7 +108,7 @@
 
 - 所有二元运算符均为左结合，例如 `1 - 2 - 3` 解析为 `(1 - 2) - 3`。
 
-## 赋值与复合赋值（Stage0/Stage1 v0）
+## 赋值与复合赋值（当前实现）
 
 当前赋值是**语句**，不是表达式：
 
@@ -127,15 +127,15 @@
 
 ## 逻辑运算（`&&` / `||`）
 
-求值顺序与短路（Stage0/Stage1 v0 已定）：
+求值顺序与短路（当前实现，已定）：
 
 - 求值顺序：从左到右。
 - `a && b`：先求值 `a`；若 `a == false`，则 `b` **不会**被求值，结果为 `false`。
 - `a || b`：先求值 `a`；若 `a == true`，则 `b` **不会**被求值，结果为 `true`。
 
-## 相等（`==`/`!=`，Stage1 约束）
+## 相等（`==`/`!=`，当前约束）
 
-Stage1 当前对相等运算符的约束：
+当前对相等运算符的约束：
 
 - `bool/<int>/f32/f64/String`：支持完整 `==`/`!=`。
   - 其中 `<int>` 指整数标量类型：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`。
@@ -144,14 +144,14 @@ Stage1 当前对相等运算符的约束：
 - `enum`：支持同类型枚举的 `==`/`!=`，包含 payload 比较（先比 tag，再按 variant 逐字段比较）。
   - payload 字段类型也必须是可比较类型（基础标量、`String`、或同样满足条件的 `struct/enum`）。
 
-## 有序比较（`< <= > >=`，Stage1 约束）
+## 有序比较（`< <= > >=`，当前约束）
 
 - `bool`：不支持有序比较。
 - `<int>`、`f32/f64`：支持同类型比较。
 - `String`：支持字典序比较（按字节序，等价 `strcmp` 语义）。
 - 泛型参数：当 `T` 显式带有 `Ord` bound（`T: Ord`）时，允许在函数体中使用 `< <= > >=` 比较。
 
-## 浮点字面量（Stage0/Stage1 v0）
+## 浮点字面量（当前实现）
 
 当前已实现的最小语法：
 
@@ -165,11 +165,11 @@ Stage1 当前对相等运算符的约束：
 - 有期望类型且为 `f32/f64` 时，按期望类型约束。
 - 无期望类型时，默认推导为 `f64`。
 
-## 整数运算（Stage0/Stage1 v0，已定）
+## 整数运算（当前实现，已定）
 
 对整数标量类型（`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`），当前语义约束为：
 
-- 整数字面量（Stage0/Stage1）：
+- 整数字面量（当前）：
   - 当上下文期望 `u64/usize`（如显式类型注解、const 声明类型）时，十进制字面量允许完整 `0..18446744073709551615`。
   - 显式 cast 场景同样适用（例如 `18446744073709551615 as u64`）。
   - 无期望类型的字面量仍按 `i64` 处理（超出 `i64` 范围会报错）。
@@ -186,7 +186,7 @@ Stage1 当前对相等运算符的约束：
   - 若编译期可确定溢出：编译错误。
   - 否则在转换点插入运行时检查；越界必须 panic（错误消息由后端决定）。
 
-## 浮点运算（Stage0/Stage1 v0）
+## 浮点运算（当前实现）
 
 对 `f32/f64`，当前语义约束为：
 
@@ -200,7 +200,7 @@ Stage1 当前对相等运算符的约束：
   - `int -> float`（允许，按目标浮点类型转换）
   - `float -> int`（checked cast：非有限值或越界会 panic）
 
-## `if` 表达式（Stage0 增补，已定）
+## `if` 表达式（增补，已定）
 
 除语句形式的 `if { ... } else { ... }` 外，Vox 允许在**表达式位置**使用 `if`：
 
@@ -209,19 +209,19 @@ let x: i32 = if cond { 1 } else { 2 };
 return if ok { a } else { b };
 ```
 
-语法（Stage0 最小子集）：
+语法（最小子集）：
 
 - 分支使用 **表达式块**：`{ stmt*; tailExpr? }`。
   - `tailExpr` 可省略：省略时该分支值为 `()`。
 - `else` 对表达式形式是**必需的**。
 - 允许 `else if ...` 链式形式（其 `else` 分支本身是 `if` 表达式）。
 
-类型规则（Stage0）：
+类型规则（当前）：
 
 - `cond` 必须是 `bool`。
 - `then` 与 `else` 分支的类型必须一致（或在 untyped int 约束下可被推导为一致）。
 
-## 错误传播语法（Stage1 v0）
+## 错误传播语法（当前版本）
 
 - 后缀 `?`：`expr?`
   - 当前实现支持：
@@ -252,7 +252,7 @@ type Value = I32: i32 | Str: String;
 - 推荐写 `Label: Type`，使构造与匹配有稳定名字：`.I32(1)`、`.Str("x")`。
 - 对简单名义类型允许省略 label：`type X = Foo | Bar;`。
 
-当前实现（Stage0/Stage1 v0）：
+当前实现：
 
 - 仅支持 **labeled** 形式：`type Name = A: TA | B: TB | ...`（每个 variant 当前只有 1 个 payload 类型）。
 - 语义上等价于同名 `enum` 声明（即“tagged union”），并复用 `enum` 的构造与 `match` 机制。
@@ -268,7 +268,7 @@ type Value = I32: i32 | Str: String;
 - `'\''`、`'\"'`、`'\\'`
 - `'你'`（单个 Unicode 标量）
 
-当前实现（Stage0/Stage1 v0）：
+当前实现：
 
 - lexer 提供 `char` token，parser 将其 lowering 为对应码点整数常量（例如 `'A' -> 65`、`'你' -> 20320`）。
 - 结合当前类型系统 `char -> u32` 别名语义，`char` 字面量可直接用于 `char`/`u32` 上下文与 `@range(... ) char`。
@@ -281,7 +281,7 @@ type Value = I32: i32 | Str: String;
 - `"..."`：字符串字面量
 - `"""..."""`：多行字符串字面量（支持自动 unindent）
 
-转义（Stage0/Stage1 当前保证的最小集合）：
+转义（当前保证的最小集合）：
 
 - `\\`：反斜杠
 - `\"`：双引号
@@ -304,7 +304,7 @@ type Value = I32: i32 | Str: String;
 类型（设计目标 vs 当前实现）：
 
 - 语言设计目标倾向将 `"..."` 视为 `&'static str`（可按 `&str` 使用）。
-- Stage0/Stage1/Stage2 当前实现中，字符串字面量仍视为 `String`（后端以 `const char*` 表示）。
+- 当前实现中，字符串字面量仍视为 `String`（后端以 `const char*` 表示）。
 - Stage2 当前不支持裸 `str` 类型；请使用 `String`（拥有）或 `&str`/`&'static str`（借用）。
 - Stage2 已支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法；借用形状在类型系统/IR 中保留（`Ref`）；命名 lifetime（如 `&'a T`）在语法阶段直接拒绝。
 - 过渡到切片方向的当前落地是 `std/string` 的 `StrView { owner: String, lo, hi }`（拥有型视图），用于“可长期保存的子串视图”；推荐优先使用 view-first API（如 `sub`、`take_prefix`、`take_suffix`、`drop_prefix`、`drop_suffix`）并尽量延后 `to_string` 物化。
@@ -325,9 +325,9 @@ type Small = @range(-5..=5) i32;
   - 否则：运行时检查，失败 **panic**
 - 若需要可恢复错误，请使用返回 `Option/Result` 的转换函数（例如 `Tiny::try_from(...)`）。
 
-Stage0/Stage1 v0 当前实现限制：
+当前实现限制：
 
-- `T` 仅支持整数类型（当前 stage0/stage1 实现：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`，以及别名 `char -> u32`）。
+- `T` 仅支持整数类型（当前实现：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`，以及别名 `char -> u32`）。
 - `lo/hi` 仅支持十进制整数字面量（允许前缀 `-`）。
 
 ## 枚举构造子点前缀简写（已定）
@@ -348,7 +348,7 @@ match x {
 
 ## match 模式（patterns）
 
-Stage0/Stage1 目前支持的 `match` pattern 形态：
+目前支持的 `match` pattern 形态：
 
 - `_`：wildcard
 - `name`：绑定模式（bind），总是匹配，并把 scrutinee 绑定到 `name`
@@ -378,7 +378,7 @@ match r {
 }
 ```
 
-穷尽性（Stage0/Stage1 v0 的近似规则，已实现）：
+穷尽性（近似规则，已实现）：
 
 - 若存在 `_` 或 `name` 这种“总是匹配”的 arm，则视为穷尽。
 - 否则（enum scrutinee）：
@@ -387,7 +387,7 @@ match r {
     - 例如 `Result.Ok(Option[T])` 的 `.Ok(.Some(v))` 与 `.Ok(.None)` 组合起来即可覆盖 `.Ok(...)`。
   - 多 payload variant：仍需要一个该 variant 的 “catch-all arm”，其所有 payload pattern 都是 `_` 或绑定模式（例如 `.Pair(_, _)` / `.Pair(a, b)`）。
     - 允许同一个 variant 出现多个 arm：先写更具体的 payload pattern，再写该 variant 的 catch-all arm。
-- 否则（非 enum scrutinee）：必须有 `_` 或绑定模式 arm（Stage0/Stage1 v0 不做完整穷尽推导）。
+- 否则（非 enum scrutinee）：必须有 `_` 或绑定模式 arm（当前实现不做完整穷尽推导）。
 
 ## 类型别名（type alias）
 
@@ -406,7 +406,7 @@ type V = Vec[I];
 pub type Size = i64;
 ```
 
-## 常量（const，Stage0/Stage1 v0）
+## 常量（const，当前实现）
 
 声明一个模块级常量：
 
@@ -415,7 +415,7 @@ const N: i32 = 10;
 pub const NAME: String = "vox";
 ```
 
-约束（Stage0/Stage1 v0）：
+约束（当前实现）：
 
 - `const` 必须在顶层声明（不支持在函数内声明 const）。
 - 必须写明类型注解：`const X: T = ...`
@@ -458,7 +458,7 @@ pub const NAME: String = "vox";
   - 也支持限定路径写法：`const X: E = E.A(1)`、`const X: dep.E = dep.E.A(1)`。
   - 也支持 typed-path 写法：`const X: Option[i32] = Option[i32].Some(1)`、`const Y: Option[i32] = Option[i32].None`。
 
-可见性与导入（Stage0/Stage1）：
+可见性与导入（当前）：
 
 - 默认私有（仅当前模块可见）。
 - 可见性修饰：
@@ -488,7 +488,7 @@ match x {
 
 - `v` 的类型等于 scrutinee 的类型（这里是 `Option[i32]`）。
 - 绑定模式等价于“带名字的 `_`”，所以也会让 `match` 变为穷尽。
-- Stage0/Stage1 v0 会对明显的 unreachable arm 报错（例如 `_`/绑定模式之后的 arm，或某个 enum variant 在 payload 空间已被覆盖之后的 arm）。
+- 当前实现会对明显的 unreachable arm 报错（例如 `_`/绑定模式之后的 arm，或某个 enum variant 在 payload 空间已被覆盖之后的 arm）。
 
 ## 禁止的引用语法位置（目标语义）
 
@@ -504,20 +504,20 @@ Vox 统一使用 `.` 表示“成员访问”，并在不同上下文中解析�
 - **值成员**：`expr.field`（结构体字段访问）
 - **模块成员**：`module.name`（通过 `import` 引入的模块/依赖包的命名空间成员）
 
-解析规则（Stage0 先实现最小子集）：
+解析规则（先实现最小子集）：
 
 - `a.b(...)`（调用上下文）
   - 若 `a`（或 `a.b.c` 的根）是当前作用域中的局部变量/参数：尝试解析为**值方法调用**。
-    - Stage0 仅支持一小部分**内建类型的 intrinsic 方法**（见下）。
-    - 其它类型的方法调用在 Stage0 报错（Stage1 再引入 trait/impl）。
+    - 仅支持一小部分**内建类型的 intrinsic 方法**（见下）。
+    - 其它类型的方法调用当前报错（后续引入 trait/impl）。
   - 否则：`a` 必须是本文件 `import "..." [as alias]` 引入的命名空间别名；解析为该命名空间下的函数调用。
 - `a.b`（表达式上下文）
   - 若 `a` 的类型是 `struct`：解析为字段读取。
-  - 其它类型：报错（Stage0 先不支持动态/反射式成员访问）。
+  - 其它类型：报错（先不支持动态/反射式成员访问）。
 
-### 内建 intrinsic 方法（Stage0 最小子集）
+### 内建 intrinsic 方法（最小子集）
 
-Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
+为了减少编译器代码的样板，内建支持：
 
 - `Vec[T]`：
   - `v.push(x) -> ()`（可变）
@@ -546,31 +546,31 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
 - `i32/i64/bool`：
   - `x.to_string() -> String`（最小格式化能力；用于诊断与代码生成）
 
-对 receiver 的约束（Stage0）：
+对 receiver 的约束：
 
 - 非变更方法（如 `len/is_empty/get/byte_at/slice/starts_with/ends_with/contains/index_of/last_index_of`）：receiver 可以是任意表达式（例如 `ctx.items.len()`）。
 - 变更方法（`Vec.push`/`Vec.insert`/`Vec.set`/`Vec.clear`/`Vec.extend`/`Vec.pop`/`Vec.remove`）：receiver 必须是 **place**（可写位置）。
   - `Vec.push`/`Vec.insert`/`Vec.set`/`Vec.clear`/`Vec.extend`/`Vec.pop`/`Vec.remove` 要求 receiver 的根绑定是 `let mut`（不可变绑定会报错）。
-  - Stage0/Stage1：支持局部变量（如 `v.push(x)`、`v.insert(i, x)`、`v.set(i, x)`、`v.clear()`、`v.extend(w)`、`v.pop()`、`v.remove(i)`），以及可变局部 struct 的直接字段（如 `s.items.push(x)`、`s.items.insert(i, x)`、`s.items.set(i, x)`、`s.items.clear()`、`s.items.extend(w)`、`s.items.pop()`、`s.items.remove(i)`）。
+  - 当前：支持局部变量（如 `v.push(x)`、`v.insert(i, x)`、`v.set(i, x)`、`v.clear()`、`v.extend(w)`、`v.pop()`、`v.remove(i)`），以及可变局部 struct 的直接字段（如 `s.items.push(x)`、`s.items.insert(i, x)`、`s.items.set(i, x)`、`s.items.clear()`、`s.items.extend(w)`、`s.items.pop()`、`s.items.remove(i)`）。
   - Stage2：额外支持可变局部 struct 的多级字段（如 `o.inner.items.push(x)`、`o.inner.items.insert(i, x)`、`o.inner.items.set(i, x)`、`o.inner.items.clear()`、`o.inner.items.extend(w)`、`o.inner.items.pop()`、`o.inner.items.remove(i)`）。
 
-### 保留的 `__*` 低层 intrinsic（Stage0/Stage1 自举期）
+### 保留的 `__*` 低层 intrinsic（自举期）
 
 除 `panic/print` 外，自举期还存在少量以 `__` 开头的低层 intrinsic（用于 `std/fs`、`std/process` 等最小工具链能力）。
 
-约束（Stage0/Stage1）：
+约束（当前）：
 
 - **非 `std/**` 模块禁止直接调用**以 `__` 开头的函数（例如 `__exec(...)`）。
 - 禁止用户代码定义以 `__` 开头的函数/类型名（保留给自举期 intrinsic 与标准库实现）。
 - 这些名字保留给标准库实现与自举工具链，用户代码应通过 `std/fs`、`std/process` 等封装接口使用。
 
-### 类型反射 intrinsic（Stage1 已实现）
+### 类型反射 intrinsic（已实现）
 
 当前可用：
 
 - `@size_of(Type) -> usize`
 - `@align_of(Type) -> usize`
-- `@type(Type) -> TypeId`（Stage1 当前表示为 `usize`）
+- `@type(Type) -> TypeId`（当前表示为 `usize`）
 - `@type_name(Type) -> String`
 - `@field_count(Type) -> usize`（当前支持 `struct/enum`）
 - `@field_name(Type, I) -> String`（当前支持 `struct/enum`，`I` 为 const 索引）
@@ -608,9 +608,9 @@ Stage0 为了减少 Stage1（编译器代码）的样板，内建支持：
   - 三种形态都允许尾逗号：`@is_integer(i32,)`、`@same_type(i32, i64,)`、`@field_name(S, 1,)`
 - 类型位置额外支持：`@field_type(Type, I)`，例如 `type B = @field_type(S, 1)`（当前仅支持 `struct` 字段与 `enum` 的 unit/单 payload variant；多 payload variant 会拒绝）。
 - 这些 intrinsic 会在 IR 生成时折叠为常量；在 `const` 上下文同样可用。
-- `@size_of/@align_of` 采用 Stage1 当前 C 后端的目标布局模型。
+- `@size_of/@align_of` 采用当前 C 后端的目标布局模型。
 
-## 导入语法（Stage0 最小子集）
+## 导入语法（最小子集）
 
 模块/包导入：
 
@@ -634,8 +634,8 @@ fn main() -> i32 {
 }
 ```
 
-说明（Stage0）：
+说明（当前）：
 
 - `import { ... } from "path"` 中每个名字会在目标命名空间中解析为函数或名义类型（`struct/enum`）。
-- 若同名同时存在函数与类型，则报错 `ambiguous imported name`（Stage0 先不混用命名空间）。
+- 若同名同时存在函数与类型，则报错 `ambiguous imported name`（先不混用命名空间）。
 - `import "x"` 的默认解析为“同包本地模块优先，其次依赖包”；若出现歧义，必须用 `pkg:` / `mod:` 显式指定。

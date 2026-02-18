@@ -61,7 +61,7 @@ import "utils" as u
 fn f(p: u.Point) -> i32 { return p.x; }
 ```
 
-命名导入也可以导入函数/类型（Stage0 最小子集）：
+命名导入也可以导入函数/类型（最小子集）：
 
 ```vox
 import { read_file, Point } from "utils/io"

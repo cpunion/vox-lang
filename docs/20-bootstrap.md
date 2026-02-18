@@ -6,7 +6,7 @@
 
 - `main` 只保留一个编译器实现（位于 `src/`）。
 - 日常自举链路为：`locked release compiler -> new compiler`。
-- `stage0/stage1` 历史实现不再在 `main` 维护，统一归档到分支 `archive/stage0-stage1`。
+- 历史引导实现不再在 `main` 维护，统一归档到 `archive` 分支。
 
 ## 主线目录约定
 
