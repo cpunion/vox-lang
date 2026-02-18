@@ -183,5 +183,6 @@ fn list_smoke() -> String {
 3. [x] `vox/token` 初版（显式 `Pos` + `Off` + `File` + `FileSet` + `Position`）。
 4. [x] `vox/types` façade 初版（`Config + CheckResult + Info`，后端复用 `vox/typecheck`）。
 5. [x] `vox/internal/*` 首批下沉：`vox/internal/text`，并在 `vox/manifest` 中复用。
-6. [x] Stable/Experimental 模块统一头注释（稳定性级别 + 迁移策略）。
-7. [x] `vox/list`（go list 对标）：输出完整包依赖图（模块、导入边、可选 JSON），并附带模块级 effect/resource 能力聚合信息。
+6. [x] CLI 主流程复用 `vox/internal/text.trim_space`（`src/main.vox` 不再维护重复 trim helper）。
+7. [x] Stable/Experimental 模块统一头注释（稳定性级别 + 迁移策略）。
+8. [x] `vox/list`（go list 对标）：输出完整包依赖图（模块、导入边、可选 JSON），并附带模块级 effect/resource 能力聚合信息。

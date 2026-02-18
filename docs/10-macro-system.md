@@ -99,7 +99,8 @@ fn main() -> i32 { return compile!(make_add1(41)); }
       - 常量参数允许缺省；若声明了默认值会在内联时补齐并参与替换。
     - 跨模块（`pkg.name!(...)`）：仅在模板对跨模块内联安全时启用（当前要求模板表达式只能依赖形参与其派生表达式），否则回退。
   - 其余情况回退为调用糖：`name!(...)` / `name[T]!(...)` -> `name(...)` / `name[T](...)`，再进入常规 typecheck。
-  - 当发生“内联跳过并回退”时，编译失败场景会在错误文本追加 `[macroexpand] ...` 注记，包含具体跳过原因（如“callee function not found”、“generic arg count mismatch”）。
+  - 例外：若已定位到目标模块但找不到被调用函数（missing callee），macroexpand 直接报错，不再回退到调用糖。
+  - 当发生“内联跳过并回退”时，编译失败场景会在错误文本追加 `[macroexpand] ...` 注记，包含具体跳过原因（如“generic arg count mismatch”）。
   - 展开阶段会额外记录稳定决策注记：`decision=inline-template` 或 `decision=fallback-call`，用于区分“成功内联”与“调用糖回退”。
   - 对“模板不支持 / 跨模块作用域不安全”场景，注记会带上模板根表达式类型（如 `root: Call`），便于快速定位。
 - 宏执行 v1（无 `macro` 关键字）：
