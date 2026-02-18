@@ -88,7 +88,24 @@ fn std_async_file_with_cancel_requested() -> ld.SourceFile {
       pub fn waker(token: i64) -> Waker { return Waker { token: token }; }
       pub fn context(w: Waker) -> Context { return Context { waker: w }; }
       pub fn park(i: i32, c: Context) -> () { return; }
-      pub fn cancel_requested(c: Context) -> bool { return false; }
+      pub fn cancel_requested(c: Context) -> bool { c; return true; }
+    """,
+  };
+}
+
+fn std_async_file_with_cancel_requested_and_return() -> ld.SourceFile {
+  return ld.SourceFile {
+    path: "src/std/async/async.vox",
+    text: """
+      pub enum Poll[T] { Pending, Ready(T) }
+      pub struct Waker { pub token: i64 }
+      pub struct Context { pub waker: Waker }
+      pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+      pub fn waker(token: i64) -> Waker { return Waker { token: token }; }
+      pub fn context(w: Waker) -> Context { return Context { waker: w }; }
+      pub fn park(i: i32, c: Context) -> () { return; }
+      pub fn cancel_requested(c: Context) -> bool { c; return true; }
+      pub fn cancel_return(c: Context) -> i32 { c; return 77; }
     """,
   };
 }
@@ -109,6 +126,7 @@ fn std_async_file_with_runtime_hooks() -> ld.SourceFile {
       pub fn park_until_wake(i: i32, c: Context) -> bool { i; c; return false; }
       pub fn cancel_requested_with(rt: Rt, c: Context) -> bool { rt; c; return true; }
       pub fn cancel_requested(c: Context) -> bool { c; return true; }
+      pub fn cancel_return_with(rt: Rt, c: Context) -> i32 { rt; c; return 99; }
     """,
   };
 }
@@ -590,10 +608,33 @@ fn test_compile_async_main_driver_checks_cancel_hook_when_available() -> () {
   });
   t.assert_with(r.ok, r.err);
   t.assert(contains(r.c, "cancel_5frequested("));
+  t.assert(!contains(r.c, "cancel_5freturn("));
   t.assert(!contains(r.c, "async cancelled"));
 }
 
-fn test_compile_async_main_driver_prefers_runtime_cancel_hook_when_available() -> () {
+fn test_compile_async_main_driver_uses_cancel_return_hook_when_available() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file_with_cancel_requested_and_return());
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      async fn main() -> i32 { return 7; }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+  t.assert(contains(r.c, "cancel_5frequested("));
+  t.assert(contains(r.c, "cancel_5freturn("));
+  t.assert(!contains(r.c, "async cancelled"));
+}
+
+fn test_compile_async_main_driver_prefers_runtime_cancel_hooks_when_available() -> () {
   let mut fs: Vec[ld.SourceFile] = Vec();
   fs.push(std_async_file_with_runtime_hooks());
   fs.push(ld.SourceFile {
@@ -611,6 +652,7 @@ fn test_compile_async_main_driver_prefers_runtime_cancel_hook_when_available() -
   });
   t.assert_with(r.ok, r.err);
   t.assert(contains(r.c, "cancel_5frequested_5fwith("));
+  t.assert(contains(r.c, "cancel_5freturn_5fwith("));
   t.assert(!contains(r.c, "async cancelled"));
 }
 
