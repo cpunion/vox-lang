@@ -115,3 +115,17 @@ Windows 目标支持两条工具链：
 - `wasm32-wasi`: 可用于 `test`（由 `WASM_RUNNER` 执行）
 - `wasm32-unknown-unknown`: 仅构建
 - `wasm32-unknown-emscripten`: 仅构建
+
+## Async Wake Runtime 平台约束（A14-3）
+
+`std/async` 的 `EventRuntime` 基于 `__wake_wait/__wake_notify`。C runtime 当前约束如下：
+
+- Windows: 等待循环使用 `Sleep(1)`，配合原子 pending 计数消费 wake token。
+- Emscripten: 等待循环使用 `sched_yield()`（协作式让出），不使用 `nanosleep`。
+- Linux/macOS/POSIX: 等待循环使用 `nanosleep(1ms)`。
+- 通用语义：
+  - `timeout_ms < 0` 会被钳制到 `0`。
+  - `token` 未命中 slot 时立即返回 `false`。
+  - 返回 `true` 表示本次调用消费到至少一个 pending wake token。
+
+这些分支由 `src/vox/codegen/c_emit_test.vox` 的 wake regression 用例锁定。
