@@ -70,7 +70,7 @@ fn cancel_return[T](c: Context) -> T; // 可选钩子；不提供时回退默认
 2. `Ready(T)` 表示完成，返回结果。
 3. `Context/Waker` 定义最小执行器接口契约；具体调度策略由 runtime/宿主决定。
 4. `Runtime` trait 定义“Pending 时如何等待/让出 + 取消轮询”的 runtime 分层接口，当前标准库提供：
-   - `EventRuntime`（基于 `now_ns + yield_now` 的超时等待，作为 `default_runtime()`）
+   - `EventRuntime`（基于 `__wake_wait(token, timeout_ms)` 的超时等待/唤醒消费，作为 `default_runtime()`）
    - `SpinRuntime`（`yield_now` 兼容路径）
    并暴露 `default_runtime()` + `*_with(rt, ...)` 供宿主注入自定义 runtime。
 
@@ -154,5 +154,5 @@ trait Sink {
 
 ## 9. 当前剩余工作
 
-1. runtime/executor 体验继续增强（当前已支持 `default_runtime + *_with` 注入，且默认 runtime 已切到 timeout-yield 等待基线；后续补真正的 epoll/IOCP 事件循环与多源就绪队列）。
+1. runtime/executor 体验继续增强（当前已支持 `default_runtime + *_with` 注入，默认 runtime 已切到 wake-token 超时等待基线；后续补真正的 epoll/IOCP 事件循环与多源就绪队列）。
 2. drop/cancel 语义继续细化与验证（当前已支持“可恢复返回 + 可选清理/传播钩子”基线；后续补更细粒度资源回收策略）。
