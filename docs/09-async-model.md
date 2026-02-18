@@ -21,6 +21,7 @@
    - 当构建测试二进制启用 test main 时：若发现 `async fn test_*() -> ()`，编译器为该 test 生成一个同步 wrapper 并交给测试运行器调用。
    - wrapper 内部使用轮询 `poll` 直到 `Ready`；`Pending` 分支优先使用 runtime 注入路径：若存在 `default_runtime()`，优先调用 `park_until_wake_with(rt, iter, cx)`，再回退 `park_with(rt, iter, cx)`、`pending_wait_with(rt, iter, cx)`；若不存在 runtime 注入路径，则回退 `park_until_wake(iter, cx)`、`park(iter, cx)`、`pending_wait(iter, cx)`、`spin_wait(iter)`，最后 pure continue。
    - 取消轮询同样优先 runtime 注入路径：`cancel_requested_with(rt, cx)`，其次回退 `cancel_requested(cx)`。
+   - 取消资源清理支持可选钩子：优先 `cancel_cleanup_with(rt, cx)`，其次 `cancel_cleanup(cx)`（若存在则在取消返回前执行）。
    - 取消结果传播支持可选钩子：
      - 优先 `cancel_return_with(rt, cx)`，其次 `cancel_return(cx)`；
      - 若两者都不存在，回退为默认可恢复返回（`()` 或返回类型默认值）。
@@ -57,6 +58,8 @@ fn park_until_wake(i: i32, c: Context) -> bool;
 fn park(i: i32, c: Context) -> ();
 fn pending_wait(i: i32, c: Context) -> (); // 兼容别名，默认转到 park
 fn cancel_requested(c: Context) -> bool;
+fn cancel_cleanup_with[R](rt: R, c: Context) -> (); // 可选钩子
+fn cancel_cleanup(c: Context) -> (); // 可选钩子
 fn cancel_return_with[R, T](rt: R, c: Context) -> T; // 可选钩子
 fn cancel_return[T](c: Context) -> T; // 可选钩子；不提供时回退默认返回
 ```
@@ -132,7 +135,7 @@ trait Sink {
 1. 编译器生成的 frame 在 drop 时释放已初始化字段。
 2. 必须保证“未初始化字段不 drop”。
 3. 取消语义保持幂等（重复取消不出错）。
-4. 当前 v1 已落地取消轮询与结果传播钩子：生成的 async entry/test wrapper 会在 `Pending` 路径查询取消钩子（优先 `cancel_requested_with(rt, cx)`，其次 `cancel_requested(cx)`）；命中后优先走 `cancel_return_with/cancel_return`，否则回退默认返回（不 panic）。
+4. 当前 v1 已落地取消轮询与传播钩子：生成的 async entry/test wrapper 会在 `Pending` 路径查询取消钩子（优先 `cancel_requested_with(rt, cx)`，其次 `cancel_requested(cx)`）；命中后先执行可选清理（`cancel_cleanup_with/cancel_cleanup`），再执行可选返回传播（`cancel_return_with/cancel_return`），否则回退默认返回（不 panic）。
 
 ## 8. 与借用规则的关系（D03-4 目标）
 
@@ -149,4 +152,4 @@ trait Sink {
 ## 9. 当前剩余工作
 
 1. runtime/executor 体验继续增强（当前已支持 `default_runtime + *_with` 注入；后续补事件循环/epoll/IOCP 等更完整执行器能力）。
-2. drop/cancel 语义继续细化与验证（当前已从 panic 升级到“可恢复返回”基线；后续补可配置取消结果传播与更细粒度资源回收策略）。
+2. drop/cancel 语义继续细化与验证（当前已支持“可恢复返回 + 可选清理/传播钩子”基线；后续补更细粒度资源回收策略）。
