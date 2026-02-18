@@ -15,7 +15,7 @@
 3. 语义已完整接入（D03 主体已完成）：
    - `async fn`（无 `await`）已进入正常 typecheck/codegen 管线（当前行为仍等价同步函数）
    - `await` 表达式已解析为 AST 节点（`ExprNode.Await`），并已接入 typecheck/irgen：仅允许在 `async fn` 中使用；推荐表面语法为 `e.await`（同时保留前缀 `await e` 兼容）。当前阶段支持通过 frame 状态机保留进度（frame.state + frame.a0/a1/...），`Pending => return Pending`，`Ready(v) => v`。
-   - `trait async fn` 已支持（无 default body），并通过“隐式关联类型投影” desugar：对每个 async 方法自动引入 `type __async$<method>`，并把方法返回类型改写为 `Self.__async$<method>`；实现侧由编译器自动把该关联类型绑定到 lowering 后的 frame 类型。
+   - `trait async fn` 已支持（含 default body），并通过“隐式关联类型投影” desugar：对每个 async 方法自动引入 `type __async$<method>`，并把方法返回类型改写为 `Self.__async$<method>`；实现侧由编译器自动把该关联类型绑定到 lowering 后的 frame 类型。
 4. async 入口与测试可运行（最小执行器，v0）：
    - 当构建可执行文件启用 driver main 时：若用户定义 `async fn main() -> T`，编译器在编译期生成一个同步 `fn main() -> T` wrapper。
    - 当构建测试二进制启用 test main 时：若发现 `async fn test_*() -> ()`，编译器为该 test 生成一个同步 wrapper 并交给测试运行器调用。
@@ -78,7 +78,7 @@ trait Runtime {
 6. `await` 已支持一般表达式控制流场景：
    - `block` / `if` / `match` / `try` 表达式内部。
    - 宏调用参数内部。
-7. 由于当前 capture rewrite 仍是基于名字（`l_<name>`）的实现细节，`async fn` 暂不支持局部变量 shadowing（同名 `let`）。
+7. `async fn` 支持局部变量 shadowing（同名 `let`）；async 归一化会先做词法作用域唯一化，再进入状态机/capture lowering。
 8. 无生命周期标注的约束：`async fn` 会返回一个可逃逸的 Future/frame 值，因此其 **参数/输出类型中禁止出现非 `&'static` 的借用**（包括嵌套在 `Vec[...]`、struct/enum 字段中的借用）。否则借用将随 frame 逃逸，无法在类型系统中表达其有效期。
 
 ## 6. push 与 pull 的转换
