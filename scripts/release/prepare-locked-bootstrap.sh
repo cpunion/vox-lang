@@ -33,8 +33,8 @@ if [[ -z "$TAG" ]]; then
   exit 1
 fi
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo "[bootstrap] gh is not installed" >&2
+if ! command -v curl >/dev/null 2>&1; then
+  echo "[bootstrap] curl is not installed" >&2
   exit 1
 fi
 
@@ -48,12 +48,16 @@ mkdir -p "$TMP_DIR"
 ASSET="vox-lang-${TAG}-${PLATFORM}.tar.gz"
 echo "[bootstrap] lock tag: $TAG"
 echo "[bootstrap] expected asset: $ASSET"
-
-gh release download "$TAG" --repo "$REPO" --pattern "$ASSET" --dir "$TMP_DIR"
-
 ARCHIVE="$TMP_DIR/$ASSET"
-if [[ ! -f "$ARCHIVE" ]]; then
-  echo "[bootstrap] missing archive after download: $ARCHIVE" >&2
+URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET}"
+echo "[bootstrap] download: $URL"
+if ! curl -fL --retry 3 --retry-delay 1 --retry-all-errors -o "$ARCHIVE" "$URL"; then
+  echo "[bootstrap] failed to download locked bootstrap archive" >&2
+  exit 1
+fi
+
+if [[ ! -s "$ARCHIVE" ]]; then
+  echo "[bootstrap] downloaded archive is empty: $ARCHIVE" >&2
   exit 1
 fi
 
