@@ -26,6 +26,40 @@ Governance from now on:
 
 ### P0
 
+- [x] A08 Async cancel/drop 语义细化（先完成可验证基线）
+  - [x] A08-1 增加 cancel 路径顺序保证回归：`cancel_cleanup*` 必须先于 `cancel_return*` 生成。
+  - [x] A08-2 增加 cleanup-only 路径回归：仅有 `cancel_cleanup` 时仍走默认可恢复返回，不回退 panic。
+  - Source: `docs/09-async-model.md`.
+
+- [x] A09 宏展开回退路径收敛（减少静默 fallback）
+  - [x] A09-1 `name!(...)` 已定位到目标模块但 callee 缺失时，macroexpand 直接报错（不再降级为 call sugar）。
+  - [x] A09-2 增加对应回归测试与文档同步。
+  - Source: `docs/10-macro-system.md`.
+
+- [x] A10 specialization 冲突诊断增强
+  - [x] A10-1 impl overlap 报错补充 `rank_trace`，稳定展示“更特化/不可比较”关系。
+  - [x] A10-2 typecheck/compile 回归覆盖 `rank_trace` 文案。
+  - Source: `docs/06-advanced-generics.md`.
+
+- [x] A11 泛型 pack 限制策略收敛
+  - [x] A11-1 `type pack arity exceeds materialization limit` 文案统一到 `typecheck` 单一函数出口，移除重复拼接。
+  - [x] A11-2 typecheck/const-eval/irgen 统一复用同一 limit+error 文案。
+  - Source: `docs/06-advanced-generics.md`.
+
+- [x] A12 `vox/internal/*` 下沉继续推进
+  - [x] A12-1 CLI 主流程复用 `vox/internal/text.trim_space`，移除 `src/main.vox` 重复实现。
+  - Source: `docs/28-vox-libraries.md`.
+
+- [x] A13 规范与实现一致性修正
+  - [x] A13-1 `docs/09-async-model.md` 示例签名与当前 `EventRuntime` 默认行为一致。
+  - [x] A13-2 `docs/14-syntax-details.md` 成员调用说明更新为 trait/impl 已支持现状。
+  - [x] A13-3 `docs/10-macro-system.md` 补充 missing-callee 直错规则。
+  - Source: `docs/09-async-model.md`, `docs/14-syntax-details.md`, `docs/10-macro-system.md`.
+
+- [ ] A14 Async 事件驱动执行器（epoll/kqueue/IOCP + 多源就绪队列）
+  - Scope: 在保持现有 `Runtime` trait 兼容前提下，把 `EventRuntime` 从 timeout-yield 基线升级为真正事件驱动。
+  - Source: `docs/09-async-model.md`, `docs/29-async-expr-await.md`.
+
 - [x] A01 Real generic pack expansion (type/value packs), not declaration-only.
   - [x] A01-1 Trailing explicit type args can bind a single trailing type pack.
     - Landed in `src/vox/typecheck/tc_call.vox`, `src/vox/irgen/gen_call_match.vox`, and `src/vox/typecheck/consts.vox`, with compile/typecheck tests covering both runtime and const-call paths.

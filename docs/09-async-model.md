@@ -53,7 +53,7 @@ trait Runtime {
 }
 
 fn wake(c: Context) -> ();
-fn default_runtime() -> SpinRuntime;
+fn default_runtime() -> EventRuntime;
 fn park_until_wake(i: i32, c: Context) -> bool;
 fn park(i: i32, c: Context) -> ();
 fn pending_wait(i: i32, c: Context) -> (); // 兼容别名，默认转到 park
