@@ -98,7 +98,7 @@ src/main.vox:3:5: lex error: unexpected char
 
 这样上层工具可在不解析错误字符串的前提下完成分流、统计和重试策略。
 
-后续计划（诊断升级）：
+诊断升级（已落地）：
 
-- AST/expr pool 节点携带最小 span（至少包含 `file/line/col`；byte offset 可选）
-- typecheck/irgen 错误携带 span，并按本章格式渲染；缺失 span 时回退到 `1:1`
+- AST/expr pool 节点已携带最小 span（`file/line/col`）。
+- typecheck/irgen 关键错误路径已优先使用 span 渲染；缺失 span 时回退到 `1:1`。

@@ -2238,6 +2238,13 @@ fn eval_const_expr_in_mod_locals(
 
         let mut sig_use: FuncSig = fr_call.sig;
         if has_pack && pack_explicit_tys.len() > 0 {
+          if pack_explicit_tys.len() > materialized_pack_arity_limit() {
+            let msg_pack: String = "type pack arity exceeds materialization limit: "
+              .concat(pack_explicit_tys.len().to_string())
+              .concat(" > ")
+              .concat(materialized_pack_arity_limit().to_string());
+            return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, msg_pack), kind: 0, ty: ctx.ty_bad, iv: 0, bv: false, sv: "", sigs: sigs0, states: states0 };
+          }
           let mut all_same: bool = true;
           let mut pi: i32 = 1;
           while pi < pack_explicit_tys.len() {
@@ -2989,7 +2996,7 @@ fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig]
   if st == 2 { return ResolveConstResult { ok: true, err: TcError.None, sigs: sigs0, states: states0, ctx: c }; }
   if st == 1 {
     let it0: ConstItem = items.get(idx);
-    return ResolveConstResult { ok: false, err: type_error(it0.decl.file, "const cycle: ".concat(const_qname(it0.mod_path, it0.decl.name))), sigs: sigs0, states: states0, ctx: c };
+    return ResolveConstResult { ok: false, err: type_error_at(it0.decl.sp, "const cycle: ".concat(const_qname(it0.mod_path, it0.decl.name))), sigs: sigs0, states: states0, ctx: c };
   }
 
   let mut sigs: Vec[ConstSig] = sigs0;
@@ -2999,7 +3006,7 @@ fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig]
   // Resolve declared type (v0: must be primitive or `@range(..) <int>`).
   let fm: FindModResult = find_mod(w, it.mod_path);
   if !fm.found {
-    return ResolveConstResult { ok: false, err: type_error(it.decl.file, "unknown module for const"), sigs: sigs, states: states, ctx: c };
+    return ResolveConstResult { ok: false, err: type_error_at(it.decl.sp, "unknown module for const"), sigs: sigs, states: states, ctx: c };
   }
   let m: WorldModule = w.mods.get(fm.idx);
   let ir0: ImportsResult = build_imports(w, it.mod_path, m.prog.imports, it.decl.file);
@@ -3007,7 +3014,7 @@ fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig]
   let imps: Imports = ir0.imps;
 
   let tr: ResolveTyResult = resolve_type(c, w, it.mod_path, imps, Vec(), it.decl.ty);
-  if !tr.ok { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "type resolve failed in const"), sigs: sigs, states: states, ctx: c }; }
+  if !tr.ok { return ResolveConstResult { ok: false, err: type_error_at(it.decl.sp, "type resolve failed in const"), sigs: sigs, states: states, ctx: c }; }
   c = tr.ctx;
   let ty: i32 = tr.idx;
   let ok_v0: bool =
@@ -3018,7 +3025,7 @@ fn resolve_const(ctx: Ctx, w: World, items: Vec[ConstItem], sigs0: Vec[ConstSig]
     is_enum_ty(c, ty) ||
     is_struct_ty(c, ty) ||
     is_int_scalar_kind(int_kind(c, ty));
-  if !ok_v0 { return ResolveConstResult { ok: false, err: type_error(it.decl.file, "const type must be primitive/enum/struct in v0"), sigs: sigs, states: states, ctx: c }; }
+  if !ok_v0 { return ResolveConstResult { ok: false, err: type_error_at(it.decl.sp, "const type must be primitive/enum/struct in v0"), sigs: sigs, states: states, ctx: c }; }
 
   // Evaluate init expression.
   let ev: EvalConstExprResult = eval_const_expr_in_mod(c, w, items, sigs, states, it.mod_path, imps, m.prog.exprs, it.decl.file, it.decl.init, ty);
@@ -3069,14 +3076,14 @@ fn collect_consts(ctx: Ctx, w: World) -> TcCtxResult {
     while ci < m.prog.consts.len() {
       let cd: ast.ConstDecl = m.prog.consts.get(ci);
       if is_reserved_intrinsic_name(cd.name) {
-        return TcCtxResult { ok: false, err: type_error(cd.file, "reserved name: ".concat(cd.name)), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(cd.sp, "reserved name: ".concat(cd.name)), ctx: c };
       }
       if tn_has_nonstatic_borrow(cd.ty) {
         return TcCtxResult { ok: false, err: type_error_at(cd.sp, "non-static borrowed type is not allowed in const type"), ctx: c };
       }
       let qn: String = const_qname(m.path, cd.name);
       if const_contains_str(seen, qn) {
-        return TcCtxResult { ok: false, err: type_error(cd.file, "duplicate const: ".concat(cd.name)), ctx: c };
+        return TcCtxResult { ok: false, err: type_error_at(cd.sp, "duplicate const: ".concat(cd.name)), ctx: c };
       }
       seen.push(qn);
       items.push(ConstItem { mod_path: m.path, decl: cd });
