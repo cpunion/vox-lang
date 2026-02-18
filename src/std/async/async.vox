@@ -54,6 +54,28 @@ pub struct EventRuntime {
   pub timeout_ms: i32,
 }
 
+pub struct ReadyPoll {
+  pub ready: bool,
+  pub token: i64,
+}
+
+pub struct ReadyQueue {
+  pub tokens: Vec[i64],
+  pub head: i32,
+}
+
+pub struct ReadyPop {
+  pub ok: bool,
+  pub token: i64,
+  pub q: ReadyQueue,
+}
+
+// Event source abstraction used by runtime-specific backends (epoll/kqueue/IOCP).
+// v0 baseline keeps a minimal "wait once" contract and feeds a token queue.
+pub trait EventSource {
+  fn wait(src: Self, timeout_ms: i32, c: Context) -> ReadyPoll;
+}
+
 impl Runtime for SpinRuntime {
   fn pending_wait(rt: SpinRuntime, i: i32, c: Context) -> () {
     rt;
@@ -66,6 +88,14 @@ impl Runtime for SpinRuntime {
 fn normalized_timeout_ms(ms: i32) -> i32 {
   if ms <= 0 { return 1; }
   return ms;
+}
+
+impl EventSource for EventRuntime {
+  fn wait(rt: EventRuntime, timeout_ms: i32, c: Context) -> ReadyPoll {
+    let ms: i32 = if timeout_ms > 0 { normalized_timeout_ms(timeout_ms) } else { normalized_timeout_ms(rt.timeout_ms) };
+    let ok: bool = __wake_wait(c.waker.token, ms);
+    return ReadyPoll { ready: ok, token: c.waker.token };
+  }
 }
 
 impl Runtime for EventRuntime {
@@ -110,12 +140,57 @@ pub fn context(w: Waker) -> Context {
   return Context { waker: w };
 }
 
+pub fn ready_queue() -> ReadyQueue {
+  return ReadyQueue { tokens: Vec(), head: 0 };
+}
+
+impl ReadyQueue {
+  fn len(q: ReadyQueue) -> i32 { return q.tokens.len() - q.head; }
+
+  fn is_empty(q: ReadyQueue) -> bool { return q.tokens.len() == q.head; }
+
+  fn push(q: ReadyQueue, token: i64) -> ReadyQueue {
+    let mut out: ReadyQueue = q;
+    out.tokens.push(token);
+    return out;
+  }
+
+  fn pop(q: ReadyQueue) -> ReadyPop {
+    if q.tokens.len() == q.head {
+      return ReadyPop { ok: false, token: 0, q: q };
+    }
+    let mut out: ReadyQueue = q;
+    let tok: i64 = out.tokens.get(out.head);
+    out.head = out.head + 1;
+    if out.head > 0 && out.head * 2 >= out.tokens.len() {
+      let mut compact: Vec[i64] = Vec();
+      let mut i: i32 = out.head;
+      while i < out.tokens.len() {
+        compact.push(out.tokens.get(i));
+        i = i + 1;
+      }
+      out.tokens = compact;
+      out.head = 0;
+    }
+    return ReadyPop { ok: true, token: tok, q: out };
+  }
+}
+
 pub fn spin_runtime() -> SpinRuntime {
   return SpinRuntime { marker: 0 };
 }
 
 pub fn event_runtime(timeout_ms: i32) -> EventRuntime {
   return EventRuntime { timeout_ms: normalized_timeout_ms(timeout_ms) };
+}
+
+pub fn poll_ready_with[S: EventSource](src: S, timeout_ms: i32, c: Context) -> ReadyPoll {
+  return EventSource.wait(src, timeout_ms, c);
+}
+
+pub fn enqueue_ready(q: ReadyQueue, p: ReadyPoll) -> ReadyQueue {
+  if p.ready { return q.push(p.token); }
+  return q;
 }
 
 pub fn io_runtime() -> EventRuntime {

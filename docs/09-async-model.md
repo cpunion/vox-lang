@@ -52,6 +52,12 @@ trait Runtime {
   fn cancel_requested(rt: Self, c: Context) -> bool;
 }
 
+struct ReadyPoll { ready: bool, token: i64 }
+struct ReadyQueue { tokens: Vec[i64], head: i32 }
+trait EventSource {
+  fn wait(src: Self, timeout_ms: i32, c: Context) -> ReadyPoll;
+}
+
 fn wake(c: Context) -> ();
 fn default_runtime() -> EventRuntime;
 fn park_until_wake(i: i32, c: Context) -> bool;
@@ -73,6 +79,10 @@ fn cancel_return[T](c: Context) -> T; // 可选钩子；不提供时回退默认
    - `EventRuntime`（基于 `__wake_wait(token, timeout_ms)` 的超时等待/唤醒消费，作为 `default_runtime()`）
    - `SpinRuntime`（`yield_now` 兼容路径）
    并暴露 `default_runtime()` + `*_with(rt, ...)` 供宿主注入自定义 runtime。
+5. `EventSource + ReadyQueue` 提供“事件源抽象 + 多源就绪队列”基线：
+   - `EventSource.wait(...)` 统一“单次等待 -> ReadyPoll”接口；
+   - `ReadyQueue` 提供 token 队列（push/pop）作为多源事件汇聚结构；
+   - 现阶段先用于接口收敛，后续由平台后端（epoll/kqueue/IOCP）填充具体事件源实现。
 
 ## 4. lowering 设计（D03-3 目标）
 

@@ -63,8 +63,10 @@ Governance from now on:
     - [x] A14-0b 更新 `scripts/release/bootstrap.lock` 到该版本并通过 rolling 门禁。
     - [x] A14-0c 再放开 `src/std` 调用与 `bootstrap-intrinsics.allow`，确保第一跳不被旧 bootstrap 卡住。
       - Landed: `std/async` uses `__wake_notify/__wake_wait`, allowlist synced.
-  - [ ] A14-1 `EventRuntime` 接入 wake token 通路（`wake` -> `__wake_notify`，`park_until_wake` -> `__wake_wait`）。
-  - [ ] A14-2 事件源抽象与多源就绪队列（为 epoll/kqueue/IOCP 统一接口做准备）。
+  - [x] A14-1 `EventRuntime` 接入 wake token 通路（`wake` -> `__wake_notify`，`park_until_wake` -> `__wake_wait`）。
+    - Landed in `src/std/async/async.vox` + `src/std/async/async_test.vox`.
+  - [x] A14-2 事件源抽象与多源就绪队列（为 epoll/kqueue/IOCP 统一接口做准备）。
+    - Baseline landed: `EventSource` + `ReadyPoll` + `ReadyQueue` and queue bridge helpers in `std/async`.
   - [ ] A14-3 平台实现补齐与回归（linux/macOS/windows + wasm 行为约束）。
   - Scope: 在保持现有 `Runtime` trait 兼容前提下，把 `EventRuntime` 从 timeout-yield 基线升级为真正事件驱动。
   - Source: `docs/09-async-model.md`, `docs/29-async-expr-await.md`.
