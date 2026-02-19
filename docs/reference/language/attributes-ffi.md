@@ -40,7 +40,8 @@ fn who() -> String { ... }
 
 ## Diagnostics
 
-- invalid attribute placement (for example unsupported placement inside certain impl method contexts) is rejected.
+- `@ffi_import`, `@ffi_export`, and `@track_caller` are restricted to top-level functions.
+- placing those restricted attributes in unsupported contexts (for example impl methods) is rejected.
 - malformed attribute arguments are parse/typecheck errors.
 
 ## Example
