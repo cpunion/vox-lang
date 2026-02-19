@@ -4,7 +4,7 @@
 
 This section is the normative reference for Vox types.
 
-Coverage IDs: `S001`-`S011`, `S013`-`S014`, `S018`.
+Coverage IDs: `S001`-`S011`, `S013`-`S014`, `S018`-`S020`.
 
 ## Type Family Map
 

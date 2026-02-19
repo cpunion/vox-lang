@@ -4,7 +4,7 @@
 
 Defines `enum` declaration syntax, variant constructors, and pattern matching use.
 
-Coverage IDs: `S007`, `S009`, `S010`.
+Coverage IDs: `S007`, `S009`, `S010`, `S020`.
 
 ## Grammar (Simplified)
 
@@ -18,10 +18,14 @@ Variant
 VariantCtorExpr
   := TypePath "." Variant "(" ArgList? ")"
    | TypePath "." Variant
+   | "." Variant "(" ArgList? ")"
+   | "." Variant
 
 VariantPattern
   := TypePath "." Variant "(" PatList? ")"
    | TypePath "." Variant
+   | "." Variant "(" PatList? ")"
+   | "." Variant
 ```
 
 Current declaration coverage supports tuple-style payload variants and unit variants.
@@ -36,6 +40,9 @@ Current declaration coverage supports tuple-style payload variants and unit vari
 
 - Constructor call form: `Option[i32].Some(1)`.
 - Unit variant form: `Option[i32].None`.
+- Contextual dot-shorthand is accepted in typed contexts:
+  - constructor: `.Some(1)`, `.None`
+  - pattern: `.Some(x)`, `.None`
 - Match patterns use qualified variant names (for example `Option.Some(x)`).
   Generic arguments are typically inferred from the matched value and can be omitted.
 
