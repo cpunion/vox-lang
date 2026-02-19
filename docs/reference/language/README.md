@@ -6,6 +6,7 @@ This is the language reference tree.
 
 - `docs/reference/language/types.md` (entrypoint)
 - `docs/reference/language/types/primitives.md`
+- `docs/reference/language/types/aliases.md`
 - `docs/reference/language/types/text.md`
 - `docs/reference/language/types/references.md`
 - `docs/reference/language/types/structs.md`
@@ -27,6 +28,10 @@ This is the language reference tree.
 - `docs/reference/language/operators.md`
 - `docs/reference/language/functions.md`
 - `docs/reference/language/modules-imports.md`
+
+## Items and Constants
+
+- `docs/reference/language/constants.md`
 
 ## Generics and Traits
 

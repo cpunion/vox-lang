@@ -4,11 +4,12 @@
 
 This section is the normative reference for Vox types.
 
-Coverage IDs: `S001`-`S010`.
+Coverage IDs: `S001`-`S011`, `S013`-`S014`.
 
 ## Type Family Map
 
 - Primitive and scalar types: `docs/reference/language/types/primitives.md`
+- Type aliases and labeled union aliases: `docs/reference/language/types/aliases.md`
 - String and text types: `docs/reference/language/types/text.md`
 - Borrow/reference types: `docs/reference/language/types/references.md`
 - Struct types: `docs/reference/language/types/structs.md`
