@@ -31,6 +31,15 @@ pub fn g(x: i32) -> i32 { return x; }
 - Named imports introduce selected names directly into current module scope.
 - `pub` marks declarations visible to importing modules.
 
+### Import Path Resolution
+
+Current resolution model:
+
+- Import strings are module/package paths (not filesystem-relative to current file).
+- Local package modules are resolved from package source root (`src/**`).
+- Dependency package modules are resolved via package manifest (`vox.toml`) dependency graph.
+- In ambiguous name cases, explicit namespace prefixes are recommended (see internal module/package rules).
+
 ## Diagnostics
 
 - malformed import syntax is rejected by parser.
@@ -42,6 +51,6 @@ pub fn g(x: i32) -> i32 { return x; }
 import "math" as m
 import {a as aa, b} from "util"
 pub struct P { pub v: i32 }
-pub fn f(x: i32) -> i32 { return x + 1; }
-fn main() -> i32 { let p: P = P { v: 1 }; return f(p.v); }
+pub fn f(x: i32) -> i32 { return m.add(aa(x), b); }
+fn main() -> i32 { return f(1); }
 ```
