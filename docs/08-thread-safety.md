@@ -12,9 +12,10 @@
 2. `Range[T]`、`Vec[T]`：当 `T` 满足对应 trait 时自动满足。
 3. `struct`、`enum`：当所有字段（含变体载荷）都满足时自动满足。
 4. 类型参数 `T` 不做隐式推导：`T: Send/Sync` 必须显式写在泛型约束里。
-5. 若存在显式 `impl Send/Sync for X`，显式实现优先；否则走自动推导。
+5. 对 marker trait `Send/Sync`，禁止正向手写实现（`impl Send/Sync for X`）；基线只允许自动推导 + negative impl。
+6. 支持 negative impl：`impl !Send for X {}` / `impl !Sync for X {}`，显式否定优先级高于自动推导。
 
 当前边界：
 
-- 还不支持 negative impl（如 `!Send`）与 unsafe 手工承诺模型。
+- 不支持 `unsafe impl Send/Sync` 这类手工承诺模型。
 - 更深层的借用/所有权收敛与并发内存模型仍在后续阶段推进（见 `docs/27-active-backlog.md` 的 `D06/D07`）。

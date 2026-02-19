@@ -63,6 +63,7 @@
 - `impl` 可省略带默认实现的方法（同模块/跨模块 trait 均可继承默认实现）
 - `impl` 方法的泛型参数名按位置匹配 trait 方法（名称可不同）
 - `impl` 方法的 const 泛型参数当前要求与 trait 方法同名同类型（按位置匹配）
+- 支持 negative impl（当前仅 `std/prelude::Send` / `std/prelude::Sync`）：`impl !Send for UiHandle {}`
 - `impl` 需为 trait 中每个关联类型给出绑定：`impl Iter for I { type Item = i32; ... }`
 - 支持在类型位置引用 `Self.Assoc`（trait/impl 方法签名）以及 `T.Assoc`（泛型签名，`T` 为类型参数）。
 - `T.Assoc` 约束规则：`T` 的 trait bounds 中必须且只能有一个 trait 声明该关联类型，否则报错（unknown/ambiguous projection）。

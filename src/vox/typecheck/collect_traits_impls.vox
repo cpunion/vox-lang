@@ -1292,6 +1292,9 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
       let imr: ImportsResult = build_imports(w, m.path, m.prog.imports, id.file);
       if !imr.ok { return TcCtxResult { ok: false, err: imr.err, ctx: c }; }
       let imps: Imports = imr.imps;
+      if id.is_negative && id.is_inherent {
+        return TcCtxResult { ok: false, err: type_error_at(id.sp, "negative impl requires trait impl form"), ctx: c };
+      }
 
       if id.is_inherent {
         let mut head_tpbs: Vec[TypeParamBoundSig] = Vec();
@@ -1514,6 +1517,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           mod_path: m.path,
           decl_idx: ii,
           is_inherent: true,
+          is_negative: false,
           trait_mod_path: "",
           trait_name: "",
           for_ty: for_ty_inh,
@@ -1536,6 +1540,20 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
       }
       if !vis_allows(tf.sig.vis, trr.mod_path, m.path) {
         return TcCtxResult { ok: false, err: type_error_at(id.sp, "trait is private"), ctx: c };
+      }
+      let is_auto_thread_marker: bool = auto_thread_marker_trait(trr.mod_path, trr.name);
+      if id.is_negative {
+        if !is_auto_thread_marker {
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, "negative impl is only allowed for std/prelude::Send and std/prelude::Sync"), ctx: c };
+        }
+        if id.assoc_types.len() != 0 {
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, "negative impl must not define associated types"), ctx: c };
+        }
+        if id.methods.len() != 0 {
+          return TcCtxResult { ok: false, err: type_error_at(id.sp, "negative impl must not define methods"), ctx: c };
+        }
+      } else if is_auto_thread_marker {
+        return TcCtxResult { ok: false, err: type_error_at(id.sp, "manual impl of auto marker trait is not allowed; use negative impl"), ctx: c };
       }
 
       let mut head_tpbs: Vec[TypeParamBoundSig] = Vec();
@@ -1585,6 +1603,17 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         let ds: ImplSig = c.impls.get(di);
         if ds.trait_mod_path == trr.mod_path && ds.trait_name == trr.name {
           if impl_for_ty_overlap(c, ds.for_ty, for_ty) {
+            if id.is_negative {
+              if ds.is_negative {
+                let msg_neg: String = "overlapping negative impl: ".concat(ty_inst_str(c, for_ty)).concat(" vs ").concat(ty_inst_str(c, ds.for_ty));
+                return TcCtxResult { ok: false, err: type_error_at(id.sp, msg_neg), ctx: c };
+              }
+              di = di + 1;
+              continue;
+            } else if ds.is_negative {
+              let msg_conflict: String = "impl conflicts with negative impl: ".concat(ty_inst_str(c, for_ty)).concat(" vs ").concat(ty_inst_str(c, ds.for_ty));
+              return TcCtxResult { ok: false, err: type_error_at(id.sp, msg_conflict), ctx: c };
+            }
             let new_more: bool = impl_sig_more_specific_parts(c, for_ty, id.type_params, head_tpbs, ds.for_ty, ds.head_type_params, ds.head_type_param_bounds);
             let old_more: bool = impl_sig_more_specific_parts(c, ds.for_ty, ds.head_type_params, ds.head_type_param_bounds, for_ty, id.type_params, head_tpbs);
             if !new_more && !old_more {
@@ -1592,6 +1621,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
                 mod_path: m.path,
                 decl_idx: ii,
                 is_inherent: false,
+                is_negative: false,
                 trait_mod_path: trr.mod_path,
                 trait_name: trr.name,
                 for_ty: for_ty,
@@ -1612,6 +1642,23 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           }
         }
         di = di + 1;
+      }
+      if id.is_negative {
+        c.impls.push(ImplSig {
+          mod_path: m.path,
+          decl_idx: ii,
+          is_inherent: false,
+          is_negative: true,
+          trait_mod_path: trr.mod_path,
+          trait_name: trr.name,
+          for_ty: for_ty,
+          head_type_params: id.type_params,
+          head_type_param_bounds: head_tpbs,
+          assoc_types: Vec(),
+          methods: Vec(),
+        });
+        ii = ii + 1;
+        continue;
       }
 
       let mut impl_assocs: Vec[ImplAssocTypeSig] = Vec();
@@ -1983,6 +2030,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         mod_path: m.path,
         decl_idx: ii,
         is_inherent: false,
+        is_negative: id.is_negative,
         trait_mod_path: trr.mod_path,
         trait_name: trr.name,
         for_ty: for_ty,

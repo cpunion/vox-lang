@@ -15,6 +15,11 @@ fn me_contains(hay: String, needle: String) -> bool {
   return false;
 }
 
+fn me_has_suffix(s: String, suf: String) -> bool {
+  if s.len() < suf.len() { return false; }
+  return s.slice(s.len() - suf.len(), s.len()) == suf;
+}
+
 fn me_notes_contains(notes: Vec[String], needle: String) -> bool {
   let mut i: i32 = 0;
   while i < notes.len() {
@@ -39,6 +44,10 @@ fn me_world_add(w: tc.World, path: String, src: String) -> tc.World {
 }
 
 fn me_main_return_expr_node(w: tc.World, mod_path: String) -> ast.ExprNode {
+  return me_func_return_expr_node(w, mod_path, "main");
+}
+
+fn me_func_return_expr_node(w: tc.World, mod_path: String, fn_name: String) -> ast.ExprNode {
   let mut mi: i32 = 0;
   while mi < w.mods.len() {
     let wm: tc.WorldModule = w.mods.get(mi);
@@ -46,7 +55,7 @@ fn me_main_return_expr_node(w: tc.World, mod_path: String) -> ast.ExprNode {
       let mut fi: i32 = 0;
       while fi < wm.prog.funcs.len() {
         let fd: ast.FuncDecl = wm.prog.funcs.get(fi);
-        if fd.name == "main" {
+        if fd.name == fn_name {
           let mut si: i32 = 0;
           while si < fd.body.stmts.len() {
             let st: ast.Stmt = fd.body.stmts.get(si);
@@ -65,6 +74,43 @@ fn me_main_return_expr_node(w: tc.World, mod_path: String) -> ast.ExprNode {
   return ast.ExprNode.Int("0");
 }
 
+fn me_func_decl(w: tc.World, mod_path: String, fn_name: String) -> ast.FuncDecl {
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let wm: tc.WorldModule = w.mods.get(mi);
+    if wm.path == mod_path {
+      let mut fi: i32 = 0;
+      while fi < wm.prog.funcs.len() {
+        let fd: ast.FuncDecl = wm.prog.funcs.get(fi);
+        if fd.name == fn_name { return fd; }
+        fi = fi + 1;
+      }
+    }
+    mi = mi + 1;
+  }
+  return ast.FuncDecl {
+    file: "",
+    sp: ast.span0(),
+    vis: ast.vis_private(),
+    is_pub: false,
+    is_async: false,
+    track_caller: false,
+    name: "",
+    type_params: Vec(),
+    type_param_packs: Vec(),
+    const_params: Vec(),
+    type_param_bounds: Vec(),
+    const_where_bounds: Vec(),
+    params: Vec(),
+    ret: ast.TypeName { parts: Vec(), args: Vec() },
+    ffi_imports: Vec(),
+    ffi_exports: Vec(),
+    effects: Vec(),
+    resources: Vec(),
+    body: ast.Block { stmts: Vec() },
+  };
+}
+
 fn me_func_count(w: tc.World, mod_path: String) -> i32 {
   let mut mi: i32 = 0;
   while mi < w.mods.len() {
@@ -73,6 +119,48 @@ fn me_func_count(w: tc.World, mod_path: String) -> i32 {
     mi = mi + 1;
   }
   return -1;
+}
+
+fn me_world_mod(w: tc.World, mod_path: String) -> tc.WorldModule {
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let wm: tc.WorldModule = w.mods.get(mi);
+    if wm.path == mod_path { return wm; }
+    mi = mi + 1;
+  }
+  return tc.WorldModule {
+    path: "",
+    prog: ast.Program {
+      imports: Vec(),
+      types: Vec(),
+      consts: Vec(),
+      structs: Vec(),
+      enums: Vec(),
+      traits: Vec(),
+      impls: Vec(),
+      funcs: Vec(),
+      exprs: ast.expr_pool(),
+    },
+  };
+}
+
+fn me_file_has_named_import(w: tc.World, mod_path: String, file: String, path: String, local: String) -> bool {
+  let m: tc.WorldModule = me_world_mod(w, mod_path);
+  let mut i: i32 = 0;
+  while i < m.prog.imports.len() {
+    let imp: ast.ImportDecl = m.prog.imports.get(i);
+    if imp.file == file && imp.path == path {
+      let mut j: i32 = 0;
+      while j < imp.names.len() {
+        let nm: ast.ImportName = imp.names.get(j);
+        let local_name: String = if nm.alias != "" { nm.alias } else { nm.name };
+        if local_name == local { return true; }
+        j = j + 1;
+      }
+    }
+    i = i + 1;
+  }
+  return false;
 }
 
 fn me_is_int_lit(w: tc.World, mod_path: String, id: i32, text: String) -> bool {
@@ -121,6 +209,254 @@ fn test_macroexpand_compile_bang_splices_expr_smoke() -> () {
   t.assert(er.rounds == 1);
   let tr: tc.TcResult = tc.typecheck_world(er.world);
   t.assert(tr.ok);
+}
+
+fn test_macroexpand_file_bang_smoke() -> () {
+  let w: tc.World = me_world_from("main", "const P: String = __file!()\nfn main() -> i32 { return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let m: tc.WorldModule = er.world.mods.get(0);
+  let c0: ast.ConstDecl = m.prog.consts.get(0);
+  let n: ast.ExprNode = ast.expr_pool_get(m.prog.exprs, c0.init);
+  let v: String = match n { ast.ExprNode.Str(s) => s, _ => "" };
+  t.assert(v != "");
+  t.assert(me_has_suffix(v, "/src/main.vox") || me_has_suffix(v, "src/main.vox"));
+}
+
+fn test_macroexpand_line_bang_smoke() -> () {
+  let w: tc.World = me_world_from("main", "const L: i32 = __line!()\nfn main() -> i32 { return L; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let m: tc.WorldModule = er.world.mods.get(0);
+  let c0: ast.ConstDecl = m.prog.consts.get(0);
+  let n: ast.ExprNode = ast.expr_pool_get(m.prog.exprs, c0.init);
+  t.assert(match n { ast.ExprNode.Int(v) => v == "1", _ => false });
+}
+
+fn test_macroexpand_line_bang_reports_call_line_smoke() -> () {
+  let w: tc.World = me_world_from("main", "const A: i32 = 0\nconst L: i32 = __line!()\nfn main() -> i32 { return L; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let m: tc.WorldModule = er.world.mods.get(0);
+  let c1: ast.ConstDecl = m.prog.consts.get(1);
+  let n: ast.ExprNode = ast.expr_pool_get(m.prog.exprs, c1.init);
+  t.assert(match n { ast.ExprNode.Int(v) => v == "2", _ => false });
+}
+
+fn test_macroexpand_col_bang_smoke() -> () {
+  let w: tc.World = me_world_from("main", "const C: i32 = __col!()\nfn main() -> i32 { return C; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let m: tc.WorldModule = er.world.mods.get(0);
+  let c0: ast.ConstDecl = m.prog.consts.get(0);
+  let n: ast.ExprNode = ast.expr_pool_get(m.prog.exprs, c0.init);
+  t.assert(match n { ast.ExprNode.Int(v) => v == "16", _ => false });
+}
+
+fn test_macroexpand_module_path_bang_smoke() -> () {
+  let w: tc.World = me_world_from("main", "const M: String = __module_path!()\nfn main() -> i32 { return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let m: tc.WorldModule = er.world.mods.get(0);
+  let c0: ast.ConstDecl = m.prog.consts.get(0);
+  let n: ast.ExprNode = ast.expr_pool_get(m.prog.exprs, c0.init);
+  t.assert(match n { ast.ExprNode.Str(v) => v == "main", _ => false });
+}
+
+fn test_macroexpand_func_bang_smoke() -> () {
+  let w: tc.World = me_world_from("main", "fn main() -> String { return __func!(); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.Str(v) => v == "main", _ => false });
+}
+
+fn test_macroexpand_caller_bang_smoke() -> () {
+  let w: tc.World = me_world_from("main",
+    "struct Caller { file: String, line: i32, col: i32, module: String, func: String }\n"
+      .concat("fn main() -> Caller { return __caller!(); }\n"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert(match n { ast.ExprNode.StructLit(_ty, fields) => fields.len() == 5, _ => false });
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_track_caller_injects_param_and_callsite_smoke() -> () {
+  let w: tc.World = me_world_from(
+    "main",
+    "struct Caller { file: String, line: i32, col: i32, module: String, func: String }\n"
+      .concat("@track_caller fn leaf() -> i32 { return 7; }\n")
+      .concat("fn main() -> i32 { return leaf(); }\n"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+
+  let leaf: ast.FuncDecl = me_func_decl(er.world, "main", "leaf");
+  t.assert(leaf.track_caller);
+  t.assert_eq(leaf.params.len(), 1);
+  t.assert_eq(leaf.params.get(0).name, "caller");
+
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Call(_c, _ta, args) => args.len() == 1,
+      _ => false,
+    },
+    "expected track_caller callsite to append one caller argument");
+
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_track_caller_forwards_in_tracked_owner_smoke() -> () {
+  let w: tc.World = me_world_from(
+    "main",
+    "struct Caller { file: String, line: i32, col: i32, module: String, func: String }\n"
+      .concat("@track_caller fn inner() -> i32 { return 1; }\n")
+      .concat("@track_caller fn outer() -> i32 { return inner(); }\n")
+      .concat("fn main() -> i32 { return outer(); }\n"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+
+  let n: ast.ExprNode = me_func_return_expr_node(er.world, "main", "outer");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Call(_c, _ta, args) => args.len() == 1,
+      _ => false,
+    },
+    "expected tracked owner to call tracked callee with one forwarded caller arg");
+
+  let m: tc.WorldModule = er.world.mods.get(0);
+  let outer_expr: ast.ExprNode =
+    match n {
+      ast.ExprNode.Call(_c, _ta, args) => ast.expr_pool_get(m.prog.exprs, args.get(0)),
+      _ => ast.ExprNode.Int("0"),
+    };
+  t.assert_with(
+    match outer_expr { ast.ExprNode.Ident(s) => s == "caller", _ => false },
+    "expected forwarded caller arg to be ident `caller`");
+
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_track_caller_with_bang_call_sugar_smoke() -> () {
+  let w: tc.World = me_world_from(
+    "main",
+    "struct Caller { file: String, line: i32, col: i32, module: String, func: String }\n"
+      .concat("@track_caller fn leaf() -> i32 { return 7; }\n")
+      .concat("fn main() -> i32 { return leaf!(); }\n"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_track_caller_builtin_in_tracked_fn_uses_forwarded_caller_smoke() -> () {
+  let w: tc.World = me_world_from(
+    "main",
+    "struct Caller { file: String, line: i32, col: i32, module: String, func: String }\n"
+      .concat("@track_caller fn where_from() -> Caller { return __caller!(); }\n")
+      .concat("fn main() -> Caller { return where_from(); }\n"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+
+  let n: ast.ExprNode = me_func_return_expr_node(er.world, "main", "where_from");
+  t.assert_with(
+    match n { ast.ExprNode.Ident(s) => s == "caller", _ => false },
+    "expected __caller! inside @track_caller fn to lower to forwarded caller param");
+
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_track_caller_cross_module_alias_call_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "std/prelude", "pub struct Caller { pub file: String, pub line: i32, pub col: i32, pub module: String, pub func: String }");
+  w = me_world_add(w, "dep", "@track_caller pub fn leaf() -> i32 { return 7; }");
+  w = me_world_add(w, "main", "import \"dep\" as dep\nfn main() -> i32 { return dep.leaf(); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  t.assert_with(
+    me_file_has_named_import(er.world, "main", "src/main.vox", "std/prelude", "Caller"),
+    "expected auto named import Caller in main");
+  t.assert_with(
+    me_file_has_named_import(er.world, "dep", "src/main.vox", "std/prelude", "Caller"),
+    "expected auto named import Caller in dep");
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Call(_c, _ta, args) => args.len() == 1,
+      _ => false,
+    },
+    "expected dep.leaf() callsite to append caller arg");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_track_caller_cross_module_named_import_call_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "std/prelude", "pub struct Caller { pub file: String, pub line: i32, pub col: i32, pub module: String, pub func: String }");
+  w = me_world_add(w, "dep", "@track_caller pub fn leaf() -> i32 { return 7; }");
+  w = me_world_add(w, "main", "import { leaf } from \"dep\"\nfn main() -> i32 { return leaf(); }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let n: ast.ExprNode = me_main_return_expr_node(er.world, "main");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Call(_c, _ta, args) => args.len() == 1,
+      _ => false,
+    },
+    "expected named import leaf() callsite to append caller arg");
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_track_caller_recursive_call_forwards_caller_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = me_world_add(w, "std/prelude", "pub struct Caller { pub file: String, pub line: i32, pub col: i32, pub module: String, pub func: String }");
+  w = me_world_add(w, "main",
+    "@track_caller fn sum(n: i32) -> i32 {\n"
+      .concat("  if n <= 0 { return 0; }\n")
+      .concat("  return sum(n - 1);\n")
+      .concat("}\n")
+      .concat("fn main() -> i32 { return sum(2); }\n"));
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+
+  let n: ast.ExprNode = me_func_return_expr_node(er.world, "main", "sum");
+  t.assert_with(
+    match n {
+      ast.ExprNode.Call(_c, _ta, args) => args.len() == 2,
+      _ => false,
+    },
+    "expected recursive call to forward caller as hidden second arg");
+
+  let m: tc.WorldModule = me_world_mod(er.world, "main");
+  let caller_arg: ast.ExprNode =
+    match n {
+      ast.ExprNode.Call(_c, _ta, args) => ast.expr_pool_get(m.prog.exprs, args.get(1)),
+      _ => ast.ExprNode.Int("0"),
+    };
+  t.assert_with(
+    match caller_arg { ast.ExprNode.Ident(s) => s == "caller", _ => false },
+    "expected recursive tracked call to pass caller ident");
+
+  let tr: tc.TcResult = tc.typecheck_world(er.world);
+  t.assert_with(tr.ok, tc.tc_error_to_string(tr.err));
+}
+
+fn test_macroexpand_dirname_bang_nested_file_smoke() -> () {
+  let w: tc.World = me_world_from("main", "const D: String = dirname!(__file!())\nfn main() -> i32 { return 0; }");
+  let er: mx.ExpandResult = mx.expand_world(w, mx.default_config());
+  t.assert_with(er.ok, tc.tc_error_to_string(er.err));
+  let m: tc.WorldModule = er.world.mods.get(0);
+  let c0: ast.ConstDecl = m.prog.consts.get(0);
+  let n: ast.ExprNode = ast.expr_pool_get(m.prog.exprs, c0.init);
+  let v: String = match n { ast.ExprNode.Str(s) => s, _ => "" };
+  t.assert(v != "");
+  t.assert(me_has_suffix(v, "/src") || v == "src");
 }
 
 fn test_macroexpand_user_macro_sugar_preserves_type_args() -> () {

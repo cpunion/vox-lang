@@ -269,7 +269,8 @@ struct ParseTopFnAttrsResult {
   ffi_imports: Vec[ast.FfiImportAttr],
   ffi_exports: Vec[ast.FfiExportAttr],
   effects: Vec[ast.EffectAttr],
-  resources: Vec[ast.ResourceAttr]
+  resources: Vec[ast.ResourceAttr],
+  track_caller: bool
 }
 
 fn dummy_token() -> lex.Token {
@@ -1949,6 +1950,7 @@ fn parse_fn_decl(
   ffi_exports: Vec[ast.FfiExportAttr],
   effects: Vec[ast.EffectAttr],
   resources: Vec[ast.ResourceAttr],
+  track_caller: bool,
 ) -> ParseFnResult {
   let mut q0: Parser = p;
   let mut is_async: bool = false;
@@ -2030,6 +2032,7 @@ fn parse_fn_decl(
       vis: vis,
       is_pub: is_pub,
       is_async: is_async,
+      track_caller: track_caller,
       name: r2.name,
       type_params: tps,
       type_param_packs: tpps,
@@ -2711,6 +2714,10 @@ fn parse_trait_decl(p: Parser, vis: i32, is_pub: bool) -> ParseTraitResult {
           q = set_method_ffi_attr_error(q);
           continue;
         }
+        if ar.track_caller {
+          q = set_method_track_caller_attr_error(q);
+          continue;
+        }
         let mr: ParseTraitMethodResult = parse_trait_method_decl(q, ar.effects, ar.resources);
         q = mr.p;
         ms.push(mr.m);
@@ -2737,11 +2744,17 @@ fn parse_impl_decl(p: Parser) -> ParseImplResult {
   let mut q0: Parser = ar1.p;
   let mut tps: Vec[String] = Vec();
   let mut tpbs: Vec[ast.TypeParamBoundsDecl] = Vec();
+  let mut is_negative: bool = false;
   if kind_is(peek_kind(q0), lex.TokenKind.LBracket) {
     let rtp: ParseTypeParamsResult = parse_type_params(q0);
     q0 = rtp.p;
     tps = rtp.tps;
     tpbs = rtp.tpbs;
+  }
+  if kind_is(peek_kind(q0), lex.TokenKind.Not) {
+    let ar_neg: AdvanceResult = advance(q0);
+    q0 = ar_neg.p;
+    is_negative = true;
   }
   let hr: ParseTypeResult = parse_type_name(q0);
   let mut is_inherent: bool = false;
@@ -2757,6 +2770,26 @@ fn parse_impl_decl(p: Parser) -> ParseImplResult {
   } else {
     is_inherent = true;
     for_ty = hr.ty;
+  }
+  if is_negative && is_inherent {
+    let mut q_bad: Parser = q1;
+    q_bad.has_err = true;
+    q_bad.err = ParseError.InvalidType(peek(q1).start, "negative impl requires trait impl form");
+    return ParseImplResult {
+      p: q_bad,
+      i: ast.ImplDecl {
+        file: p.file,
+        sp: span_tok(p, ar1.tok),
+        is_inherent: true,
+        is_negative: true,
+        type_params: tps,
+        type_param_bounds: tpbs,
+        trait_name: trait_name,
+        for_ty: for_ty,
+        assoc_types: Vec(),
+        methods: Vec(),
+      },
+    };
   }
   let ar3: AdvanceResult = expect(q1, lex.TokenKind.LBrace);
   let mut q: Parser = ar3.p;
@@ -2774,7 +2807,11 @@ fn parse_impl_decl(p: Parser) -> ParseImplResult {
         q = set_method_ffi_attr_error(q);
         continue;
       }
-      let r: ParseFnResult = parse_fn_decl(q, ast.vis_private(), false, Vec(), Vec(), ar0.effects, ar0.resources);
+      if ar0.track_caller {
+        q = set_method_track_caller_attr_error(q);
+        continue;
+      }
+      let r: ParseFnResult = parse_fn_decl(q, ast.vis_private(), false, Vec(), Vec(), ar0.effects, ar0.resources, false);
       q = r.p;
       methods.push(r.f);
     }
@@ -2786,6 +2823,7 @@ fn parse_impl_decl(p: Parser) -> ParseImplResult {
       file: p.file,
       sp: span_tok(p, ar1.tok),
       is_inherent: is_inherent,
+      is_negative: is_negative,
       type_params: tps,
       type_param_bounds: tpbs,
       trait_name: trait_name,
@@ -2945,42 +2983,80 @@ fn set_method_ffi_attr_error(p: Parser) -> Parser {
   return q;
 }
 
+fn set_method_track_caller_attr_error(p: Parser) -> Parser {
+  let mut q: Parser = p;
+  q.has_err = true;
+  q.err = ParseError.InvalidType(peek(p).start, "track_caller attribute is only allowed on top-level fn");
+  return q;
+}
+
 fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
   let mut q: Parser = p;
   let mut ffi_imports: Vec[ast.FfiImportAttr] = Vec();
   let mut ffi_exports: Vec[ast.FfiExportAttr] = Vec();
   let mut effects: Vec[ast.EffectAttr] = Vec();
   let mut resources: Vec[ast.ResourceAttr] = Vec();
+  let mut track_caller: bool = false;
 
   while !q.has_err && kind_is(peek_kind(q), lex.TokenKind.At) {
     let ar_at: AdvanceResult = expect(q, lex.TokenKind.At);
     let sp0: ast.Span = span_tok(q, ar_at.tok);
     let rn: ParseIdentResult = parse_ident(ar_at.p);
-    let ar_l: AdvanceResult = expect(rn.p, lex.TokenKind.LParen);
-    let mut qa: Parser = ar_l.p;
     let mut args: Vec[String] = Vec();
-
-    if !kind_is(peek_kind(qa), lex.TokenKind.RParen) {
-      while !qa.has_err {
-        let rs: ParseStringResult = parse_attr_arg_text(qa);
-        qa = rs.p;
-        if qa.has_err {
-          return ParseTopFnAttrsResult { p: qa, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects, resources: resources };
+    let mut qa: Parser = rn.p;
+    if kind_is(peek_kind(qa), lex.TokenKind.LParen) {
+      let ar_l: AdvanceResult = advance(qa);
+      qa = ar_l.p;
+      if !kind_is(peek_kind(qa), lex.TokenKind.RParen) {
+        while !qa.has_err {
+          let rs: ParseStringResult = parse_attr_arg_text(qa);
+          qa = rs.p;
+          if qa.has_err {
+            return ParseTopFnAttrsResult {
+              p: qa,
+              ffi_imports: ffi_imports,
+              ffi_exports: ffi_exports,
+              effects: effects,
+              resources: resources,
+              track_caller: track_caller,
+            };
+          }
+          args.push(rs.s);
+          if kind_is(peek_kind(qa), lex.TokenKind.Comma) {
+            let ar_c: AdvanceResult = advance(qa);
+            qa = ar_c.p;
+            if kind_is(peek_kind(qa), lex.TokenKind.RParen) { break; }
+            continue;
+          }
+          break;
         }
-        args.push(rs.s);
-        if kind_is(peek_kind(qa), lex.TokenKind.Comma) {
-          let ar_c: AdvanceResult = advance(qa);
-          qa = ar_c.p;
-          if kind_is(peek_kind(qa), lex.TokenKind.RParen) { break; }
-          continue;
-        }
-        break;
       }
+      let ar_r: AdvanceResult = expect(qa, lex.TokenKind.RParen);
+      q = ar_r.p;
+    } else if rn.name == "track_caller" {
+      q = qa;
+    } else {
+      let mut qe_l: Parser = qa;
+      qe_l.has_err = true;
+      qe_l.err = ParseError.UnexpectedToken(lex.TokenKind.LParen, peek_kind(qa), peek(qa).start);
+      return ParseTopFnAttrsResult {
+        p: qe_l,
+        ffi_imports: ffi_imports,
+        ffi_exports: ffi_exports,
+        effects: effects,
+        resources: resources,
+        track_caller: track_caller,
+      };
     }
-    let ar_r: AdvanceResult = expect(qa, lex.TokenKind.RParen);
-    q = ar_r.p;
     if q.has_err {
-      return ParseTopFnAttrsResult { p: q, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects, resources: resources };
+      return ParseTopFnAttrsResult {
+        p: q,
+        ffi_imports: ffi_imports,
+        ffi_exports: ffi_exports,
+        effects: effects,
+        resources: resources,
+        track_caller: track_caller,
+      };
     }
 
     if rn.name == "ffi_import" {
@@ -2992,7 +3068,14 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
         let mut qe: Parser = q;
         qe.has_err = true;
         qe.err = ParseError.InvalidType(rn.at, "bad ffi attribute arguments");
-        return ParseTopFnAttrsResult { p: qe, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects, resources: resources };
+        return ParseTopFnAttrsResult {
+          p: qe,
+          ffi_imports: ffi_imports,
+          ffi_exports: ffi_exports,
+          effects: effects,
+          resources: resources,
+          track_caller: track_caller,
+        };
       }
     } else if rn.name == "ffi_export" {
       if args.len() == 2 && is_ffi_target(args.get(0)) {
@@ -3001,7 +3084,14 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
         let mut qe2: Parser = q;
         qe2.has_err = true;
         qe2.err = ParseError.InvalidType(rn.at, "bad ffi attribute arguments");
-        return ParseTopFnAttrsResult { p: qe2, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects, resources: resources };
+        return ParseTopFnAttrsResult {
+          p: qe2,
+          ffi_imports: ffi_imports,
+          ffi_exports: ffi_exports,
+          effects: effects,
+          resources: resources,
+          track_caller: track_caller,
+        };
       }
     } else if rn.name == "effect" {
       if args.len() == 1 && args.get(0) != "" {
@@ -3010,7 +3100,14 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
         let mut qe4: Parser = q;
         qe4.has_err = true;
         qe4.err = ParseError.InvalidType(rn.at, "bad effect attribute arguments");
-        return ParseTopFnAttrsResult { p: qe4, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects, resources: resources };
+        return ParseTopFnAttrsResult {
+          p: qe4,
+          ffi_imports: ffi_imports,
+          ffi_exports: ffi_exports,
+          effects: effects,
+          resources: resources,
+          track_caller: track_caller,
+        };
       }
     } else if rn.name == "resource" {
       if args.len() == 2 && args.get(1) != "" {
@@ -3022,23 +3119,67 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
           let mut qe5: Parser = q;
           qe5.has_err = true;
           qe5.err = ParseError.InvalidType(rn.at, "bad resource attribute arguments");
-          return ParseTopFnAttrsResult { p: qe5, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects, resources: resources };
+          return ParseTopFnAttrsResult {
+            p: qe5,
+            ffi_imports: ffi_imports,
+            ffi_exports: ffi_exports,
+            effects: effects,
+            resources: resources,
+            track_caller: track_caller,
+          };
         }
       } else {
         let mut qe6: Parser = q;
         qe6.has_err = true;
         qe6.err = ParseError.InvalidType(rn.at, "bad resource attribute arguments");
-        return ParseTopFnAttrsResult { p: qe6, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects, resources: resources };
+        return ParseTopFnAttrsResult {
+          p: qe6,
+          ffi_imports: ffi_imports,
+          ffi_exports: ffi_exports,
+          effects: effects,
+          resources: resources,
+          track_caller: track_caller,
+        };
+      }
+    } else if rn.name == "track_caller" {
+      if args.len() == 0 {
+        track_caller = true;
+      } else {
+        let mut qe7: Parser = q;
+        qe7.has_err = true;
+        qe7.err = ParseError.InvalidType(rn.at, "track_caller takes no arguments");
+        return ParseTopFnAttrsResult {
+          p: qe7,
+          ffi_imports: ffi_imports,
+          ffi_exports: ffi_exports,
+          effects: effects,
+          resources: resources,
+          track_caller: track_caller,
+        };
       }
     } else {
       let mut qe3: Parser = q;
       qe3.has_err = true;
       qe3.err = ParseError.InvalidType(rn.at, "unknown function attribute");
-      return ParseTopFnAttrsResult { p: qe3, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects, resources: resources };
+      return ParseTopFnAttrsResult {
+        p: qe3,
+        ffi_imports: ffi_imports,
+        ffi_exports: ffi_exports,
+        effects: effects,
+        resources: resources,
+        track_caller: track_caller,
+      };
     }
   }
 
-  return ParseTopFnAttrsResult { p: q, ffi_imports: ffi_imports, ffi_exports: ffi_exports, effects: effects, resources: resources };
+  return ParseTopFnAttrsResult {
+    p: q,
+    ffi_imports: ffi_imports,
+    ffi_exports: ffi_exports,
+    effects: effects,
+    resources: resources,
+    track_caller: track_caller,
+  };
 }
 
 fn parse_pub_marker(p: Parser) -> ParsePubResult {
@@ -3097,7 +3238,12 @@ fn parse_program(p: Parser) -> ParseProgramResult {
     let vis: i32 = pr.vis;
 
     let k: lex.TokenKind = peek_kind(q);
-    let has_fn_attrs: bool = ar.ffi_imports.len() != 0 || ar.ffi_exports.len() != 0 || ar.effects.len() != 0 || ar.resources.len() != 0;
+    let has_fn_attrs: bool =
+      ar.ffi_imports.len() != 0 ||
+      ar.ffi_exports.len() != 0 ||
+      ar.effects.len() != 0 ||
+      ar.resources.len() != 0 ||
+      ar.track_caller;
     if has_fn_attrs && !kind_is(k, lex.TokenKind.KwFn) && !kind_is(k, lex.TokenKind.KwAsync) {
       let mut qe: Parser = q;
       qe.has_err = true;
@@ -3135,7 +3281,7 @@ fn parse_program(p: Parser) -> ParseProgramResult {
       q = r.p;
       impls.push(r.i);
     } else {
-      let r: ParseFnResult = parse_fn_decl(q, vis, is_pub, ar.ffi_imports, ar.ffi_exports, ar.effects, ar.resources);
+      let r: ParseFnResult = parse_fn_decl(q, vis, is_pub, ar.ffi_imports, ar.ffi_exports, ar.effects, ar.resources, ar.track_caller);
       q = r.p;
       funcs.push(r.f);
     }
