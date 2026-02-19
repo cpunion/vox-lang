@@ -3,7 +3,7 @@
 ## Scope
 
 Defines generic parameters, const generics, `where` constraints, comptime constraints,
-and current pack syntax surface.
+and type pack syntax/materialization.
 
 Coverage IDs: `S301`, `S302`, `S303`, `S304`, `S305`, `S306`, `S307`.
 
@@ -37,11 +37,25 @@ Variadic pack surface syntax (current parser coverage):
 fn sum[T](head: T, tail: T...) -> T { ... }
 ```
 
+Pack projection syntax:
+
+```vox
+fn pick_first[T...](a: T.0, _b: T.1) -> T.0 { return a; }
+```
+
 ## Generic Instantiation
 
 - Generic functions/types are instantiated with concrete type/const arguments.
 - Explicit type arguments are supported (`id[i32](1)`).
 - Const generic arguments are validated against declared const parameter type.
+- Trailing explicit type arguments can bind a trailing type pack (including heterogeneous packs).
+
+## Type Packs
+
+- Declaration form: `T...` in generic parameter list.
+- Variadic parameter form: `xs: T...`.
+- Projection form: `T.N` (for example `T.0`, `T.1`) in type positions.
+- Pack substitution/materialization is applied consistently across type checking, const evaluation, and IR generation for supported generic call paths.
 
 ## Constraints
 
@@ -57,10 +71,10 @@ fn sum[T](head: T, tail: T...) -> T { ... }
 
 Constraints can appear on impl heads, including comptime predicates.
 
-## Current Limitations
+## Current Limits
 
-- Pack/type-variadic semantics are partially implemented; syntax surface exists.
-- Advanced specialization ordering beyond current implementation is documented in internal design docs.
+- Pack materialization enforces an arity limit; exceeding it is a type error.
+- Specialization ordering follows current checker ranking rules and rejects incomparable overlaps.
 
 ## Diagnostics
 
@@ -74,6 +88,7 @@ Type/check errors:
 - unsatisfied trait bounds
 - unsatisfied comptime bounds
 - const argument/type mismatches
+- `type pack arity exceeds materialization limit`
 
 ## Example
 
@@ -81,6 +96,7 @@ Type/check errors:
 fn id[T](x: T) -> T where T: Eq { return x; }
 fn addn[const N: i32](x: i32) -> i32 where comptime N > 0 { return x + N; }
 fn sum[T](head: T, tail: T...) -> T { return head; }
+fn pick_first[T...](a: T.0, _b: T.1) -> T.0 { return a; }
 
 trait Tag { fn tag(x: Self) -> i32; }
 impl[T] Tag for Vec[T] where comptime @size_of(T) <= 16 {
