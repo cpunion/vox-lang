@@ -25,7 +25,8 @@ VisibleField
 
 - private (no marker): visible only within owning module scope.
 - `pub`: publicly visible.
-- `pub(crate)`: visible within the current package scope (for example `src`, `std`).
+- `pub(crate)`: visible within the current package module tree (`src/**`).
+  - `tests/**` is treated as external test modules and does not get `pub(crate)` visibility from `src/**`.
 - `pub(super)`: visible within the parent module and its submodules.
 
 ## Where Visibility Appears
@@ -50,6 +51,15 @@ Parser errors:
 Type/check errors:
 
 - symbol access that violates declared visibility
+- representative messages:
+  - `fn is private: <name>`
+  - `const is private: <name>`
+  - `struct field is private: <field>`
+  - `type is private`
+
+Import-path visibility checks use import diagnostics (see `modules-imports.md`):
+
+- `E_IMPORT_0009`: imported name exists but is private from current module scope
 
 ## Example
 
