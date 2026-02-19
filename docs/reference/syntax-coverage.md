@@ -38,6 +38,7 @@ Status:
 | S101 | if/else statement | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S102 | if-expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S103 | while loop | Done | `tests/syntax/src/control_flow_test.vox` |  |
+| S104 | for-in loop | Done | `tests/syntax/src/control_flow_test.vox` | parser lowers to while+len/get |
 | S105 | break/continue | Done | `tests/syntax/src/control_flow_test.vox` | includes `loop { ... }` coverage |
 | S106 | match expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S107 | malformed control-flow parse failure | Done | `tests/syntax/src/control_flow_test.vox` |  |
@@ -82,6 +83,4 @@ Status:
 
 ## Planned (Not Merged Yet)
 
-| ID | Description | Status |
-|---|---|---|
-| S104 | for-in loop | Planned |
+No pending syntax IDs at the moment.
