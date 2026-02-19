@@ -4,7 +4,7 @@
 
 Defines literal forms and typing behavior used by the type checker.
 
-Coverage IDs: `S002`, `S005`, `S018`.
+Coverage IDs: `S002`, `S005`, `S018`, `S021`, `S022`.
 
 ## Integer Literals
 
@@ -16,6 +16,7 @@ Coverage IDs: `S002`, `S005`, `S018`.
 
 - Decimal floating literals are supported.
 - Type is resolved from context (`f32`/`f64`) or default rules where applicable.
+- Exponent and suffixed forms are supported (for example `1e3`, `2.5e-2f32`).
 
 ## Boolean Literals
 

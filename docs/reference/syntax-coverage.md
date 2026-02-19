@@ -38,6 +38,8 @@ Status:
 | S018 | triple-quoted multiline string literal rules | Done | `tests/syntax/src/basic_types_test.vox` | unindent + leading newline trim + tab-indent rejection |
 | S019 | enum variant visibility marker parse failure | Done | `tests/syntax/src/visibility_test.vox` | variants cannot be prefixed by `pub`/`pub(crate)`/`pub(super)` |
 | S020 | enum dot-variant shorthand (`.Some(...)`, `.None`) | Done | `tests/syntax/src/adt_test.vox` | constructor + match pattern |
+| S021 | float types and float literal forms | Done | `tests/syntax/src/basic_types_test.vox` | `f32/f64`, decimal/exponent/suffixed literals |
+| S022 | malformed float literal parse failure | Done | `tests/syntax/src/basic_types_test.vox` | malformed exponent form |
 | S101 | if/else statement | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S102 | if-expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S103 | while loop | Done | `tests/syntax/src/control_flow_test.vox` |  |

@@ -4,6 +4,8 @@
 
 Defines built-in scalar types and their core semantics.
 
+Coverage IDs: `S001`, `S021`.
+
 ## Grammar
 
 ```vox
