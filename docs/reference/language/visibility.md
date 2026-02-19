@@ -4,7 +4,7 @@
 
 Defines declaration visibility markers currently supported by Vox item syntax.
 
-Coverage IDs: `S015`, `S016`, `S017`.
+Coverage IDs: `S015`, `S016`, `S017`, `S019`.
 
 ## Grammar (Simplified)
 
@@ -47,6 +47,7 @@ Parser errors:
 
 - invalid marker argument (for example `pub(local)`)
 - malformed marker syntax
+- visibility marker on unsupported target (for example enum variants)
 
 Type/check errors:
 
