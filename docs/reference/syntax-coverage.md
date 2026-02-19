@@ -20,7 +20,7 @@ Status:
 |---|---|---|---|---|
 | S001 | integer and bool types | Done | `tests/syntax/src/basic_types_test.vox` |  |
 | S002 | char and string literals | Done | `tests/syntax/src/basic_types_test.vox` |  |
-| S003 | borrow/ref type forms | Done | `tests/syntax/src/basic_types_test.vox` | includes `&T`, `&'static str` |
+| S003 | borrow/ref type forms | Done | `tests/syntax/src/basic_types_test.vox` | includes `&T`, `&mut T`, `&'static T`, `&'static mut T` |
 | S004 | range-annotated integer type | Done | `tests/syntax/src/basic_types_test.vox` |  |
 | S005 | malformed literal parse failure | Done | `tests/syntax/src/basic_types_test.vox` |  |
 | S006 | struct declaration (shape/generics/where) | Done | `tests/syntax/src/adt_test.vox` |  |
