@@ -28,6 +28,10 @@ Status:
 | S008 | struct literal and field access | Done | `tests/syntax/src/adt_test.vox` | typed path struct literal |
 | S009 | enum constructor and match pattern | Done | `tests/syntax/src/adt_test.vox` | qualified variant ctor/pattern |
 | S010 | malformed struct/enum declaration parse failure | Done | `tests/syntax/src/adt_test.vox` |  |
+| S011 | type alias declaration | Done | `tests/syntax/src/type_alias_const_test.vox` |  |
+| S012 | const declaration | Done | `tests/syntax/src/type_alias_const_test.vox` |  |
+| S013 | labeled union type alias declaration | Done | `tests/syntax/src/type_alias_const_test.vox` | `type Name = A: TA | B: TB` |
+| S014 | malformed type/const declaration parse failure | Done | `tests/syntax/src/type_alias_const_test.vox` |  |
 | S101 | if/else statement | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S102 | if-expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S103 | while loop | Done | `tests/syntax/src/control_flow_test.vox` |  |
