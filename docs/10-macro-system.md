@@ -124,7 +124,7 @@ fn main() -> i32 { return compile!(make_add1(41)); }
   - 当前 `name!(...)` 调用位点是表达式位置，因此已稳定支持 `AstExpr` 与 `AstBlock` 形态的函数式宏模板执行。
   - 当宏执行函数返回 `AstStmt/AstItem` 且在表达式位点被调用时，macroexpand 会直接报错：`macro call requires AstExpr or AstBlock return type`（避免回退路径的非确定行为）。
   - 当 `name!(...)` 或 `compile!(...)` 直接位于语句位点（`ExprStmt`）时，`AstStmt` 返回类型也可用（例如 `mk_stmt!(...)` 或 `compile!(mk_stmt(...))` 作为独立语句）。
+  - `AstItem` 当前不作为可插回位点：在表达式位点/语句位点调用时都会给出确定性错误（分别要求 `AstExpr or AstBlock` / `AstExpr or AstBlock or AstStmt`）。
   - `name!(...)` 支持模块别名与命名导入两种跨模块调用方式（例如 `dep.add1!(...)` / `import { add1 as inc } ...; inc!(...)`）。
   - 模板中可直接使用 `const` 泛型参数标识符（例如 `x + N`）；展开时会按调用实参替换为字面量。
   - 展开收敛后，这类宏执行函数会从 world 中剔除，不进入后续运行时 typecheck/codegen（避免把 `Ast*` 当作运行时类型）。
-- 这样做的目标是先稳定语法和流水线边界，并让“宏即函数”的调用形态可直接使用；后续再把返回 AST 的真正宏执行器接入同一阶段。
