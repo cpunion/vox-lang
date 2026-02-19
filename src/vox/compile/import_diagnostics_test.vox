@@ -1,0 +1,96 @@
+import "std/testing" as t
+import "vox/compile" as c
+import "vox/loader" as ld
+import "vox/codegen" as cg
+
+fn test_compile_named_import_unknown_name_reports_code() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/dep/dep.vox",
+    text: "pub fn one() -> i32 { return 1; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "import { missing } from \"dep\"\nfn main() -> i32 { return 0; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(!r.ok, r.err);
+  t.assert(starts_with(r.err, "src/main.vox:1:"));
+  t.assert(contains(r.err, "unknown imported name: dep::missing"));
+  t.assert(contains(r.err, "[E_IMPORT_0007]"));
+}
+
+fn test_compile_named_import_private_name_reports_code() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/dep/dep.vox",
+    text: "fn hidden() -> i32 { return 1; }\npub fn one() -> i32 { return hidden(); }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "import { hidden } from \"dep\"\nfn main() -> i32 { return 0; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(!r.ok, r.err);
+  t.assert(starts_with(r.err, "src/main.vox:1:"));
+  t.assert(contains(r.err, "function is private: dep::hidden"));
+  t.assert(contains(r.err, "[E_IMPORT_0009]"));
+}
+
+fn test_compile_named_import_conflicts_with_local_definition_reports_code() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/dep/dep.vox",
+    text: "pub fn one() -> i32 { return 1; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn one() -> i32 { return 0; }\nimport { one } from \"dep\"\nfn main() -> i32 { return one(); }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(!r.ok, r.err);
+  t.assert(starts_with(r.err, "src/main.vox:2:"));
+  t.assert(contains(r.err, "import name conflicts with local definition: one"));
+  t.assert(contains(r.err, "[E_IMPORT_0006]"));
+}
+
+fn test_compile_named_import_conflicts_with_module_alias_reports_code() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/dep/dep.vox",
+    text: "pub fn one() -> i32 { return 1; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/other/other.vox",
+    text: "pub fn one() -> i32 { return 2; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "import \"dep\" as x\nimport { one as x } from \"other\"\nfn main() -> i32 { return 0; }",
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(!r.ok, r.err);
+  t.assert(starts_with(r.err, "src/main.vox:2:"));
+  t.assert(contains(r.err, "import name conflicts with module alias: x"));
+  t.assert(contains(r.err, "[E_IMPORT_0006]"));
+}
