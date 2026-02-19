@@ -4,19 +4,19 @@
 
 Defines function declaration, parameter/return typing, call forms, and block expression rules.
 
-Coverage IDs: `S201`, `S202`, `S203`, `S204`, `S205`.
+Coverage IDs: `S201`, `S202`, `S203`, `S204`, `S205`, `S206`.
 
 ## Grammar (Simplified)
 
 ```vox
 FnDecl
-  := "fn" Ident GenericParams? "(" ParamList? ")" "->" Type Block
+  := "fn" Ident GenericParams? "(" ParamList? ","? ")" "->" Type Block
 
 Param
   := Ident ":" Type
 
 CallExpr
-  := Expr "(" ArgList? ")"
+  := Expr "(" ArgList? ","? ")"
 
 MemberCallExpr
   := Expr "." Ident "(" ArgList? ")"
@@ -33,12 +33,14 @@ BlockExpr
 - A function has a name, parameter list, explicit return type, and body block.
 - Unit return uses `-> ()`.
 - Generics and `where` constraints are allowed where supported by parser/typechecker.
+- Function parameter lists accept an optional trailing comma.
 
 ## Calls
 
 ### Direct/Member Call
 
 - `f(x, y)` calls callable expression `f`.
+- Call argument lists accept an optional trailing comma.
 - `recv.method(args...)` resolves via inherent impl or trait method resolution.
 - method resolution in current checker prefers:
   - built-in receiver methods (`Vec`, `String`, primitive helpers),
