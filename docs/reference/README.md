@@ -12,10 +12,12 @@ Current references are aligned with the merged syntax acceptance modules:
 - module-04: operators and casts
 - module-05: functions, method call, UFCS
 - module-06: generics, const generics, where/comptime, type pack syntax
+- module-07: traits and impls syntax
 
 ## Documents
 
-- `docs/reference/syntax.md`: syntax reference for the currently covered surface.
+- `docs/reference/language/README.md`: language reference tree (entrypoint).
+- `docs/reference/syntax.md`: compatibility index redirecting to language tree docs.
 - `docs/reference/syntax-coverage.md`: syntax ID matrix and test mapping.
 
 ## Contribution Rule
@@ -23,5 +25,5 @@ Current references are aligned with the merged syntax acceptance modules:
 For syntax changes, update docs and tests in the same PR:
 
 1. update/add acceptance tests in `tests/syntax/src/*.vox` with `SYNTAX:Sxxx` markers.
-2. update `docs/reference/syntax.md` and/or `docs/reference/syntax-coverage.md`.
+2. update corresponding topic docs under `docs/reference/language/**` and `docs/reference/syntax-coverage.md`.
 3. resolve review comments, then merge only after CI is green.
