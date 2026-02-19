@@ -82,6 +82,10 @@ Status:
 | S804 | comparison/equality operators | Done | `tests/syntax/src/operators_test.vox` |  |
 | S805 | cast operator | Done | `tests/syntax/src/operators_test.vox` |  |
 | S806 | malformed operator expression parse failure | Done | `tests/syntax/src/operators_test.vox` |  |
+| S901 | macro call sugar `name!(...)` | Done | `tests/syntax/src/macros_test.vox` |  |
+| S902 | builtin macro syntax (`compile!`, `quote expr`, `$x`) | Done | `tests/syntax/src/macros_test.vox` | parser-level coverage |
+| S903 | macro call with explicit generic/const args | Done | `tests/syntax/src/macros_test.vox` | `id[T]!`, `addn[N]!` |
+| S904 | malformed macro call parse failure | Done | `tests/syntax/src/macros_test.vox` | missing `(` after `!` |
 
 ## Planned (Not Merged Yet)
 
