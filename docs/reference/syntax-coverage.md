@@ -23,6 +23,11 @@ Status:
 | S003 | borrow/ref type forms | Done | `tests/syntax/src/basic_types_test.vox` | includes `&T`, `&'static str` |
 | S004 | range-annotated integer type | Done | `tests/syntax/src/basic_types_test.vox` |  |
 | S005 | malformed literal parse failure | Done | `tests/syntax/src/basic_types_test.vox` |  |
+| S006 | struct declaration (fields/pub/generics/where) | Done | `tests/syntax/src/adt_test.vox` |  |
+| S007 | enum declaration (variants/generics/where) | Done | `tests/syntax/src/adt_test.vox` | tuple-payload and unit variants |
+| S008 | struct literal and field access | Done | `tests/syntax/src/adt_test.vox` | typed path struct literal |
+| S009 | enum constructor and match pattern | Done | `tests/syntax/src/adt_test.vox` | qualified variant ctor/pattern |
+| S010 | malformed struct/enum declaration parse failure | Done | `tests/syntax/src/adt_test.vox` |  |
 | S101 | if/else statement | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S102 | if-expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S103 | while loop | Done | `tests/syntax/src/control_flow_test.vox` |  |
