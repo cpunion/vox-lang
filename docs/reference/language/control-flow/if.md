@@ -1,11 +1,36 @@
 # If
 
-Covered forms:
+## Scope
 
-- `if/else` statement
-- `if` expression
+Coverage IDs: `S101`, `S102`.
 
-Example:
+## Syntax
+
+Statement form:
+
+```vox
+if <cond-expr> { <stmts> } else { <stmts> }
+if <cond-expr> { <stmts> } else if <cond-expr> { <stmts> } else { <stmts> }
+```
+
+Expression form:
+
+```vox
+let v: T = if <cond-expr> { <expr> } else { <expr> };
+```
+
+## Semantics
+
+- `<cond-expr>` is evaluated first.
+- When condition is true, then-branch executes; otherwise else-branch executes.
+- In expression form, branch result types must be compatible with the expected type.
+
+## Diagnostics
+
+- Missing required blocks or malformed `else` branches produce parse errors.
+- Type mismatch between expression branches produces type errors.
+
+## Examples
 
 ```vox
 fn main() -> i32 {

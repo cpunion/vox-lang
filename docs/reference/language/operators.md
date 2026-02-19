@@ -1,6 +1,10 @@
 # Operators and Cast
 
-Current covered operators:
+## Scope
+
+Coverage IDs: `S801`, `S802`, `S803`, `S804`, `S805`, `S806`.
+
+## Supported Operators
 
 - arithmetic: `+ - * / %`
 - logical: `&& || !`
@@ -8,7 +12,18 @@ Current covered operators:
 - comparison/equality: `< <= > >= == !=`
 - cast: `as`
 
-Example:
+## Semantics
+
+- Logical operators use short-circuit evaluation (`&&`, `||`).
+- Arithmetic/bitwise/comparison operators follow precedence and associativity rules.
+- `as` performs explicit type conversion.
+
+## Diagnostics
+
+- Malformed expressions (for example `1 + ;`) are parse errors.
+- Invalid operand type combinations are type errors.
+
+## Example
 
 ```vox
 fn main() -> i32 {

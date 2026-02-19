@@ -1,13 +1,40 @@
 # Functions and Calls
 
-Current covered forms:
+## Scope
 
-- function declaration and return
-- instance member call (`x.m(...)`)
-- UFCS style call (`Trait.m(x, ...)`)
-- block expression
+Coverage IDs: `S201`, `S202`, `S203`, `S204`, `S205`.
 
-Example:
+## Syntax
+
+Function declaration:
+
+```vox
+fn <name>(<params>) -> <ret-ty> { <stmts> }
+```
+
+Call forms:
+
+- instance member call: `recv.method(args...)`
+- UFCS call: `Trait.method(recv, args...)`
+
+Block expression:
+
+```vox
+let x: T = { <stmts>; <tail-expr> };
+```
+
+## Semantics
+
+- `return` exits current function.
+- Method call syntax resolves to impl/trait methods.
+- Block expressions evaluate to their tail expression value.
+
+## Diagnostics
+
+- Missing function body is a parse error.
+- Signature/body type mismatch is a type error.
+
+## Example
 
 ```vox
 struct I { v: i32 }

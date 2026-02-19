@@ -1,15 +1,42 @@
 # Traits and Impls
 
-Current covered forms:
+## Scope
 
-- trait declaration
-- trait default method body
-- associated type in trait and impl
-- supertrait syntax (`trait A: B`)
-- generic impl head (`impl[T] ...`)
-- negative impl syntax (`impl !Trait for Type {}`)
+Coverage IDs: `S401`, `S402`, `S403`, `S404`, `S405`, `S406`, `S407`.
 
-Example:
+## Syntax
+
+Trait declaration:
+
+```vox
+trait Name[: SuperTrait] {
+  type AssocType;
+  fn method(x: Self) -> Ret;
+  fn defaulted(x: Self) -> Ret { ... }
+}
+```
+
+Impl forms:
+
+```vox
+impl Trait for Type { ... }
+impl[T] Trait for Type[T] { ... }
+impl !Trait for Type {}
+```
+
+## Semantics
+
+- Trait methods define required behavior contracts for implementers.
+- Default method bodies can be provided in trait definitions.
+- Associated types are bound in concrete impl blocks.
+- Negative impls declare non-implementation for auto-trait-like constraints.
+
+## Diagnostics
+
+- Invalid negative inherent impl forms are rejected (for example `impl !Type {}`).
+- Trait/impl signature mismatches are reported by type checking.
+
+## Example
 
 ```vox
 trait Base { fn base(x: Self) -> i32; }

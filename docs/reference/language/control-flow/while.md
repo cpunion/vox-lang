@@ -1,10 +1,27 @@
 # While
 
-Covered form:
+## Scope
 
-- `while` loop
+Coverage ID: `S103`.
 
-Example:
+## Syntax
+
+```vox
+while <cond-expr> { <stmts> }
+```
+
+## Semantics
+
+- Condition is checked before each iteration.
+- Loop exits when condition becomes false.
+- `break` and `continue` can be used inside loop body.
+
+## Diagnostics
+
+- Malformed condition/body produces parse errors.
+- Condition type mismatch is reported by type checking.
+
+## Example
 
 ```vox
 fn sum3() -> i32 {

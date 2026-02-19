@@ -1,15 +1,30 @@
 # Generics
 
-Current covered forms:
+## Scope
 
-- generic type parameters and explicit type arguments
-- const generics
-- `where` trait bounds
-- `where comptime` bounds
-- impl-head `where comptime`
-- type pack / variadic parameter surface syntax (`T...`)
+Coverage IDs: `S301`, `S302`, `S303`, `S304`, `S305`, `S306`, `S307`.
 
-Example:
+## Syntax
+
+- type parameters: `fn id[T](x: T) -> T`
+- explicit type args: `id[i32](1)`
+- const generics: `fn addn[const N: i32](x: i32) -> i32`
+- trait bounds: `where T: Trait`
+- comptime bounds: `where comptime <expr>`
+- variadic type pack surface syntax: `tail: T...`
+
+## Semantics
+
+- Generic functions/types are instantiated with concrete arguments.
+- `where` constraints are checked during type checking.
+- malformed generic argument syntax is rejected at parse stage.
+
+## Diagnostics
+
+- bad bracket/argument structure in generic argument lists is a parse error.
+- unsatisfied bounds are type errors.
+
+## Example
 
 ```vox
 fn id[T](x: T) -> T where T: Eq { return x; }

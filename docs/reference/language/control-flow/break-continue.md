@@ -1,11 +1,26 @@
 # Break and Continue
 
-Covered forms:
+## Scope
 
-- `break`
-- `continue`
+Coverage ID: `S105` (currently partial: `loop` keyword coverage is pending).
 
-Example:
+## Syntax
+
+```vox
+break;
+continue;
+```
+
+## Semantics
+
+- `break` exits the nearest enclosing loop.
+- `continue` skips the rest of current iteration and starts next iteration.
+
+## Diagnostics
+
+- Using `break` / `continue` outside loops is rejected during type checking/lowering.
+
+## Example
 
 ```vox
 fn main() -> i32 {
