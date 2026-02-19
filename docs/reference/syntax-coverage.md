@@ -32,6 +32,9 @@ Status:
 | S012 | const declaration | Done | `tests/syntax/src/type_alias_const_test.vox` |  |
 | S013 | labeled union type alias declaration | Done | `tests/syntax/src/type_alias_const_test.vox` | `type Name = A: TA | B: TB` |
 | S014 | malformed type/const declaration parse failure | Done | `tests/syntax/src/type_alias_const_test.vox` |  |
+| S015 | visibility markers on items | Done | `tests/syntax/src/visibility_test.vox` | `pub`, `pub(crate)`, `pub(super)` |
+| S016 | visibility markers on struct fields | Done | `tests/syntax/src/visibility_test.vox` | field-level visibility forms |
+| S017 | malformed visibility marker parse failure | Done | `tests/syntax/src/visibility_test.vox` | invalid marker like `pub(local)` |
 | S101 | if/else statement | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S102 | if-expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S103 | while loop | Done | `tests/syntax/src/control_flow_test.vox` |  |
