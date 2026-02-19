@@ -67,8 +67,10 @@ Current checker constraints:
 
 ## Resolution Notes
 
-- Method lookup may resolve via inherent impl first, then trait context, according to checker rules.
-- UFCS form can disambiguate trait method selection.
+- Receiver method sugar (`x.m(...)`) resolves inherent methods first.
+- If no inherent method matches, checker falls back to trait-method lookup in scope/bounds.
+- UFCS form (`Trait.m(x, ...)`) always selects trait dispatch explicitly, even when an inherent method with the same name exists.
+- If multiple trait candidates remain for method sugar, checker reports `ambiguous trait method call`.
 
 ## Diagnostics
 
