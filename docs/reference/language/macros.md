@@ -8,7 +8,7 @@ Defines parser-level macro syntax forms:
 - builtin `compile!(...)`,
 - quote/unquote surface syntax (`quote expr { ... }`, `$x`).
 
-Coverage IDs: `S901`, `S902`, `S903`, `S904`, `S905`.
+Coverage IDs: `S901`, `S902`, `S903`, `S904`, `S905`, `S909`.
 
 ## Grammar (Simplified)
 
@@ -52,6 +52,11 @@ __col!()
 __module_path!()
 __func!()
 __caller!()
+dirname!(__file!())
+panic!("msg")
+compile_error!("msg")
+assert!(cond)
+assert_eq!(lhs, rhs)
 ```
 
 - `compile!(...)` is compile-time splice syntax.
@@ -59,6 +64,9 @@ __caller!()
 - `$x` is parsed as unquote sugar inside quote contexts.
 - introspection builtins return caller/module/source metadata at macro expansion stage:
   `__file!`, `__line!`, `__col!`, `__module_path!`, `__func!`, `__caller!`.
+- utility builtins:
+  - `dirname!(path)` for compile-time parent-directory extraction.
+  - `panic!(...)`, `compile_error!(...)`, `assert!(...)`, `assert_eq!(...)`.
 
 ## Diagnostics
 

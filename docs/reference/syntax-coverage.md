@@ -94,6 +94,7 @@ Status:
 | S906 | reflect intrinsic call forms | Done | `tests/syntax/src/reflect_intrinsics_test.vox` | `@size_of/@align_of/@type/@same_type/@field_name/@field_type` |
 | S907 | reflect predicate intrinsic call forms | Done | `tests/syntax/src/reflect_intrinsics_test.vox` | `@is_*` family |
 | S908 | malformed reflect intrinsic parse failure | Done | `tests/syntax/src/reflect_intrinsics_test.vox` | missing separators/parens |
+| S909 | builtin utility macro calls | Done | `tests/syntax/src/macros_test.vox` | `dirname!/panic!/compile_error!/assert!/assert_eq!` |
 
 ## Planned (Not Merged Yet)
 
