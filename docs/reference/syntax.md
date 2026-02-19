@@ -19,6 +19,7 @@ Topic docs:
 - `docs/reference/language/types/compatibility.md`
 - `docs/reference/language/types/literals.md`
 - `docs/reference/language/operators.md`
+- `docs/reference/language/error-handling.md`
 - `docs/reference/language/functions.md`
 - `docs/reference/language/macros.md`
 - `docs/reference/language/modules-imports.md`
