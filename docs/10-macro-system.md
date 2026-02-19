@@ -74,6 +74,22 @@ fn main() -> i32 { return compile!(make_add1(41)); }
     - 当 `expr` 是普通调用（`f(...)` / `pkg.f(...)`）且 `f` 返回 `Ast*` 时，会先转为宏调用再展开，支持 `compile!(make_ast(...))` 形态。
     - 上述 `f(...)` 也支持命名导入函数（`import { f as g } from "dep"; compile!(g(...))`）。
     - 支持“宏调用宏”级联展开：`compile!(m2(...))` 若 `m2` 模板中继续产生 `m1!(...)`，会在后续轮次继续展开直到收敛。
+  - `__file!()`：无参，展开为当前源码文件路径字符串（规范化为 `/` 分隔）。
+  - `__line!()`：无参，展开为当前源码位置的 1-based 行号整数字面量。
+  - `__col!()`：无参，展开为当前源码位置的 1-based 列号整数字面量。
+  - `__module_path!()`：无参，展开为当前模块路径字符串。
+  - `__func!()`：无参，展开为当前函数名字符串（若不在函数体内则为空字符串）。
+  - `__caller!()`：无参，展开为 `Caller { file, line, col, module, func }` 结构字面量。
+    - `Caller` 默认来自 `std/prelude`（可被本地同名类型遮蔽）。
+  - `@track_caller`（或 `@track_caller()`）：
+    - 仅允许标注在顶层 `fn`。
+    - 若当前模块未声明本地 `Caller`，展开阶段会按文件自动补 `import { Caller } from "std/prelude"`。
+    - 展开阶段会把被标注函数重写为额外接收 `caller: Caller` 参数。
+    - 对该函数的调用点会自动补一参：
+      - 普通上下文补 `__caller!()`
+      - 另一个 `@track_caller` 函数内部补 `caller`（透传外层调用者）
+    - 在 `@track_caller fn` 内部，`__caller!()` 会展开为该转发参数 `caller`（而非函数体内源码位置）。
+  - `dirname!(path)`：1 个字符串参数，编译期返回其父目录；支持嵌套 `dirname!(__file!())`。
 - `quote!(expr)`：仅 1 个值参数、无 type args，表达式级 quote MVP（当前直接产出内联表达式节点）。
 - `unquote!(expr)`：仅 1 个值参数、无 type args，表达式级 unquote MVP（当前直接产出内联表达式节点）。
   - 覆盖形态已验证包含普通二元表达式、`if` 表达式与 `match` 表达式组合场景。

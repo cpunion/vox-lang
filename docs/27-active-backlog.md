@@ -84,6 +84,13 @@ Governance from now on:
     - Landed in `src/std/async/async.vox` + `src/std/async/async_test.vox`.
   - Source: `docs/09-async-model.md`.
 
+- [x] A17 Thread-safety marker negative impl（`!Send/!Sync`）
+  - [x] A17-1 语法层支持 `impl !Trait for Type {}`（当前用于 `Send/Sync`）。
+    - Landed in `src/vox/ast/ast.vox`, `src/vox/parse/parse.vox`, `src/vox/parse/parse_test.vox`.
+  - [x] A17-2 语义层支持 negative impl 覆盖自动推导，并禁止 `Send/Sync` 的手写正向 impl。
+    - Landed in `src/vox/typecheck/collect_traits_impls.vox`, `src/vox/typecheck/sym_lookup.vox`, `src/vox/typecheck/typecheck_test.vox`, `src/vox/compile/misc_test.vox`.
+  - Source: `docs/08-thread-safety.md`, `docs/14-syntax-details.md`.
+
 - [x] A01 Real generic pack expansion (type/value packs), not declaration-only.
   - [x] A01-1 Trailing explicit type args can bind a single trailing type pack.
     - Landed in `src/vox/typecheck/tc_call.vox`, `src/vox/irgen/gen_call_match.vox`, and `src/vox/typecheck/consts.vox`, with compile/typecheck tests covering both runtime and const-call paths.
@@ -161,7 +168,7 @@ Governance from now on:
   - Source: `docs/16-platform-support.md`.
 
 - [x] D02 Thread-safety model (`Send/Sync` auto-derivation policy).
-  - Stage2 baseline landed: marker traits in `std/prelude` + auto-derivation for scalars/String/Vec/Range/struct/enum; type params still require explicit bounds.
+  - Stage2 baseline landed: marker traits in `std/prelude` + auto-derivation for scalars/String/Vec/Range/struct/enum; type params still require explicit bounds; `impl !Send/!Sync` supported and explicit positive `impl Send/Sync` rejected.
   - Source: `docs/08-thread-safety.md`.
 
 - [x] D03 Async model.

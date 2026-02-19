@@ -1,0 +1,787 @@
+import "vox/ast" as ast
+import "vox/typecheck" as tc
+
+struct TrackedFnRef {
+  mod_path: String,
+  name: String,
+}
+
+struct TrackRewriteExprResult {
+  pool: ast.ExprPool,
+  id: i32,
+}
+
+struct TrackRewriteStmtResult {
+  pool: ast.ExprPool,
+  st: ast.Stmt,
+}
+
+struct TrackRewriteBlockResult {
+  pool: ast.ExprPool,
+  b: ast.Block,
+}
+
+struct TrackRewriteExprBlockResult {
+  pool: ast.ExprPool,
+  b: ast.ExprBlock,
+}
+
+struct TrackRewriteFieldsResult {
+  pool: ast.ExprPool,
+  fields: Vec[ast.StructLitField],
+}
+
+struct TrackRewriteExprIdsResult {
+  pool: ast.ExprPool,
+  ids: Vec[i32],
+}
+
+struct TrackRewriteArmsResult {
+  pool: ast.ExprPool,
+  arms: Vec[ast.MatchArm],
+}
+
+struct TrackRewriteCtx {
+  refs: Vec[TrackedFnRef],
+  mod_path: String,
+  imps: tc.Imports,
+  owner_is_tracked: bool,
+}
+
+struct TrackRewriteProgramResult {
+  ok: bool,
+  err: tc.TcError,
+  changed: bool,
+  prog: ast.Program,
+}
+
+fn track_prog_ok(changed: bool, prog: ast.Program) -> TrackRewriteProgramResult {
+  return TrackRewriteProgramResult {
+    ok: true,
+    err: tc.TcError.None,
+    changed: changed,
+    prog: prog,
+  };
+}
+
+fn track_prog_err(err: tc.TcError, prog: ast.Program) -> TrackRewriteProgramResult {
+  return TrackRewriteProgramResult {
+    ok: false,
+    err: err,
+    changed: false,
+    prog: prog,
+  };
+}
+
+fn track_contains_ref(refs: Vec[TrackedFnRef], mod_path: String, name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < refs.len() {
+    let r: TrackedFnRef = refs.get(i);
+    if r.mod_path == mod_path && r.name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn track_collect_refs(w: tc.World) -> Vec[TrackedFnRef] {
+  let mut refs: Vec[TrackedFnRef] = Vec();
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(mi);
+    let mut fi: i32 = 0;
+    while fi < m.prog.funcs.len() {
+      let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+      if fd.track_caller {
+        refs.push(TrackedFnRef { mod_path: m.path, name: fd.name });
+      }
+      fi = fi + 1;
+    }
+    mi = mi + 1;
+  }
+  return refs;
+}
+
+fn track_str_contains(xs: Vec[String], s: String) -> bool {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    if xs.get(i) == s { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn track_add_unique_file(xs0: Vec[String], s: String) -> Vec[String] {
+  let mut xs: Vec[String] = xs0;
+  if s == "" { return xs; }
+  if !track_str_contains(xs, s) { xs.push(s); }
+  return xs;
+}
+
+fn track_prog_files(prog: ast.Program) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < prog.imports.len() {
+    out = track_add_unique_file(out, prog.imports.get(i).file);
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.types.len() {
+    out = track_add_unique_file(out, prog.types.get(i).file);
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.consts.len() {
+    out = track_add_unique_file(out, prog.consts.get(i).file);
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.structs.len() {
+    out = track_add_unique_file(out, prog.structs.get(i).file);
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.enums.len() {
+    out = track_add_unique_file(out, prog.enums.get(i).file);
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.traits.len() {
+    out = track_add_unique_file(out, prog.traits.get(i).file);
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.impls.len() {
+    out = track_add_unique_file(out, prog.impls.get(i).file);
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.funcs.len() {
+    out = track_add_unique_file(out, prog.funcs.get(i).file);
+    i = i + 1;
+  }
+  return out;
+}
+
+fn track_prog_has_decl_named_caller(prog: ast.Program) -> bool {
+  let mut i: i32 = 0;
+  while i < prog.types.len() {
+    if prog.types.get(i).name == "Caller" { return true; }
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.structs.len() {
+    if prog.structs.get(i).name == "Caller" { return true; }
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.enums.len() {
+    if prog.enums.get(i).name == "Caller" { return true; }
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.traits.len() {
+    if prog.traits.get(i).name == "Caller" { return true; }
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.consts.len() {
+    if prog.consts.get(i).name == "Caller" { return true; }
+    i = i + 1;
+  }
+  i = 0;
+  while i < prog.funcs.len() {
+    if prog.funcs.get(i).name == "Caller" { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn track_import_local_name(nm: ast.ImportName) -> String {
+  if nm.alias != "" { return nm.alias; }
+  return nm.name;
+}
+
+fn track_file_has_caller_named_import(imps: Vec[ast.ImportDecl], file: String) -> bool {
+  let mut i: i32 = 0;
+  while i < imps.len() {
+    let imp: ast.ImportDecl = imps.get(i);
+    if imp.file != file {
+      i = i + 1;
+      continue;
+    }
+    let mut j: i32 = 0;
+    while j < imp.names.len() {
+      let nm: ast.ImportName = imp.names.get(j);
+      if track_import_local_name(nm) == "Caller" { return true; }
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn track_with_default_caller_imports(prog0: ast.Program) -> ast.Program {
+  if track_prog_has_decl_named_caller(prog0) { return prog0; }
+  let files: Vec[String] = track_prog_files(prog0);
+  if files.len() == 0 { return prog0; }
+
+  let mut imps: Vec[ast.ImportDecl] = prog0.imports;
+  let mut i: i32 = 0;
+  while i < files.len() {
+    let file: String = files.get(i);
+    if !track_file_has_caller_named_import(imps, file) {
+      let sp: ast.Span = ast.Span { file: file, line: 1, col: 1 };
+      let mut names: Vec[ast.ImportName] = Vec();
+      names.push(ast.ImportName { name: "Caller", alias: "", sp: sp });
+      imps.push(ast.ImportDecl {
+        file: file,
+        sp: sp,
+        path: "std/prelude",
+        alias: "",
+        names: names,
+      });
+    }
+    i = i + 1;
+  }
+
+  return ast.Program {
+    imports: imps,
+    types: prog0.types,
+    consts: prog0.consts,
+    structs: prog0.structs,
+    enums: prog0.enums,
+    traits: prog0.traits,
+    impls: prog0.impls,
+    funcs: prog0.funcs,
+    exprs: prog0.exprs,
+  };
+}
+
+fn track_caller_type() -> ast.TypeName {
+  let mut parts: Vec[String] = Vec();
+  parts.push("Caller");
+  return ast.TypeName { parts: parts, args: Vec() };
+}
+
+fn track_param_name_exists(ps: Vec[ast.Param], name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < ps.len() {
+    if ps.get(i).name == name { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn track_resolve_call_target(refs: Vec[TrackedFnRef], mod_path: String, imps: tc.Imports, exprs: ast.ExprPool, callee: i32) -> bool {
+  let n: ast.ExprNode = ast.expr_pool_get(exprs, callee);
+  if match n { ast.ExprNode.Ident(_name) => true, _ => false } {
+    let name: String = match n { ast.ExprNode.Ident(s) => s, _ => "" };
+    if track_contains_ref(refs, mod_path, name) { return true; }
+    let nf: tc.NamedFuncImport = find_named_func_import(imps.named_funcs, name);
+    if nf.local != "" && track_contains_ref(refs, nf.mod_path, nf.name) { return true; }
+    if track_contains_ref(refs, "std/prelude", name) { return true; }
+    return false;
+  }
+
+  if match n { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+    let recv: i32 = match n { ast.ExprNode.Member(r, _n) => r, _ => -1 };
+    let name: String = match n { ast.ExprNode.Member(_r, nm) => nm, _ => "" };
+    let rn: ast.ExprNode = ast.expr_pool_get(exprs, recv);
+    if !match rn { ast.ExprNode.Ident(_a) => true, _ => false } { return false; }
+    let alias: String = match rn { ast.ExprNode.Ident(a) => a, _ => "" };
+    let target_mod: String = tc.find_alias(imps.aliases, alias);
+    if target_mod == "" { return false; }
+    return track_contains_ref(refs, target_mod, name);
+  }
+
+  return false;
+}
+
+fn track_append_caller_arg(pool0: ast.ExprPool, sp: ast.Span, owner_is_tracked: bool) -> TrackRewriteExprResult {
+  if owner_is_tracked {
+    let ar_caller: ast.AddExprResult = ast.expr_pool_add(pool0, ast.ExprNode.Ident("caller"), sp);
+    return TrackRewriteExprResult {
+      pool: ar_caller.pool,
+      id: ar_caller.id,
+    };
+  }
+
+  let ar_ident: ast.AddExprResult = ast.expr_pool_add(pool0, ast.ExprNode.Ident("__caller"), sp);
+  let ar_macro: ast.AddExprResult = ast.expr_pool_add(ar_ident.pool, ast.ExprNode.MacroCall(ar_ident.id, Vec(), Vec()), sp);
+  return TrackRewriteExprResult {
+    pool: ar_macro.pool,
+    id: ar_macro.id,
+  };
+}
+
+fn track_rewrite_exprs(pool0: ast.ExprPool, ids0: Vec[i32], ctx: TrackRewriteCtx) -> TrackRewriteExprIdsResult {
+  let mut out: Vec[i32] = Vec();
+  let mut pool: ast.ExprPool = pool0;
+  let mut i: i32 = 0;
+  while i < ids0.len() {
+    let rr: TrackRewriteExprResult = track_rewrite_expr(pool, ids0.get(i), ctx);
+    pool = rr.pool;
+    out.push(rr.id);
+    i = i + 1;
+  }
+  return TrackRewriteExprIdsResult { pool: pool, ids: out };
+}
+
+fn track_rewrite_fields(pool0: ast.ExprPool, fields0: Vec[ast.StructLitField], ctx: TrackRewriteCtx) -> TrackRewriteFieldsResult {
+  let mut out: Vec[ast.StructLitField] = Vec();
+  let mut pool: ast.ExprPool = pool0;
+  let mut i: i32 = 0;
+  while i < fields0.len() {
+    let f: ast.StructLitField = fields0.get(i);
+    let rr: TrackRewriteExprResult = track_rewrite_expr(pool, f.expr, ctx);
+    pool = rr.pool;
+    out.push(ast.StructLitField { name: f.name, expr: rr.id });
+    i = i + 1;
+  }
+  return TrackRewriteFieldsResult { pool: pool, fields: out };
+}
+
+fn track_rewrite_arms(pool0: ast.ExprPool, arms0: Vec[ast.MatchArm], ctx: TrackRewriteCtx) -> TrackRewriteArmsResult {
+  let mut out: Vec[ast.MatchArm] = Vec();
+  let mut pool: ast.ExprPool = pool0;
+  let mut i: i32 = 0;
+  while i < arms0.len() {
+    let a: ast.MatchArm = arms0.get(i);
+    let rr: TrackRewriteExprResult = track_rewrite_expr(pool, a.expr, ctx);
+    pool = rr.pool;
+    out.push(ast.MatchArm { pat: a.pat, expr: rr.id });
+    i = i + 1;
+  }
+  return TrackRewriteArmsResult { pool: pool, arms: out };
+}
+
+fn track_rewrite_expr_block(pool0: ast.ExprPool, b0: ast.ExprBlock, ctx: TrackRewriteCtx) -> TrackRewriteExprBlockResult {
+  let mut pool: ast.ExprPool = pool0;
+  let mut out_stmts: Vec[ast.Stmt] = Vec();
+  let mut i: i32 = 0;
+  while i < b0.stmts.len() {
+    let sr: TrackRewriteStmtResult = track_rewrite_stmt(pool, b0.stmts.get(i), ctx);
+    pool = sr.pool;
+    out_stmts.push(sr.st);
+    i = i + 1;
+  }
+
+  let mut tail: i32 = b0.tail;
+  if b0.has_tail {
+    let tr: TrackRewriteExprResult = track_rewrite_expr(pool, b0.tail, ctx);
+    pool = tr.pool;
+    tail = tr.id;
+  }
+
+  return TrackRewriteExprBlockResult {
+    pool: pool,
+    b: ast.ExprBlock { stmts: out_stmts, has_tail: b0.has_tail, tail: tail },
+  };
+}
+
+fn track_rewrite_expr(pool0: ast.ExprPool, id: i32, ctx: TrackRewriteCtx) -> TrackRewriteExprResult {
+  let n: ast.ExprNode = ast.expr_pool_get(pool0, id);
+  let sp: ast.Span = ast.expr_pool_span(pool0, id);
+
+  if match n {
+    ast.ExprNode.Int(_v) => true,
+    ast.ExprNode.Float(_v) => true,
+    ast.ExprNode.Bool(_v) => true,
+    ast.ExprNode.Ident(_v) => true,
+    ast.ExprNode.Str(_v) => true,
+    ast.ExprNode.DotIdent(_v) => true,
+    _ => false,
+  } {
+    return TrackRewriteExprResult { pool: pool0, id: id };
+  }
+
+  if match n { ast.ExprNode.Block(_b) => true, _ => false } {
+    let b0: ast.ExprBlock = match n { ast.ExprNode.Block(b) => b, _ => ast.ExprBlock { stmts: Vec(), has_tail: false, tail: -1 } };
+    let br: TrackRewriteExprBlockResult = track_rewrite_expr_block(pool0, b0, ctx);
+    let n2: ast.ExprNode = ast.ExprNode.Block(br.b);
+    return TrackRewriteExprResult { pool: expr_pool_replace(br.pool, id, n2, sp), id: id };
+  }
+
+  if match n { ast.ExprNode.If(_c, _t, _e) => true, _ => false } {
+    let c0: i32 = match n { ast.ExprNode.If(c, _t, _e) => c, _ => -1 };
+    let t0: i32 = match n { ast.ExprNode.If(_c, t, _e) => t, _ => -1 };
+    let e0: i32 = match n { ast.ExprNode.If(_c, _t, e) => e, _ => -1 };
+    let rc: TrackRewriteExprResult = track_rewrite_expr(pool0, c0, ctx);
+    let rt: TrackRewriteExprResult = track_rewrite_expr(rc.pool, t0, ctx);
+    let re: TrackRewriteExprResult = track_rewrite_expr(rt.pool, e0, ctx);
+    let n2: ast.ExprNode = ast.ExprNode.If(rc.id, rt.id, re.id);
+    return TrackRewriteExprResult { pool: expr_pool_replace(re.pool, id, n2, sp), id: id };
+  }
+
+  if match n { ast.ExprNode.Unary(_op, _a) => true, _ => false } {
+    let op: ast.UnaryOp = match n { ast.ExprNode.Unary(o, _a) => o, _ => ast.UnaryOp.Pos };
+    let a0: i32 = match n { ast.ExprNode.Unary(_o, a) => a, _ => -1 };
+    let ra: TrackRewriteExprResult = track_rewrite_expr(pool0, a0, ctx);
+    let n2: ast.ExprNode = ast.ExprNode.Unary(op, ra.id);
+    return TrackRewriteExprResult { pool: expr_pool_replace(ra.pool, id, n2, sp), id: id };
+  }
+
+  if match n { ast.ExprNode.As(_a, _tn) => true, _ => false } {
+    let a0: i32 = match n { ast.ExprNode.As(a, _tn) => a, _ => -1 };
+    let tn: ast.TypeName = match n { ast.ExprNode.As(_a, t) => t, _ => ast.TypeName { parts: Vec(), args: Vec() } };
+    let ra: TrackRewriteExprResult = track_rewrite_expr(pool0, a0, ctx);
+    let n2: ast.ExprNode = ast.ExprNode.As(ra.id, tn);
+    return TrackRewriteExprResult { pool: expr_pool_replace(ra.pool, id, n2, sp), id: id };
+  }
+
+  if match n { ast.ExprNode.Binary(_op, _l, _r) => true, _ => false } {
+    let op: ast.BinaryOp = match n { ast.ExprNode.Binary(o, _l, _r) => o, _ => ast.BinaryOp.Add };
+    let l0: i32 = match n { ast.ExprNode.Binary(_o, l, _r) => l, _ => -1 };
+    let r0: i32 = match n { ast.ExprNode.Binary(_o, _l, r) => r, _ => -1 };
+    let rl: TrackRewriteExprResult = track_rewrite_expr(pool0, l0, ctx);
+    let rr: TrackRewriteExprResult = track_rewrite_expr(rl.pool, r0, ctx);
+    let n2: ast.ExprNode = ast.ExprNode.Binary(op, rl.id, rr.id);
+    return TrackRewriteExprResult { pool: expr_pool_replace(rr.pool, id, n2, sp), id: id };
+  }
+
+  if match n { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
+    let recv0: i32 = match n { ast.ExprNode.Member(r, _n) => r, _ => -1 };
+    let name: String = match n { ast.ExprNode.Member(_r, nm) => nm, _ => "" };
+    let rr: TrackRewriteExprResult = track_rewrite_expr(pool0, recv0, ctx);
+    let n2: ast.ExprNode = ast.ExprNode.Member(rr.id, name);
+    return TrackRewriteExprResult { pool: expr_pool_replace(rr.pool, id, n2, sp), id: id };
+  }
+
+  if match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } {
+    let callee0: i32 = match n { ast.ExprNode.Call(c, _ta, _as) => c, _ => -1 };
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, ta, _as) => ta, _ => Vec() };
+    let args0: Vec[i32] = match n { ast.ExprNode.Call(_c, _ta, as0) => as0, _ => Vec() };
+    let rc: TrackRewriteExprResult = track_rewrite_expr(pool0, callee0, ctx);
+    let rr_args: TrackRewriteExprIdsResult = track_rewrite_exprs(rc.pool, args0, ctx);
+    let mut pool2: ast.ExprPool = rr_args.pool;
+    let mut args2: Vec[i32] = rr_args.ids;
+    if track_resolve_call_target(ctx.refs, ctx.mod_path, ctx.imps, pool2, rc.id) {
+      let ar: TrackRewriteExprResult = track_append_caller_arg(pool2, sp, ctx.owner_is_tracked);
+      pool2 = ar.pool;
+      args2.push(ar.id);
+    }
+    let n2: ast.ExprNode = ast.ExprNode.Call(rc.id, targs, args2);
+    return TrackRewriteExprResult { pool: expr_pool_replace(pool2, id, n2, sp), id: id };
+  }
+
+  if match n { ast.ExprNode.MacroCall(_callee, _targs, _args) => true, _ => false } {
+    let callee0: i32 = match n { ast.ExprNode.MacroCall(c, _ta, _as) => c, _ => -1 };
+    let targs: Vec[ast.TypeName] = match n { ast.ExprNode.MacroCall(_c, ta, _as) => ta, _ => Vec() };
+    let args0: Vec[i32] = match n { ast.ExprNode.MacroCall(_c, _ta, as0) => as0, _ => Vec() };
+    let rc: TrackRewriteExprResult = track_rewrite_expr(pool0, callee0, ctx);
+    let rr_args: TrackRewriteExprIdsResult = track_rewrite_exprs(rc.pool, args0, ctx);
+    let mut pool2: ast.ExprPool = rr_args.pool;
+    let mut args2: Vec[i32] = rr_args.ids;
+    if track_resolve_call_target(ctx.refs, ctx.mod_path, ctx.imps, pool2, rc.id) {
+      let ar: TrackRewriteExprResult = track_append_caller_arg(pool2, sp, ctx.owner_is_tracked);
+      pool2 = ar.pool;
+      args2.push(ar.id);
+    }
+    let n2: ast.ExprNode = ast.ExprNode.MacroCall(rc.id, targs, args2);
+    return TrackRewriteExprResult { pool: expr_pool_replace(pool2, id, n2, sp), id: id };
+  }
+
+  if match n { ast.ExprNode.TryBlock(_b) => true, _ => false } {
+    let b0: i32 = match n { ast.ExprNode.TryBlock(b) => b, _ => -1 };
+    let rr: TrackRewriteExprResult = track_rewrite_expr(pool0, b0, ctx);
+    let n2: ast.ExprNode = ast.ExprNode.TryBlock(rr.id);
+    return TrackRewriteExprResult { pool: expr_pool_replace(rr.pool, id, n2, sp), id: id };
+  }
+
+  if match n { ast.ExprNode.Try(_a) => true, _ => false } {
+    let a0: i32 = match n { ast.ExprNode.Try(a) => a, _ => -1 };
+    let rr: TrackRewriteExprResult = track_rewrite_expr(pool0, a0, ctx);
+    let n2: ast.ExprNode = ast.ExprNode.Try(rr.id);
+    return TrackRewriteExprResult { pool: expr_pool_replace(rr.pool, id, n2, sp), id: id };
+  }
+
+  if match n { ast.ExprNode.Await(_a) => true, _ => false } {
+    let a0: i32 = match n { ast.ExprNode.Await(a) => a, _ => -1 };
+    let rr: TrackRewriteExprResult = track_rewrite_expr(pool0, a0, ctx);
+    let n2: ast.ExprNode = ast.ExprNode.Await(rr.id);
+    return TrackRewriteExprResult { pool: expr_pool_replace(rr.pool, id, n2, sp), id: id };
+  }
+
+  if match n { ast.ExprNode.StructLit(_tyex, _fields) => true, _ => false } {
+    let tyex0: i32 = match n { ast.ExprNode.StructLit(tyex, _fields) => tyex, _ => -1 };
+    let fields0: Vec[ast.StructLitField] = match n { ast.ExprNode.StructLit(_tyex, fs) => fs, _ => Vec() };
+    let rr_ty: TrackRewriteExprResult = track_rewrite_expr(pool0, tyex0, ctx);
+    let rr_fields: TrackRewriteFieldsResult = track_rewrite_fields(rr_ty.pool, fields0, ctx);
+    let n2: ast.ExprNode = ast.ExprNode.StructLit(rr_ty.id, rr_fields.fields);
+    return TrackRewriteExprResult { pool: expr_pool_replace(rr_fields.pool, id, n2, sp), id: id };
+  }
+
+  let scrut0: i32 = match n { ast.ExprNode.Match(scrut, _arms) => scrut, _ => -1 };
+  let arms0: Vec[ast.MatchArm] = match n { ast.ExprNode.Match(_scrut, arms) => arms, _ => Vec() };
+  let rr_scrut: TrackRewriteExprResult = track_rewrite_expr(pool0, scrut0, ctx);
+  let rr_arms: TrackRewriteArmsResult = track_rewrite_arms(rr_scrut.pool, arms0, ctx);
+  let n2: ast.ExprNode = ast.ExprNode.Match(rr_scrut.id, rr_arms.arms);
+  return TrackRewriteExprResult { pool: expr_pool_replace(rr_arms.pool, id, n2, sp), id: id };
+}
+
+fn track_rewrite_stmt(pool0: ast.ExprPool, st: ast.Stmt, ctx: TrackRewriteCtx) -> TrackRewriteStmtResult {
+  return match st {
+    ast.Stmt.Let(sp, m, name, has_ann, ann, init) => {
+      let rr: TrackRewriteExprResult = track_rewrite_expr(pool0, init, ctx);
+      TrackRewriteStmtResult { pool: rr.pool, st: ast.Stmt.Let(sp, m, name, has_ann, ann, rr.id) }
+    },
+    ast.Stmt.Assign(sp, name, ex) => {
+      let rr: TrackRewriteExprResult = track_rewrite_expr(pool0, ex, ctx);
+      TrackRewriteStmtResult { pool: rr.pool, st: ast.Stmt.Assign(sp, name, rr.id) }
+    },
+    ast.Stmt.AssignField(sp, recv, field, ex) => {
+      let rr: TrackRewriteExprResult = track_rewrite_expr(pool0, ex, ctx);
+      TrackRewriteStmtResult { pool: rr.pool, st: ast.Stmt.AssignField(sp, recv, field, rr.id) }
+    },
+    ast.Stmt.ExprStmt(sp, ex) => {
+      let rr: TrackRewriteExprResult = track_rewrite_expr(pool0, ex, ctx);
+      TrackRewriteStmtResult { pool: rr.pool, st: ast.Stmt.ExprStmt(sp, rr.id) }
+    },
+    ast.Stmt.IfStmt(sp, cond, then_b, has_else, else_b) => {
+      let rc: TrackRewriteExprResult = track_rewrite_expr(pool0, cond, ctx);
+      let rt: TrackRewriteBlockResult = track_rewrite_block(rc.pool, then_b, ctx);
+      let re: TrackRewriteBlockResult =
+        if has_else {
+          track_rewrite_block(rt.pool, else_b, ctx)
+        } else {
+          TrackRewriteBlockResult { pool: rt.pool, b: else_b }
+        };
+      TrackRewriteStmtResult { pool: re.pool, st: ast.Stmt.IfStmt(sp, rc.id, rt.b, has_else, re.b) }
+    },
+    ast.Stmt.WhileStmt(sp, cond, body) => {
+      let rc: TrackRewriteExprResult = track_rewrite_expr(pool0, cond, ctx);
+      let rb: TrackRewriteBlockResult = track_rewrite_block(rc.pool, body, ctx);
+      TrackRewriteStmtResult { pool: rb.pool, st: ast.Stmt.WhileStmt(sp, rc.id, rb.b) }
+    },
+    ast.Stmt.TryBegin(sp, out_name) => TrackRewriteStmtResult { pool: pool0, st: ast.Stmt.TryBegin(sp, out_name) },
+    ast.Stmt.TryEnd(sp) => TrackRewriteStmtResult { pool: pool0, st: ast.Stmt.TryEnd(sp) },
+    ast.Stmt.Break(sp) => TrackRewriteStmtResult { pool: pool0, st: ast.Stmt.Break(sp) },
+    ast.Stmt.Continue(sp) => TrackRewriteStmtResult { pool: pool0, st: ast.Stmt.Continue(sp) },
+    ast.Stmt.ReturnStmt(sp, has_ex, ex) => {
+      if !has_ex { return TrackRewriteStmtResult { pool: pool0, st: ast.Stmt.ReturnStmt(sp, false, ex) }; }
+      let rr: TrackRewriteExprResult = track_rewrite_expr(pool0, ex, ctx);
+      TrackRewriteStmtResult { pool: rr.pool, st: ast.Stmt.ReturnStmt(sp, true, rr.id) }
+    },
+  };
+}
+
+fn track_rewrite_block(pool0: ast.ExprPool, b0: ast.Block, ctx: TrackRewriteCtx) -> TrackRewriteBlockResult {
+  let mut pool: ast.ExprPool = pool0;
+  let mut out: Vec[ast.Stmt] = Vec();
+  let mut i: i32 = 0;
+  while i < b0.stmts.len() {
+    let sr: TrackRewriteStmtResult = track_rewrite_stmt(pool, b0.stmts.get(i), ctx);
+    pool = sr.pool;
+    out.push(sr.st);
+    i = i + 1;
+  }
+  return TrackRewriteBlockResult { pool: pool, b: ast.Block { stmts: out } };
+}
+
+fn track_rewrite_prog(w: tc.World, mod_path: String, prog0: ast.Program, refs: Vec[TrackedFnRef]) -> TrackRewriteProgramResult {
+  let prog1: ast.Program = track_with_default_caller_imports(prog0);
+  let mut changed: bool = false;
+  let mut exprs: ast.ExprPool = prog1.exprs;
+
+  let mut out_consts: Vec[ast.ConstDecl] = Vec();
+  let mut ci: i32 = 0;
+  while ci < prog1.consts.len() {
+    let cd: ast.ConstDecl = prog1.consts.get(ci);
+    let ir: tc.ImportsResult = tc.build_imports(w, mod_path, prog1.imports, cd.file);
+    if !ir.ok { return track_prog_err(ir.err, prog1); }
+    let ctx: TrackRewriteCtx = TrackRewriteCtx { refs: refs, mod_path: mod_path, imps: ir.imps, owner_is_tracked: false };
+    let rr: TrackRewriteExprResult = track_rewrite_expr(exprs, cd.init, ctx);
+    exprs = rr.pool;
+    if rr.id != cd.init { changed = true; }
+    out_consts.push(ast.ConstDecl {
+      file: cd.file,
+      sp: cd.sp,
+      vis: cd.vis,
+      is_pub: cd.is_pub,
+      name: cd.name,
+      ty: cd.ty,
+      init: rr.id,
+    });
+    ci = ci + 1;
+  }
+
+  let mut out_funcs: Vec[ast.FuncDecl] = Vec();
+  let mut fi: i32 = 0;
+  while fi < prog1.funcs.len() {
+    let fd: ast.FuncDecl = prog1.funcs.get(fi);
+    if fd.track_caller && fd.ffi_imports.len() != 0 {
+      return track_prog_err(tc.tc_type_error_at(fd.sp, "track_caller is not allowed on ffi_import fn"), prog1);
+    }
+    let ir: tc.ImportsResult = tc.build_imports(w, mod_path, prog1.imports, fd.file);
+    if !ir.ok { return track_prog_err(ir.err, prog1); }
+    let ctx: TrackRewriteCtx = TrackRewriteCtx { refs: refs, mod_path: mod_path, imps: ir.imps, owner_is_tracked: fd.track_caller };
+    let br: TrackRewriteBlockResult = track_rewrite_block(exprs, fd.body, ctx);
+    exprs = br.pool;
+
+    let mut params: Vec[ast.Param] = fd.params;
+    if fd.track_caller {
+      if track_param_name_exists(params, "caller") {
+        return track_prog_err(tc.tc_type_error_at(fd.sp, "track_caller function cannot declare parameter named `caller`"), prog1);
+      }
+      params.push(ast.Param { name: "caller", ty: track_caller_type() });
+      changed = true;
+    }
+
+    out_funcs.push(ast.FuncDecl {
+      file: fd.file,
+      sp: fd.sp,
+      vis: fd.vis,
+      is_pub: fd.is_pub,
+      is_async: fd.is_async,
+      track_caller: fd.track_caller,
+      name: fd.name,
+      type_params: fd.type_params,
+      type_param_packs: fd.type_param_packs,
+      const_params: fd.const_params,
+      type_param_bounds: fd.type_param_bounds,
+      const_where_bounds: fd.const_where_bounds,
+      params: params,
+      ret: fd.ret,
+      ffi_imports: fd.ffi_imports,
+      ffi_exports: fd.ffi_exports,
+      effects: fd.effects,
+      resources: fd.resources,
+      body: br.b,
+    });
+    fi = fi + 1;
+  }
+
+  let mut out_traits: Vec[ast.TraitDecl] = Vec();
+  let mut ti: i32 = 0;
+  while ti < prog1.traits.len() {
+    let td: ast.TraitDecl = prog1.traits.get(ti);
+    let ir: tc.ImportsResult = tc.build_imports(w, mod_path, prog1.imports, td.file);
+    if !ir.ok { return track_prog_err(ir.err, prog1); }
+    let mut ms: Vec[ast.TraitMethodDecl] = Vec();
+    let mut mi: i32 = 0;
+    while mi < td.methods.len() {
+      let md: ast.TraitMethodDecl = td.methods.get(mi);
+      if md.has_body {
+        let ctx: TrackRewriteCtx = TrackRewriteCtx { refs: refs, mod_path: mod_path, imps: ir.imps, owner_is_tracked: false };
+        let br: TrackRewriteBlockResult = track_rewrite_block(exprs, md.body, ctx);
+        exprs = br.pool;
+        ms.push(ast.TraitMethodDecl {
+          sp: md.sp,
+          is_async: md.is_async,
+          name: md.name,
+          type_params: md.type_params,
+          type_param_packs: md.type_param_packs,
+          const_params: md.const_params,
+          type_param_bounds: md.type_param_bounds,
+          const_where_bounds: md.const_where_bounds,
+          params: md.params,
+          ret: md.ret,
+          effects: md.effects,
+          resources: md.resources,
+          has_body: true,
+          body: br.b,
+        });
+      } else {
+        ms.push(md);
+      }
+      mi = mi + 1;
+    }
+    out_traits.push(ast.TraitDecl {
+      file: td.file,
+      sp: td.sp,
+      vis: td.vis,
+      is_pub: td.is_pub,
+      name: td.name,
+      supers: td.supers,
+      assoc_types: td.assoc_types,
+      methods: ms,
+    });
+    ti = ti + 1;
+  }
+
+  let mut out_impls: Vec[ast.ImplDecl] = Vec();
+  let mut ii: i32 = 0;
+  while ii < prog1.impls.len() {
+    let id0: ast.ImplDecl = prog1.impls.get(ii);
+    let mut ms: Vec[ast.FuncDecl] = Vec();
+    let mut mi: i32 = 0;
+    while mi < id0.methods.len() {
+      let fd: ast.FuncDecl = id0.methods.get(mi);
+      let ir: tc.ImportsResult = tc.build_imports(w, mod_path, prog1.imports, fd.file);
+      if !ir.ok { return track_prog_err(ir.err, prog1); }
+      let ctx: TrackRewriteCtx = TrackRewriteCtx { refs: refs, mod_path: mod_path, imps: ir.imps, owner_is_tracked: false };
+      let br: TrackRewriteBlockResult = track_rewrite_block(exprs, fd.body, ctx);
+      exprs = br.pool;
+      ms.push(ast.FuncDecl {
+        file: fd.file,
+        sp: fd.sp,
+        vis: fd.vis,
+        is_pub: fd.is_pub,
+        is_async: fd.is_async,
+        track_caller: fd.track_caller,
+        name: fd.name,
+        type_params: fd.type_params,
+        type_param_packs: fd.type_param_packs,
+        const_params: fd.const_params,
+        type_param_bounds: fd.type_param_bounds,
+        const_where_bounds: fd.const_where_bounds,
+        params: fd.params,
+        ret: fd.ret,
+        ffi_imports: fd.ffi_imports,
+        ffi_exports: fd.ffi_exports,
+        effects: fd.effects,
+        resources: fd.resources,
+        body: br.b,
+      });
+      mi = mi + 1;
+    }
+    out_impls.push(ast.ImplDecl {
+      file: id0.file,
+      sp: id0.sp,
+      is_inherent: id0.is_inherent,
+      is_negative: id0.is_negative,
+      type_params: id0.type_params,
+      type_param_bounds: id0.type_param_bounds,
+      trait_name: id0.trait_name,
+      for_ty: id0.for_ty,
+      assoc_types: id0.assoc_types,
+      methods: ms,
+    });
+    ii = ii + 1;
+  }
+
+  let prog2: ast.Program = ast.Program {
+    imports: prog1.imports,
+    types: prog1.types,
+    consts: out_consts,
+    structs: prog1.structs,
+    enums: prog1.enums,
+    traits: out_traits,
+    impls: out_impls,
+    funcs: out_funcs,
+    exprs: exprs,
+  };
+  let imports_changed: bool = prog1.imports.len() != prog0.imports.len();
+  return track_prog_ok(changed || imports_changed, prog2);
+}
+
+fn rewrite_track_caller_world(w: tc.World) -> ExpandRoundResult {
+  let refs: Vec[TrackedFnRef] = track_collect_refs(w);
+  if refs.len() == 0 { return round_ok(w, false); }
+
+  let mut mods: Vec[tc.WorldModule] = Vec();
+  let mut changed: bool = false;
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(i);
+    let rr: TrackRewriteProgramResult = track_rewrite_prog(w, m.path, m.prog, refs);
+    if !rr.ok { return round_err(w, rr.err); }
+    if rr.changed { changed = true; }
+    mods.push(tc.WorldModule { path: m.path, prog: rr.prog });
+    i = i + 1;
+  }
+
+  let w2: tc.World = tc.World { mods: mods };
+  if !changed { return round_ok(w2, false); }
+  return round_ok_with_notes(w2, true, notes1("track_caller: lowered call-site caller context"));
+}
