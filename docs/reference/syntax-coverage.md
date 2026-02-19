@@ -69,7 +69,7 @@ Status:
 | S505 | malformed await expression parse failure | Done | `tests/syntax/src/async_test.vox` |  |
 | S601 | import alias form | Done | `tests/syntax/src/modules_imports_test.vox` |  |
 | S602 | named import form | Done | `tests/syntax/src/modules_imports_test.vox` | `import {a as aa, b} from "util"` |
-| S603 | basic `pub` declarations in module/import flow | Done | `tests/syntax/src/modules_imports_test.vox` | complements S015 extended visibility markers |
+| S603 | visibility declarations in module/import flow | Done | `tests/syntax/src/modules_imports_test.vox` | includes `pub`, `pub(crate)`, `pub(super)` with imports |
 | S604 | malformed import parse failure | Done | `tests/syntax/src/modules_imports_test.vox` |  |
 | S701 | effect/resource attributes | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
 | S702 | ffi import/export attributes | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
