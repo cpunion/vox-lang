@@ -57,7 +57,13 @@ NegativeImplDecl
 
 ### Negative Impl
 
-`impl !Trait for Type {}` declares explicit non-implementation for trait constraints.
+`impl !Trait for Type {}` declares explicit non-implementation.
+
+Current checker constraints:
+
+- negative impl is only allowed for `std/prelude::Send` and `std/prelude::Sync`;
+- negative impl body must be empty (no associated types, no methods);
+- manual positive impl for `Send`/`Sync` is rejected (use negative impl when needed).
 
 ## Resolution Notes
 
@@ -76,6 +82,9 @@ Type/check errors:
 - trait method signature mismatch in impl
 - missing required associated type/method bindings
 - invalid overlapping/conflicting impls under checker rules
+- negative impl for traits other than `Send`/`Sync`
+- non-empty negative impl body
+- manual positive impl of auto marker traits (`Send`/`Sync`)
 
 ## Example
 
