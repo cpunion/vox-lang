@@ -50,7 +50,6 @@
   - pack/variadic 语法（Stage2 当前实现）：`fn zip[T...](xs: T...) -> i32 { ... }`
     - `xs: T...` 会在类型检查阶段降级为 `Vec[T]`，并可进入 IR/codegen。
     - `T...`（type param pack 声明）支持实质参与类型系统：可进行异构逐位置物化与 `Pack.N` 投影（细节见 `docs/06-advanced-generics.md`）。
-- 其它（暂不实现）：`impl[T] ...` 等。
 
 ## Trait 语法（当前版本）
 

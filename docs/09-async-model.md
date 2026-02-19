@@ -22,7 +22,7 @@
    - wrapper 内部使用轮询 `poll` 直到 `Ready`；`Pending` 分支优先使用 runtime 注入路径：若存在 `default_runtime()`，优先调用 `park_until_wake_with(rt, iter, cx)`，再回退 `park_with(rt, iter, cx)`、`pending_wait_with(rt, iter, cx)`；若不存在 runtime 注入路径，则回退 `park_until_wake(iter, cx)`、`park(iter, cx)`、`pending_wait(iter, cx)`、`spin_wait(iter)`，最后 pure continue。
    - 取消轮询同样优先 runtime 注入路径：`cancel_requested_with(rt, cx)`，其次回退 `cancel_requested(cx)`。
    - 取消分支支持可选 frame 重绑定钩子：优先 `cancel_drop_state_with(rt, cx, state, f)`，其次 `cancel_drop_with(rt, cx, f)`，再其次 `cancel_drop_state(cx, state, f)`、`cancel_drop(cx, f)`（用于宿主按 Future/frame 类型 + state 做更细粒度释放或重置）。
-   - 取消资源清理支持可选钩子：优先 `cancel_cleanup_with(rt, cx)`，其次 `cancel_cleanup(cx)`（若存在则在取消返回前执行）。
+   - 取消资源清理支持可选钩子：优先 `cancel_cleanup_state_with(rt, cx, state)`，其次 `cancel_cleanup_with(rt, cx)`，再其次 `cancel_cleanup_state(cx, state)`、`cancel_cleanup(cx)`（若存在则在取消返回前执行）。
    - 取消结果传播支持可选钩子：
      - 优先 `cancel_return_with(rt, cx)`，其次 `cancel_return(cx)`；
      - 若两者都不存在，回退为默认可恢复返回（`()` 或返回类型默认值）。
@@ -69,7 +69,9 @@ fn cancel_drop_state_with[R, F](rt: R, c: Context, state: i32, f: F) -> F; // �
 fn cancel_drop_with[R, F](rt: R, c: Context, f: F) -> F; // 可选钩子
 fn cancel_drop_state[F](c: Context, state: i32, f: F) -> F; // 可选钩子
 fn cancel_drop[F](c: Context, f: F) -> F; // 可选钩子
+fn cancel_cleanup_state_with[R](rt: R, c: Context, state: i32) -> (); // 可选钩子
 fn cancel_cleanup_with[R](rt: R, c: Context) -> (); // 可选钩子
+fn cancel_cleanup_state(c: Context, state: i32) -> (); // 可选钩子
 fn cancel_cleanup(c: Context) -> (); // 可选钩子
 fn cancel_return_with[R, T](rt: R, c: Context) -> T; // 可选钩子
 fn cancel_return[T](c: Context) -> T; // 可选钩子；不提供时回退默认返回
@@ -154,7 +156,7 @@ trait Sink {
 1. 编译器生成的 frame 在 drop 时释放已初始化字段。
 2. 必须保证“未初始化字段不 drop”。
 3. 取消语义保持幂等（重复取消不出错）。
-4. 当前 v1 已落地取消轮询与传播钩子：生成的 async entry/test wrapper 会在 `Pending` 路径查询取消钩子（优先 `cancel_requested_with(rt, cx)`，其次 `cancel_requested(cx)`）；命中后先执行可选 frame 重绑定（优先 `cancel_drop_state_with/cancel_drop_with`，回退 `cancel_drop_state/cancel_drop`），再执行可选清理（`cancel_cleanup_with/cancel_cleanup`），最后执行可选返回传播（`cancel_return_with/cancel_return`），否则回退默认返回（不 panic）。
+4. 当前 v1 已落地取消轮询与传播钩子：生成的 async entry/test wrapper 会在 `Pending` 路径查询取消钩子（优先 `cancel_requested_with(rt, cx)`，其次 `cancel_requested(cx)`）；命中后先执行可选 frame 重绑定（优先 `cancel_drop_state_with/cancel_drop_with`，回退 `cancel_drop_state/cancel_drop`），再执行可选清理（优先 `cancel_cleanup_state_with/cancel_cleanup_with`，回退 `cancel_cleanup_state/cancel_cleanup`），最后执行可选返回传播（`cancel_return_with/cancel_return`），否则回退默认返回（不 panic）。
 
 ## 8. 与借用规则的关系（D03-4 目标）
 

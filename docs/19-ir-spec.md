@@ -37,14 +37,14 @@ IR v0 基础类型：
 - `f32/f64`
 - `bool`
 - `unit`
-- `str`（当前用于编译器内的 `String` 字面量与最小字符串比较/返回；后续会替换为真正的字符串/切片模型）
+- `str`（当前 `String` 文本类型）
 - `struct(<qualified_name>)`（名义结构体类型）
 - `enum(<qualified_name>)`（名义枚举类型）
 
 Stage2（编译器内部类型池）补充说明：
 
-- typecheck 层新增 `TyKind.Ref` 表达借用形状（`&T/&mut T/&'static T/&'static mut T`）。
-- 当前编译器已将 `Ref` 非擦除地保留到 IR（函数签名、slot/temp/call 类型索引可见借用形状）；`Range` 仍按 v0 设计在 irgen 侧降到基类型并通过 `range_check` 表达约束。
+- `TyKind.Ref` 表达借用形状（`&T/&mut T/&'static T/&'static mut T`），并非擦除保留到 IR（函数签名、slot/temp/call 类型索引可见借用形状）。
+- `Range` 仍按 v0 设计在 irgen 侧降到基类型并通过 `range_check` 表达约束。
 - C 后端把 `Ref` 作为透明包装映射到底层 C 类型，并在比较/名义等值路径中按底层类型语义处理。
 
 说明（当前实现策略）：
