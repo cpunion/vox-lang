@@ -8,7 +8,7 @@ Defines parser-level macro syntax forms:
 - builtin `compile!(...)`,
 - quote/unquote surface syntax (`quote expr { ... }`, `$x`).
 
-Coverage IDs: `S901`, `S902`, `S903`, `S904`.
+Coverage IDs: `S901`, `S902`, `S903`, `S904`, `S905`.
 
 ## Grammar (Simplified)
 
@@ -46,11 +46,19 @@ The `!` call form is parsed as macro-call syntax and then handled by macro expan
 ```vox
 compile!(1 + 2)
 quote expr { $x + 1 }
+file!()
+line!()
+col!()
+module_path!()
+func!()
+caller!()
 ```
 
 - `compile!(...)` is compile-time splice syntax.
 - `quote expr { ... }` is parsed as quote sugar.
 - `$x` is parsed as unquote sugar inside quote contexts.
+- introspection builtins return caller/module/source metadata at macro expansion stage:
+  `file!`, `line!`, `col!`, `module_path!`, `func!`, `caller!`.
 
 ## Diagnostics
 
