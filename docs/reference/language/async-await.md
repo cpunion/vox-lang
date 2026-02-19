@@ -12,10 +12,11 @@ Async function:
 async fn name(args...) -> Ret { ... }
 ```
 
-Await expression (postfix):
+Await expression:
 
 ```vox
-expr.await
+expr.await // recommended
+await expr // compatibility form
 ```
 
 Async trait method:
