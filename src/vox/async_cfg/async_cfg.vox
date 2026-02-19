@@ -496,7 +496,47 @@ pub fn build(exprs0: ast.ExprPool, b0: ast.Block, allow_fallthrough_return: bool
   return BuildResult { ok: true, err: "", blocks: b.blocks, entry: entry, await_count: b.next_await, resume_blocks: b.resume };
 }
 
-pub struct CapturesResult { pub ok: bool, pub err: String, pub captures: Vec[String] }
+pub struct CapturesResult {
+  pub ok: bool,
+  pub err: String,
+  pub captures: Vec[String],
+  pub uses: Vec[CaptureAwaitUse],
+}
+pub struct CaptureAwaitUse {
+  pub name: String,
+  pub await_idx: i32,
+  pub await_sp: ast.Span,
+}
+
+fn empty_capture_await_use() -> CaptureAwaitUse {
+  return CaptureAwaitUse { name: "", await_idx: -1, await_sp: ast.span0() };
+}
+
+fn capture_await_use_find(xs: Vec[CaptureAwaitUse], name: String) -> CaptureAwaitUse {
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let u: CaptureAwaitUse = xs.get(i);
+    if u.name == name { return u; }
+    i = i + 1;
+  }
+  return empty_capture_await_use();
+}
+
+fn stmt_span(st: ast.Stmt) -> ast.Span {
+  return match st {
+    ast.Stmt.Let(sp, _m, _n, _ha, _ann, _e) => sp,
+    ast.Stmt.Assign(sp, _n, _e) => sp,
+    ast.Stmt.AssignField(sp, _r, _f, _e) => sp,
+    ast.Stmt.ExprStmt(sp, _e) => sp,
+    ast.Stmt.IfStmt(sp, _c, _t, _h, _e) => sp,
+    ast.Stmt.WhileStmt(sp, _c, _b) => sp,
+    ast.Stmt.TryBegin(sp, _out) => sp,
+    ast.Stmt.TryEnd(sp) => sp,
+    ast.Stmt.Break(sp) => sp,
+    ast.Stmt.Continue(sp) => sp,
+    ast.Stmt.ReturnStmt(sp, _h, _e) => sp,
+  };
+}
 
 fn ids_index_of(ids: Vec[i32], id: i32) -> i32 {
   let mut i: i32 = 0;
@@ -521,7 +561,7 @@ fn blocks_replace_vec_vec(xs: Vec[Vec[String]], idx: i32, v: Vec[String]) -> Vec
 // `exclude` lets callers remove params (they already live in the frame as p_<name>).
 pub fn captures(exprs: ast.ExprPool, cfg: BuildResult, exclude: Vec[String]) -> CapturesResult {
   if !cfg.ok {
-    return CapturesResult { ok: false, err: cfg.err, captures: Vec() };
+    return CapturesResult { ok: false, err: cfg.err, captures: Vec(), uses: Vec() };
   }
 
   // Map block id -> index.
@@ -677,5 +717,32 @@ pub fn captures(exprs: ast.ExprPool, cfg: BuildResult, exclude: Vec[String]) -> 
     i = i + 1;
   }
 
-  return CapturesResult { ok: true, err: "", captures: out_caps };
+  let mut out_uses: Vec[CaptureAwaitUse] = Vec();
+  let mut ci: i32 = 0;
+  while ci < out_caps.len() {
+    let nm: String = out_caps.get(ci);
+    let mut ri: i32 = 0;
+    let mut use0: CaptureAwaitUse = empty_capture_await_use();
+    while ri < cfg.resume_blocks.len() {
+      let bid: i32 = cfg.resume_blocks.get(ri);
+      let bi: i32 = ids_index_of(ids, bid);
+      if bi != -1 && vec_contains(live_in.get(bi), nm) {
+        let blk: Block = cfg.blocks.get(bi);
+        if match blk.payload { Payload.AwaitPoll(_k, _st, _is_try, _n, _h) => true, _ => false } {
+          let k: i32 = match blk.payload { Payload.AwaitPoll(k0, _st, _is_try, _n, _h) => k0, _ => -1 };
+          let st0: ast.Stmt = match blk.payload { Payload.AwaitPoll(_k, st0, _is_try, _n, _h) => st0, _ => ast.Stmt.Break(ast.span0()) };
+          use0 = CaptureAwaitUse { name: nm, await_idx: k, await_sp: stmt_span(st0) };
+        } else {
+          use0 = CaptureAwaitUse { name: nm, await_idx: -1, await_sp: ast.span0() };
+        }
+        ri = cfg.resume_blocks.len();
+      } else {
+        ri = ri + 1;
+      }
+    }
+    if use0.name != "" { out_uses.push(use0); }
+    ci = ci + 1;
+  }
+
+  return CapturesResult { ok: true, err: "", captures: out_caps, uses: out_uses };
 }

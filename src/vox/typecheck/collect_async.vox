@@ -4,7 +4,7 @@ import "vox/async_cfg" as ac
 
 // Async lowering metadata collection.
 
-struct AsyncLocalDecl { name: String, ty: i32, mutable: bool, stmt_idx: i32 }
+struct AsyncLocalDecl { name: String, ty: i32, mutable: bool, decl_sp: ast.Span }
 
 fn stmt_span(st: ast.Stmt) -> ast.Span {
   return match st {
@@ -38,7 +38,7 @@ fn local_decl_find(xs: Vec[AsyncLocalDecl], name: String) -> AsyncLocalDecl {
     if x.name == name { return x; }
     i = i + 1;
   }
-  return AsyncLocalDecl { name: "", ty: -1, mutable: false, stmt_idx: -1 };
+  return AsyncLocalDecl { name: "", ty: -1, mutable: false, decl_sp: ast.span0() };
 }
 
 struct StmtAwaitInfo { ok: bool, operand: i32, is_try: bool }
@@ -137,7 +137,7 @@ fn walk_async_block(
         vty = strip_range_only(c, er0.ty);
       }
       l = locals_decl(l, name0, vty, is_mut);
-      decls.push(AsyncLocalDecl { name: name0, ty: vty, mutable: is_mut, stmt_idx: -1 });
+      decls.push(AsyncLocalDecl { name: name0, ty: vty, mutable: is_mut, decl_sp: sp0 });
     }
 
     // Await operand typing (statement-level await).
@@ -304,16 +304,14 @@ fn span_loc(sp: ast.Span) -> String {
   return sp.file.concat(":").concat(sp.line.to_string()).concat(":").concat(sp.col.to_string());
 }
 
-struct CaptureUse { name: String, await_stmt_idx: i32, use_stmt_idx: i32 }
-
-fn capture_use_find(xs: Vec[CaptureUse], name: String) -> CaptureUse {
+fn capture_await_span(uses: Vec[ac.CaptureAwaitUse], name: String) -> ast.Span {
   let mut i: i32 = 0;
-  while i < xs.len() {
-    let x: CaptureUse = xs.get(i);
-    if x.name == name { return x; }
+  while i < uses.len() {
+    let u: ac.CaptureAwaitUse = uses.get(i);
+    if u.name == name { return u.await_sp; }
     i = i + 1;
   }
-  return CaptureUse { name: "", await_stmt_idx: -1, use_stmt_idx: -1 };
+  return ast.span0();
 }
 
 fn expr_uses_name(exprs: ast.ExprPool, eid: i32, name: String) -> bool {
@@ -869,11 +867,13 @@ fn collect_async_finalize_one(
     let ld: AsyncLocalDecl = local_decl_find(locals, nm);
     if ld.name == "" { return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "internal: missing capture local decl"), ctx: c }; }
     if ty_has_forbidden_borrow(c, ld.ty) {
+      let await_sp: ast.Span = capture_await_span(cr.uses, nm);
+      let err_sp: ast.Span = if await_sp.file != "" { await_sp } else { fd.sp };
       let msg: String =
         "borrowed local cannot live across await: ".concat(nm)
-          .concat(" (declared at ").concat(fd.sp.file).concat(":").concat(fd.sp.line.to_string()).concat(":").concat(fd.sp.col.to_string())
-          .concat(", crosses await at ").concat(fd.sp.file).concat(":").concat(fd.sp.line.to_string()).concat(":").concat(fd.sp.col.to_string()).concat(")");
-      return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, msg), ctx: c };
+          .concat(" (declared at ").concat(span_loc(ld.decl_sp))
+          .concat(", crosses await at ").concat(span_loc(await_sp)).concat(")");
+      return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(err_sp, msg), ctx: c };
     }
     fs.push(StructFieldSig { name: "l_".concat(nm), ty: ld.ty, vis: ast.vis_private(), is_pub: false });
     ci0 = ci0 + 1;
