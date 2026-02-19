@@ -2,31 +2,32 @@
 
 This directory contains user-facing reference documents for Vox.
 
-## Current Scope
+## Entry Points
 
-Current references are aligned with merged syntax acceptance modules, and are being
-normalized into reference-style pages (grammar, semantics, diagnostics, examples):
-
-- module-01: support harness
-- module-02: basic types and literals
-- module-03: control flow
-- module-04: operators and casts
-- module-05: functions, method call, UFCS
-- module-06: generics, const generics, where/comptime, type pack syntax
-- module-07: traits and impls syntax
-- module-08: struct/enum declarations and ADT usage syntax
-- module-09: type alias/union alias and const declarations
-- module-10: visibility markers and access-level syntax
-
-## Documents
-
-- `docs/reference/language/README.md`: language reference tree (entrypoint).
-- `docs/reference/syntax.md`: compatibility index redirecting to language tree docs.
+- `docs/reference/language/README.md`: language reference tree.
+- `docs/reference/syntax.md`: syntax index (redirect to topic pages).
 - `docs/reference/syntax-coverage.md`: syntax ID matrix and test mapping.
 
-Type system details are split into dedicated pages under:
+## Reference Tree
 
-- `docs/reference/language/types/`
+- Type system:
+  - `docs/reference/language/types.md`
+  - `docs/reference/language/types/*.md`
+- Control flow:
+  - `docs/reference/language/control-flow/README.md`
+  - `docs/reference/language/control-flow/*.md`
+- Expressions/calls/modules:
+  - `docs/reference/language/operators.md`
+  - `docs/reference/language/functions.md`
+  - `docs/reference/language/modules-imports.md`
+  - `docs/reference/language/visibility.md`
+- Generics/traits/async/attributes:
+  - `docs/reference/language/generics.md`
+  - `docs/reference/language/traits-impls.md`
+  - `docs/reference/language/async-await.md`
+  - `docs/reference/language/attributes-ffi.md`
+- Constants:
+  - `docs/reference/language/constants.md`
 
 ## Contribution Rule
 
