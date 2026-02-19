@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-intrinsics \
+.PHONY: fmt fmt-check test test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-intrinsics test-reference \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run \
 	release-source-bundle release-source-verify
 
@@ -15,14 +15,18 @@ fmt-check:
 	"$$COMPILER_BIN" fmt --check $(FMT_PATHS)
 
 # Run core repo tests: rolling selfhost gates + example package smoke.
-test: test-intrinsics test-rolling test-examples
+test: test-intrinsics test-reference test-rolling test-examples
 
 # Active development gate.
-test-active: test-intrinsics test-rolling
+test-active: test-intrinsics test-reference test-rolling
 
 # Guard std intrinsic usage against bootstrap compatibility drift.
 test-intrinsics:
 	./scripts/ci/check-std-intrinsics.sh
+
+# Guard reference syntax matrix/doc/test mapping.
+test-reference:
+	./scripts/ci/check-reference-coverage.sh
 
 # Rolling bootstrap gate (previous compiler -> new compiler).
 test-rolling: test-selfhost-build test-selfhost-gate
