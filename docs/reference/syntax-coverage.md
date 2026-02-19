@@ -38,7 +38,7 @@ Status:
 | S101 | if/else statement | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S102 | if-expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S103 | while loop | Done | `tests/syntax/src/control_flow_test.vox` |  |
-| S105 | break/continue | Partial | `tests/syntax/src/control_flow_test.vox` | `loop` keyword coverage pending |
+| S105 | break/continue | Done | `tests/syntax/src/control_flow_test.vox` | includes `loop { ... }` coverage |
 | S106 | match expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S107 | malformed control-flow parse failure | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S201 | function declaration and return | Done | `tests/syntax/src/functions_test.vox` |  |

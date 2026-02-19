@@ -32,5 +32,6 @@ Control-flow docs (one structure per document):
 
 - `docs/reference/language/control-flow/if.md`
 - `docs/reference/language/control-flow/while.md`
+- `docs/reference/language/control-flow/loop.md`
 - `docs/reference/language/control-flow/break-continue.md`
 - `docs/reference/language/control-flow/match.md`
