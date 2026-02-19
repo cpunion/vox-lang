@@ -824,27 +824,105 @@ fn impl_bounds_more_specific(
   return !impl_bounds_cover(ctx, b_tps, b_bounds, a_tps, a_bounds);
 }
 
+fn cti_const_where_rhs_reflect_encode(kind: i32, name: String) -> String {
+  let tag: String =
+    if kind == ast.comptime_where_lhs_size_of() {
+      "size_of"
+    } else if kind == ast.comptime_where_lhs_align_of() {
+      "align_of"
+    } else if kind == ast.comptime_where_lhs_field_count() {
+      "field_count"
+    } else if kind == ast.comptime_where_lhs_type() {
+      "type"
+    } else {
+      ""
+    };
+  if tag == "" { return ""; }
+  return "__cwref__:".concat(tag).concat(":").concat(name);
+}
+
+fn impl_map_type_param_name_for_cmp(name: String, from_tps: Vec[String], to_tps: Vec[String]) -> String {
+  let mut i: i32 = 0;
+  while i < from_tps.len() && i < to_tps.len() {
+    let from_tp: String = from_tps.get(i);
+    let to_tp: String = to_tps.get(i);
+    if name == from_tp { return to_tp; }
+    let pfx: String = from_tp.concat(".");
+    if name.len() > pfx.len() && name.slice(0, pfx.len()) == pfx {
+      return to_tp.concat(".").concat(name.slice(pfx.len(), name.len()));
+    }
+    i = i + 1;
+  }
+  return name;
+}
+
+fn impl_const_where_cover(
+  a_tps: Vec[String],
+  a_bounds: Vec[ConstWhereBoundSig],
+  b_tps: Vec[String],
+  b_bounds: Vec[ConstWhereBoundSig],
+) -> bool {
+  let mut i: i32 = 0;
+  while i < b_bounds.len() {
+    let b: ConstWhereBoundSig = b_bounds.get(i);
+    let lhs_name: String = impl_map_type_param_name_for_cmp(b.name, b_tps, a_tps);
+    let mut rhs_param: String = b.rhs_param;
+    if b.rhs_is_param {
+      let rr: CollectRhsReflectDecode = collect_rhs_reflect_decode(b.rhs_param);
+      if rr.ok {
+        let mapped: String = impl_map_type_param_name_for_cmp(rr.name, b_tps, a_tps);
+        rhs_param = cti_const_where_rhs_reflect_encode(rr.kind, mapped);
+      }
+    }
+    if !has_const_where_sig(a_bounds, b.lhs_kind, lhs_name, b.op, b.rhs_is_param, rhs_param, b.rhs_iv) {
+      return false;
+    }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn impl_const_where_more_specific(
+  a_tps: Vec[String],
+  a_bounds: Vec[ConstWhereBoundSig],
+  b_tps: Vec[String],
+  b_bounds: Vec[ConstWhereBoundSig],
+) -> bool {
+  if !impl_const_where_cover(a_tps, a_bounds, b_tps, b_bounds) { return false; }
+  return !impl_const_where_cover(b_tps, b_bounds, a_tps, a_bounds);
+}
+
 fn impl_sig_more_specific_parts(
   ctx: Ctx,
   a_for_ty: i32,
   a_tps: Vec[String],
   a_bounds: Vec[TypeParamBoundSig],
+  a_cw_bounds: Vec[ConstWhereBoundSig],
   b_for_ty: i32,
   b_tps: Vec[String],
   b_bounds: Vec[TypeParamBoundSig],
+  b_cw_bounds: Vec[ConstWhereBoundSig],
 ) -> bool {
   let a_head_more: bool = impl_for_ty_more_specific(ctx, a_for_ty, b_for_ty);
   let b_head_more: bool = impl_for_ty_more_specific(ctx, b_for_ty, a_for_ty);
   if a_head_more && !b_head_more { return true; }
   if b_head_more && !a_head_more { return false; }
-  return impl_bounds_more_specific(ctx, a_tps, a_bounds, b_tps, b_bounds);
+  let bounds_more: bool = impl_bounds_more_specific(ctx, a_tps, a_bounds, b_tps, b_bounds);
+  let cw_more: bool = impl_const_where_more_specific(a_tps, a_cw_bounds, b_tps, b_cw_bounds);
+  if bounds_more || cw_more {
+    if impl_bounds_cover(ctx, a_tps, a_bounds, b_tps, b_bounds) &&
+      impl_const_where_cover(a_tps, a_cw_bounds, b_tps, b_cw_bounds) {
+      return true;
+    }
+  }
+  return false;
 }
 
 pub fn impl_sig_more_specific(ctx: Ctx, a: ImplSig, b: ImplSig) -> bool {
   return impl_sig_more_specific_parts(
     ctx,
-    a.for_ty, a.head_type_params, a.head_type_param_bounds,
-    b.for_ty, b.head_type_params, b.head_type_param_bounds,
+    a.for_ty, a.head_type_params, a.head_type_param_bounds, a.head_const_where_bounds,
+    b.for_ty, b.head_type_params, b.head_type_param_bounds, b.head_const_where_bounds,
   );
 }
 
@@ -1320,6 +1398,9 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           }
           bi0_inh = bi0_inh + 1;
         }
+        let head_cwr_inh: CollectConstWhereResult = collect_const_where_bounds(id.sp, id.type_params, Vec(), id.const_where_bounds);
+        if !head_cwr_inh.ok { return TcCtxResult { ok: false, err: head_cwr_inh.err, ctx: c }; }
+        let head_cwbs_inh: Vec[ConstWhereBoundSig] = head_cwr_inh.bounds;
 
         let fr_inh: ResolveTyResult = resolve_type(c, w, m.path, imps, id.type_params, id.for_ty);
         c = fr_inh.ctx;
@@ -1523,6 +1604,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           for_ty: for_ty_inh,
           head_type_params: id.type_params,
           head_type_param_bounds: head_tpbs,
+          head_const_where_bounds: head_cwbs_inh,
           assoc_types: Vec(),
           methods: ims_inh,
         });
@@ -1579,6 +1661,9 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         }
         bi0 = bi0 + 1;
       }
+      let head_cwr: CollectConstWhereResult = collect_const_where_bounds(id.sp, id.type_params, Vec(), id.const_where_bounds);
+      if !head_cwr.ok { return TcCtxResult { ok: false, err: head_cwr.err, ctx: c }; }
+      let head_cwbs: Vec[ConstWhereBoundSig] = head_cwr.bounds;
 
       let fr: ResolveTyResult = resolve_type(c, w, m.path, imps, id.type_params, id.for_ty);
       c = fr.ctx;
@@ -1614,8 +1699,16 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
               let msg_conflict: String = "impl conflicts with negative impl: ".concat(ty_inst_str(c, for_ty)).concat(" vs ").concat(ty_inst_str(c, ds.for_ty));
               return TcCtxResult { ok: false, err: type_error_at(id.sp, msg_conflict), ctx: c };
             }
-            let new_more: bool = impl_sig_more_specific_parts(c, for_ty, id.type_params, head_tpbs, ds.for_ty, ds.head_type_params, ds.head_type_param_bounds);
-            let old_more: bool = impl_sig_more_specific_parts(c, ds.for_ty, ds.head_type_params, ds.head_type_param_bounds, for_ty, id.type_params, head_tpbs);
+            let new_more: bool = impl_sig_more_specific_parts(
+              c,
+              for_ty, id.type_params, head_tpbs, head_cwbs,
+              ds.for_ty, ds.head_type_params, ds.head_type_param_bounds, ds.head_const_where_bounds,
+            );
+            let old_more: bool = impl_sig_more_specific_parts(
+              c,
+              ds.for_ty, ds.head_type_params, ds.head_type_param_bounds, ds.head_const_where_bounds,
+              for_ty, id.type_params, head_tpbs, head_cwbs,
+            );
             if !new_more && !old_more {
               let cur_sig: ImplSig = ImplSig {
                 mod_path: m.path,
@@ -1627,6 +1720,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
                 for_ty: for_ty,
                 head_type_params: id.type_params,
                 head_type_param_bounds: head_tpbs,
+                head_const_where_bounds: head_cwbs,
                 assoc_types: Vec(),
                 methods: Vec(),
               };
@@ -1654,6 +1748,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           for_ty: for_ty,
           head_type_params: id.type_params,
           head_type_param_bounds: head_tpbs,
+          head_const_where_bounds: head_cwbs,
           assoc_types: Vec(),
           methods: Vec(),
         });
@@ -2036,6 +2131,7 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         for_ty: for_ty,
         head_type_params: id.type_params,
         head_type_param_bounds: head_tpbs,
+        head_const_where_bounds: head_cwbs,
         assoc_types: impl_assocs,
         methods: ims,
       });

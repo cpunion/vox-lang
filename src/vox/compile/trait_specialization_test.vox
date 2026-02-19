@@ -104,3 +104,44 @@ fn test_compile_impl_unconstrained_head_type_param_rejected() -> () {
   t.assert(!r.ok);
   t.assert(contains(r.err, "impl type param is unconstrained by impl target type: U"));
 }
+
+fn test_compile_impl_specialization_prefers_head_where_comptime_superset_bounds_smoke() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Tag { fn tag(x: Self) -> i32; }
+      impl[T] Tag for Vec[T] where comptime @size_of(T) <= 16 {
+        fn tag(x: Vec[T]) -> i32 { return 1; }
+      }
+      impl[T] Tag for Vec[T] where comptime @size_of(T) <= 16, comptime @align_of(T) <= 8 {
+        fn tag(x: Vec[T]) -> i32 { return 2; }
+      }
+      fn main() -> i32 { let mut v: Vec[i32] = Vec(); return Tag.tag(v); }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert_with(r.ok, r.err);
+  t.assert(r.ok);
+}
+
+fn test_compile_impl_specialization_incomparable_head_where_comptime_bounds_rejected() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      trait Tag { fn tag(x: Self) -> i32; }
+      impl[T] Tag for Vec[T] where comptime @size_of(T) <= 16 {
+        fn tag(x: Vec[T]) -> i32 { return 1; }
+      }
+      impl[T] Tag for Vec[T] where comptime @align_of(T) <= 8 {
+        fn tag(x: Vec[T]) -> i32 { return 2; }
+      }
+      fn main() -> i32 { let mut v: Vec[i32] = Vec(); return Tag.tag(v); }
+    """,
+  });
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec() });
+  t.assert(!r.ok);
+  t.assert(contains(r.err, "overlapping impl without strict specialization"));
+  t.assert(contains(r.err, "rank_trace:"));
+}

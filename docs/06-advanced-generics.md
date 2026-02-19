@@ -73,12 +73,14 @@ where
 当前实现（受控 specialization，接近 `min_specialization`）：
 
 - 允许同一 trait 出现重叠 impl，但必须存在**严格特化**关系。
-- 严格特化判定基于 impl 头部（`for` 类型 + 头部 type bounds）：
+- 严格特化判定基于 impl 头部（`for` 类型 + 头部 type bounds + 头部 `where comptime` 约束）：
   - 先比较 `for` 类型偏序：`A` 比 `B` 更特化，当且仅当：`B` 可匹配 `A`，且 `A` 不能匹配所有 `B`。
-  - 当 `for` 头等价时，再比较头部 bounds：覆盖更多约束（或更强超 trait 约束）的 impl 更特化。
+  - 当 `for` 头等价时，再比较头部约束：
+    - type bounds：覆盖更多约束（或更强超 trait 约束）的 impl 更特化；
+    - `where comptime`：按约束集合覆盖比较（A 覆盖 B 且 B 不覆盖 A 时，A 更特化）。
   - 直观例子：`impl[T] Tag for T` 与 `impl[T: Eq] Tag for T`，后者更特化。
 - 对同一接收者类型，分派选择“最特化且唯一”的 impl。
-- 分派前会先检查 impl 头部 bounds 是否对当前接收者成立；不成立的候选不会参与竞争。
+- 分派前会先检查 impl 头部约束（type bounds + `where comptime`）是否对当前接收者成立；不成立的候选不会参与竞争。
 - 若重叠但不存在严格偏序（不可比较或等价重叠），编译期报错：
   - `overlapping impl without strict specialization: ...`
 - 诊断增强（Stage2）：
@@ -87,7 +89,7 @@ where
 
 当前限制（后续可扩展）：
 
-- 偏序不比较方法体语义；`where` 的完整逻辑强弱比较仍未纳入（当前比较的是 impl 头部 `for` + 头部 type bounds）。
+- 偏序不比较方法体语义；`where comptime` 当前采用“约束集合覆盖”比较，不做不等式语义蕴含推理（如 `<=8` 自动推导强于 `<=16`）。
 - 仅在当前 `unify_ty` 支持的类型构造上参与判定（如 `Vec[T]` 场景）。
 
 ## 4. 可变参数泛型（Stage2 当前实现）
