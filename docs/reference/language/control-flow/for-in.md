@@ -25,12 +25,12 @@ lowers to:
 
 ```vox
 {
-  let __vox_for_iter_line_col = xs;
-  let mut __vox_for_idx_line_col = 0;
-  while __vox_for_idx_line_col < __vox_for_iter_line_col.len() {
-    let x = __vox_for_iter_line_col.get(__vox_for_idx_line_col);
+  let __vox_for_iter_<line>_<col> = xs;
+  let mut __vox_for_idx_<line>_<col> = 0;
+  while __vox_for_idx_<line>_<col> < __vox_for_iter_<line>_<col>.len() {
+    let x = __vox_for_iter_<line>_<col>.get(__vox_for_idx_<line>_<col>);
     body
-    __vox_for_idx_line_col = __vox_for_idx_line_col + 1;
+    __vox_for_idx_<line>_<col> = __vox_for_idx_<line>_<col> + 1;
   }
 }
 ```
