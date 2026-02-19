@@ -21,6 +21,7 @@ Topic docs:
 - `docs/reference/language/operators.md`
 - `docs/reference/language/functions.md`
 - `docs/reference/language/modules-imports.md`
+- `docs/reference/language/visibility.md`
 - `docs/reference/language/constants.md`
 - `docs/reference/language/generics.md`
 - `docs/reference/language/traits-impls.md`

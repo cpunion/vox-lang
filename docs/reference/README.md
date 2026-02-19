@@ -16,6 +16,7 @@ normalized into reference-style pages (grammar, semantics, diagnostics, examples
 - module-07: traits and impls syntax
 - module-08: struct/enum declarations and ADT usage syntax
 - module-09: type alias/union alias and const declarations
+- module-10: visibility markers and access-level syntax
 
 ## Documents
 

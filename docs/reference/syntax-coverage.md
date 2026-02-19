@@ -23,7 +23,7 @@ Status:
 | S003 | borrow/ref type forms | Done | `tests/syntax/src/basic_types_test.vox` | includes `&T`, `&'static str` |
 | S004 | range-annotated integer type | Done | `tests/syntax/src/basic_types_test.vox` |  |
 | S005 | malformed literal parse failure | Done | `tests/syntax/src/basic_types_test.vox` |  |
-| S006 | struct declaration (fields/pub/generics/where) | Done | `tests/syntax/src/adt_test.vox` |  |
+| S006 | struct declaration (shape/generics/where) | Done | `tests/syntax/src/adt_test.vox` |  |
 | S007 | enum declaration (variants/generics/where) | Done | `tests/syntax/src/adt_test.vox` | tuple-payload and unit variants |
 | S008 | struct literal and field access | Done | `tests/syntax/src/adt_test.vox` | typed path struct literal |
 | S009 | enum constructor and match pattern | Done | `tests/syntax/src/adt_test.vox` | qualified variant ctor/pattern |
@@ -32,6 +32,9 @@ Status:
 | S012 | const declaration | Done | `tests/syntax/src/type_alias_const_test.vox` |  |
 | S013 | labeled union type alias declaration | Done | `tests/syntax/src/type_alias_const_test.vox` | `type Name = A: TA | B: TB` |
 | S014 | malformed type/const declaration parse failure | Done | `tests/syntax/src/type_alias_const_test.vox` |  |
+| S015 | visibility markers on items | Done | `tests/syntax/src/visibility_test.vox` | `pub`, `pub(crate)`, `pub(super)` |
+| S016 | visibility markers on struct fields | Done | `tests/syntax/src/visibility_test.vox` | includes `pub`, `pub(crate)`, `pub(super)` |
+| S017 | malformed visibility marker parse failure | Done | `tests/syntax/src/visibility_test.vox` | invalid marker like `pub(local)` |
 | S101 | if/else statement | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S102 | if-expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S103 | while loop | Done | `tests/syntax/src/control_flow_test.vox` |  |
@@ -64,7 +67,7 @@ Status:
 | S505 | malformed await expression parse failure | Done | `tests/syntax/src/async_test.vox` |  |
 | S601 | import alias form | Done | `tests/syntax/src/modules_imports_test.vox` |  |
 | S602 | named import form | Done | `tests/syntax/src/modules_imports_test.vox` | `import {a as aa, b} from "util"` |
-| S603 | pub declarations | Done | `tests/syntax/src/modules_imports_test.vox` |  |
+| S603 | basic `pub` declarations in module/import flow | Done | `tests/syntax/src/modules_imports_test.vox` | complements S015 extended visibility markers |
 | S604 | malformed import parse failure | Done | `tests/syntax/src/modules_imports_test.vox` |  |
 | S701 | effect/resource attributes | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
 | S702 | ffi import/export attributes | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
