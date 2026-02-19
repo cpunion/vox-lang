@@ -33,7 +33,7 @@ BinaryOp
 From high to low:
 
 1. postfix/member/call/await
-2. unary (`!`, unary `-`)
+2. unary (`!`, unary `+`, unary `-`)
 3. multiplicative (`*`, `/`, `%`)
 4. additive (`+`, `-`)
 5. shift (`<<`, `>>`)
@@ -53,28 +53,42 @@ Binary operators are left-associative unless parser/type rules specify otherwise
 
 - `+ - * / %`
 - valid on numeric operands under type-check rules
+- both operands must resolve to the same base numeric type (after `@range` base stripping),
+  except numeric literals may be context-typed during checking
 
 ### Logical
 
 - `&& || !`
-- operands/results are `bool`
+- `&&`/`||` operands/results are `bool`
+- `!` on `bool` is logical-not
 - `&&` and `||` are short-circuit operators
 
 ### Bitwise and Shift
 
 - `& | ^ << >>`
-- integer-family operands only
+- `<< >>` require integer operands
+- `& | ^` support integer operands; `bool & bool`, `bool | bool`, `bool ^ bool` are also valid
 
 ### Comparison and Equality
 
 - `< <= > >= == !=`
 - result type is `bool`
-- operands must be comparable under type-check rules
+- ordered compare (`< <= > >=`) supports:
+  - numeric base types and `String`,
+  - generic type parameters only when bounded by `Ord`
+- equality (`== !=`) supports:
+  - primitive scalar types and `String`,
+  - generic type parameters only when bounded by `Eq`,
+  - struct/enum recursively when all fields are equality-capable
 
 ### Cast
 
 - `expr as Type`
 - explicit conversion only; implicit conversion is limited
+- numeric casts supported in current implementation:
+  - int-like <-> int-like
+  - float <-> float
+  - int-like <-> float
 - range-refined target types (`@range(...)`) may insert runtime checks
 
 ## Evaluation Semantics
@@ -95,6 +109,9 @@ Type errors:
 - operand/operator type incompatibility
 - unsupported cast target/source pair
 - refinement cast violation (const-time error or runtime panic)
+- representative diagnostics include:
+  - `binary lhs typecheck failed`
+  - `binary rhs typecheck failed`
 
 ## Example
 

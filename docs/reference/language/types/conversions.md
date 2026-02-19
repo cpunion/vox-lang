@@ -30,6 +30,12 @@ CastExpr
 - Numeric casts between integer and float types are supported where defined.
 - Invalid cast targets are rejected by type checker.
 
+Current checker conversion surface:
+
+- int-like <-> int-like
+- float <-> float
+- int-like <-> float
+
 ## Reference-Related Conversions
 
 - Reference form changes are not general-purpose casts.

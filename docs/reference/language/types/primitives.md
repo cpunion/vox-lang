@@ -50,7 +50,9 @@ Notes:
 ## Boolean Type
 
 - `bool` has two values: `true`, `false`.
-- Logical operators (`&&`, `||`, `!`) require boolean operands.
+- Logical operators `&&` and `||` require boolean operands.
+- Unary `!` supports boolean logical-not and integer bitwise-not.
+- Bitwise `&`, `|`, `^` are valid on `bool` pairs.
 
 ## Character Type
 
