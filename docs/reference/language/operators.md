@@ -68,6 +68,7 @@ Binary operators are left-associative unless parser/type rules specify otherwise
 - `& | ^ << >>`
 - `<< >>` require integer operands
 - `& | ^` support integer operands; `bool & bool`, `bool | bool`, `bool ^ bool` are also valid
+- unary `!` on integers is bitwise-not
 
 ### Comparison and Equality
 
