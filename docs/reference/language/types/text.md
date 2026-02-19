@@ -2,7 +2,7 @@
 
 ## Scope
 
-Defines `String` and `str` related typing rules.
+Defines owned and borrowed text types: `String`, `&str`, and `&'static str`.
 
 ## Grammar
 
@@ -14,7 +14,7 @@ Type
    | "&'static str"
 ```
 
-`str` is dynamically-sized and is normally used through references.
+Parser accepts `str` in type positions, but type checking rejects bare `str` values.
 
 ## `String`
 
@@ -22,11 +22,21 @@ Type
 - Usable as local values, struct fields, and return values.
 - Common operations come from std/prelude methods (for example `len`, `concat`).
 
-## `str`
+## Borrowed Text (`&str`, `&'static str`)
 
-- Non-owned string view target type.
-- Typically appears as `&str` or `&'static str`.
-- Plain `str` value positions are not generally used as standalone sized values.
+- `&str` is a non-static borrowed text view.
+- `&'static str` is a static borrowed text view.
+- String literals can be used where borrowed text is expected.
+
+## Bare `str` Rule
+
+Bare `str` is rejected by the type checker:
+
+```text
+bare str is not allowed; use String for owned text or &str for borrowed text
+```
+
+Use `String` for owned text, and `&str`/`&'static str` for borrowed text.
 
 ## Interop Notes
 
@@ -37,6 +47,7 @@ Type
 
 Type checking rejects:
 
+- bare `str` in value/parameter/return positions,
 - mismatched owned vs borrowed string forms without valid conversion,
 - invalid mutation through immutable string borrows.
 
