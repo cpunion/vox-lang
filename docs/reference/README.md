@@ -19,6 +19,7 @@ This directory contains user-facing reference documents for Vox.
 - Expressions/calls/modules:
   - `docs/reference/language/operators.md`
   - `docs/reference/language/error-handling.md`
+  - `docs/reference/language/reflect-intrinsics.md`
   - `docs/reference/language/functions.md`
   - `docs/reference/language/macros.md`
   - `docs/reference/language/modules-imports.md`
