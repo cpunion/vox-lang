@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-intrinsics test-reference \
+.PHONY: fmt fmt-check test test-syntax test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-intrinsics test-reference \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run \
 	release-source-bundle release-source-verify
 
@@ -14,11 +14,11 @@ fmt-check:
 	COMPILER_BIN=$$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1); \
 	"$$COMPILER_BIN" fmt --check $(FMT_PATHS)
 
-# Run core repo tests: rolling selfhost gates + example package smoke.
-test: test-intrinsics test-reference test-rolling test-examples
+# Run core repo tests: rolling selfhost gates + syntax/reference gates + example package smoke.
+test: test-intrinsics test-reference test-syntax test-rolling test-examples
 
 # Active development gate.
-test-active: test-intrinsics test-reference test-rolling
+test-active: test-intrinsics test-reference test-syntax test-rolling
 
 # Guard std intrinsic usage against bootstrap compatibility drift.
 test-intrinsics:
@@ -27,6 +27,14 @@ test-intrinsics:
 # Guard reference syntax matrix/doc/test mapping.
 test-reference:
 	./scripts/ci/check-reference-coverage.sh
+
+# Run syntax acceptance package.
+test-syntax:
+	@set -e; \
+	start=$$(date +%s); \
+	./scripts/ci/test-syntax.sh; \
+	end=$$(date +%s); \
+	echo "[time] syntax acceptance: $$((end-start))s"
 
 # Rolling bootstrap gate (previous compiler -> new compiler).
 test-rolling: test-selfhost-build test-selfhost-gate

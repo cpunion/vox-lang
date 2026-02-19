@@ -38,4 +38,5 @@ For syntax changes, update docs and tests in the same PR:
 
 1. update/add acceptance tests in `tests/syntax/src/*.vox` with `SYNTAX:Sxxx` markers.
 2. update corresponding topic docs under `docs/reference/language/**` and `docs/reference/syntax-coverage.md`.
-3. resolve review comments, then merge only after CI is green.
+3. run `make test-reference test-syntax` locally.
+4. resolve review comments, then merge only after CI is green.
