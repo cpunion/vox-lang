@@ -121,4 +121,31 @@ trait Tag { fn tag(x: Self) -> i32; }
 impl[T] Tag for Vec[T] where comptime @size_of(T) <= 16 { fn tag(x: Vec[T]) -> i32 { return 1; } }
 ```
 
+## 6. Traits and Impls
+
+- trait declaration
+- trait default method body
+- associated type in trait/impl
+- supertrait syntax (`trait A: B`)
+- generic impl head (`impl[T] ...`)
+- negative impl syntax (`impl !Trait for Type {}`)
+
+Example:
+
+```vox
+trait Base { fn base(x: Self) -> i32; }
+trait Iter: Base {
+  type Item;
+  fn next(x: Self) -> Self.Item;
+  fn ready(x: Self) -> bool { return true; }
+}
+struct I { v: i32 }
+impl Base for I { fn base(x: I) -> i32 { return x.v; } }
+impl Iter for I {
+  type Item = i32;
+  fn next(x: I) -> i32 { return x.v; }
+}
+impl !Send for I {}
+```
+
 For precise status by syntax ID, see `docs/reference/syntax-coverage.md`.

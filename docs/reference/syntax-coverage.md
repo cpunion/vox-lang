@@ -41,6 +41,13 @@ Status:
 | S305 | impl head where comptime | Done | `tests/syntax/src/generics_test.vox` |  |
 | S306 | type pack and variadic params | Done | `tests/syntax/src/generics_test.vox` |  |
 | S307 | malformed generic argument parse failure | Done | `tests/syntax/src/generics_test.vox` |  |
+| S401 | trait declaration | Done | `tests/syntax/src/traits_impls_test.vox` |  |
+| S402 | trait default method body | Done | `tests/syntax/src/traits_impls_test.vox` |  |
+| S403 | associated type in trait and impl | Done | `tests/syntax/src/traits_impls_test.vox` |  |
+| S404 | supertrait syntax | Done | `tests/syntax/src/traits_impls_test.vox` |  |
+| S405 | generic impl head | Done | `tests/syntax/src/traits_impls_test.vox` |  |
+| S406 | negative impl syntax | Done | `tests/syntax/src/traits_impls_test.vox` |  |
+| S407 | invalid negative inherent impl parse failure | Done | `tests/syntax/src/traits_impls_test.vox` |  |
 | S801 | arithmetic operators | Done | `tests/syntax/src/operators_test.vox` |  |
 | S802 | logical operators | Done | `tests/syntax/src/operators_test.vox` |  |
 | S803 | bitwise/shift operators | Done | `tests/syntax/src/operators_test.vox` | includes precedence form |
@@ -53,7 +60,6 @@ Status:
 | ID | Description | Status |
 |---|---|---|
 | S104 | for-in loop | Planned |
-| S401-S407 | traits and impls syntax coverage module | Planned |
 | S501-S505 | async syntax coverage module | Planned |
 | S601-S604 | modules/imports syntax coverage module | Planned |
 | S701-S704 | attributes/ffi syntax coverage module | Planned |
