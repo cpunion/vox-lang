@@ -14,6 +14,7 @@ Topic docs:
 - `docs/reference/language/generics.md`
 - `docs/reference/language/traits-impls.md`
 - `docs/reference/language/async-await.md`
+- `docs/reference/language/attributes-ffi.md`
 
 Control-flow docs (one structure per document):
 

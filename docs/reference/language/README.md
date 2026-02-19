@@ -28,4 +28,8 @@ This is the language reference tree.
 
 - `docs/reference/language/async-await.md`
 
+## Attributes and FFI
+
+- `docs/reference/language/attributes-ffi.md`
+
 For syntax ID coverage and status, see `docs/reference/syntax-coverage.md`.

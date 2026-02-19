@@ -57,6 +57,10 @@ Status:
 | S602 | named import form | Done | `tests/syntax/src/modules_imports_test.vox` | `import {a as aa, b} from "util"` |
 | S603 | pub declarations | Done | `tests/syntax/src/modules_imports_test.vox` |  |
 | S604 | malformed import parse failure | Done | `tests/syntax/src/modules_imports_test.vox` |  |
+| S701 | effect/resource attributes | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
+| S702 | ffi import/export attributes | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
+| S703 | track_caller attribute | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
+| S704 | invalid attribute placement parse failure | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
 | S801 | arithmetic operators | Done | `tests/syntax/src/operators_test.vox` |  |
 | S802 | logical operators | Done | `tests/syntax/src/operators_test.vox` |  |
 | S803 | bitwise/shift operators | Done | `tests/syntax/src/operators_test.vox` | includes precedence form |
@@ -69,4 +73,3 @@ Status:
 | ID | Description | Status |
 |---|---|---|
 | S104 | for-in loop | Planned |
-| S701-S704 | attributes/ffi syntax coverage module | Planned |
