@@ -35,6 +35,7 @@ Status:
 | S015 | visibility markers on items | Done | `tests/syntax/src/visibility_test.vox` | `pub`, `pub(crate)`, `pub(super)` |
 | S016 | visibility markers on struct fields | Done | `tests/syntax/src/visibility_test.vox` | includes `pub`, `pub(crate)`, `pub(super)` |
 | S017 | malformed visibility marker parse failure | Done | `tests/syntax/src/visibility_test.vox` | invalid marker like `pub(local)` |
+| S018 | triple-quoted multiline string literal rules | Done | `tests/syntax/src/basic_types_test.vox` | unindent + leading newline trim + tab-indent rejection |
 | S101 | if/else statement | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S102 | if-expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S103 | while loop | Done | `tests/syntax/src/control_flow_test.vox` |  |

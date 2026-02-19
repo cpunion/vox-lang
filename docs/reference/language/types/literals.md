@@ -4,7 +4,7 @@
 
 Defines literal forms and typing behavior used by the type checker.
 
-Coverage IDs: `S002`, `S005`.
+Coverage IDs: `S002`, `S005`, `S018`.
 
 ## Integer Literals
 
@@ -31,6 +31,35 @@ Coverage IDs: `S002`, `S005`.
 
 - Double-quoted string literals, for example `"vox"`.
 - Triple-quoted multiline text literals are supported and normalized by indentation rules.
+
+### Triple-Quoted Multiline Rules
+
+For `"""..."""` literals, parser normalization is:
+
+1. line ending normalization (`\r\n`/`\r` -> `\n`);
+2. if the first body byte is `\n`, it is removed;
+3. one trailing empty line is removed;
+4. common leading-space indentation across non-empty lines is removed;
+5. tab indentation is rejected with parse error;
+6. escape decoding is then applied on normalized text.
+
+Example source:
+
+```vox
+let s: String = """
+    line1
+      line2
+    line3
+""";
+```
+
+Normalized runtime text is:
+
+```text
+line1
+  line2
+line3
+```
 
 ## Parse Errors
 
