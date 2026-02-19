@@ -3434,19 +3434,27 @@ fn main() -> i32 {
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
 
-    let cpath: String = out.concat(".test.c");
-    let bin: String = out.concat(".test");
+    let test_invocation_ns: i64 = tm.now_ns();
+    let mut test_invocation_hash: u64 = 1469598103934665603 as u64;
+    test_invocation_hash = lock_hash_text(test_invocation_hash, out);
+    test_invocation_hash = lock_hash_text(test_invocation_hash, test_module_pat);
+    test_invocation_hash = lock_hash_text(test_invocation_hash, test_run_pat);
+    test_invocation_hash = lock_hash_text(test_invocation_hash, test_filter);
+    test_invocation_hash = lock_hash_text(test_invocation_hash, test_jobs.to_string());
+    test_invocation_hash = lock_hash_text(test_invocation_hash, if test_fail_fast { "1" } else { "0" });
+    test_invocation_hash = lock_hash_text(test_invocation_hash, if test_rerun_failed { "1" } else { "0" });
+    test_invocation_hash = lock_hash_text(test_invocation_hash, if test_json { "1" } else { "0" });
+    let test_invocation_tag: String =
+      test_invocation_ns.to_string()
+        .concat("_")
+        .concat(test_invocation_hash.to_string());
+    let cpath: String = out.concat(".test.").concat(test_invocation_tag).concat(".c");
+    let bin: String = out.concat(".test.").concat(test_invocation_tag);
     let mut tests_for_selected: Vec[String] = Vec();
     let mut tci: i32 = 0;
     while tci < tests.len() {
       tests_for_selected.push(tests.get(tci));
       tci = tci + 1;
-    }
-    let mut tests_for_hit: Vec[String] = Vec();
-    let mut thi: i32 = 0;
-    while thi < tests_for_selected.len() {
-      tests_for_hit.push(tests_for_selected.get(thi));
-      thi = thi + 1;
     }
     let mut tests_for_queues: Vec[String] = Vec();
     let mut tqu: i32 = 0;
@@ -3455,40 +3463,27 @@ fn main() -> i32 {
       tqu = tqu + 1;
     }
     let total_tests: i32 = tests.len();
-    let mut files_for_cache: Vec[ld.SourceFile] = Vec();
-    let mut fci: i32 = 0;
-    while fci < files.len() {
-      files_for_cache.push(files.get(fci));
-      fci = fci + 1;
+    let tests_for_compile: Vec[String] = tests_for_selected;
+    let cp: c.CompileProfileResult =
+      c.compile_files_to_c_profile(files, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile });
+    let r: c.CompileResult = cp.r;
+    if !r.ok {
+      print("compile failed: ".concat(r.err).concat("\n"));
+      return 1;
     }
-    let build_key: String = test_build_cache_key(files_for_cache);
-    let cached_tests: Vec[String] = test_build_cache_load_tests(out, build_key, cpath, bin);
-    let tests_for_compile: Vec[String] = merge_unique_strings(cached_tests, tests_for_selected);
-    if !test_build_cache_hit(out, build_key, cpath, bin, tests_for_hit) {
-      let cp: c.CompileProfileResult =
-        c.compile_files_to_c_profile(files, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile });
-      let r: c.CompileResult = cp.r;
-      if !r.ok {
-        print("compile failed: ".concat(r.err).concat("\n"));
-        return 1;
-      }
-      if profile_on { print_compile_profile("test-compile", cp.p); }
+    if profile_on { print_compile_profile("test-compile", cp.p); }
 
-      fs.write_string(cpath, r.c);
-      write_emit_c_text(emit_c_enabled, emit_c_path, cpath, r.c);
-      let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, bin);
-      let cc_t0: i64 = tm.now_ns();
-      let code: i32 = exec_cmd(cmdline, trace_exec);
-      let cc_ns: i64 = dur_nonneg_ns(cc_t0, tm.now_ns());
-      if profile_on { print("[profile] test-cc: ".concat(format_duration_ns(cc_ns)).concat("\n")); }
-      if code != 0 {
-        print("cc failed: ".concat(cmdline).concat("\n"));
-        print("cc exit: ".concat(code.to_string()).concat("\n"));
-        return 1;
-      }
-      write_test_build_cache(out, build_key, tests_for_compile);
-    } else {
-      copy_emit_c_from_file(emit_c_enabled, emit_c_path, cpath);
+    fs.write_string(cpath, r.c);
+    write_emit_c_text(emit_c_enabled, emit_c_path, cpath, r.c);
+    let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, bin);
+    let cc_t0: i64 = tm.now_ns();
+    let code: i32 = exec_cmd(cmdline, trace_exec);
+    let cc_ns: i64 = dur_nonneg_ns(cc_t0, tm.now_ns());
+    if profile_on { print("[profile] test-cc: ".concat(format_duration_ns(cc_ns)).concat("\n")); }
+    if code != 0 {
+      print("cc failed: ".concat(cmdline).concat("\n"));
+      print("cc exit: ".concat(code.to_string()).concat("\n"));
+      return 1;
     }
 
     // Run tests by module-level parallel queues, keeping module-internal order.
