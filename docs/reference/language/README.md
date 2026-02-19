@@ -17,6 +17,7 @@ This is the language reference tree.
 
 - `docs/reference/language/operators.md`
 - `docs/reference/language/functions.md`
+- `docs/reference/language/modules-imports.md`
 
 ## Generics and Traits
 
