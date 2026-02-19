@@ -25,8 +25,8 @@ VisibleField
 
 - private (no marker): visible only within owning module scope.
 - `pub`: publicly visible.
-- `pub(crate)`: visible within current package/module root scope.
-- `pub(super)`: visible within parent-module scope.
+- `pub(crate)`: visible within the current package scope (for example `src`, `std`).
+- `pub(super)`: visible within the parent module and its submodules.
 
 ## Where Visibility Appears
 
@@ -34,6 +34,11 @@ Current parse/type usage includes:
 
 - top-level items (`fn`, `type`, `const`, `struct`, `enum`, `trait`)
 - struct fields
+
+Notes:
+
+- enum variants do not currently carry independent visibility markers; they follow enum-level visibility/model rules.
+- `impl` blocks are not modeled with independent visibility markers.
 
 ## Diagnostics
 
