@@ -29,7 +29,7 @@ FieldAccess
 ## Declaration
 
 - Struct defines a nominal product type with named fields.
-- Field visibility can be declared via `pub` on each field.
+- Field visibility supports `pub`, `pub(crate)`, `pub(super)`, or private (no marker).
 - Type parameters and `where` constraints are supported.
 
 ## Struct Literal
@@ -54,6 +54,9 @@ Type/check errors:
 - unknown field names
 - missing required fields / extra fields
 - visibility violations across module boundaries
+- representative messages:
+  - `struct field is private: <field>` (literal initialization)
+  - `field is private: <field>` (member access)
 
 ## Example
 

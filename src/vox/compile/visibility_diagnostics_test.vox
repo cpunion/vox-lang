@@ -14,6 +14,16 @@ fn compile_expect_err(files: Vec[ld.SourceFile]) -> String {
   return r.err;
 }
 
+fn compile_expect_ok(files: Vec[ld.SourceFile]) -> () {
+  let r: c.CompileResult = c.compile_files_to_c(files, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}
+
 fn test_compile_pub_crate_hidden_from_tests_reports_private_fn_error() -> () {
   let mut fs: Vec[ld.SourceFile] = Vec();
   fs.push(ld.SourceFile {
@@ -67,5 +77,79 @@ fn test_compile_private_struct_field_in_literal_reports_error() -> () {
   let err: String = compile_expect_err(fs);
   t.assert(starts_with(err, "src/main.vox:2:"));
   t.assert(contains(err, "struct field is private: x"));
+  t.assert(contains(err, "[E_TYPE_0001]"));
+}
+
+fn test_compile_pub_crate_struct_field_visible_inside_src_modules() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/a/a.vox",
+    text: "pub struct S { pub(crate) x: i32, pub y: i32 }\npub fn mk() -> S { return S { x: 1, y: 2 }; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/b/b.vox",
+    text: "import \"a\" as a\npub fn read() -> i32 { let s: a.S = a.mk(); return s.x; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "import \"b\" as b\nfn main() -> i32 { return b.read(); }",
+  });
+  compile_expect_ok(fs);
+}
+
+fn test_compile_pub_crate_struct_field_hidden_from_tests_modules() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/a/a.vox",
+    text: "pub struct S { pub(crate) x: i32, pub y: i32 }\npub fn mk() -> S { return S { x: 1, y: 2 }; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn main() -> i32 { return 0; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "tests/basic.vox",
+    text: "import \"a\" as a\nfn test_hidden_field_access() -> () { let s: a.S = a.mk(); let _v: i32 = s.x; }",
+  });
+  let err: String = compile_expect_err(fs);
+  t.assert(contains(err, "tests/basic.vox:2:"));
+  t.assert(contains(err, "field is private: x"));
+  t.assert(contains(err, "[E_TYPE_0001]"));
+}
+
+fn test_compile_pub_super_struct_field_visible_in_parent_scope() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/a/b/c/c.vox",
+    text: "pub struct S { pub(super) x: i32, pub y: i32 }\npub fn mk() -> S { return S { x: 1, y: 2 }; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/a/b/use.vox",
+    text: "import \"a/b/c\" as c\npub fn ok() -> i32 { let s: c.S = c.mk(); return s.x; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "import \"a/b\" as ab\nfn main() -> i32 { return ab.ok(); }",
+  });
+  compile_expect_ok(fs);
+}
+
+fn test_compile_pub_super_struct_field_hidden_outside_parent_scope() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(ld.SourceFile {
+    path: "src/a/b/c/c.vox",
+    text: "pub struct S { pub(super) x: i32, pub y: i32 }\npub fn mk() -> S { return S { x: 1, y: 2 }; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/a/d/use.vox",
+    text: "import \"a/b/c\" as c\npub fn bad() -> i32 { let s: c.S = c.mk(); return s.x; }",
+  });
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "import \"a/d\" as ad\nfn main() -> i32 { return ad.bad(); }",
+  });
+  let err: String = compile_expect_err(fs);
+  t.assert(contains(err, "src/a/d/use.vox:2:"));
+  t.assert(contains(err, "field is private: x"));
   t.assert(contains(err, "[E_TYPE_0001]"));
 }
