@@ -40,10 +40,26 @@ BlockExpr
 
 - `f(x, y)` calls callable expression `f`.
 - `recv.method(args...)` resolves via inherent impl or trait method resolution.
+- method resolution in current checker prefers:
+  - built-in receiver methods (`Vec`, `String`, primitive helpers),
+  - bound-trait methods for type parameters,
+  - inherent impl methods,
+  - trait dispatch methods
 
 ### UFCS Call
 
 - `Trait.method(recv, args...)` calls a method using explicit trait/type qualification.
+- `alias.Trait.method(...)` and imported named trait forms are supported by the same path logic.
+
+## Borrowed Parameter Arguments
+
+- For parameters typed as `&T`, call arguments must be place expressions.
+- For parameters typed as `&mut T`, call arguments must be mutable place expressions.
+- Non-place or immutable-place arguments are rejected at call checking time.
+
+## Special Constructor Form
+
+- `Vec()` requires expected type context (`Vec[T]`); otherwise type checking fails.
 
 ## Return Semantics
 
@@ -67,6 +83,13 @@ Type errors:
 - argument count/type mismatch
 - return type mismatch
 - unresolved method/UFCS targets
+- representative diagnostics include:
+  - `arg #N type mismatch: expected ...`
+  - `call arg #N for & parameter must be place`
+  - `call arg #N for &mut parameter must be mutable place`
+  - `call arg #N for &mut parameter is immutable`
+  - `ambiguous trait method call: ...`
+  - `unknown trait method: ...`
 
 ## Example
 
