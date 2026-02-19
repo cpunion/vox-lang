@@ -24,5 +24,9 @@ impl Iter for I {
   type Item = i32;
   fn next(x: I) -> i32 { return x.v; }
 }
+trait Show { fn show(x: Self) -> String; }
+impl[T] Show for Vec[T] {
+  fn show(x: Vec[T]) -> String { return x.len().to_string(); }
+}
 impl !Send for I {}
 ```
