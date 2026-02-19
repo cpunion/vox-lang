@@ -72,6 +72,15 @@ Type/checker errors:
 - duplicate imported names in same scope
 - invalid visibility usage
 
+Current import diagnostics (stable codes):
+
+- `E_IMPORT_0002`: unknown module import
+- `E_IMPORT_0004`: duplicate import alias in same file
+- `E_IMPORT_0005`: duplicate local name in named-import list
+- `E_IMPORT_0006`: named-import local name conflicts with module alias/local declaration
+- `E_IMPORT_0007`: unknown imported name in target module
+- `E_IMPORT_0009`: imported name exists but is private from current module scope
+
 ## Example
 
 ```vox
