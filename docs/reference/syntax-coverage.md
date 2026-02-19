@@ -44,6 +44,9 @@ Status:
 | S105 | break/continue | Done | `tests/syntax/src/control_flow_test.vox` | includes `loop { ... }` coverage |
 | S106 | match expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S107 | malformed control-flow parse failure | Done | `tests/syntax/src/control_flow_test.vox` |  |
+| S108 | question operator (`expr?`) | Done | `tests/syntax/src/error_handling_test.vox` |  |
+| S109 | try block expression (`try { ... }`) | Done | `tests/syntax/src/error_handling_test.vox` |  |
+| S110 | malformed try/question parse failure | Done | `tests/syntax/src/error_handling_test.vox` |  |
 | S201 | function declaration and return | Done | `tests/syntax/src/functions_test.vox` |  |
 | S202 | member call syntax | Done | `tests/syntax/src/functions_test.vox` | `i.inc()` |
 | S203 | UFCS call syntax | Done | `tests/syntax/src/functions_test.vox` | `Add.add(i, 3)` |
