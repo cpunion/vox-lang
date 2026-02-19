@@ -4,7 +4,8 @@ This directory contains user-facing reference documents for Vox.
 
 ## Current Scope
 
-Current references are aligned with the merged syntax acceptance modules:
+Current references are aligned with merged syntax acceptance modules, and are being
+normalized into reference-style pages (grammar, semantics, diagnostics, examples):
 
 - module-01: support harness
 - module-02: basic types and literals
@@ -19,6 +20,10 @@ Current references are aligned with the merged syntax acceptance modules:
 - `docs/reference/language/README.md`: language reference tree (entrypoint).
 - `docs/reference/syntax.md`: compatibility index redirecting to language tree docs.
 - `docs/reference/syntax-coverage.md`: syntax ID matrix and test mapping.
+
+Type system details are split into dedicated pages under:
+
+- `docs/reference/language/types/`
 
 ## Contribution Rule
 

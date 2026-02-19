@@ -4,7 +4,14 @@ This is the language reference tree.
 
 ## Type System
 
-- `docs/reference/language/types.md`
+- `docs/reference/language/types.md` (entrypoint)
+- `docs/reference/language/types/primitives.md`
+- `docs/reference/language/types/text.md`
+- `docs/reference/language/types/references.md`
+- `docs/reference/language/types/ranges.md`
+- `docs/reference/language/types/conversions.md`
+- `docs/reference/language/types/compatibility.md`
+- `docs/reference/language/types/literals.md`
 
 ## Control Flow
 

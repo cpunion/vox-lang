@@ -1,77 +1,29 @@
-# Types
+# Type System
 
 ## Scope
 
-This page describes currently supported basic type forms.
+This section is the normative reference for Vox types.
 
-Coverage IDs: `S001`, `S002`, `S003`, `S004`.
+Coverage IDs: `S001`, `S002`, `S003`, `S004`, `S005`.
 
-## Built-in Scalar Types
+## Type Family Map
 
-### Integers
+- Primitive and scalar types: `docs/reference/language/types/primitives.md`
+- String and text types: `docs/reference/language/types/text.md`
+- Borrow/reference types: `docs/reference/language/types/references.md`
+- Range-refined integer types: `docs/reference/language/types/ranges.md`
+- Type conversion and cast rules: `docs/reference/language/types/conversions.md`
+- Type compatibility and assignability: `docs/reference/language/types/compatibility.md`
+- Literal forms and typing: `docs/reference/language/types/literals.md`
 
-Signed: `i8 i16 i32 i64 isize`  
-Unsigned: `u8 u16 u32 u64 usize`
+## Summary
 
-### Floating Point
+Vox currently supports:
 
-`f32 f64`
+- Integer, float, bool, and char primitive types.
+- `String` and borrowed `str` views.
+- Borrow forms `&T`, `&mut T`, `&'static T`, `&'static mut T`.
+- Integer range refinement through `@range(lo..=hi) BaseInt`.
+- Explicit casts via `as`.
 
-### Other Scalars
-
-- `bool`
-- `char` (current implementation uses `u32` codepoint representation)
-
-## Text Types
-
-- `String`: owned string type.
-- `str`: dynamically-sized string view target; normally used through references (`&str`, `&'static str`).
-
-## Borrow/Reference Types
-
-Supported reference forms:
-
-- shared borrow: `&T`
-- mutable borrow: `&mut T`
-- static shared borrow: `&'static T`
-- static mutable borrow: `&'static mut T`
-
-Examples:
-
-```vox
-fn read(x: &i32, s: &'static str) -> i32 { return x.to_string().len() + s.len(); }
-fn write(x: &mut i32) -> () { *x = *x + 1; }
-```
-
-## Range-Annotated Integer Type
-
-Syntax:
-
-```vox
-@range(lo..=hi) T
-```
-
-Current constraints:
-
-- `T` must be an integer-family type (`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`).
-- `f32/f64` are not supported as range base types.
-
-Check behavior:
-
-- At compile-time: if conversion value is constant and out-of-range, compilation fails.
-- At runtime: when converting into range type from non-constant value, runtime check is inserted; out-of-range panics.
-
-## Literal Notes
-
-- char literals are supported (for example `'A'`, `'\n'`, `'你'`).
-- string literals are supported (`"hello"`).
-
-## Example
-
-```vox
-fn f(a: i32, b: bool, c: char, d: String, e: &i32, s: &'static str) -> i32 {
-  let x: @range(0..=3) i8 = 2 as @range(0..=3) i8;
-  if b { return a + (x as i32); }
-  return c as i32 + d.len() + e.to_string().len() + s.len();
-}
-```
+For complete grammar, typing behavior, and diagnostics, use the topic pages above.
