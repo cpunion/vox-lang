@@ -2,23 +2,36 @@
 
 ## Scope
 
-Coverage ID: `S105` (currently partial: `loop` keyword coverage is pending).
+Defines loop-control statements `break` and `continue`.
 
-## Syntax
+Coverage ID: `S105` (partial: dedicated `loop` keyword coverage remains pending).
+
+## Grammar (Simplified)
 
 ```vox
-break;
-continue;
+BreakStmt    := "break" ";"
+ContinueStmt := "continue" ";"
 ```
 
 ## Semantics
 
-- `break` exits the nearest enclosing loop.
-- `continue` skips the rest of current iteration and starts next iteration.
+- `break` exits nearest enclosing loop.
+- `continue` skips to next iteration of nearest enclosing loop.
+
+## Context Rules
+
+- both statements are valid only inside loop bodies.
+- control target is lexical nearest loop construct.
 
 ## Diagnostics
 
-- Using `break` / `continue` outside loops is rejected during type checking/lowering.
+Type/lowering errors:
+
+- using `break` or `continue` outside loops
+
+Parser errors:
+
+- malformed statement termination
 
 ## Example
 
@@ -30,9 +43,8 @@ fn main() -> i32 {
     i = i + 1;
     if i == 2 {
       continue;
-    } else {
-      s = s + i;
     }
+    s = s + i;
   }
   while true {
     s = s + 1;

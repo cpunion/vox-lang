@@ -7,7 +7,14 @@ Syntax reference has been split into a document tree:
 
 Topic docs:
 
-- `docs/reference/language/types.md`
+- `docs/reference/language/types.md` (entrypoint)
+- `docs/reference/language/types/primitives.md`
+- `docs/reference/language/types/text.md`
+- `docs/reference/language/types/references.md`
+- `docs/reference/language/types/ranges.md`
+- `docs/reference/language/types/conversions.md`
+- `docs/reference/language/types/compatibility.md`
+- `docs/reference/language/types/literals.md`
 - `docs/reference/language/operators.md`
 - `docs/reference/language/functions.md`
 - `docs/reference/language/modules-imports.md`

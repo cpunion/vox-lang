@@ -2,54 +2,75 @@
 
 ## Scope
 
+Defines module visibility, import forms, and package-path resolution behavior.
+
 Coverage IDs: `S601`, `S602`, `S603`, `S604`.
 
-## Syntax
+## Grammar (Simplified)
 
-Module alias import:
+```vox
+ImportDecl
+  := "import" StringLit "as" Ident
+   | "import" "{" ImportItemList "}" "from" StringLit
+
+ImportItem
+  := Ident
+   | Ident "as" Ident
+
+VisDecl
+  := "pub" ItemDecl
+```
+
+## Import Forms
+
+### Alias Import
 
 ```vox
 import "pkg/path" as alias
 ```
 
-Named import list:
+Introduces a namespace alias into current module scope.
+
+### Named Import
 
 ```vox
 import {name1, name2 as alias2} from "pkg/path"
 ```
 
-Visibility:
+Brings selected exported names directly into current module scope.
 
-```vox
-pub struct S { pub f: i32 }
-pub fn g(x: i32) -> i32 { return x; }
-```
+## Visibility
 
-## Semantics
+- `pub` marks declarations as exportable outside current module/package boundary.
+- non-`pub` items are module-internal.
 
-- Alias imports introduce a module namespace alias.
-- Named imports introduce selected names directly into current module scope.
-- `pub` marks declarations visible to importing modules.
+## Path Resolution
 
-### Import Path Resolution
+Current model:
 
-Current resolution model:
-
-- Import strings are module/package paths (not filesystem-relative to current file).
-- Local package modules are resolved from package source root (`src/**`).
-- Dependency package modules are resolved via package manifest (`vox.toml`) dependency graph.
-- In ambiguous name cases, explicit namespace prefixes are recommended (see internal module/package rules).
+- import string is a module/package path identifier, not a relative filesystem expression.
+- local package modules are resolved from package source roots (for example `src/**`).
+- dependency modules are resolved through `vox.toml` dependency graph.
 
 ## Diagnostics
 
-- malformed import syntax is rejected by parser.
-- duplicate/invalid import alias usage is diagnosed during type checking.
+Parser errors:
+
+- malformed `import` syntax
+- malformed named import list
+
+Type/checker errors:
+
+- unresolved import module or symbol
+- duplicate imported names in same scope
+- invalid visibility usage
 
 ## Example
 
 ```vox
 import "math" as m
 import {a as aa, b} from "util"
+
 pub struct P { pub v: i32 }
 pub fn f(x: i32) -> i32 { return m.add(aa(x), b); }
 fn main() -> i32 { return f(1); }
