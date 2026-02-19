@@ -30,14 +30,27 @@ trait T {
 - `async fn` is lowered to a future-like state machine.
 - `expr.await` polls until ready and yields the output value.
 - `await expr` is accepted as compatibility syntax; `expr.await` is preferred.
-- Await is supported inside expression boundaries currently covered by parser/lowering
-  (including `if`/`match` expression contexts covered by acceptance tests).
+- Await is supported in expression contexts covered by lowering, including:
+  - statement-level awaits,
+  - `if`/`match` expression branches,
+  - try/`?` composition (`expr.await?`),
+  - macro argument positions after normalization.
+
+## Await Operand Model
+
+`await` accepts either:
+
+- Poll-like enum shape with variants `{ Pending, Ready(T) }`, or
+- a type that implements `std/async::Future` with `Output` and `poll` compatible with Poll-like return.
+
+Otherwise type checking rejects the await expression.
 
 ## Lowering Model (User-Visible)
 
 - compiler generates poll/state transitions for async bodies.
 - pending branches preserve continuation state.
 - completion returns `Poll::Ready(output)`-equivalent behavior at runtime layer.
+- await operands must not capture non-static borrows across suspension points.
 
 ## Diagnostics
 
@@ -47,8 +60,10 @@ Parser errors:
 
 Type/lowering errors:
 
-- awaiting non-awaitable/non-future values
-- unsupported await placement in contexts not yet lowered
+- `await can only be used in async fn`
+- `` `await` requires Poll-like enum { Pending, Ready(T) } or std/async::Future impl ``
+- `await operand cannot contain non-static borrow`
+- `await in unsupported statement position`
 - trait async signature/impl mismatch
 
 ## Example
