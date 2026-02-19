@@ -2,47 +2,54 @@
 
 ## Scope
 
+Defines currently supported built-in attributes and FFI annotation syntax.
+
 Coverage IDs: `S701`, `S702`, `S703`, `S704`.
 
-## Syntax
-
-Effect/resource attributes:
+## Grammar (Simplified)
 
 ```vox
-@effect(FsRead)
-@resource(read, Fs)
-fn read() -> i32 { ... }
+Attr
+  := "@effect(" Ident ")"
+   | "@resource(" Ident "," Ident ")"
+   | "@ffi_import(" StringLit "," StringLit ")"
+   | "@ffi_export(" StringLit "," StringLit ")"
+   | "@track_caller"
+
+AttributedFn
+  := Attr* FnDecl
 ```
 
-FFI attributes:
+## Attribute Set
 
-```vox
-@ffi_import("c", "puts")
-fn puts(s: String) -> i32;
+### Effect/Resource
 
-@ffi_export("c", "vox_add")
-fn add(a: i32, b: i32) -> i32 { ... }
-```
+- `@effect(Name)` declares capability metadata on function.
+- `@resource(mode, Name)` declares resource access intent.
 
-Caller tracking:
+### FFI Import/Export
 
-```vox
-@track_caller
-fn who() -> String { ... }
-```
+- `@ffi_import("abi", "symbol")` binds declaration to foreign symbol.
+- `@ffi_export("abi", "symbol")` exports function symbol for foreign linkage.
 
-## Semantics
+### Caller Tracking
 
-- `@effect` and `@resource` annotate function-level capability and resource access metadata.
-- `@ffi_import` binds a declaration to an external symbol.
-- `@ffi_export` exports a function symbol for foreign linkage.
-- `@track_caller` enables caller-site metadata propagation for diagnostics/logging use cases.
+- `@track_caller` enables caller-site metadata propagation.
+
+## Placement Rules
+
+Current enforced rules:
+
+- `@ffi_import`, `@ffi_export`, `@track_caller` are top-level function attributes.
+- unsupported placement (for example impl methods) is rejected.
 
 ## Diagnostics
 
-- `@ffi_import`, `@ffi_export`, and `@track_caller` are restricted to top-level functions.
-- placing those restricted attributes in unsupported contexts (for example impl methods) is rejected.
-- malformed attribute arguments are parse/typecheck errors.
+Parser/type errors include:
+
+- malformed attribute argument list
+- unsupported attribute target placement
+- invalid ABI/symbol usage under FFI checker rules
 
 ## Example
 

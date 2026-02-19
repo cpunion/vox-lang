@@ -2,24 +2,37 @@
 
 ## Scope
 
+Defines `while` loop syntax and behavior.
+
 Coverage ID: `S103`.
 
-## Syntax
+## Grammar (Simplified)
 
 ```vox
-while <cond-expr> { <stmts> }
+WhileStmt
+  := "while" Expr Block
 ```
 
 ## Semantics
 
-- Condition is checked before each iteration.
-- Loop exits when condition becomes false.
-- `break` and `continue` can be used inside loop body.
+- condition is evaluated before each iteration.
+- loop body executes only when condition is `true`.
+- `break` exits loop; `continue` starts next iteration.
+
+## Type Rules
+
+- while condition must be `bool`.
 
 ## Diagnostics
 
-- Malformed condition/body produces parse errors.
-- Condition type mismatch is reported by type checking.
+Parser errors:
+
+- malformed condition/body
+
+Type/check errors:
+
+- non-boolean condition
+- invalid `break`/`continue` usage context
 
 ## Example
 

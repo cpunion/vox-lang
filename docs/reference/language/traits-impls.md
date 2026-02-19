@@ -2,39 +2,80 @@
 
 ## Scope
 
+Defines trait declarations, associated items, impl forms, inherent impls, and negative impl syntax.
+
 Coverage IDs: `S401`, `S402`, `S403`, `S404`, `S405`, `S406`, `S407`.
 
-## Syntax
-
-Trait declaration:
+## Grammar (Simplified)
 
 ```vox
-trait Name[: SuperTrait] {
-  type AssocType;
-  fn method(x: Self) -> Ret;
-  fn defaulted(x: Self) -> Ret { ... }
-}
+TraitDecl
+  := "trait" Ident SuperTraitClause? "{" TraitItem* "}"
+
+SuperTraitClause
+  := ":" TraitPath ("+" TraitPath)*
+
+TraitItem
+  := AssocTypeDecl
+   | TraitMethodDecl
+
+AssocTypeDecl
+  := "type" Ident ";"
+
+TraitMethodDecl
+  := "fn" Ident Signature (";" | Block)
+
+ImplDecl
+  := "impl" GenericParams? TraitPath "for" Type WhereClause? "{" ImplItem* "}"
+
+InherentImplDecl
+  := "impl" GenericParams? Type WhereClause? "{" ImplItem* "}"
+
+NegativeImplDecl
+  := "impl" "!" TraitPath "for" Type "{}"
 ```
 
-Impl forms:
+## Trait Declarations
 
-```vox
-impl Trait for Type { ... }
-impl[T] Trait for Type[T] { ... }
-impl !Trait for Type {}
-```
+- Traits define required method signatures and optional default bodies.
+- Traits may declare associated types.
+- Traits may inherit supertraits (`trait A: B`).
 
-## Semantics
+## Impl Forms
 
-- Trait methods define required behavior contracts for implementers.
-- Default method bodies can be provided in trait definitions.
-- Associated types are bound in concrete impl blocks.
-- Negative impls declare non-implementation for auto-trait-like constraints.
+### Trait Impl
+
+`impl Trait for Type { ... }` provides concrete method/type bindings.
+
+### Generic Trait Impl
+
+`impl[T] Trait for Type[T] { ... }` is supported with optional `where` constraints.
+
+### Inherent Impl
+
+`impl Type { ... }` attaches methods directly to a concrete type (non-trait methods).
+
+### Negative Impl
+
+`impl !Trait for Type {}` declares explicit non-implementation for trait constraints.
+
+## Resolution Notes
+
+- Method lookup may resolve via inherent impl first, then trait context, according to checker rules.
+- UFCS form can disambiguate trait method selection.
 
 ## Diagnostics
 
-- Invalid negative inherent impl forms are rejected (for example `impl !Type {}`).
-- Trait/impl signature mismatches are reported by type checking.
+Parser errors:
+
+- malformed trait/impl headers and items
+- invalid negative impl grammar forms
+
+Type/check errors:
+
+- trait method signature mismatch in impl
+- missing required associated type/method bindings
+- invalid overlapping/conflicting impls under checker rules
 
 ## Example
 
@@ -45,15 +86,15 @@ trait Iter: Base {
   fn next(x: Self) -> Self.Item;
   fn ready(x: Self) -> bool { return true; }
 }
+
 struct I { v: i32 }
+impl I {
+  fn inc(self: Self) -> i32 { return self.v + 1; }
+}
 impl Base for I { fn base(x: I) -> i32 { return x.v; } }
 impl Iter for I {
   type Item = i32;
   fn next(x: I) -> i32 { return x.v; }
-}
-trait Show { fn show(x: Self) -> String; }
-impl[T] Show for Vec[T] {
-  fn show(x: Vec[T]) -> String { return x.len().to_string(); }
 }
 impl !Send for I {}
 ```

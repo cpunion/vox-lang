@@ -2,24 +2,22 @@
 
 ## Scope
 
+Defines async function syntax, await forms, async trait methods, and user-visible lowering behavior.
+
 Coverage IDs: `S501`, `S502`, `S503`, `S504`, `S505`.
 
-## Syntax
-
-Async function:
+## Grammar (Simplified)
 
 ```vox
-async fn name(args...) -> Ret { ... }
+AsyncFnDecl
+  := "async" "fn" Ident Signature Block
+
+AwaitExpr
+  := Expr ".await"
+   | "await" Expr   // compatibility form
 ```
 
-Await expression:
-
-```vox
-expr.await // recommended
-await expr // compatibility form
-```
-
-Async trait method:
+Async method declarations in traits are supported:
 
 ```vox
 trait T {
@@ -29,14 +27,29 @@ trait T {
 
 ## Semantics
 
-- `async fn` returns a future-like value lowered by the compiler.
-- `.await` polls the awaited future and yields the ready value.
-- `await` is supported inside expression boundaries such as `if` and `match` arms.
+- `async fn` is lowered to a future-like state machine.
+- `expr.await` polls until ready and yields the output value.
+- `await expr` is accepted as compatibility syntax; `expr.await` is preferred.
+- Await is supported inside expression boundaries currently covered by parser/lowering
+  (including `if`/`match` expression contexts covered by acceptance tests).
+
+## Lowering Model (User-Visible)
+
+- compiler generates poll/state transitions for async bodies.
+- pending branches preserve continuation state.
+- completion returns `Poll::Ready(output)`-equivalent behavior at runtime layer.
 
 ## Diagnostics
 
-- malformed await expressions (for example `.await` without receiver) are parse errors.
-- invalid await placement or future/type mismatches are type/lowering errors.
+Parser errors:
+
+- malformed await syntax (for example missing receiver)
+
+Type/lowering errors:
+
+- awaiting non-awaitable/non-future values
+- unsupported await placement in contexts not yet lowered
+- trait async signature/impl mismatch
 
 ## Example
 
@@ -44,7 +57,9 @@ trait T {
 trait Work { async fn run(x: Self) -> i32; }
 struct F { v: i32 }
 impl Work for F { async fn run(x: F) -> i32 { return x.v; } }
+
 async fn get() -> i32 { return 1; }
+
 async fn main() -> i32 {
   let x: i32 = get().await;
   let y: i32 = if x > 0 { get().await } else { 0 };

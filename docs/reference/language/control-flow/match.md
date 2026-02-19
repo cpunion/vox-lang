@@ -2,38 +2,54 @@
 
 ## Scope
 
+Defines `match` expression syntax and arm typing behavior.
+
 Coverage ID: `S106`.
 
-## Syntax
+## Grammar (Simplified)
 
 ```vox
-match <scrutinee-expr> {
-  <pattern> => <expr>,
-  ...
-}
+MatchExpr
+  := "match" Expr "{" MatchArmList "}"
+
+MatchArm
+  := Pattern "=>" Expr ","?
 ```
 
-Currently covered pattern subset in syntax acceptance:
+## Pattern Subset (Current Acceptance Coverage)
 
 - literal pattern (for example `1`)
 - wildcard pattern (`_`)
 
 ## Semantics
 
-- Scrutinee is evaluated once.
-- First matching arm is selected.
-- In expression position, all arm expression types must be compatible.
+- scrutinee expression is evaluated once.
+- first matching arm is selected.
+- `match` in expression position yields selected arm value.
+
+## Type Rules
+
+- arm result types must be compatible in expression context.
 
 ## Diagnostics
 
-- Missing arrows/commas/braces produce parse errors.
-- Incompatible arm result types produce type errors.
+Parser errors:
+
+- missing/malformed `=>`, commas, or braces
+
+Type/check errors:
+
+- incompatible arm result types
+- invalid pattern usage under current parser/type rules
 
 ## Example
 
 ```vox
 fn map_flag(v: i32) -> i32 {
-  let m: i32 = match v { 1 => 7, _ => 0 };
+  let m: i32 = match v {
+    1 => 7,
+    _ => 0,
+  };
   return m;
 }
 ```

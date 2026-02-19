@@ -2,39 +2,58 @@
 
 ## Scope
 
+Defines `if` statement and `if` expression forms.
+
 Coverage IDs: `S101`, `S102`.
 
-## Syntax
-
-Statement form:
+## Grammar (Simplified)
 
 ```vox
-if <cond-expr> { <stmts> } else { <stmts> }
-if <cond-expr> { <stmts> } else if <cond-expr> { <stmts> } else { <stmts> }
+IfStmt
+  := "if" Expr Block ("else" IfStmt | "else" Block)?
+
+IfExpr
+  := "if" Expr Block "else" Block
 ```
 
-Expression form:
+## Statement Form
 
 ```vox
-let v: T = if <cond-expr> { <expr> } else { <expr> };
+if cond { ... }
+if cond { ... } else { ... }
+if cond { ... } else if cond2 { ... } else { ... }
 ```
+
+## Expression Form
+
+```vox
+let v: T = if cond { expr1 } else { expr2 };
+```
+
+- expression form requires `else` branch.
+- then/else branch results must be type-compatible.
 
 ## Semantics
 
-- `<cond-expr>` is evaluated first.
-- When condition is true, then-branch executes; otherwise else-branch executes.
-- In expression form, branch result types must be compatible with the expected type.
+- condition expression is evaluated first.
+- condition must type-check as `bool`.
+- exactly one branch executes.
 
 ## Diagnostics
 
-- Missing required blocks or malformed `else` branches produce parse errors.
-- Type mismatch between expression branches produces type errors.
+Parser errors:
+
+- missing/malformed blocks or `else` structure
+
+Type errors:
+
+- non-boolean condition
+- incompatible branch result types in expression context
 
 ## Examples
 
 ```vox
-fn main() -> i32 {
-  let x: i32 = 1;
+fn classify(x: i32) -> i32 {
   if x > 0 {
     return 1;
   } else {

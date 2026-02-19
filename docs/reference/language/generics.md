@@ -2,27 +2,78 @@
 
 ## Scope
 
+Defines generic parameters, const generics, `where` constraints, comptime constraints,
+and current pack syntax surface.
+
 Coverage IDs: `S301`, `S302`, `S303`, `S304`, `S305`, `S306`, `S307`.
 
-## Syntax
+## Grammar (Simplified)
 
-- type parameters: `fn id[T](x: T) -> T`
-- explicit type args: `id[i32](1)`
-- const generics: `fn addn[const N: i32](x: i32) -> i32`
-- trait bounds: `where T: Trait`
-- comptime bounds: `where comptime <expr>`
-- variadic type pack surface syntax: `tail: T...`
+```vox
+GenericParams
+  := "[" GenericParamList "]"
 
-## Semantics
+GenericParam
+  := TypeParam
+   | ConstParam
 
-- Generic functions/types are instantiated with concrete arguments.
-- `where` constraints are checked during type checking.
-- malformed generic argument syntax is rejected at parse stage.
+TypeParam
+  := Ident
+
+ConstParam
+  := "const" Ident ":" Type
+
+WhereClause
+  := "where" WhereItem ("," WhereItem)*
+
+WhereItem
+  := Type ":" Trait
+   | "comptime" Expr
+```
+
+Variadic pack surface syntax (current parser coverage):
+
+```vox
+fn sum[T](head: T, tail: T...) -> T { ... }
+```
+
+## Generic Instantiation
+
+- Generic functions/types are instantiated with concrete type/const arguments.
+- Explicit type arguments are supported (`id[i32](1)`).
+- Const generic arguments are validated against declared const parameter type.
+
+## Constraints
+
+### Trait Bounds
+
+`where T: Trait` requires `T` to satisfy trait implementation.
+
+### Comptime Bounds
+
+`where comptime <expr>` must evaluate to a compile-time truthy condition.
+
+### Impl-Head Constraints
+
+Constraints can appear on impl heads, including comptime predicates.
+
+## Current Limitations
+
+- Pack/type-variadic semantics are partially implemented; syntax surface exists.
+- Advanced specialization ordering beyond current implementation is documented in internal design docs.
 
 ## Diagnostics
 
-- bad bracket/argument structure in generic argument lists is a parse error.
-- unsatisfied bounds are type errors.
+Parser errors:
+
+- malformed generic parameter/argument lists
+- malformed `where` syntax
+
+Type/check errors:
+
+- unsatisfied trait bounds
+- unsatisfied comptime bounds
+- const argument/type mismatches
 
 ## Example
 
@@ -30,6 +81,9 @@ Coverage IDs: `S301`, `S302`, `S303`, `S304`, `S305`, `S306`, `S307`.
 fn id[T](x: T) -> T where T: Eq { return x; }
 fn addn[const N: i32](x: i32) -> i32 where comptime N > 0 { return x + N; }
 fn sum[T](head: T, tail: T...) -> T { return head; }
+
 trait Tag { fn tag(x: Self) -> i32; }
-impl[T] Tag for Vec[T] where comptime @size_of(T) <= 16 { fn tag(x: Vec[T]) -> i32 { return 1; } }
+impl[T] Tag for Vec[T] where comptime @size_of(T) <= 16 {
+  fn tag(x: Vec[T]) -> i32 { return 1; }
+}
 ```
