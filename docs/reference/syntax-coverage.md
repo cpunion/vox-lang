@@ -90,7 +90,7 @@ Status:
 | S902 | builtin macro syntax (`compile!`, `quote expr`, `$x`) | Done | `tests/syntax/src/macros_test.vox` | parser-level coverage |
 | S903 | macro call with explicit generic/const args | Done | `tests/syntax/src/macros_test.vox` | `id[T]!`, `addn[N]!` |
 | S904 | malformed macro call parse failure | Done | `tests/syntax/src/macros_test.vox` | missing `(` after `!` |
-| S905 | builtin introspection macro calls | Done | `tests/syntax/src/macros_test.vox` | `file!/line!/col!/module_path!/func!/caller!` |
+| S905 | builtin introspection macro calls | Done | `tests/syntax/src/macros_test.vox` | `__file!/__line!/__col!/__module_path!/__func!/__caller!` |
 
 ## Planned (Not Merged Yet)
 

@@ -46,19 +46,19 @@ The `!` call form is parsed as macro-call syntax and then handled by macro expan
 ```vox
 compile!(1 + 2)
 quote expr { $x + 1 }
-file!()
-line!()
-col!()
-module_path!()
-func!()
-caller!()
+__file!()
+__line!()
+__col!()
+__module_path!()
+__func!()
+__caller!()
 ```
 
 - `compile!(...)` is compile-time splice syntax.
 - `quote expr { ... }` is parsed as quote sugar.
 - `$x` is parsed as unquote sugar inside quote contexts.
 - introspection builtins return caller/module/source metadata at macro expansion stage:
-  `file!`, `line!`, `col!`, `module_path!`, `func!`, `caller!`.
+  `__file!`, `__line!`, `__col!`, `__module_path!`, `__func!`, `__caller!`.
 
 ## Diagnostics
 
