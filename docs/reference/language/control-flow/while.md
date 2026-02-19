@@ -6,6 +6,8 @@ Defines `while` loop syntax and behavior.
 
 Coverage ID: `S103`.
 
+Related: `docs/reference/language/control-flow/loop.md`.
+
 ## Grammar (Simplified)
 
 ```vox

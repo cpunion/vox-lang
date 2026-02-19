@@ -4,7 +4,7 @@
 
 Defines loop-control statements `break` and `continue`.
 
-Coverage ID: `S105` (partial: dedicated `loop` keyword coverage remains pending).
+Coverage ID: `S105`.
 
 ## Grammar (Simplified)
 
@@ -17,6 +17,7 @@ ContinueStmt := "continue" ";"
 
 - `break` exits nearest enclosing loop.
 - `continue` skips to next iteration of nearest enclosing loop.
+- enclosing loop can be `while ... { ... }` or `loop { ... }`.
 
 ## Context Rules
 
