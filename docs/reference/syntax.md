@@ -41,6 +41,10 @@ fn main() -> i32 {
       s = s + i;
     }
   }
+  while true {
+    s = s + 1;
+    break;
+  }
   let v: i32 = if s > 0 { 1 } else { 0 };
   let m: i32 = match v { 1 => 7, _ => 0 };
   return m;
@@ -87,9 +91,14 @@ impl I {
 trait Add { fn add(self: Self, y: i32) -> i32; }
 impl Add for I { fn add(self: Self, y: i32) -> i32 { return self.v + y; } }
 
+fn add1(x: i32) -> i32 {
+  let y: i32 = { let z: i32 = x + 1; z };
+  return y;
+}
+
 fn main() -> i32 {
   let i: I = I { v: 2 };
-  return i.inc() + Add.add(i, 3);
+  return add1(i.inc()) + Add.add(i, 3);
 }
 ```
 
@@ -108,6 +117,8 @@ Example:
 fn id[T](x: T) -> T where T: Eq { return x; }
 fn addn[const N: i32](x: i32) -> i32 where comptime N > 0 { return x + N; }
 fn sum[T](head: T, tail: T...) -> T { return head; }
+trait Tag { fn tag(x: Self) -> i32; }
+impl[T] Tag for Vec[T] where comptime @size_of(T) <= 16 { fn tag(x: Vec[T]) -> i32 { return 1; } }
 ```
 
 For precise status by syntax ID, see `docs/reference/syntax-coverage.md`.

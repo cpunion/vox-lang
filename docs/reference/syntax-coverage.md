@@ -26,8 +26,7 @@ Status:
 | S101 | if/else statement | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S102 | if-expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S103 | while loop | Done | `tests/syntax/src/control_flow_test.vox` |  |
-| S104 | for-in loop | Planned | - | not covered in merged tests yet |
-| S105 | break/continue | Done | `tests/syntax/src/control_flow_test.vox` | `loop` keyword coverage pending |
+| S105 | break/continue | Partial | `tests/syntax/src/control_flow_test.vox` | `loop` keyword coverage pending |
 | S106 | match expression | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S107 | malformed control-flow parse failure | Done | `tests/syntax/src/control_flow_test.vox` |  |
 | S201 | function declaration and return | Done | `tests/syntax/src/functions_test.vox` |  |
@@ -53,6 +52,7 @@ Status:
 
 | ID | Description | Status |
 |---|---|---|
+| S104 | for-in loop | Planned |
 | S401-S407 | traits and impls syntax coverage module | Planned |
 | S501-S505 | async syntax coverage module | Planned |
 | S601-S604 | modules/imports syntax coverage module | Planned |
