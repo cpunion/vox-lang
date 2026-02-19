@@ -128,7 +128,7 @@ Stage2（编译器内部类型池）补充说明：
 说明：
 
 - `and/or/not` 是对 **已求值** 的 `bool` 值进行运算，不具备短路行为。
-- 源码层的 `&&/||` 具备短路语义（见 `docs/14-syntax-details.md`），在 lowering 时应使用 CFG（`condbr` + blocks）来实现。
+- 源码层的 `&&/||` 具备短路语义（见 `docs/internal/14-syntax-details.md`），在 lowering 时应使用 CFG（`condbr` + blocks）来实现。
 
 ### 5.4.1 数值转换（cast）
 

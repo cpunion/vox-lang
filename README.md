@@ -117,7 +117,7 @@ vox version | --version | -V
 
 ## 平台支持
 
-见 `docs/16-platform-support.md`。当前目标平台：
+见 `docs/internal/16-platform-support.md`。当前目标平台：
 
 - Linux: `linux-x86` / `linux-amd64` / `linux-arm64`
 - macOS: `darwin-amd64` / `darwin-arm64`
@@ -162,18 +162,18 @@ vox toolchain pin v0.2.10
 
 建议阅读顺序：
 
-1. `docs/00-overview.md`
-2. `docs/README.md`
-3. `docs/15-toolchain.md`
-4. `docs/16-platform-support.md`
-5. `docs/24-release-process.md`
+1. `docs/internal/00-overview.md`
+2. `docs/internal/README.md`
+3. `docs/internal/15-toolchain.md`
+4. `docs/internal/16-platform-support.md`
+5. `docs/internal/24-release-process.md`
 
 语言规范与实现细节：
 
-- `docs/01-type-system.md`
-- `docs/07-memory-management.md`
-- `docs/09-async-model.md`
-- `docs/10-macro-system.md`
-- `docs/17-ffi-interop.md`
-- `docs/19-ir-spec.md`
-- `docs/28-vox-libraries.md`
+- `docs/internal/01-type-system.md`
+- `docs/internal/07-memory-management.md`
+- `docs/internal/09-async-model.md`
+- `docs/internal/10-macro-system.md`
+- `docs/internal/17-ffi-interop.md`
+- `docs/internal/19-ir-spec.md`
+- `docs/internal/28-vox-libraries.md`

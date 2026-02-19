@@ -34,7 +34,7 @@
 - `T`：拥有值（move 语义 + RAII drop）。`String/Vec` 也属于 `T`，只是内部持有堆资源。
 - `Box[T]`：唯一堆所有权（move-only）。
 - `Arc[T]` / `Weak[T]`：共享堆所有权（引用计数）。
-- `&T` / `&mut T`：借用引用（**Vox 中为临时引用**，不能长期保存/返回/捕获；见 `docs/07-memory-management.md`）。
+- `&T` / `&mut T`：借用引用（**Vox 中为临时引用**，不能长期保存/返回/捕获；见 `docs/internal/07-memory-management.md`）。
 - `&'static T`：允许长期保存（唯一允许的显式 lifetime 标注）。
 
 ### 2) 字符串与切片
@@ -52,7 +52,7 @@ Vox 允许在编译期解释执行一段受限的程序，目标包括：
 - 类型反射（查询字段/布局/类型类别等）
 - 受控的代码生成（配合 AST 宏）
 
-细节见 `docs/04-generics-comptime.md` 与 `docs/05-comptime-detailed.md`。
+细节见 `docs/internal/04-generics-comptime.md` 与 `docs/internal/05-comptime-detailed.md`。
 
 ### 4) 表达式块（Block Expression）
 
@@ -82,4 +82,4 @@ let z: i32 = match v {
 
 ## 文档结构
 
-规范拆分按编号组织，参考 `docs/README.md`。
+规范拆分按编号组织，参考 `docs/internal/README.md`。

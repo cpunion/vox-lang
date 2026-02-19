@@ -1,7 +1,7 @@
 # Stage2 Backlog (1-12)
 
 Status: **archived (closed)**.
-Canonical closure + gate: `docs/archive/25-p0p1-closure.md`, `make test-p0p1`.
+Canonical closure + gate: `docs/internal/archive/25-p0p1-closure.md`, `make test-p0p1`.
 
 This file was the active burn-down list for compiler.  
 Rule: complete one item end-to-end (code + tests + commit), then move to the next.

@@ -55,4 +55,4 @@ const N: usize = size_of(i64);
 ## 与宏系统的关系
 
 - `comptime` 用于“编译期计算/反射/选择分支/生成数据”。
-- AST 宏用于“生成语法树/声明/表达式”等结构（见 `docs/10-macro-system.md`）。
+- AST 宏用于“生成语法树/声明/表达式”等结构（见 `docs/internal/10-macro-system.md`）。
