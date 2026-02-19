@@ -30,6 +30,7 @@ Topic docs:
 
 Control-flow docs (one structure per document):
 
+- `docs/reference/language/control-flow/README.md` (entrypoint)
 - `docs/reference/language/control-flow/if.md`
 - `docs/reference/language/control-flow/while.md`
 - `docs/reference/language/control-flow/for-in.md`
