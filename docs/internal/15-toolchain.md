@@ -76,7 +76,7 @@ make release-dry-run VERSION=v0.2.0-rc1
 make release-verify VERSION=v0.2.0-rc1
 ```
 
-详见：`docs/24-release-process.md`。
+详见：`docs/internal/24-release-process.md`。
 
 ### 新增 intrinsic 的两阶段策略
 

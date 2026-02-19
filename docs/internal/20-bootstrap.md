@@ -27,4 +27,4 @@
 - 产物构建：`scripts/release/build-release-bundle.sh`
 - 产物校验：`scripts/release/verify-release-bundle.sh`
 
-详见：`docs/24-release-process.md`。
+详见：`docs/internal/24-release-process.md`。

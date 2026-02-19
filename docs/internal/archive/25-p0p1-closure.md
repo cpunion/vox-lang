@@ -12,7 +12,7 @@ This gate is wired in `Makefile` and `scripts/ci/verify-p0p1.sh`.
 
 ## Why The 1-12 List Kept Reappearing
 
-1. There was no single closure command; completion was spread across `docs/archive/22-backlog.md`, `docs/archive/23-backlog-next.md`, and several test suites.
+1. There was no single closure command; completion was spread across `docs/internal/archive/22-backlog.md`, `docs/internal/archive/23-backlog-next.md`, and several test suites.
 2. Follow-up planning mixed “already-closed 1-12” with other roadmap work, so the same scope was repeatedly re-listed.
 3. No explicit “archived + verified by command” convention existed for this batch.
 
@@ -45,6 +45,6 @@ This gate is wired in `Makefile` and `scripts/ci/verify-p0p1.sh`.
 
 ## Policy
 
-- `docs/archive/22-backlog.md` and `docs/archive/23-backlog-next.md` are archived for this batch.
+- `docs/internal/archive/22-backlog.md` and `docs/internal/archive/23-backlog-next.md` are archived for this batch.
 - If the gate passes, 1-12 stay closed.
 - New work must open as a new list, not by re-listing 1-12.

@@ -7,8 +7,8 @@ Purpose:
 - Closed batches must not be re-listed here.
 
 Do-not-relist batches:
-- `docs/archive/25-p0p1-closure.md` (items 1-12 closed)
-- `docs/archive/26-closure-1-4-7-9.md` (items 1-4/7-9 closed)
+- `docs/internal/archive/25-p0p1-closure.md` (items 1-12 closed)
+- `docs/internal/archive/26-closure-1-4-7-9.md` (items 1-4/7-9 closed)
 
 ## Why Tasks Repeated Before
 
@@ -29,32 +29,32 @@ Governance from now on:
 - [x] A08 Async cancel/drop 语义细化（先完成可验证基线）
   - [x] A08-1 增加 cancel 路径顺序保证回归：`cancel_cleanup*` 必须先于 `cancel_return*` 生成。
   - [x] A08-2 增加 cleanup-only 路径回归：仅有 `cancel_cleanup` 时仍走默认可恢复返回，不回退 panic。
-  - Source: `docs/09-async-model.md`.
+  - Source: `docs/internal/09-async-model.md`.
 
 - [x] A09 宏展开回退路径收敛（减少静默 fallback）
   - [x] A09-1 `name!(...)` 已定位到目标模块但 callee 缺失时，macroexpand 直接报错（不再降级为 call sugar）。
   - [x] A09-2 增加对应回归测试与文档同步。
-  - Source: `docs/10-macro-system.md`.
+  - Source: `docs/internal/10-macro-system.md`.
 
 - [x] A10 specialization 冲突诊断增强
   - [x] A10-1 impl overlap 报错补充 `rank_trace`，稳定展示“更特化/不可比较”关系。
   - [x] A10-2 typecheck/compile 回归覆盖 `rank_trace` 文案。
-  - Source: `docs/06-advanced-generics.md`.
+  - Source: `docs/internal/06-advanced-generics.md`.
 
 - [x] A11 泛型 pack 限制策略收敛
   - [x] A11-1 `type pack arity exceeds materialization limit` 文案统一到 `typecheck` 单一函数出口，移除重复拼接。
   - [x] A11-2 typecheck/const-eval/irgen 统一复用同一 limit+error 文案。
-  - Source: `docs/06-advanced-generics.md`.
+  - Source: `docs/internal/06-advanced-generics.md`.
 
 - [x] A12 `vox/internal/*` 下沉继续推进
   - [x] A12-1 CLI 主流程复用 `vox/internal/text.trim_space`，移除 `src/main.vox` 重复实现。
-  - Source: `docs/28-vox-libraries.md`.
+  - Source: `docs/internal/28-vox-libraries.md`.
 
 - [x] A13 规范与实现一致性修正
-  - [x] A13-1 `docs/09-async-model.md` 示例签名与当前 `EventRuntime` 默认行为一致。
-  - [x] A13-2 `docs/14-syntax-details.md` 成员调用说明更新为 trait/impl 已支持现状。
-  - [x] A13-3 `docs/10-macro-system.md` 补充 missing-callee 直错规则。
-  - Source: `docs/09-async-model.md`, `docs/14-syntax-details.md`, `docs/10-macro-system.md`.
+  - [x] A13-1 `docs/internal/09-async-model.md` 示例签名与当前 `EventRuntime` 默认行为一致。
+  - [x] A13-2 `docs/internal/14-syntax-details.md` 成员调用说明更新为 trait/impl 已支持现状。
+  - [x] A13-3 `docs/internal/10-macro-system.md` 补充 missing-callee 直错规则。
+  - Source: `docs/internal/09-async-model.md`, `docs/internal/14-syntax-details.md`, `docs/internal/10-macro-system.md`.
 
 - [x] A14 Async 事件驱动执行器（epoll/kqueue/IOCP + 多源就绪队列）
   - [x] A14-0 发布链路前置解锁（rolling bootstrap 两阶段）
@@ -68,28 +68,28 @@ Governance from now on:
   - [x] A14-2 事件源抽象与多源就绪队列（为 epoll/kqueue/IOCP 统一接口做准备）。
     - Baseline landed: `EventSource` + `ReadyPoll` + `ReadyQueue` and queue bridge helpers in `std/async`.
   - [x] A14-3 平台实现补齐与回归（linux/macOS/windows + wasm 行为约束）。
-    - Landed: wake runtime platform constraints documented in `docs/16-platform-support.md` and locked by codegen regressions in `src/vox/codegen/c_emit_test.vox`.
+    - Landed: wake runtime platform constraints documented in `docs/internal/16-platform-support.md` and locked by codegen regressions in `src/vox/codegen/c_emit_test.vox`.
   - Scope: 在保持现有 `Runtime` trait 兼容前提下，把 `EventRuntime` 从 timeout-yield 基线升级为真正事件驱动。
-  - Source: `docs/09-async-model.md`, `docs/29-async-expr-await.md`.
+  - Source: `docs/internal/09-async-model.md`, `docs/internal/29-async-expr-await.md`.
 
 - [x] A15 Async 事件源多 context 扫描接线基线
   - [x] A15-1 `std/async` 新增 `drain_ready_once`，将多个 `Context` 的单轮 `EventSource.wait` 结果统一入 `ReadyQueue`，减少宿主重复样板。
     - Landed in `src/std/async/async.vox` + `src/std/async/async_test.vox`.
-  - Source: `docs/09-async-model.md`.
+  - Source: `docs/internal/09-async-model.md`.
 
 - [x] A16 Async cancel/drop 细化：frame 重绑定钩子
   - [x] A16-1 async entry/test wrapper 在取消分支新增可选 `cancel_drop_with/cancel_drop` 调用，并固定顺序为 `cancel_drop -> cancel_cleanup -> cancel_return`。
     - Landed in `src/vox/compile/compile.vox` with regressions in `src/vox/compile/async_test.vox`.
   - [x] A16-2 `std/async` 增加默认 no-op 的 `cancel_drop_with/cancel_drop`，并补标准库回归。
     - Landed in `src/std/async/async.vox` + `src/std/async/async_test.vox`.
-  - Source: `docs/09-async-model.md`.
+  - Source: `docs/internal/09-async-model.md`.
 
 - [x] A17 Thread-safety marker negative impl（`!Send/!Sync`）
   - [x] A17-1 语法层支持 `impl !Trait for Type {}`（当前用于 `Send/Sync`）。
     - Landed in `src/vox/ast/ast.vox`, `src/vox/parse/parse.vox`, `src/vox/parse/parse_test.vox`.
   - [x] A17-2 语义层支持 negative impl 覆盖自动推导，并禁止 `Send/Sync` 的手写正向 impl。
     - Landed in `src/vox/typecheck/collect_traits_impls.vox`, `src/vox/typecheck/sym_lookup.vox`, `src/vox/typecheck/typecheck_test.vox`, `src/vox/compile/misc_test.vox`.
-  - Source: `docs/08-thread-safety.md`, `docs/14-syntax-details.md`.
+  - Source: `docs/internal/08-thread-safety.md`, `docs/internal/14-syntax-details.md`.
 
 - [x] A01 Real generic pack expansion (type/value packs), not declaration-only.
   - [x] A01-1 Trailing explicit type args can bind a single trailing type pack.
@@ -103,7 +103,7 @@ Governance from now on:
       - [x] Heterogeneous pack participation in bounds/where clauses is supported (trait bounds + comptime where reflect).
   - [x] A01-3 Value pack expansion and call-site lowering coherence.
     - Verified by pack-call/vec-call dual-mode tests in `src/vox/typecheck/typecheck_test.vox` and `src/vox/compile/compile_test.vox`.
-  - Source: `docs/06-advanced-generics.md`.
+  - Source: `docs/internal/06-advanced-generics.md`.
 
 - [x] A02 String/borrow model convergence from transitional `String/str` aliasing to compiler-stable borrow constraints and diagnostics.
   - [x] A02-1 Bare `str` is now rejected; use `String` for owned text and `&str`/`&'static str` for borrow-position text.
@@ -117,7 +117,7 @@ Governance from now on:
   - [x] A02-5 Call-arg mismatch diagnostics are now borrow-aware: expected type text preserves borrow form (`&T`/`&mut T`/`&'static T`/`&'static mut T`) instead of showing erased base type.
     - Covered in `src/vox/typecheck/tc_call.vox`, `src/vox/typecheck/typecheck_test.vox`, and `src/vox/compile/compile_test.vox`.
   - [x] A02-6 closure note: borrow remains signature-metadata based in this stage; first-class borrow IR/type representation is deferred to `D06`.
-  - Sources: `docs/13-standard-library.md`, `docs/20-bootstrap.md`, `docs/19-ir-spec.md`.
+  - Sources: `docs/internal/13-standard-library.md`, `docs/internal/20-bootstrap.md`, `docs/internal/19-ir-spec.md`.
 
 - [x] A03 Runtime memory model convergence (compiler scope).
   - [x] A03-1 Runtime tracked allocations now support early release via `vox_rt_free`; non-escaping temp path buffers in `mkdir_p`/`walk_vox_files` are released eagerly instead of waiting for process exit.
@@ -131,12 +131,12 @@ Governance from now on:
   - [x] A03-5 Sync-handle registry nodes now use tracked runtime allocation (`vox_rt_malloc/vox_rt_free`), so undisposed-handle paths do not leave untracked registry memory behind.
     - Covered in `src/vox/codegen/c_runtime.vox` and `src/vox/codegen/c_emit_test.vox`.
   - [x] A03-6 closure note: full ownership/move/drop for general values/containers is deferred to `D07` to keep rolling-bootstrap stable.
-  - Source: `docs/20-bootstrap.md`.
+  - Source: `docs/internal/20-bootstrap.md`.
 
 - [x] A04 Package registry remoteization.
   - [x] A04-1 Registry dependencies now support remote git-backed registry roots (`git+...`/URL/`.git`) with clone/fetch cache under `.vox/deps/registry_remote`, then resolve `name/version` from cached checkout.
     - Covered in `src/main.vox`; historical selfhost integration evidence is archived.
-  - Source: `docs/11-package-management.md`.
+  - Source: `docs/internal/11-package-management.md`.
 
 ### P1
 
@@ -144,7 +144,7 @@ Governance from now on:
   - [x] A05-1 Expression-site macro execution is now strictly typed: macro fns returning `AstStmt/AstItem` are rejected at expression macro call sites with deterministic diagnostics (`macro call requires AstExpr or AstBlock return type; got ...`).
     - Covered in `src/vox/macroexpand/macroexpand.vox`, `src/vox/macroexpand/user_macro_inline.vox`, and tests in `src/vox/macroexpand/macroexpand_test.vox`.
   - [x] A05-2 Statement-site `name!(...)`/`compile!(...)` now accepts `AstStmt` return type (direct `ExprStmt` positions), while expression sites remain `AstExpr/AstBlock`-only.
-  - Source: `docs/10-macro-system.md`.
+  - Source: `docs/internal/10-macro-system.md`.
 
 - [x] A06 Diagnostics span coverage completion (remaining weak paths in typecheck/irgen).
   - [x] A06-1 Call-site diagnostics now emit concrete reasons for argument/type-arg failures instead of generic `typecheck failed` in common paths.
@@ -154,22 +154,22 @@ Governance from now on:
     - Covered in `src/vox/typecheck/tc_member.vox`, `src/vox/typecheck/tc_struct_lit.vox`, `src/vox/typecheck/tc_expr.vox` with paired tests in typecheck/compile suites.
   - [x] A06-4 Enum constructor diagnostics (`.Variant(...)` and `Enum.Variant(...)`) now emit explicit unknown-variant/arity/arg-mismatch/result-mismatch errors.
     - Covered in `src/vox/typecheck/tc_call.vox` with paired tests in `src/vox/typecheck/typecheck_test.vox` and `src/vox/compile/compile_test.vox`.
-  - Source: `docs/18-diagnostics.md`.
+  - Source: `docs/internal/18-diagnostics.md`.
 
 - [x] A07 Specialization rule strengthening (where-strength/ordering edge cases).
   - [x] A07-1 Reject impl head type params that are unconstrained by `for` target type; this removes ambiguous overlap that can be introduced only via extra impl-head params/bounds.
     - Covered in `src/vox/typecheck/collect_traits_impls.vox` with paired tests in `src/vox/typecheck/generics_test.vox` and `src/vox/compile/compile_test.vox`.
-  - Source: `docs/06-advanced-generics.md`.
+  - Source: `docs/internal/06-advanced-generics.md`.
 
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.
   - Landed: build/test/run/install accept `--target`; parser supports GNU/MinGW + MSVC Windows triples; codegen chooses toolchain/flags/link options by target and compiler family.
-  - Source: `docs/16-platform-support.md`.
+  - Source: `docs/internal/16-platform-support.md`.
 
 - [x] D02 Thread-safety model (`Send/Sync` auto-derivation policy).
   - Stage2 baseline landed: marker traits in `std/prelude` + auto-derivation for scalars/String/Vec/Range/struct/enum; type params still require explicit bounds; `impl !Send/!Sync` supported and explicit positive `impl Send/Sync` rejected.
-  - Source: `docs/08-thread-safety.md`.
+  - Source: `docs/internal/08-thread-safety.md`.
 
 - [x] D03 Async model.
   - [x] D03-1 词法/语法前置：保留 `async`/`await` 关键字，`async fn` AST 标记接入。
@@ -185,8 +185,8 @@ Governance from now on:
   - [x] D03-4 借用跨 `await` 约束与诊断。
   - [x] D03-5 `await` in general expression control-flow (`try`/`match`/macro args).
     - Landed: async normalization now supports `await` in nested `if`/`match`/`try` expression control-flow and macro-call args, with compile/typecheck regressions in `src/vox/compile/async_test.vox` and `src/vox/typecheck/async_test.vox`.
-    - See: `docs/29-async-expr-await.md`.
-  - Source: `docs/09-async-model.md`.
+    - See: `docs/internal/29-async-expr-await.md`.
+  - Source: `docs/internal/09-async-model.md`.
 
 - [x] D04 Effect/resource system.
   - [x] D04-1 Effect baseline landed:
@@ -208,20 +208,20 @@ Governance from now on:
       - [x] `vox/list` 基线 effect class 分类输出：模块级/函数级新增 `effect_classes`（当前按 effect 命名约定映射 `IO/GPU/Async/Other`）。
       - [x] `vox/list` 基线执行器 lane 建议输出：`executor_lanes`（`class/executor/modules`），用于外部调度器按 effect class 分流。
       - [x] `vox/list` 基线模块调度提示输出：`module_schedule_hints`（`parallel_ok/serial_guarded`），结合资源冲突给出保守串并行建议。
-  - Source: `docs/00-overview.md`.
+  - Source: `docs/internal/00-overview.md`.
 
 - [x] D05 FFI/WASM detailed ABI/attribute model.
   - [x] D05-1 统一属性签名与约束（位置/组合/泛型/符号唯一性）。
   - [x] D05-2 ABI 白名单与类型映射明确化（C 后端基线）。
   - [x] D05-3 wasm import/export 代码生成别名规则与 target 运行约束文档化。
-  - Source: `docs/17-ffi-interop.md`.
+  - Source: `docs/internal/17-ffi-interop.md`.
 
 - [x] D06 First-class borrow IR/type representation (`&T`/`&str` non-erased types, borrow-aware IR ops).
   - [x] D06-1 Type-pool level borrow representation landed: `ir::TyKind.Ref` + `resolve_type` preserves `&T/&mut T/&'static T/&'static mut T` and reflection (`@type_name/@type`) can observe borrow shape.
   - [x] D06-2 Stage2 bootstrap boundary updated: irgen now preserves `Ref` in IR signatures/slots/calls, while `Range` continues to lower to base + `range_check` for v0 stability.
   - [x] D06-3 Borrow-aware IR/codegen landed: codegen `Ref` transparent type mapping + compare/nominal-eq borrow-aware unwrapping, with regression tests for IR signature preservation and `&str` compare codegen.
   - Extracted from A02 closure note.
-  - Source: `docs/19-ir-spec.md`, `docs/13-standard-library.md`.
+  - Source: `docs/internal/19-ir-spec.md`, `docs/internal/13-standard-library.md`.
 
 - [x] D07 Full ownership/move/drop semantics for general values/containers.
   - [x] D07-1 Remove bootstrap-safe `std/collections/map` fallback: switch to direct `Vec.set/remove/clear` implementation and keep `bootstrap -> compiler` gate green.
@@ -239,4 +239,4 @@ Governance from now on:
     - [x] D07-3g UFCS release parity: `Release.release(x)` now participates in move-source detection with the same moved-value diagnostics/self-rebind behavior as `release(x)` and `x.release()`.
     - [x] D07-3h Multi-source release tracking: expressions containing multiple release paths now mark all consumed roots (including call-arg fanout and `assign field` RHS), so moved diagnostics are not silently dropped for later sources.
   - Extracted from A03 closure note.
-  - Source: `docs/20-bootstrap.md`.
+  - Source: `docs/internal/20-bootstrap.md`.

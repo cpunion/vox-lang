@@ -11,7 +11,7 @@
   - 名称以 `test_` 开头
   - 必须是 `fn test_xxx() -> ()`（无参数，返回 unit）
 
-CLI（见 `docs/15-toolchain.md`）：
+CLI（见 `docs/internal/15-toolchain.md`）：
 
 ```bash
 vox test

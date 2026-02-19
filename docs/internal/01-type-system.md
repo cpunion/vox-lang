@@ -184,7 +184,7 @@ fn identity[T](x: T) -> T { x }
 struct Pair[T, U] { first: T, second: U }
 ```
 
-Const 泛型（细节见 `docs/06-advanced-generics.md`）：
+Const 泛型（细节见 `docs/internal/06-advanced-generics.md`）：
 
 ```vox
 struct Array[T, const N: usize] {

@@ -18,4 +18,4 @@
 当前边界：
 
 - 不支持 `unsafe impl Send/Sync` 这类手工承诺模型。
-- 更深层的借用/所有权收敛与并发内存模型仍在后续阶段推进（见 `docs/27-active-backlog.md` 的 `D06/D07`）。
+- 更深层的借用/所有权收敛与并发内存模型仍在后续阶段推进（见 `docs/internal/27-active-backlog.md` 的 `D06/D07`）。

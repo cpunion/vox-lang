@@ -21,7 +21,7 @@ Supported:
   - `match` expressions (including arm bodies)
   - macro call arguments
 
-This closes D03-5 scope from `docs/27-active-backlog.md`.
+This closes D03-5 scope from `docs/internal/27-active-backlog.md`.
 
 ## Why These Are Hard In The Current Pipeline
 

@@ -12,7 +12,7 @@
 
 `if else match for while loop break continue return await`
 
-说明：`async`/`await` 已启用（见 `docs/09-async-model.md`）。推荐语法为 `e.await`（也保留 `await e` 作为兼容）。
+说明：`async`/`await` 已启用（见 `docs/internal/09-async-model.md`）。推荐语法为 `e.await`（也保留 `await e` 作为兼容）。
 
 绑定与可变性：
 
@@ -49,7 +49,7 @@
   - const 泛型调用（显式 const 实参）：`addn[3](4)`
   - pack/variadic 语法（Stage2 当前实现）：`fn zip[T...](xs: T...) -> i32 { ... }`
     - `xs: T...` 会在类型检查阶段降级为 `Vec[T]`，并可进入 IR/codegen。
-    - `T...`（type param pack 声明）支持实质参与类型系统：可进行异构逐位置物化与 `Pack.N` 投影（细节见 `docs/06-advanced-generics.md`）。
+    - `T...`（type param pack 声明）支持实质参与类型系统：可进行异构逐位置物化与 `Pack.N` 投影（细节见 `docs/internal/06-advanced-generics.md`）。
 
 ## Trait 语法（当前版本）
 
@@ -494,7 +494,7 @@ match x {
 
 为配合“临时借用”规则：
 
-- 非 `&'static` 的 `&T` / `&mut T` 不允许出现在 struct 字段与返回类型中（详见 `docs/07-memory-management.md`）
+- 非 `&'static` 的 `&T` / `&mut T` 不允许出现在 struct 字段与返回类型中（详见 `docs/internal/07-memory-management.md`）
 - Stage2 当前已在 typecheck 强制上述位置约束；借用形状在类型系统/IR 中保留为 `Ref`。
 
 ## 成员访问（`.`）
