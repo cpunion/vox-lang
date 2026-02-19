@@ -10,6 +10,7 @@ Topic docs:
 - `docs/reference/language/types.md`
 - `docs/reference/language/operators.md`
 - `docs/reference/language/functions.md`
+- `docs/reference/language/modules-imports.md`
 - `docs/reference/language/generics.md`
 - `docs/reference/language/traits-impls.md`
 - `docs/reference/language/async-await.md`
