@@ -37,6 +37,7 @@ Current declaration coverage supports tuple-style payload variants and unit vari
 - Constructor call form: `Option[i32].Some(1)`.
 - Unit variant form: `Option[i32].None`.
 - Match patterns use qualified variant names (for example `Option.Some(x)`).
+  Generic arguments are typically inferred from the matched value and can be omitted.
 
 ## Diagnostics
 
