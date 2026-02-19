@@ -2236,6 +2236,46 @@ fn main() -> i32 {
   t.assert_with(cond_true, "loop condition should lower to bool true");
 }
 
+fn test_parse_for_in_stmt_lowers_to_block_while_len_get() -> () {
+  let src: String = """
+fn main() -> i32 {
+  let mut xs: Vec[i32] = Vec();
+  xs.push(1);
+  xs.push(2);
+  let mut s: i32 = 0;
+  for x in xs {
+    s = s + x;
+  }
+  return s;
+}
+""";
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(ok(r.err));
+
+  let f: ast.FuncDecl = r.prog.funcs.get(0);
+  t.assert_eq(f.body.stmts.len(), 6);
+  let st_for: ast.Stmt = f.body.stmts.get(4);
+  let exprs: ast.ExprPool = r.prog.exprs;
+
+  let lowered_block: i32 = match st_for { ast.Stmt.ExprStmt(_sp, eid) => eid, _ => -1 };
+  t.assert_with(lowered_block >= 0, "for-in should lower to ExprStmt(Block)");
+  let block_ok: bool = match ast.expr_pool_get(exprs, lowered_block) {
+    ast.ExprNode.Block(b) =>
+      b.stmts.len() == 3 &&
+        match b.stmts.get(0) { ast.Stmt.Let(_sp, _m, n, _ha, _ann, _init) => contains(n, "__vox_for_iter_"), _ => false } &&
+        match b.stmts.get(1) { ast.Stmt.Let(_sp, m, n, _ha, _ann, _init) => m && contains(n, "__vox_for_idx_"), _ => false } &&
+        match b.stmts.get(2) {
+          ast.Stmt.WhileStmt(_sp, cond, wb) =>
+            wb.stmts.len() >= 2 &&
+              match wb.stmts.get(0) { ast.Stmt.Let(_sp2, _m2, n2, _ha2, _ann2, _init2) => n2 == "x", _ => false } &&
+              match ast.expr_pool_get(exprs, cond) { ast.ExprNode.Binary(ast.BinaryOp.Lt, _l, _r) => true, _ => false },
+          _ => false,
+        },
+    _ => false,
+  };
+  t.assert_with(block_ok, "for-in lowering block shape mismatch");
+}
+
 fn test_parse_if_expr() -> () {
   // if-expression: `if cond { expr } else { expr }`
   let src: String = "fn main(x: i32) -> i32 {\n  let y: i32 = if x < 3 { 1 } else { 2 };\n  return if y < 0 { 0 } else { y };\n}";

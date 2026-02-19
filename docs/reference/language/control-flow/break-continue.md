@@ -17,7 +17,7 @@ ContinueStmt := "continue" ";"
 
 - `break` exits nearest enclosing loop.
 - `continue` skips to next iteration of nearest enclosing loop.
-- enclosing loop can be `while ... { ... }` or `loop { ... }`.
+- enclosing loop can be `while ... { ... }`, `loop { ... }`, or `for ... in ... { ... }`.
 
 ## Context Rules
 

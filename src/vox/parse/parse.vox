@@ -955,6 +955,7 @@ fn parse_expr_block(p: Parser) -> ParseExprResult {
     let is_stmt: bool =
       kind_is(k, lex.TokenKind.KwLet) ||
       (kind_is(k, lex.TokenKind.KwIf) && !if_expr_has_else_ahead(q)) ||
+      kind_is(k, lex.TokenKind.KwFor) ||
       kind_is(k, lex.TokenKind.KwWhile) ||
       kind_is(k, lex.TokenKind.KwLoop) ||
       kind_is(k, lex.TokenKind.KwBreak) ||
@@ -1810,6 +1811,90 @@ fn parse_stmt(p: Parser) -> ParseStmtResult {
       }
     }
     return ParseStmtResult { p: q, st: ast.Stmt.IfStmt(sp0, r2.id, r3.b, has_else, else_b) };
+  }
+  if kind_is(k, lex.TokenKind.KwFor) {
+    // Surface sugar:
+    //   for x in xs { body }
+    // lowers to:
+    //   {
+    //     let __vox_for_iter_<line>_<col> = xs;
+    //     let mut __vox_for_idx_<line>_<col> = 0;
+    //     while __vox_for_idx_<line>_<col> < __vox_for_iter_<line>_<col>.len() {
+    //       let x = __vox_for_iter_<line>_<col>.get(__vox_for_idx_<line>_<col>);
+    //       body
+    //       __vox_for_idx_<line>_<col> = __vox_for_idx_<line>_<col> + 1;
+    //     }
+    //   }
+    let ar_for: AdvanceResult = advance(p);
+    let rn: ParseIdentResult = parse_ident(ar_for.p);
+    let ar_in: AdvanceResult = expect(rn.p, lex.TokenKind.KwIn);
+    let r_iter: ParseExprResult = parse_expr(ar_in.p, 0);
+    let r_body: ParseBlockResult = parse_block(r_iter.p);
+    let mut q: Parser = r_body.p;
+
+    let suffix: String = sp0.line.to_string().concat("_").concat(sp0.col.to_string());
+    let iter_name: String = "__vox_for_iter_".concat(suffix);
+    let idx_name: String = "__vox_for_idx_".concat(suffix);
+    let dummy_ty: ast.TypeName = ast.TypeName { parts: Vec(), args: Vec() };
+
+    let st_iter: ast.Stmt = ast.Stmt.Let(sp0, false, iter_name, false, dummy_ty, r_iter.id);
+
+    let add_zero: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Int("0"), sp0);
+    q.exprs = add_zero.pool;
+    let st_idx: ast.Stmt = ast.Stmt.Let(sp0, true, idx_name, false, dummy_ty, add_zero.id);
+
+    let add_idx_cond: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Ident(idx_name), sp0);
+    q.exprs = add_idx_cond.pool;
+    let add_iter_len_recv: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Ident(iter_name), sp0);
+    q.exprs = add_iter_len_recv.pool;
+    let add_len_member: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Member(add_iter_len_recv.id, "len"), sp0);
+    q.exprs = add_len_member.pool;
+    let add_len_call: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Call(add_len_member.id, Vec(), Vec()), sp0);
+    q.exprs = add_len_call.pool;
+    let add_cond: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Binary(ast.BinaryOp.Lt, add_idx_cond.id, add_len_call.id), sp0);
+    q.exprs = add_cond.pool;
+
+    let add_iter_get_recv: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Ident(iter_name), sp0);
+    q.exprs = add_iter_get_recv.pool;
+    let add_get_member: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Member(add_iter_get_recv.id, "get"), sp0);
+    q.exprs = add_get_member.pool;
+    let add_idx_arg: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Ident(idx_name), sp0);
+    q.exprs = add_idx_arg.pool;
+    let mut get_args: Vec[i32] = Vec();
+    get_args.push(add_idx_arg.id);
+    let add_get_call: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Call(add_get_member.id, Vec(), get_args), sp0);
+    q.exprs = add_get_call.pool;
+    let st_item: ast.Stmt = ast.Stmt.Let(sp0, false, rn.name, false, dummy_ty, add_get_call.id);
+
+    let add_idx_inc: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Ident(idx_name), sp0);
+    q.exprs = add_idx_inc.pool;
+    let add_one: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Int("1"), sp0);
+    q.exprs = add_one.pool;
+    let add_sum: ast.AddExprResult = ast.expr_pool_add(q.exprs, ast.ExprNode.Binary(ast.BinaryOp.Add, add_idx_inc.id, add_one.id), sp0);
+    q.exprs = add_sum.pool;
+    let st_inc: ast.Stmt = ast.Stmt.Assign(sp0, idx_name, add_sum.id);
+
+    let mut while_stmts: Vec[ast.Stmt] = Vec();
+    while_stmts.push(st_item);
+    let mut bi: i32 = 0;
+    while bi < r_body.b.stmts.len() {
+      while_stmts.push(r_body.b.stmts.get(bi));
+      bi = bi + 1;
+    }
+    while_stmts.push(st_inc);
+    let st_while: ast.Stmt = ast.Stmt.WhileStmt(sp0, add_cond.id, ast.Block { stmts: while_stmts });
+
+    let mut lowered: Vec[ast.Stmt] = Vec();
+    lowered.push(st_iter);
+    lowered.push(st_idx);
+    lowered.push(st_while);
+    let add_block: ast.AddExprResult = ast.expr_pool_add(
+      q.exprs,
+      ast.ExprNode.Block(ast.ExprBlock { stmts: lowered, has_tail: false, tail: -1 }),
+      sp0,
+    );
+    q.exprs = add_block.pool;
+    return ParseStmtResult { p: q, st: ast.Stmt.ExprStmt(sp0, add_block.id) };
   }
   if kind_is(k, lex.TokenKind.KwWhile) {
     let ar1: AdvanceResult = advance(p);
