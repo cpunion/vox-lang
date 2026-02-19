@@ -23,4 +23,8 @@ This is the language reference tree.
 - `docs/reference/language/generics.md`
 - `docs/reference/language/traits-impls.md`
 
+## Async
+
+- `docs/reference/language/async-await.md`
+
 For syntax ID coverage and status, see `docs/reference/syntax-coverage.md`.

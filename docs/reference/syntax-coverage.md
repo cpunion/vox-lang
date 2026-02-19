@@ -48,6 +48,11 @@ Status:
 | S405 | generic impl head | Done | `tests/syntax/src/traits_impls_test.vox` |  |
 | S406 | negative impl syntax | Done | `tests/syntax/src/traits_impls_test.vox` |  |
 | S407 | invalid negative inherent impl parse failure | Done | `tests/syntax/src/traits_impls_test.vox` |  |
+| S501 | async function syntax | Done | `tests/syntax/src/async_test.vox` |  |
+| S502 | postfix await syntax | Done | `tests/syntax/src/async_test.vox` |  |
+| S503 | await inside if/match expressions | Done | `tests/syntax/src/async_test.vox` |  |
+| S504 | async trait method syntax | Done | `tests/syntax/src/async_test.vox` |  |
+| S505 | malformed await expression parse failure | Done | `tests/syntax/src/async_test.vox` |  |
 | S801 | arithmetic operators | Done | `tests/syntax/src/operators_test.vox` |  |
 | S802 | logical operators | Done | `tests/syntax/src/operators_test.vox` |  |
 | S803 | bitwise/shift operators | Done | `tests/syntax/src/operators_test.vox` | includes precedence form |
@@ -60,6 +65,5 @@ Status:
 | ID | Description | Status |
 |---|---|---|
 | S104 | for-in loop | Planned |
-| S501-S505 | async syntax coverage module | Planned |
 | S601-S604 | modules/imports syntax coverage module | Planned |
 | S701-S704 | attributes/ffi syntax coverage module | Planned |
