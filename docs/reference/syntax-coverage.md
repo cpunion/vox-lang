@@ -91,6 +91,9 @@ Status:
 | S903 | macro call with explicit generic/const args | Done | `tests/syntax/src/macros_test.vox` | `id[T]!`, `addn[N]!` |
 | S904 | malformed macro call parse failure | Done | `tests/syntax/src/macros_test.vox` | missing `(` after `!` |
 | S905 | builtin introspection macro calls | Done | `tests/syntax/src/macros_test.vox` | `__file!/__line!/__col!/__module_path!/__func!/__caller!` |
+| S906 | reflect intrinsic call forms | Done | `tests/syntax/src/reflect_intrinsics_test.vox` | `@size_of/@align_of/@type/@same_type/@field_name/@field_type` |
+| S907 | reflect predicate intrinsic call forms | Done | `tests/syntax/src/reflect_intrinsics_test.vox` | `@is_*` family |
+| S908 | malformed reflect intrinsic parse failure | Done | `tests/syntax/src/reflect_intrinsics_test.vox` | missing separators/parens |
 
 ## Planned (Not Merged Yet)
 
