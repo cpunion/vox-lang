@@ -8,6 +8,8 @@ This is the language reference tree.
 - `docs/reference/language/types/primitives.md`
 - `docs/reference/language/types/text.md`
 - `docs/reference/language/types/references.md`
+- `docs/reference/language/types/structs.md`
+- `docs/reference/language/types/enums.md`
 - `docs/reference/language/types/ranges.md`
 - `docs/reference/language/types/conversions.md`
 - `docs/reference/language/types/compatibility.md`

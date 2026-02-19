@@ -4,13 +4,15 @@
 
 This section is the normative reference for Vox types.
 
-Coverage IDs: `S001`, `S002`, `S003`, `S004`, `S005`.
+Coverage IDs: `S001`-`S010`.
 
 ## Type Family Map
 
 - Primitive and scalar types: `docs/reference/language/types/primitives.md`
 - String and text types: `docs/reference/language/types/text.md`
 - Borrow/reference types: `docs/reference/language/types/references.md`
+- Struct types: `docs/reference/language/types/structs.md`
+- Enum types: `docs/reference/language/types/enums.md`
 - Range-refined integer types: `docs/reference/language/types/ranges.md`
 - Type conversion and cast rules: `docs/reference/language/types/conversions.md`
 - Type compatibility and assignability: `docs/reference/language/types/compatibility.md`

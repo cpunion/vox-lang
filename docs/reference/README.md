@@ -14,6 +14,7 @@ normalized into reference-style pages (grammar, semantics, diagnostics, examples
 - module-05: functions, method call, UFCS
 - module-06: generics, const generics, where/comptime, type pack syntax
 - module-07: traits and impls syntax
+- module-08: struct/enum declarations and ADT usage syntax
 
 ## Documents
 
