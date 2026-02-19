@@ -64,7 +64,8 @@ Type/lowering errors:
 - `` `await` requires Poll-like enum { Pending, Ready(T) } or std/async::Future impl ``
 - `await operand cannot contain non-static borrow`
 - `await in unsupported statement position`
-- trait async signature/impl mismatch
+- `impl must use async fn to implement async trait method`
+- `impl async method output type mismatch: got <T0>, want <T1>`
 
 ## Example
 
