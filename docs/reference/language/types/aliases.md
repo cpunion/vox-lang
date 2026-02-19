@@ -39,7 +39,18 @@ type Value = I32: i32 | Str: String
 
 Current behavior:
 
-- parser lowers this declaration into enum-like tagged variants.
+- parser lowers this declaration into an enum-like structure with tagged variants.
+  Example:
+  ```vox
+  type Value = I32: i32 | Str: String
+  ```
+  is conceptually equivalent to:
+  ```vox
+  enum Value {
+    I32(i32),
+    Str(String),
+  }
+  ```
 - each arm label becomes a variant name.
 - each arm payload is currently a single positional field type.
 
