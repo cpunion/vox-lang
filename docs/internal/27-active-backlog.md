@@ -48,6 +48,7 @@ Governance from now on:
 
 - [x] A12 `vox/internal/*` 下沉继续推进
   - [x] A12-1 CLI 主流程复用 `vox/internal/text.trim_space`，移除 `src/main.vox` 重复实现。
+  - [x] A12-2 新增 `vox/internal/path`，并让 `src/main.vox` / `vox/macroexpand` 复用统一路径辅助逻辑（`base_name/dirname/join/slash-normalize/is_abs_path`）。
   - Source: `docs/internal/28-vox-libraries.md`.
 
 - [x] A13 规范与实现一致性修正
