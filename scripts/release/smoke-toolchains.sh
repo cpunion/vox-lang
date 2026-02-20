@@ -2,11 +2,30 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-GOOS="$(go env GOOS)"
+
+normalize_host_os() {
+  local os="$1"
+  case "$os" in
+    linux) echo "linux" ;;
+    darwin|macos) echo "darwin" ;;
+    windows|mingw*|msys*|cygwin*) echo "windows" ;;
+    *) echo "$os" ;;
+  esac
+}
+
+detect_host_os() {
+  if [[ -n "${RUNNER_OS:-}" ]]; then
+    echo "$(normalize_host_os "$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')")"
+    return 0
+  fi
+  echo "$(normalize_host_os "$(uname -s | tr '[:upper:]' '[:lower:]')")"
+}
+
+HOST_OS="$(detect_host_os)"
 
 normalize_windows_exe_path() {
   local p="$1"
-  if [[ "$GOOS" != "windows" ]]; then
+  if [[ "$HOST_OS" != "windows" ]]; then
     printf '%s\n' "$p"
     return 0
   fi
@@ -22,7 +41,7 @@ normalize_windows_exe_path() {
 }
 
 bootstrap_cc_env() {
-  if [[ "$GOOS" == "windows" ]]; then
+  if [[ "$HOST_OS" == "windows" ]]; then
     local mingw_a="/c/ProgramData/mingw64/mingw64/bin"
     local mingw_b="/c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin"
     if [[ -d "$mingw_a" ]]; then
@@ -37,15 +56,22 @@ bootstrap_cc_env() {
   if [[ -n "${CC:-}" ]]; then
     local cc_bin="${CC%% *}"
     if command -v "$cc_bin" >/dev/null 2>&1; then
+      if [[ "$HOST_OS" == "windows" && ( "$cc_bin" == "cl" || "$cc_bin" == "cl.exe" ) ]]; then
+        if [[ "$CC" == "cl" || "$CC" == "cl.exe" ]]; then
+          export CC="cl /std:c11"
+        fi
+        echo "[smoke] using CC from env: $CC"
+        return 0
+      fi
       local resolved="$(command -v "$cc_bin")"
-      if [[ "$GOOS" == "windows" ]]; then
+      if [[ "$HOST_OS" == "windows" ]]; then
         resolved="$(normalize_windows_exe_path "$resolved")"
       fi
       export CC="$resolved"
       echo "[smoke] using CC from env: $CC"
       return 0
     fi
-    if [[ "$GOOS" == "windows" && "$cc_bin" =~ ^[A-Za-z]:\\ ]]; then
+    if [[ "$HOST_OS" == "windows" && "$cc_bin" =~ ^[A-Za-z]:\\ ]]; then
       echo "[smoke] using CC from env (absolute windows path): $CC"
       return 0
     fi
@@ -53,7 +79,7 @@ bootstrap_cc_env() {
   fi
 
   local candidates=()
-  if [[ "$GOOS" == "windows" ]]; then
+  if [[ "$HOST_OS" == "windows" ]]; then
     candidates=(gcc clang cc)
   else
     candidates=(cc gcc clang)
@@ -63,7 +89,7 @@ bootstrap_cc_env() {
   for c in "${candidates[@]}"; do
     if command -v "$c" >/dev/null 2>&1; then
       local resolved="$(command -v "$c")"
-      if [[ "$GOOS" == "windows" ]]; then
+      if [[ "$HOST_OS" == "windows" ]]; then
         resolved="$(normalize_windows_exe_path "$resolved")"
       fi
       export CC="$resolved"
