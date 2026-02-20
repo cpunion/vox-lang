@@ -63,6 +63,7 @@ Status:
 | S305 | impl head where comptime | Done | `tests/syntax/src/generics_test.vox` |  |
 | S306 | type pack and variadic params | Done | `tests/syntax/src/generics_test.vox` | includes projection form `T.N` |
 | S307 | malformed generic argument parse failure | Done | `tests/syntax/src/generics_test.vox` |  |
+| S308 | trailing comma in generic bracket lists | Done | `tests/syntax/src/generics_test.vox` | params and explicit args |
 | S401 | trait declaration | Done | `tests/syntax/src/traits_impls_test.vox` |  |
 | S402 | trait default method body | Done | `tests/syntax/src/traits_impls_test.vox` |  |
 | S403 | associated type in trait and impl | Done | `tests/syntax/src/traits_impls_test.vox` |  |
