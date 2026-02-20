@@ -46,6 +46,11 @@ Governance from now on:
   - [x] A22-2 `generics_test` 增加对应 overlap/specialization 回归，保证 strict-order 判定稳定。
   - Source: `docs/internal/06-advanced-generics.md`.
 
+- [x] A23 verified const cast 编译期校验补齐
+  - [x] A23-1 `const` 场景下 `as @verified(...)` 改为编译期执行谓词函数，不再统一拒绝。
+  - [x] A23-2 谓词返回 `false` 时在 const-eval 阶段报错 `verified check failed`，并补 typecheck/compile 回归。
+  - Source: `docs/internal/01-type-system.md`, `docs/reference/language/types/verified.md`.
+
 - [x] A11 泛型 pack 限制策略收敛
   - [x] A11-1 `type pack arity exceeds materialization limit` 文案统一到 `typecheck` 单一函数出口，移除重复拼接。
   - [x] A11-2 typecheck/const-eval/irgen 统一复用同一 limit+error 文案。

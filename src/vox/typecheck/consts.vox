@@ -1146,6 +1146,7 @@ fn const_find_enum_variant(ctx: Ctx, enum_ty: i32, vname: String) -> ConstFindVa
 struct ConstResolveEnumCtorResult { ok: bool, err: String, enum_ty: i32, variant: String, vidx: i32, fields: Vec[i32] }
 
 struct ConstFindFuncDeclResult { found: bool, decl: ast.FuncDecl }
+struct EvalConstVerifiedPredicateResult { ok: bool, err: TcError, out: bool, sigs: Vec[ConstSig], states: Vec[i32] }
 
 fn empty_func_decl() -> ast.FuncDecl {
   return ast.FuncDecl {
@@ -1182,6 +1183,76 @@ fn const_find_func_decl(w: World, mod_path: String, name: String) -> ConstFindFu
     i = i + 1;
   }
   return ConstFindFuncDeclResult { found: false, decl: empty_func_decl() };
+}
+
+fn eval_const_verified_predicate(
+  ctx: Ctx,
+  w: World,
+  items: Vec[ConstItem],
+  sigs0: Vec[ConstSig],
+  states0: Vec[i32],
+  pred_mod: String,
+  pred_name: String,
+  arg_ty: i32,
+  arg_iv: i64,
+) -> EvalConstVerifiedPredicateResult {
+  let fr: FindFuncResult = find_func(ctx, pred_mod, pred_name);
+  if !fr.found {
+    return EvalConstVerifiedPredicateResult { ok: false, err: type_error("", "const verified predicate not found"), out: false, sigs: sigs0, states: states0 };
+  }
+  let fdr: ConstFindFuncDeclResult = const_find_func_decl(w, pred_mod, pred_name);
+  if !fdr.found {
+    return EvalConstVerifiedPredicateResult { ok: false, err: type_error("", "const verified predicate body unavailable"), out: false, sigs: sigs0, states: states0 };
+  }
+  if fr.sig.type_params.len() != 0 || fr.sig.const_params.len() != 0 {
+    return EvalConstVerifiedPredicateResult { ok: false, err: type_error_at(fdr.decl.sp, "verified predicate must be non-generic"), out: false, sigs: sigs0, states: states0 };
+  }
+  if fr.sig.params.len() != 1 || fdr.decl.params.len() != 1 {
+    return EvalConstVerifiedPredicateResult { ok: false, err: type_error_at(fdr.decl.sp, "verified predicate must have exactly one parameter"), out: false, sigs: sigs0, states: states0 };
+  }
+  let param_ty: i32 = fr.sig.params.get(0);
+  if !assignable_to(ctx, param_ty, arg_ty) {
+    return EvalConstVerifiedPredicateResult { ok: false, err: type_error_at(fdr.decl.sp, "verified predicate parameter type mismatch"), out: false, sigs: sigs0, states: states0 };
+  }
+  if fr.sig.ret != ctx.ty_bool {
+    return EvalConstVerifiedPredicateResult { ok: false, err: type_error_at(fdr.decl.sp, "verified predicate must return bool"), out: false, sigs: sigs0, states: states0 };
+  }
+
+  let fmf: FindModResult = find_mod(w, pred_mod);
+  if !fmf.found {
+    return EvalConstVerifiedPredicateResult { ok: false, err: type_error("", "unknown module for verified predicate"), out: false, sigs: sigs0, states: states0 };
+  }
+  let mf: WorldModule = w.mods.get(fmf.idx);
+  let imr: ImportsResult = build_imports(w, pred_mod, mf.prog.imports, fdr.decl.file);
+  if !imr.ok {
+    return EvalConstVerifiedPredicateResult { ok: false, err: imr.err, out: false, sigs: sigs0, states: states0 };
+  }
+
+  let arg_ev: EvalConstExprResult = EvalConstExprResult {
+    ok: true, err: TcError.None,
+    kind: const_kind_int(), ty: param_ty, iv: arg_iv, bv: false, sv: "",
+    sigs: sigs0, states: states0,
+  };
+  let mut call_locals: Vec[ConstLocal] = Vec();
+  call_locals.push(const_local_from_value(fdr.decl.params.get(0).name, false, arg_ev));
+
+  let sr: ConstExecStmtsResult = const_exec_stmts(
+    ctx, w, items, sigs0, states0,
+    pred_mod, imr.imps, mf.prog.exprs, fdr.decl.file, fdr.decl.body.stmts, call_locals, 0,
+  );
+  if !sr.ok {
+    return EvalConstVerifiedPredicateResult { ok: false, err: sr.err, out: false, sigs: sr.sigs, states: sr.states };
+  }
+  if sr.flow == const_flow_break() || sr.flow == const_flow_continue() {
+    return EvalConstVerifiedPredicateResult { ok: false, err: type_error_at(fdr.decl.sp, "verified predicate has invalid loop control flow"), out: false, sigs: sr.sigs, states: sr.states };
+  }
+  if sr.flow != const_flow_return() {
+    return EvalConstVerifiedPredicateResult { ok: false, err: type_error_at(fdr.decl.sp, "verified predicate requires explicit return"), out: false, sigs: sr.sigs, states: sr.states };
+  }
+  if !assignable_to(ctx, ctx.ty_bool, sr.ret_ty) || sr.ret_kind != const_kind_bool() {
+    return EvalConstVerifiedPredicateResult { ok: false, err: type_error_at(fdr.decl.sp, "verified predicate must return bool"), out: false, sigs: sr.sigs, states: sr.states };
+  }
+  return EvalConstVerifiedPredicateResult { ok: true, err: TcError.None, out: sr.ret_bv, sigs: sr.sigs, states: sr.states };
 }
 
 fn const_struct_path_matches_expected(ctx: Ctx, cur_mod: String, imps: Imports, parts: Vec[String], expected: i32) -> bool {
@@ -2715,7 +2786,19 @@ fn eval_const_expr_in_mod_locals(
       return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: to, iv: v, bv: false, sv: "", sigs: ar.sigs, states: ar.states };
     }
     if is_verified_ty(c2, to) {
-      return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const expression: @verified cast is not supported"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: ar.sigs, states: ar.states };
+      let vt: ir.Ty = ir.ty_pool_get(c2.pool, to);
+      let pr: EvalConstVerifiedPredicateResult = eval_const_verified_predicate(
+        c2, w, items, ar.sigs, ar.states,
+        vt.mod_path, vt.name,
+        to_base, v,
+      );
+      if !pr.ok {
+        return EvalConstExprResult { ok: false, err: pr.err, kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: pr.sigs, states: pr.states };
+      }
+      if !pr.out {
+        return EvalConstExprResult { ok: false, err: const_expr_error(file, exprs, id, "const expression: verified check failed"), kind: 0, ty: c2.ty_bad, iv: 0, bv: false, sv: "", sigs: pr.sigs, states: pr.states };
+      }
+      return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: to, iv: v, bv: false, sv: "", sigs: pr.sigs, states: pr.states };
     }
     return EvalConstExprResult { ok: true, err: TcError.None, kind: const_kind_int(), ty: to_base, iv: v, bv: false, sv: "", sigs: ar.sigs, states: ar.states };
   }

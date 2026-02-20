@@ -52,7 +52,8 @@ The verifier function must satisfy:
 
 ## Const Behavior
 
-- `const` cast into `@verified(...)` is currently rejected.
+- `const` cast into `@verified(...)` is evaluated at compile time.
+- predicate returns `false` => compile-time error with `verified check failed`.
 
 ## Diagnostics
 
