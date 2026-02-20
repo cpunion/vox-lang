@@ -5,13 +5,13 @@
 Defines generic parameters, const generics, `where` constraints, comptime constraints,
 and type pack syntax/materialization.
 
-Coverage IDs: `S301`, `S302`, `S303`, `S304`, `S305`, `S306`, `S307`.
+Coverage IDs: `S301`, `S302`, `S303`, `S304`, `S305`, `S306`, `S307`, `S308`.
 
 ## Grammar (Simplified)
 
 ```vox
 GenericParams
-  := "[" GenericParamList "]"
+  := "[" GenericParamList ","? "]"
 
 GenericParam
   := TypeParam
@@ -47,6 +47,7 @@ fn pick_first[T...](a: T.0, _b: T.1) -> T.0 { return a; }
 
 - Generic functions/types are instantiated with concrete type/const arguments.
 - Explicit type arguments are supported (`id[i32](1)`).
+- Generic bracket argument lists accept an optional trailing comma (`id[i32, 1,](x)`).
 - Const generic arguments are validated against declared const parameter type.
 - Trailing explicit type arguments can bind a trailing type pack (including heterogeneous packs).
 
