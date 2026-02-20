@@ -46,7 +46,7 @@ pub fn add(a: i32, b: i32) -> i32 {
 
 - `ffi_import` / `ffi_export` 函数不允许类型参数。
 - `ffi_import` / `ffi_export` 函数不允许常量泛型参数。
-- `ffi_import` / `ffi_export` 函数不允许 variadic 参数。
+- `ffi_import` / `ffi_export` 函数当前不支持 variadic 参数（会报错拒绝）。
 
 ### 2.3 符号唯一性约束
 
