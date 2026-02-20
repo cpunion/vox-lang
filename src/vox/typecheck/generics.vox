@@ -78,9 +78,9 @@ pub fn parse_const_generic_arg(ctx: Ctx, tn: ast.TypeName, want_ty: i32) -> Pars
 
 pub fn parse_const_generic_arg_with_locals(
   ctx: Ctx,
-  l0: Locals,
-  tn: ast.TypeName,
-  want_ty: i32,
+l0: Locals,
+tn: ast.TypeName,
+want_ty: i32,
 ) -> ParseConstGenericArgWithLocalsResult {
   let pr: ParseConstGenericArgResult = parse_const_generic_arg(ctx, tn, want_ty);
   if pr.ok {
@@ -141,9 +141,9 @@ fn find_nominal_ty_idx_subst(ctx: Ctx, kind: ir.TyKind, mod_path: String, name: 
     let kind_ok: bool =
       match kind {
         ir.TyKind.Struct => t.kind == ir.TyKind.Struct,
-        ir.TyKind.Enum => t.kind == ir.TyKind.Enum,
-        _ => false,
-      };
+      ir.TyKind.Enum => t.kind == ir.TyKind.Enum,
+      _ => false,
+    };
     if kind_ok && t.mod_path == mod_path && t.name == name { return i; }
     i = i + 1;
   }
@@ -276,7 +276,7 @@ pub fn ty_has_param(ctx: Ctx, ty_idx: i32) -> bool {
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty_idx);
   if t.kind == ir.TyKind.Param { return true; }
   if t.kind == ir.TyKind.Vec { return ty_has_param(ctx, t.elem); }
-  if t.kind == ir.TyKind.Range { return ty_has_param(ctx, t.elem); }
+  if t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified { return ty_has_param(ctx, t.elem); }
   if t.kind == ir.TyKind.Struct {
     let fs: FindStructResult = find_struct(ctx, t.mod_path, t.name);
     if !fs.found { return false; }
@@ -405,6 +405,17 @@ fn find_range_ty_idx_subst(ctx: Ctx, elem: i32, lo: i64, hi: i64) -> i32 {
   return -1;
 }
 
+fn find_verified_ty_idx_subst(ctx: Ctx, elem: i32, mod_path: String, name: String) -> i32 {
+  let tys: Vec[ir.Ty] = ctx.pool.tys;
+  let mut i: i32 = 0;
+  while i < tys.len() {
+    let t: ir.Ty = tys.get(i);
+    if t.kind == ir.TyKind.Verified && t.elem == elem && t.mod_path == mod_path && t.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 fn find_ref_ty_idx(ctx: Ctx, elem: i32, mut0: bool, static0: bool) -> i32 {
   let mv: i64 = if mut0 { 1 } else { 0 };
   let sv: i64 = if static0 { 1 } else { 0 };
@@ -489,6 +500,13 @@ pub fn subst_ty(ctx: Ctx, ty_idx: i32, subs: Vec[TySub]) -> i32 {
     if ridx == -1 { return ctx.ty_bad; }
     return ridx;
   }
+  if t.kind == ir.TyKind.Verified {
+    let e2: i32 = subst_ty(ctx, t.elem, subs);
+    if e2 == t.elem { return ty_idx; }
+    let vidx: i32 = find_verified_ty_idx_subst(ctx, e2, t.mod_path, t.name);
+    if vidx == -1 { return ctx.ty_bad; }
+    return vidx;
+  }
   if t.kind == ir.TyKind.Struct {
     return subst_struct_nominal_ty(ctx, ty_idx, subs);
   }
@@ -532,6 +550,16 @@ pub fn ty_inst_str(ctx: Ctx, ty_idx: i32) -> String {
       concat(t.hi.to_string()).
       concat(") ").
       concat(ty_inst_str(ctx, t.elem));
+  }
+  if t.kind == ir.TyKind.Verified {
+    let mut p: String = t.mod_path;
+    let mut i: i32 = 0;
+    while i < p.len() {
+      if p.byte_at(i) == 47 { p = p.slice(0, i).concat(".").concat(p.slice(i + 1, p.len())); }
+      i = i + 1;
+    }
+    let qn: String = if p == "" || p == "main" { t.name } else { p.concat(".").concat(t.name) };
+    return "@verified(".concat(qn).concat(") ").concat(ty_inst_str(ctx, t.elem));
   }
   if t.kind == ir.TyKind.Struct || t.kind == ir.TyKind.Enum {
     // Use `mod::Name` with '/' normalized to '.' for readability.
@@ -669,6 +697,16 @@ pub fn ty_user_str(ctx: Ctx, ty_idx: i32) -> String {
       concat(t.hi.to_string()).
       concat(") ").
       concat(ty_user_str(ctx, t.elem));
+  }
+  if t.kind == ir.TyKind.Verified {
+    let mut p: String = t.mod_path;
+    let mut i: i32 = 0;
+    while i < p.len() {
+      if p.byte_at(i) == 47 { p = p.slice(0, i).concat(".").concat(p.slice(i + 1, p.len())); }
+      i = i + 1;
+    }
+    let qn: String = if p == "" || p == "main" { t.name } else { p.concat(".").concat(t.name) };
+    return "@verified(".concat(qn).concat(") ").concat(ty_user_str(ctx, t.elem));
   }
   if t.kind == ir.TyKind.Struct || t.kind == ir.TyKind.Enum {
     // Use `mod::Name` with '/' normalized to '.' for readability.
@@ -858,7 +896,7 @@ pub fn check_const_where_bounds(ctx: Ctx, bounds: Vec[ConstWhereBoundSig], subs:
       lhs_iv = cs.iv;
       lhs_text = b.name;
     } else if
-      b.lhs_kind == ast.comptime_where_lhs_size_of() ||
+    b.lhs_kind == ast.comptime_where_lhs_size_of() ||
       b.lhs_kind == ast.comptime_where_lhs_align_of() ||
       b.lhs_kind == ast.comptime_where_lhs_field_count() ||
       b.lhs_kind == ast.comptime_where_lhs_type()
@@ -887,9 +925,9 @@ pub fn check_const_where_bounds(ctx: Ctx, bounds: Vec[ConstWhereBoundSig], subs:
     if !const_where_eval_i64(b.op, lhs_iv, rhs_iv) {
       let msg: String =
         "comptime generic constraint failed: "
-          .concat(lhs_text).concat(" ")
-          .concat(const_where_op_text(b.op)).concat(" ")
-          .concat(b.rhs_text).concat(" (got ").concat(lhs_iv.to_string()).concat(")");
+        .concat(lhs_text).concat(" ")
+        .concat(const_where_op_text(b.op)).concat(" ")
+        .concat(b.rhs_text).concat(" (got ").concat(lhs_iv.to_string()).concat(")");
       return ConstWhereCheckResult { ok: false, err: msg };
     }
     i = i + 1;

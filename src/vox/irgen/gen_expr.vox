@@ -836,6 +836,39 @@ fn gen_expr_as(g0: Gen, a: i32, _tn: ast.TypeName, out_ty: i32) -> GenExprResult
     g = gen_emit(g, ir.Instr.RangeCheck(to_base, v, rt2.lo, rt2.hi));
   }
 
+  // 3) Predicate-refined cast: call verifier and panic on failure.
+  if tc.is_verified_ty(g.ctx, out_ty) {
+    let vt: ir.Ty = ir.ty_pool_get(g.ctx.pool, out_ty);
+    let mut vs: Vec[ir.Value] = Vec();
+    vs.push(v);
+
+    let rc: GenNewIdResult = gen_new_temp(g);
+    g = rc.g;
+    let ok_tid: i32 = rc.id;
+    g = gen_emit(g, ir.Instr.Call(true, ok_tid, g.ctx.ty_bool, qname(vt.mod_path, vt.name), vs));
+
+    let base2: i32 = g.blocks.len();
+    let bok: GenNewIdResult = gen_new_block(g, "verified_ok_".concat(base2.to_string()));
+    g = bok.g;
+    let ok_idx: i32 = bok.id;
+    let bbad: GenNewIdResult = gen_new_block(g, "verified_bad_".concat(base2.to_string()));
+    g = bbad.g;
+    let bad_idx: i32 = bbad.id;
+    let bend: GenNewIdResult = gen_new_block(g, "verified_end_".concat(base2.to_string()));
+    g = bend.g;
+    let end_idx: i32 = bend.id;
+
+    g = gen_term(g, ir.Term.CondBr(ir.v_temp(ok_tid), g.blocks.get(ok_idx).name, g.blocks.get(bad_idx).name));
+
+    g = gen_set_block(g, bad_idx);
+    g = gen_term(g, ir.Term.Panic(ir.v_str("verified check failed")));
+
+    g = gen_set_block(g, ok_idx);
+    g = gen_term(g, ir.Term.Br(g.blocks.get(end_idx).name));
+
+    g = gen_set_block(g, end_idx);
+  }
+
   return GenExprResult { ok: true, err: "", g: g, val: v, ty: out_ty };
 }
 

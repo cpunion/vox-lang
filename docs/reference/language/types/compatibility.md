@@ -21,6 +21,7 @@ A value of source type `S` is assignable to target type `T` only when:
 - `&T` to `&mut T`: not assignable.
 - `&mut T` to `&T`: follows borrow coercion rules where allowed by checker.
 - Base integer to `@range(...)` type: requires refinement check.
+- Base integer to `@verified(...)` type: requires explicit cast and predicate check.
 
 ## Generic Context
 
