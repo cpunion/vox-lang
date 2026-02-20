@@ -195,7 +195,7 @@ type Small = @verified(in_small) i32;
 当前实现约束：
 
 - 验证函数必须是单参、返回 `bool`、非 async、无泛型、无 effect/resource/FFI 属性。
-- `const` 场景下的 `as @verified(...)` 目前直接报错（不做 compile-time 谓词执行）。
+- `const` 场景下的 `as @verified(...)` 会在编译期执行谓词检查，失败时报错（`verified check failed`）。
 
 ## 泛型
 
