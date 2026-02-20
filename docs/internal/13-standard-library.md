@@ -11,6 +11,7 @@
 - `std::time`：最小时钟能力（`now_ns`；用于测试与工具链计时）
 - `std::sync`：并发原语（`Mutex[T]/Atomic[T]` 泛型 API）
 - `std::async`：pull 模型异步核心（`Poll[T]`、`Future`、`Context`、`Waker`、`Runtime`、`pending_wait_with`）
+- `std::runtime`：低层 intrinsic 适配边界（标准库内部使用）
 - `std::collections`：`Vec`、`Map` 等
 - `std::io`：输出 + 最小文件抽象 + 最小 TCP 抽象
 - `std::net`：URL/Query/HTTP 文本编解码 + 基于 TCP 的最小 HTTP roundtrip
@@ -50,6 +51,10 @@
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取、环境变量读取）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`，以及 `File`/`file_read_all`/`file_write_all`/`file_exists`/`mkdir_p`。网络部分提供 `NetAddr` + `NetConn` 与最小 TCP API：`net_connect` / `net_send` / `net_recv` / `net_close`（解释器与 C 后端一致可用；失败时统一 panic）。
+- `std::runtime` 已提供 intrinsic 能力边界：
+  - 运行时封装：`args/exe_path/getenv/now_ns/yield_now`、`wake_notify/wake_wait`、文件/进程/TCP/sync 原语。
+  - 兼容探针：`intrinsic_abi() -> i32`、`has_intrinsic(name) -> bool`（当前由 `std::runtime` 维护能力表，便于滚动发布期间保持标准库 API 稳定）。
+  - 约定：`std` 其它模块不再直接调用 `__*`，统一经 `std::runtime` 转发。
 - `std::net` 已提供：
   - URL/Query：`Url`、`parse_url`、`url_to_string`、`query_escape`、`build_query`
   - HTTP 文本：`HttpRequest` + `with_header`/`with_body`/`render`，`parse_status`/`parse_status_code`/`header_value`/`response_body`
