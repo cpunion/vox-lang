@@ -61,6 +61,11 @@ Governance from now on:
   - [x] A19-2 `main/compile/loader/typecheck/world/fmt/list/manifest` 复用 `txt.has_prefix/has_suffix/contains_str/trim_space`，减少重复实现与维护面。
   - Source: `docs/internal/28-vox-libraries.md`.
 
+- [x] A21 `vox/internal/strset` 复用收敛（排序/去重）
+  - [x] A21-1 新增 `strset.insert_sorted/sort/push_unique_sorted`，统一字符串集合排序与唯一化 helper。
+  - [x] A21-2 `main` 与 `vox/list` 复用 `vox/internal/strset`，移除重复实现。
+  - Source: `docs/internal/28-vox-libraries.md`.
+
 - [x] A13 规范与实现一致性修正
   - [x] A13-1 `docs/internal/09-async-model.md` 示例签名与当前 `EventRuntime` 默认行为一致。
   - [x] A13-2 `docs/internal/14-syntax-details.md` 成员调用说明更新为 trait/impl 已支持现状。

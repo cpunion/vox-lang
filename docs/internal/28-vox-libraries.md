@@ -188,3 +188,4 @@ fn list_smoke() -> String {
 8. [x] Stable/Experimental 模块统一头注释（稳定性级别 + 迁移策略）。
 9. [x] `vox/list`（go list 对标）：输出完整包依赖图（模块、导入边、可选 JSON），并附带模块级 effect/resource 能力聚合信息。
 10. [x] `vox/internal/text` 第二批复用：`has_prefix/has_suffix/contains_str/trim_space` 在 `main/compile/loader/typecheck/world/fmt/list/manifest` 统一复用，减少重复 helper 实现。
+11. [x] `vox/internal/strset` 下沉：`insert_sorted/sort/push_unique_sorted` 在 `main` 与 `vox/list` 统一复用，减少字符串集合排序/去重重复实现。
