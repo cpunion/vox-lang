@@ -282,6 +282,60 @@ fn std_async_file_with_stateful_cleanup_hooks() -> ld.SourceFile {
   };
 }
 
+fn std_async_file_with_runtime_hint_hooks_and_poisoned_legacy() -> ld.SourceFile {
+  return ld.SourceFile {
+    path: "src/std/async/async.vox",
+    text: """
+      pub enum Poll[T] { Pending, Ready(T) }
+      pub struct Waker { pub token: i64 }
+      pub struct Context { pub waker: Waker }
+      pub struct CancelHint { pub state: i32, pub spins: i32, pub token: i64 }
+      pub struct Rt { pub id: i32 }
+      pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+      pub fn waker(token: i64) -> Waker { return Waker { token: token }; }
+      pub fn context(w: Waker) -> Context { return Context { waker: w }; }
+      pub fn default_runtime() -> Rt { return Rt { id: 1 }; }
+      pub fn park_until_wake_with(rt: Rt, i: i32, c: Context) -> bool { rt; i; c; return false; }
+      pub fn cancel_requested_with(rt: Rt, c: Context) -> bool { rt; c; return true; }
+      pub fn cancel_hint(c: Context, state: i32, spins: i32) -> CancelHint {
+        return CancelHint { state: state, spins: spins, token: c.waker.token };
+      }
+      pub fn cancel_drop_hint_with[R, F](rt: R, c: Context, h: CancelHint, f: F) -> F { rt; c; h; return f; }
+      pub fn cancel_cleanup_hint_with(rt: Rt, c: Context, h: CancelHint) -> () { rt; c; h; return; }
+      pub fn cancel_return_hint_with(rt: Rt, c: Context, h: CancelHint) -> i32 { rt; c; return h.state + h.spins + 100; }
+      // Poisoned legacy hooks: compile fails if wrapper still routes here.
+      pub fn cancel_drop_state_with[R, F](rt: R, c: Context, s: i32, f: F) -> i32 { rt; c; s; f; return 0; }
+      pub fn cancel_return_with(rt: Rt, c: Context) -> bool { rt; c; return false; }
+    """,
+  };
+}
+
+fn std_async_file_with_hint_hooks_and_poisoned_legacy() -> ld.SourceFile {
+  return ld.SourceFile {
+    path: "src/std/async/async.vox",
+    text: """
+      pub enum Poll[T] { Pending, Ready(T) }
+      pub struct Waker { pub token: i64 }
+      pub struct Context { pub waker: Waker }
+      pub struct CancelHint { pub state: i32, pub spins: i32, pub token: i64 }
+      pub trait Future { type Output; fn poll(x: &mut Self, cx: &Context) -> Poll[Self.Output]; }
+      pub fn waker(token: i64) -> Waker { return Waker { token: token }; }
+      pub fn context(w: Waker) -> Context { return Context { waker: w }; }
+      pub fn park(i: i32, c: Context) -> () { i; c; return; }
+      pub fn cancel_requested(c: Context) -> bool { c; return true; }
+      pub fn cancel_hint(c: Context, state: i32, spins: i32) -> CancelHint {
+        return CancelHint { state: state, spins: spins, token: c.waker.token };
+      }
+      pub fn cancel_drop_hint[F](c: Context, h: CancelHint, f: F) -> F { c; h; return f; }
+      pub fn cancel_cleanup_hint(c: Context, h: CancelHint) -> () { c; h; return; }
+      pub fn cancel_return_hint(c: Context, h: CancelHint) -> i32 { c; return h.state + h.spins + 70; }
+      // Poisoned legacy hooks: compile fails if wrapper still routes here.
+      pub fn cancel_drop_state[F](c: Context, s: i32, f: F) -> i32 { c; s; f; return 0; }
+      pub fn cancel_return(c: Context) -> bool { c; return false; }
+    """,
+  };
+}
+
 fn std_async_file_spin_only() -> ld.SourceFile {
   return ld.SourceFile {
     path: "src/std/async/async.vox",
@@ -924,6 +978,44 @@ fn test_compile_async_main_driver_prefers_runtime_stateful_cleanup_hook_when_ava
   let i_state_cleanup: i32 = find_substr(r.c, "cancel_5fcleanup_5fstate_5fwith");
   let i_cleanup: i32 = find_substr(r.c, "cancel_5fcleanup_5fwith");
   if i_cleanup >= 0 { t.assert(i_state_cleanup <= i_cleanup); }
+}
+
+fn test_compile_async_main_driver_prefers_runtime_hint_hooks_when_available() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file_with_runtime_hint_hooks_and_poisoned_legacy());
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      async fn main() -> i32 { return 7; }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
+}
+
+fn test_compile_async_main_driver_prefers_hint_hooks_when_available() -> () {
+  let mut fs: Vec[ld.SourceFile] = Vec();
+  fs.push(std_async_file_with_hint_hooks_and_poisoned_legacy());
+  fs.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      async fn main() -> i32 { return 7; }
+    """,
+  });
+
+  let r: c.CompileResult = c.compile_files_to_c(fs, cg.EmitOptions {
+    emit_driver_main: true,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+  });
+  t.assert_with(r.ok, r.err);
 }
 
 fn test_compile_async_main_driver_uses_drop_cleanup_and_return_hooks_on_cancel() -> () {

@@ -223,6 +223,41 @@ fn add_expr_to_prog(prog0: ast.Program, sp: ast.Span, n: ast.ExprNode) -> AddExp
   return AddExprToProgResult { prog: prog, id: r.id };
 }
 
+struct AddCancelHintExprResult { prog: ast.Program, id: i32 }
+
+fn add_cancel_hint_expr(
+  prog0: ast.Program,
+  sp: ast.Span,
+  async_alias: String,
+  has_spins_counter: bool,
+) -> AddCancelHintExprResult {
+  let mut prog: ast.Program = prog0;
+  let r_a: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+  prog = r_a.prog;
+  let r_hint_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a.id, "cancel_hint"));
+  prog = r_hint_fn.prog;
+  let r_cx: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+  prog = r_cx.prog;
+  let r_f: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("f"));
+  prog = r_f.prog;
+  let r_state: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_f.id, "state"));
+  prog = r_state.prog;
+  let r_spins: AddExprToProgResult =
+    if has_spins_counter {
+      add_expr_to_prog(prog, sp, ast.ExprNode.Ident("spins"))
+    } else {
+      add_expr_to_prog(prog, sp, ast.ExprNode.Int("0"))
+    };
+  prog = r_spins.prog;
+  let mut args: Vec[i32] = Vec();
+  args.push(r_cx.id);
+  args.push(r_state.id);
+  args.push(r_spins.id);
+  let r_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_hint_fn.id, Vec(), args));
+  prog = r_call.prog;
+  return AddCancelHintExprResult { prog: prog, id: r_call.id };
+}
+
 fn dummy_type_name() -> ast.TypeName {
   return ast.TypeName { parts: Vec(), args: Vec() };
 }
@@ -249,19 +284,26 @@ fn mk_async_poll_loop_body(
   has_default_runtime: bool,
   has_park_until_wake_with: bool,
   has_park_with: bool,
+  has_cancel_hint: bool,
+  has_cancel_drop_hint_with: bool,
   has_cancel_drop_state_with: bool,
   has_cancel_drop_with: bool,
+  has_cancel_cleanup_hint_with: bool,
   has_cancel_cleanup_state_with: bool,
   has_cancel_cleanup_with: bool,
+  has_cancel_return_hint_with: bool,
   has_cancel_return_with: bool,
   has_cancel_requested_with: bool,
   has_pending_wait_with: bool,
   has_park_until_wake: bool,
   has_park: bool,
+  has_cancel_drop_hint: bool,
   has_cancel_drop_state: bool,
   has_cancel_drop: bool,
+  has_cancel_cleanup_hint: bool,
   has_cancel_cleanup_state: bool,
   has_cancel_cleanup: bool,
+  has_cancel_return_hint: bool,
   has_cancel_return: bool,
   has_cancel_requested: bool,
   has_pending_wait: bool,
@@ -304,9 +346,12 @@ fn mk_async_poll_loop_body(
     has_park_with ||
     has_pending_wait_with ||
     has_cancel_requested_with ||
+    (has_cancel_hint && has_cancel_return_hint_with) ||
     has_cancel_return_with ||
+    (has_cancel_hint && has_cancel_cleanup_hint_with) ||
     has_cancel_cleanup_with ||
     has_cancel_cleanup_state_with ||
+    (has_cancel_hint && has_cancel_drop_hint_with) ||
     has_cancel_drop_with ||
     has_cancel_drop_state_with;
   let use_runtime_with: bool = has_default_runtime && has_runtime_hooks_with;
@@ -320,8 +365,16 @@ fn mk_async_poll_loop_body(
     prog = r_rt_init.prog;
     s_rt = ast.Stmt.Let(sp, false, "rt", false, dummy_type_name(), r_rt_init.id);
   }
+  let has_spins_counter: bool =
+    has_park_until_wake_with ||
+    has_park_with ||
+    has_pending_wait_with ||
+    has_park_until_wake ||
+    has_park ||
+    has_pending_wait ||
+    has_spin_wait;
   let mut s_spins: ast.Stmt = ast.Stmt.ExprStmt(sp, r_dummy.id);
-  if has_park_until_wake_with || has_park_with || has_pending_wait_with || has_park_until_wake || has_park || has_pending_wait || has_spin_wait {
+  if has_spins_counter {
     let r_spins0: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Int("0"));
     prog = r_spins0.prog;
     s_spins = ast.Stmt.Let(sp, true, "spins", false, dummy_type_name(), r_spins0.id);
@@ -484,7 +537,56 @@ fn mk_async_poll_loop_body(
     prog = r_cancel_call.prog;
 
     let mut then_stmts: Vec[ast.Stmt] = Vec();
-    if use_runtime_with && has_cancel_drop_state_with {
+    let use_hint_hooks: bool =
+      has_cancel_hint
+        && (has_cancel_drop_hint_with
+          || has_cancel_drop_hint
+          || has_cancel_cleanup_hint_with
+          || has_cancel_cleanup_hint
+          || has_cancel_return_hint_with
+          || has_cancel_return_hint);
+    let mut hint_id: i32 = -1;
+    if use_hint_hooks {
+      let hr: AddCancelHintExprResult = add_cancel_hint_expr(prog, sp, async_alias, has_spins_counter);
+      prog = hr.prog;
+      hint_id = hr.id;
+    }
+    if use_runtime_with && has_cancel_drop_hint_with && hint_id != -1 {
+      let r_a_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a_drop.prog;
+      let r_drop_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_drop.id, "cancel_drop_hint_with"));
+      prog = r_drop_fn.prog;
+      let r_rt_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("rt"));
+      prog = r_rt_drop.prog;
+      let r_cx_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx_drop.prog;
+      let r_f_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("f"));
+      prog = r_f_drop.prog;
+      let mut drop_args: Vec[i32] = Vec();
+      drop_args.push(r_rt_drop.id);
+      drop_args.push(r_cx_drop.id);
+      drop_args.push(hint_id);
+      drop_args.push(r_f_drop.id);
+      let r_drop_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_drop_fn.id, Vec(), drop_args));
+      prog = r_drop_call.prog;
+      then_stmts.push(ast.Stmt.Assign(sp, "f", r_drop_call.id));
+    } else if has_cancel_drop_hint && hint_id != -1 {
+      let r_a_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a_drop.prog;
+      let r_drop_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_drop.id, "cancel_drop_hint"));
+      prog = r_drop_fn.prog;
+      let r_cx_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx_drop.prog;
+      let r_f_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("f"));
+      prog = r_f_drop.prog;
+      let mut drop_args: Vec[i32] = Vec();
+      drop_args.push(r_cx_drop.id);
+      drop_args.push(hint_id);
+      drop_args.push(r_f_drop.id);
+      let r_drop_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_drop_fn.id, Vec(), drop_args));
+      prog = r_drop_call.prog;
+      then_stmts.push(ast.Stmt.Assign(sp, "f", r_drop_call.id));
+    } else if use_runtime_with && has_cancel_drop_state_with {
       let r_a_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
       prog = r_a_drop.prog;
       let r_drop_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_drop.id, "cancel_drop_state_with"));
@@ -557,7 +659,36 @@ fn mk_async_poll_loop_body(
       prog = r_drop_call.prog;
       then_stmts.push(ast.Stmt.Assign(sp, "f", r_drop_call.id));
     }
-    if use_runtime_with && has_cancel_cleanup_state_with {
+    if use_runtime_with && has_cancel_cleanup_hint_with && hint_id != -1 {
+      let r_a_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a_cleanup.prog;
+      let r_cleanup_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_cleanup.id, "cancel_cleanup_hint_with"));
+      prog = r_cleanup_fn.prog;
+      let r_rt_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("rt"));
+      prog = r_rt_cleanup.prog;
+      let r_cx_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx_cleanup.prog;
+      let mut cleanup_args: Vec[i32] = Vec();
+      cleanup_args.push(r_rt_cleanup.id);
+      cleanup_args.push(r_cx_cleanup.id);
+      cleanup_args.push(hint_id);
+      let r_cleanup_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_cleanup_fn.id, Vec(), cleanup_args));
+      prog = r_cleanup_call.prog;
+      then_stmts.push(ast.Stmt.ExprStmt(sp, r_cleanup_call.id));
+    } else if has_cancel_cleanup_hint && hint_id != -1 {
+      let r_a_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a_cleanup.prog;
+      let r_cleanup_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_cleanup.id, "cancel_cleanup_hint"));
+      prog = r_cleanup_fn.prog;
+      let r_cx_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx_cleanup.prog;
+      let mut cleanup_args: Vec[i32] = Vec();
+      cleanup_args.push(r_cx_cleanup.id);
+      cleanup_args.push(hint_id);
+      let r_cleanup_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_cleanup_fn.id, Vec(), cleanup_args));
+      prog = r_cleanup_call.prog;
+      then_stmts.push(ast.Stmt.ExprStmt(sp, r_cleanup_call.id));
+    } else if use_runtime_with && has_cancel_cleanup_state_with {
       let r_a_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
       prog = r_a_cleanup.prog;
       let r_cleanup_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_cleanup.id, "cancel_cleanup_state_with"));
@@ -622,7 +753,46 @@ fn mk_async_poll_loop_body(
       prog = r_cleanup_call.prog;
       then_stmts.push(ast.Stmt.ExprStmt(sp, r_cleanup_call.id));
     }
-    if use_runtime_with && has_cancel_return_with {
+    if use_runtime_with && has_cancel_return_hint_with && hint_id != -1 {
+      let r_a4: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a4.prog;
+      let r_cancel_ret_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a4.id, "cancel_return_hint_with"));
+      prog = r_cancel_ret_fn.prog;
+      let r_rt3: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("rt"));
+      prog = r_rt3.prog;
+      let r_cx4: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx4.prog;
+      let mut ret_args: Vec[i32] = Vec();
+      ret_args.push(r_rt3.id);
+      ret_args.push(r_cx4.id);
+      ret_args.push(hint_id);
+      let r_cancel_ret_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_cancel_ret_fn.id, Vec(), ret_args));
+      prog = r_cancel_ret_call.prog;
+      if ret_is_unit {
+        then_stmts.push(ast.Stmt.ExprStmt(sp, r_cancel_ret_call.id));
+        then_stmts.push(ast.Stmt.ReturnStmt(sp, false, -1));
+      } else {
+        then_stmts.push(ast.Stmt.ReturnStmt(sp, true, r_cancel_ret_call.id));
+      }
+    } else if has_cancel_return_hint && hint_id != -1 {
+      let r_a4: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a4.prog;
+      let r_cancel_ret_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a4.id, "cancel_return_hint"));
+      prog = r_cancel_ret_fn.prog;
+      let r_cx4: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx4.prog;
+      let mut ret_args: Vec[i32] = Vec();
+      ret_args.push(r_cx4.id);
+      ret_args.push(hint_id);
+      let r_cancel_ret_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_cancel_ret_fn.id, Vec(), ret_args));
+      prog = r_cancel_ret_call.prog;
+      if ret_is_unit {
+        then_stmts.push(ast.Stmt.ExprStmt(sp, r_cancel_ret_call.id));
+        then_stmts.push(ast.Stmt.ReturnStmt(sp, false, -1));
+      } else {
+        then_stmts.push(ast.Stmt.ReturnStmt(sp, true, r_cancel_ret_call.id));
+      }
+    } else if use_runtime_with && has_cancel_return_with {
       let r_a4: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
       prog = r_a4.prog;
       let r_cancel_ret_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a4.id, "cancel_return_with"));
@@ -680,7 +850,56 @@ fn mk_async_poll_loop_body(
     prog = r_cancel_call.prog;
 
     let mut then_stmts: Vec[ast.Stmt] = Vec();
-    if use_runtime_with && has_cancel_drop_state_with {
+    let use_hint_hooks: bool =
+      has_cancel_hint
+        && (has_cancel_drop_hint_with
+          || has_cancel_drop_hint
+          || has_cancel_cleanup_hint_with
+          || has_cancel_cleanup_hint
+          || has_cancel_return_hint_with
+          || has_cancel_return_hint);
+    let mut hint_id: i32 = -1;
+    if use_hint_hooks {
+      let hr: AddCancelHintExprResult = add_cancel_hint_expr(prog, sp, async_alias, has_spins_counter);
+      prog = hr.prog;
+      hint_id = hr.id;
+    }
+    if use_runtime_with && has_cancel_drop_hint_with && hint_id != -1 {
+      let r_a_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a_drop.prog;
+      let r_drop_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_drop.id, "cancel_drop_hint_with"));
+      prog = r_drop_fn.prog;
+      let r_rt_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("rt"));
+      prog = r_rt_drop.prog;
+      let r_cx_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx_drop.prog;
+      let r_f_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("f"));
+      prog = r_f_drop.prog;
+      let mut drop_args: Vec[i32] = Vec();
+      drop_args.push(r_rt_drop.id);
+      drop_args.push(r_cx_drop.id);
+      drop_args.push(hint_id);
+      drop_args.push(r_f_drop.id);
+      let r_drop_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_drop_fn.id, Vec(), drop_args));
+      prog = r_drop_call.prog;
+      then_stmts.push(ast.Stmt.Assign(sp, "f", r_drop_call.id));
+    } else if has_cancel_drop_hint && hint_id != -1 {
+      let r_a_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a_drop.prog;
+      let r_drop_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_drop.id, "cancel_drop_hint"));
+      prog = r_drop_fn.prog;
+      let r_cx_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx_drop.prog;
+      let r_f_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("f"));
+      prog = r_f_drop.prog;
+      let mut drop_args: Vec[i32] = Vec();
+      drop_args.push(r_cx_drop.id);
+      drop_args.push(hint_id);
+      drop_args.push(r_f_drop.id);
+      let r_drop_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_drop_fn.id, Vec(), drop_args));
+      prog = r_drop_call.prog;
+      then_stmts.push(ast.Stmt.Assign(sp, "f", r_drop_call.id));
+    } else if use_runtime_with && has_cancel_drop_state_with {
       let r_a_drop: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
       prog = r_a_drop.prog;
       let r_drop_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_drop.id, "cancel_drop_state_with"));
@@ -753,7 +972,36 @@ fn mk_async_poll_loop_body(
       prog = r_drop_call.prog;
       then_stmts.push(ast.Stmt.Assign(sp, "f", r_drop_call.id));
     }
-    if use_runtime_with && has_cancel_cleanup_state_with {
+    if use_runtime_with && has_cancel_cleanup_hint_with && hint_id != -1 {
+      let r_a_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a_cleanup.prog;
+      let r_cleanup_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_cleanup.id, "cancel_cleanup_hint_with"));
+      prog = r_cleanup_fn.prog;
+      let r_rt_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("rt"));
+      prog = r_rt_cleanup.prog;
+      let r_cx_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx_cleanup.prog;
+      let mut cleanup_args: Vec[i32] = Vec();
+      cleanup_args.push(r_rt_cleanup.id);
+      cleanup_args.push(r_cx_cleanup.id);
+      cleanup_args.push(hint_id);
+      let r_cleanup_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_cleanup_fn.id, Vec(), cleanup_args));
+      prog = r_cleanup_call.prog;
+      then_stmts.push(ast.Stmt.ExprStmt(sp, r_cleanup_call.id));
+    } else if has_cancel_cleanup_hint && hint_id != -1 {
+      let r_a_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a_cleanup.prog;
+      let r_cleanup_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_cleanup.id, "cancel_cleanup_hint"));
+      prog = r_cleanup_fn.prog;
+      let r_cx_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx_cleanup.prog;
+      let mut cleanup_args: Vec[i32] = Vec();
+      cleanup_args.push(r_cx_cleanup.id);
+      cleanup_args.push(hint_id);
+      let r_cleanup_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_cleanup_fn.id, Vec(), cleanup_args));
+      prog = r_cleanup_call.prog;
+      then_stmts.push(ast.Stmt.ExprStmt(sp, r_cleanup_call.id));
+    } else if use_runtime_with && has_cancel_cleanup_state_with {
       let r_a_cleanup: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
       prog = r_a_cleanup.prog;
       let r_cleanup_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a_cleanup.id, "cancel_cleanup_state_with"));
@@ -818,7 +1066,46 @@ fn mk_async_poll_loop_body(
       prog = r_cleanup_call.prog;
       then_stmts.push(ast.Stmt.ExprStmt(sp, r_cleanup_call.id));
     }
-    if use_runtime_with && has_cancel_return_with {
+    if use_runtime_with && has_cancel_return_hint_with && hint_id != -1 {
+      let r_a4: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a4.prog;
+      let r_cancel_ret_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a4.id, "cancel_return_hint_with"));
+      prog = r_cancel_ret_fn.prog;
+      let r_rt3: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("rt"));
+      prog = r_rt3.prog;
+      let r_cx4: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx4.prog;
+      let mut ret_args: Vec[i32] = Vec();
+      ret_args.push(r_rt3.id);
+      ret_args.push(r_cx4.id);
+      ret_args.push(hint_id);
+      let r_cancel_ret_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_cancel_ret_fn.id, Vec(), ret_args));
+      prog = r_cancel_ret_call.prog;
+      if ret_is_unit {
+        then_stmts.push(ast.Stmt.ExprStmt(sp, r_cancel_ret_call.id));
+        then_stmts.push(ast.Stmt.ReturnStmt(sp, false, -1));
+      } else {
+        then_stmts.push(ast.Stmt.ReturnStmt(sp, true, r_cancel_ret_call.id));
+      }
+    } else if has_cancel_return_hint && hint_id != -1 {
+      let r_a4: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
+      prog = r_a4.prog;
+      let r_cancel_ret_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a4.id, "cancel_return_hint"));
+      prog = r_cancel_ret_fn.prog;
+      let r_cx4: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident("cx"));
+      prog = r_cx4.prog;
+      let mut ret_args: Vec[i32] = Vec();
+      ret_args.push(r_cx4.id);
+      ret_args.push(hint_id);
+      let r_cancel_ret_call: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Call(r_cancel_ret_fn.id, Vec(), ret_args));
+      prog = r_cancel_ret_call.prog;
+      if ret_is_unit {
+        then_stmts.push(ast.Stmt.ExprStmt(sp, r_cancel_ret_call.id));
+        then_stmts.push(ast.Stmt.ReturnStmt(sp, false, -1));
+      } else {
+        then_stmts.push(ast.Stmt.ReturnStmt(sp, true, r_cancel_ret_call.id));
+      }
+    } else if use_runtime_with && has_cancel_return_with {
       let r_a4: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Ident(async_alias));
       prog = r_a4.prog;
       let r_cancel_ret_fn: AddExprToProgResult = add_expr_to_prog(prog, sp, ast.ExprNode.Member(r_a4.id, "cancel_return_with"));
@@ -919,19 +1206,26 @@ fn rewrite_async_main_and_tests_in_program(
   has_default_runtime: bool,
   has_park_until_wake_with: bool,
   has_park_with: bool,
+  has_cancel_hint: bool,
+  has_cancel_drop_hint_with: bool,
   has_cancel_drop_state_with: bool,
   has_cancel_drop_with: bool,
+  has_cancel_cleanup_hint_with: bool,
   has_cancel_cleanup_state_with: bool,
   has_cancel_cleanup_with: bool,
+  has_cancel_return_hint_with: bool,
   has_cancel_return_with: bool,
   has_cancel_requested_with: bool,
   has_pending_wait_with: bool,
   has_park_until_wake: bool,
   has_park: bool,
+  has_cancel_drop_hint: bool,
   has_cancel_drop_state: bool,
   has_cancel_drop: bool,
+  has_cancel_cleanup_hint: bool,
   has_cancel_cleanup_state: bool,
   has_cancel_cleanup: bool,
+  has_cancel_return_hint: bool,
   has_cancel_return: bool,
   has_cancel_requested: bool,
   has_pending_wait: bool,
@@ -963,19 +1257,26 @@ fn rewrite_async_main_and_tests_in_program(
           has_default_runtime,
           has_park_until_wake_with,
           has_park_with,
+          has_cancel_hint,
+          has_cancel_drop_hint_with,
           has_cancel_drop_state_with,
           has_cancel_drop_with,
+          has_cancel_cleanup_hint_with,
           has_cancel_cleanup_state_with,
           has_cancel_cleanup_with,
+          has_cancel_return_hint_with,
           has_cancel_return_with,
           has_cancel_requested_with,
           has_pending_wait_with,
           has_park_until_wake,
           has_park,
+          has_cancel_drop_hint,
           has_cancel_drop_state,
           has_cancel_drop,
+          has_cancel_cleanup_hint,
           has_cancel_cleanup_state,
           has_cancel_cleanup,
+          has_cancel_return_hint,
           has_cancel_return,
           has_cancel_requested,
           has_pending_wait,
@@ -1019,19 +1320,26 @@ fn rewrite_async_entrypoints(w0: tc.World, opts: cg.EmitOptions) -> tc.World {
   let has_default_runtime: bool = world_mod_has_func(w0, "std/async", "default_runtime");
   let has_park_until_wake_with: bool = world_mod_has_func(w0, "std/async", "park_until_wake_with");
   let has_park_with: bool = world_mod_has_func(w0, "std/async", "park_with");
+  let has_cancel_hint: bool = world_mod_has_func(w0, "std/async", "cancel_hint");
+  let has_cancel_drop_hint_with: bool = world_mod_has_func(w0, "std/async", "cancel_drop_hint_with");
   let has_cancel_drop_state_with: bool = world_mod_has_func(w0, "std/async", "cancel_drop_state_with");
   let has_cancel_drop_with: bool = world_mod_has_func(w0, "std/async", "cancel_drop_with");
+  let has_cancel_cleanup_hint_with: bool = world_mod_has_func(w0, "std/async", "cancel_cleanup_hint_with");
   let has_cancel_cleanup_state_with: bool = world_mod_has_func(w0, "std/async", "cancel_cleanup_state_with");
   let has_cancel_cleanup_with: bool = world_mod_has_func(w0, "std/async", "cancel_cleanup_with");
+  let has_cancel_return_hint_with: bool = world_mod_has_func(w0, "std/async", "cancel_return_hint_with");
   let has_cancel_return_with: bool = world_mod_has_func(w0, "std/async", "cancel_return_with");
   let has_cancel_requested_with: bool = world_mod_has_func(w0, "std/async", "cancel_requested_with");
   let has_pending_wait_with: bool = world_mod_has_func(w0, "std/async", "pending_wait_with");
   let has_park_until_wake: bool = world_mod_has_func(w0, "std/async", "park_until_wake");
   let has_park: bool = world_mod_has_func(w0, "std/async", "park");
+  let has_cancel_drop_hint: bool = world_mod_has_func(w0, "std/async", "cancel_drop_hint");
   let has_cancel_drop_state: bool = world_mod_has_func(w0, "std/async", "cancel_drop_state");
   let has_cancel_drop: bool = world_mod_has_func(w0, "std/async", "cancel_drop");
+  let has_cancel_cleanup_hint: bool = world_mod_has_func(w0, "std/async", "cancel_cleanup_hint");
   let has_cancel_cleanup_state: bool = world_mod_has_func(w0, "std/async", "cancel_cleanup_state");
   let has_cancel_cleanup: bool = world_mod_has_func(w0, "std/async", "cancel_cleanup");
+  let has_cancel_return_hint: bool = world_mod_has_func(w0, "std/async", "cancel_return_hint");
   let has_cancel_return: bool = world_mod_has_func(w0, "std/async", "cancel_return");
   let has_cancel_requested: bool = world_mod_has_func(w0, "std/async", "cancel_requested");
   let has_pending_wait: bool = world_mod_has_func(w0, "std/async", "pending_wait");
@@ -1048,19 +1356,26 @@ fn rewrite_async_entrypoints(w0: tc.World, opts: cg.EmitOptions) -> tc.World {
         has_default_runtime,
         has_park_until_wake_with,
         has_park_with,
+        has_cancel_hint,
+        has_cancel_drop_hint_with,
         has_cancel_drop_state_with,
         has_cancel_drop_with,
+        has_cancel_cleanup_hint_with,
         has_cancel_cleanup_state_with,
         has_cancel_cleanup_with,
+        has_cancel_return_hint_with,
         has_cancel_return_with,
         has_cancel_requested_with,
         has_pending_wait_with,
         has_park_until_wake,
         has_park,
+        has_cancel_drop_hint,
         has_cancel_drop_state,
         has_cancel_drop,
+        has_cancel_cleanup_hint,
         has_cancel_cleanup_state,
         has_cancel_cleanup,
+        has_cancel_return_hint,
         has_cancel_return,
         has_cancel_requested,
         has_pending_wait,
