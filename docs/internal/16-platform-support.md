@@ -138,7 +138,7 @@ Windows 目标支持两条工具链：
 
 - Linux: `epoll` 单 fd 一次等待（`EPOLLIN/EPOLLOUT` + `ERR/HUP`）。
 - macOS/*BSD: `kqueue` 单 fd 一次等待（`EVFILT_READ/EVFILT_WRITE` + `EV_ONESHOT`）。
-- Windows: `select` 基线等待（后续升级为 IOCP 语义接线）。
+- Windows: `IOCP` 等待（`CreateIoCompletionPort + WSARecv/WSASend(overlapped) + GetQueuedCompletionStatus`）。
 - 其他 POSIX: `select` 回退。
 
 通用语义：
