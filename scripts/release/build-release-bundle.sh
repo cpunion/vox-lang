@@ -88,6 +88,11 @@ bootstrap_cc_env() {
   if [[ -n "${CC:-}" ]]; then
     local cc_bin="${CC%% *}"
     if command -v "$cc_bin" >/dev/null 2>&1; then
+      if [[ "$GOOS" == "windows" && ( "$cc_bin" == "cl" || "$cc_bin" == "cl.exe" ) ]]; then
+        export CC="cl"
+        echo "[release] using CC from env: $CC"
+        return 0
+      fi
       local resolved="$(command -v "$cc_bin")"
       if [[ "$GOOS" == "windows" ]]; then
         resolved="$(normalize_windows_exe_path "$resolved")"
