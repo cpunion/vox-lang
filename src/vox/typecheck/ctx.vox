@@ -3,6 +3,7 @@ import "vox/ir" as ir
 
 pub struct Ctx {
   pub pool: ir.TyPool,
+  pub ptr_bits: i32, // normalized pointer width for isize/usize (32 or 64)
   pub ty_bad: i32,
   pub ty_unit: i32,
   pub ty_bool: i32,
@@ -30,6 +31,34 @@ pub struct Ctx {
   pub type_aliases: Vec[TypeAliasSig],
   pub consts: Vec[ConstSig],
   pub ffi_export_symbols: Vec[FfiExportSym],
+}
+
+fn normalize_ptr_bits(bits0: i32) -> i32 {
+  if bits0 == 32 { return 32; }
+  return 64;
+}
+
+pub fn ctx_ptr_bits(c: Ctx) -> i32 {
+  return normalize_ptr_bits(c.ptr_bits);
+}
+
+pub fn ctx_is_32bit_ptr(c: Ctx) -> bool {
+  return ctx_ptr_bits(c) == 32;
+}
+
+pub fn ctx_isize_min(c: Ctx) -> i64 {
+  if ctx_is_32bit_ptr(c) { return -2147483647 - 1; }
+  return -9223372036854775807 - 1;
+}
+
+pub fn ctx_isize_max(c: Ctx) -> i64 {
+  if ctx_is_32bit_ptr(c) { return 2147483647; }
+  return 9223372036854775807;
+}
+
+pub fn ctx_usize_max_i64(c: Ctx) -> i64 {
+  if ctx_is_32bit_ptr(c) { return 4294967295; }
+  return -1;
 }
 
 pub struct TypeAliasSig {
@@ -108,9 +137,11 @@ fn intern_ty(ctx: Ctx, t: ir.Ty) -> InternResult {
   return InternResult { ctx: q, idx: r.idx };
 }
 
-pub fn new_ctx() -> Ctx {
+pub fn new_ctx_with_ptr_bits(bits0: i32) -> Ctx {
+  let bits: i32 = normalize_ptr_bits(bits0);
   let mut c: Ctx = Ctx {
     pool: ir.ty_pool(),
+    ptr_bits: bits,
     ty_bad: -1, ty_unit: -1, ty_bool: -1,
     ty_i8: -1, ty_u8: -1, ty_i16: -1, ty_u16: -1, ty_i32: -1, ty_u32: -1, ty_i64: -1, ty_u64: -1, ty_isize: -1, ty_usize: -1,
     ty_f32: -1, ty_f64: -1,
@@ -153,6 +184,10 @@ pub fn new_ctx() -> Ctx {
   let rv4: InternResult = intern_ty(c, ir.ty_vec(c.ty_string)); c = rv4.ctx;
 
   return c;
+}
+
+pub fn new_ctx() -> Ctx {
+  return new_ctx_with_ptr_bits(64);
 }
 
 fn typename_is0(tn: ast.TypeName, s: String) -> bool {
@@ -473,13 +508,13 @@ fn type_param_idx_nominal(tps: Vec[String], name: String) -> i32 {
 
 fn nominal_check_type_param_bounds(
   ctx0: Ctx,
-w: World,
-cur_mod: String,
-imps: Imports,
-sp: ast.Span,
-tps: Vec[String],
-tpbs: Vec[ast.TypeParamBoundsDecl],
-arg_tys: Vec[i32],
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  sp: ast.Span,
+  tps: Vec[String],
+  tpbs: Vec[ast.TypeParamBoundsDecl],
+  arg_tys: Vec[i32],
 ) -> NominalTraitBoundsResult {
   let mut c: Ctx = ctx0;
   let mut bi: i32 = 0;
@@ -523,26 +558,26 @@ arg_tys: Vec[i32],
         if fi.ambiguous {
           let msg0: String =
             "type argument "
-            .concat(ty_inst_str(c, arg_ty))
-            .concat(" has ambiguous impls for trait ")
-            .concat(rtr.name)
-            .concat(" (candidates: ")
-            .concat(fi.candidates)
-            .concat(")");
+              .concat(ty_inst_str(c, arg_ty))
+              .concat(" has ambiguous impls for trait ")
+              .concat(rtr.name)
+              .concat(" (candidates: ")
+              .concat(fi.candidates)
+              .concat(")");
           return NominalTraitBoundsResult { ok: false, err: type_error_at(sp, msg0), ctx: c };
         }
         if !fi.found {
           let cands: String = trait_impl_candidates_text(c, rtr.mod_path, rtr.name);
           let msg1: String =
             "type argument "
-            .concat(ty_inst_str(c, arg_ty))
-            .concat(" does not satisfy trait bound ")
-            .concat(bdecl.name)
-            .concat(": ")
-            .concat(rtr.name)
-            .concat(" (available impls: ")
-            .concat(cands)
-            .concat(")");
+              .concat(ty_inst_str(c, arg_ty))
+              .concat(" does not satisfy trait bound ")
+              .concat(bdecl.name)
+              .concat(": ")
+              .concat(rtr.name)
+              .concat(" (available impls: ")
+              .concat(cands)
+              .concat(")");
           return NominalTraitBoundsResult { ok: false, err: type_error_at(sp, msg1), ctx: c };
         }
       }
@@ -729,14 +764,20 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
     };
     if !is_int { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
 
-    // Bounds must fit the base type. (v0 simplification: u64/usize bounds are limited to i64 range.)
+    // Bounds must fit the base type.
     if bt.kind == ir.TyKind.I8 && (lo < -128 || hi > 127) { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     if bt.kind == ir.TyKind.U8 && (lo < 0 || hi > 255) { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     if bt.kind == ir.TyKind.I16 && (lo < -32768 || hi > 32767) { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     if bt.kind == ir.TyKind.U16 && (lo < 0 || hi > 65535) { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     if bt.kind == ir.TyKind.I32 && (lo < -2147483648 || hi > 2147483647) { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     if bt.kind == ir.TyKind.U32 && (lo < 0 || hi > 4294967295) { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
-    if (bt.kind == ir.TyKind.U64 || bt.kind == ir.TyKind.USize) && lo < 0 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    if bt.kind == ir.TyKind.ISize && (lo < ctx_isize_min(c) || hi > ctx_isize_max(c)) {
+      return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
+    }
+    if bt.kind == ir.TyKind.USize && (lo < 0 || hi > ctx_usize_max_i64(c)) {
+      return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
+    }
+    if bt.kind == ir.TyKind.U64 && lo < 0 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
 
     let ir0: InternResult = intern_ty(c, ir.ty_range(br.idx, lo, hi));
     c = ir0.ctx;
