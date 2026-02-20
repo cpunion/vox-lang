@@ -62,6 +62,6 @@
 - `std::dotenv` 已提供：
   - `value(path, key)`：读取单个 `.env` 文件中的键值（支持 `KEY=...` 与 `export KEY=...`）
   - `value_from_paths(paths, key)`：按路径顺序查找首个非空值
-- `std::sync` 当前 API 为泛型句柄：`Mutex[T]` / `Atomic[T]`（当前 `T` 由 `SyncScalar` 约束，已覆盖 `i32/i64`）；底层统一基于 runtime `i64` handle intrinsic。`fetch_add/swap/load/store` 已在解释器与 C 后端对齐。
+- `std::sync` 当前 API 为泛型句柄：`Mutex[T]` / `Atomic[T]`（当前 `T` 由 `SyncScalar` 约束，已覆盖 `i32/i64`）；标准库层句柄类型为 `isize`（按目标指针宽度），内部通过 `std::runtime` 适配到现有 intrinsic。`fetch_add/swap/load/store` 已在解释器与 C 后端对齐。
 
 重要：由于 Vox 的“临时借用”规则，标准库应优先提供“可长期保存的拥有型视图”（例如 `StrView` / `Slice[T]`），并优先使用 view-first API（避免不必要的 `to_string` / `to_vec` 物化）。
