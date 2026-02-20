@@ -56,6 +56,11 @@ Governance from now on:
   - [x] A12-2 新增 `vox/internal/path`，并让 `src/main.vox` / `vox/macroexpand` 复用统一路径辅助逻辑（`base_name/dirname/join/slash-normalize/is_abs_path`）。
   - Source: `docs/internal/28-vox-libraries.md`.
 
+- [x] A19 `vox/internal/text` 复用收敛（第二批）
+  - [x] A19-1 新增 `txt.contains_str`，统一字符串集合包含判断 helper。
+  - [x] A19-2 `main/compile/loader/typecheck/world/fmt/list/manifest` 复用 `txt.has_prefix/has_suffix/contains_str/trim_space`，减少重复实现与维护面。
+  - Source: `docs/internal/28-vox-libraries.md`.
+
 - [x] A13 规范与实现一致性修正
   - [x] A13-1 `docs/internal/09-async-model.md` 示例签名与当前 `EventRuntime` 默认行为一致。
   - [x] A13-2 `docs/internal/14-syntax-details.md` 成员调用说明更新为 trait/impl 已支持现状。
