@@ -13,6 +13,7 @@ Attr
   := "@effect(" Ident ")"
    | "@resource(" Ident "," Ident ")"
    | "@ffi_import(" StringLit "," StringLit ")"
+   | "@ffi_import(" StringLit "," StringLit "," StringLit ")"
    | "@ffi_export(" StringLit "," StringLit ")"
    | "@track_caller"
 
@@ -30,7 +31,10 @@ AttributedFn
 ### FFI Import/Export
 
 - `@ffi_import("abi", "symbol")` binds declaration to foreign symbol.
+- `@ffi_import("wasm", "module", "symbol")` binds wasm import with module+symbol.
 - `@ffi_export("abi", "symbol")` exports function symbol for foreign linkage.
+- Same function can have multiple `@ffi_export` with different target.
+- FFI import/export functions cannot be generic or variadic.
 
 ### Caller Tracking
 
@@ -50,6 +54,7 @@ Parser/type errors include:
 - malformed attribute argument list
 - unsupported attribute target placement
 - invalid ABI/symbol usage under FFI checker rules
+- generic/variadic FFI function declarations
 
 ## Example
 
