@@ -55,6 +55,7 @@ Status:
 | S203 | UFCS call syntax | Done | `tests/syntax/src/functions_test.vox` | `Add.add(i, 3)` |
 | S204 | block expression syntax | Done | `tests/syntax/src/functions_test.vox` |  |
 | S205 | malformed function declaration parse failure | Done | `tests/syntax/src/functions_test.vox` |  |
+| S206 | trailing comma in function params/call args | Done | `tests/syntax/src/functions_test.vox` | multiline form with terminal comma |
 | S301 | generic params and explicit type args | Done | `tests/syntax/src/generics_test.vox` |  |
 | S302 | const generics | Done | `tests/syntax/src/generics_test.vox` |  |
 | S303 | where trait bounds | Done | `tests/syntax/src/generics_test.vox` |  |
