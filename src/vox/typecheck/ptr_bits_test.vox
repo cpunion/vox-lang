@@ -1,0 +1,77 @@
+import "std/testing" as t
+import "vox/parse" as p
+import "vox/typecheck" as tc
+
+fn parse_prog_ptr_bits(src: String) -> p.ParseResult {
+  return p.parse_text(src);
+}
+
+fn add_mod_ptr_bits(w: tc.World, path: String, src: String) -> tc.World {
+  let r: p.ParseResult = parse_prog_ptr_bits(src);
+  t.assert(r.err == p.ParseError.None);
+  return tc.world_add(w, path, r.prog);
+}
+
+fn contains_ptr_bits(hay: String, needle: String) -> bool {
+  if needle.len() == 0 { return true; }
+  if hay.len() < needle.len() { return false; }
+  let mut i: i32 = 0;
+  while i <= hay.len() - needle.len() {
+    if hay.slice(i, i + needle.len()) == needle { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn typecheck_world_ptr_bits(w: tc.World, ptr_bits: i32) -> tc.TcResult {
+  let br: tc.BuildCtxResult = tc.build_ctx_with_ptr_bits(w, ptr_bits);
+  if !br.ok { return tc.TcResult { ok: false, err: br.err }; }
+  return tc.typecheck_world_with_ctx(w, br.ctx);
+}
+
+fn test_typecheck_ptr32_usize_literal_out_of_range() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod_ptr_bits(w, "main", "fn main() -> usize { let x: usize = 4294967296; return x; }");
+  let r: tc.TcResult = typecheck_world_ptr_bits(w, 32);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains_ptr_bits(msg, "usize literal out of range"), msg);
+}
+
+fn test_typecheck_ptr32_isize_literal_out_of_range() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod_ptr_bits(w, "main", "fn main() -> isize { let x: isize = 2147483648; return x; }");
+  let r: tc.TcResult = typecheck_world_ptr_bits(w, 32);
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains_ptr_bits(msg, "isize literal out of range"), msg);
+}
+
+fn test_typecheck_ptr32_range_usize_bound_out_of_range() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod_ptr_bits(w, "main", "type Tiny = @range(0..=4294967296) usize\nfn main() -> i32 { return 0; }");
+  let r: tc.TcResult = typecheck_world_ptr_bits(w, 32);
+  t.assert(!r.ok);
+}
+
+fn test_typecheck_ptr32_size_of_usize_is_four() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod_ptr_bits(w, "main", """
+    type PtrWord = @range(4..=4) usize
+    const N: PtrWord = @size_of(usize) as PtrWord
+    fn main() -> i32 { return N as i32; }
+  """);
+  let r: tc.TcResult = typecheck_world_ptr_bits(w, 32);
+  t.assert_with(r.ok, tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_ptr64_size_of_usize_not_four() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod_ptr_bits(w, "main", """
+    type PtrWord = @range(4..=4) usize
+    const N: PtrWord = @size_of(usize) as PtrWord
+    fn main() -> i32 { return N as i32; }
+  """);
+  let r: tc.TcResult = typecheck_world_ptr_bits(w, 64);
+  t.assert(!r.ok);
+}

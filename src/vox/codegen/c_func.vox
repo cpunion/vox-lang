@@ -104,14 +104,34 @@ fn int_bits(k: ir.TyKind) -> i32 {
     ir.TyKind.U32 => 32,
     ir.TyKind.I64 => 64,
     ir.TyKind.U64 => 64,
-    ir.TyKind.ISize => 64,
-    ir.TyKind.USize => 64,
+    ir.TyKind.ISize => 0,
+    ir.TyKind.USize => 0,
     _ => 0,
   };
 }
 
+fn int_bits_expr(k: ir.TyKind) -> String {
+  if k == ir.TyKind.ISize || k == ir.TyKind.USize {
+    return "((int32_t)(sizeof(uintptr_t) * 8))";
+  }
+  let b: i32 = int_bits(k);
+  return b.to_string();
+}
+
+fn int_sign_high_bit_expr(k: ir.TyKind) -> String {
+  if k == ir.TyKind.ISize {
+    return "(((uintptr_t)1) << (((int32_t)(sizeof(uintptr_t) * 8)) - 1))";
+  }
+  let b: i32 = int_bits(k);
+  return "(((".concat(unsigned_peer_c_type(k)).concat(")1) << ").concat((b - 1).to_string()).concat(")");
+}
+
 fn int_cast_needs_runtime_check(dst: ir.TyKind, src: ir.TyKind) -> bool {
   if !is_int_scalar_kind(dst) || !is_int_scalar_kind(src) { return true; }
+  if dst == ir.TyKind.ISize || dst == ir.TyKind.USize || src == ir.TyKind.ISize || src == ir.TyKind.USize {
+    // Pointer-width ints depend on target ABI; keep checks to preserve correctness across targets.
+    return true;
+  }
   let db: i32 = int_bits(dst);
   let sb: i32 = int_bits(src);
   if db == 0 || sb == 0 { return true; }
@@ -133,8 +153,8 @@ fn unsigned_peer_c_type(k: ir.TyKind) -> String {
     ir.TyKind.U32 => "uint32_t",
     ir.TyKind.I64 => "uint64_t",
     ir.TyKind.U64 => "uint64_t",
-    ir.TyKind.ISize => "uint64_t",
-    ir.TyKind.USize => "uint64_t",
+    ir.TyKind.ISize => "uintptr_t",
+    ir.TyKind.USize => "uintptr_t",
     _ => "uint64_t",
   };
 }
@@ -145,7 +165,7 @@ fn signed_min_macro(k: ir.TyKind) -> String {
     ir.TyKind.I16 => "INT16_MIN",
     ir.TyKind.I32 => "INT32_MIN",
     ir.TyKind.I64 => "INT64_MIN",
-    ir.TyKind.ISize => "INT64_MIN",
+    ir.TyKind.ISize => "INTPTR_MIN",
     _ => "",
   };
 }
@@ -156,7 +176,7 @@ fn signed_max_macro(k: ir.TyKind) -> String {
     ir.TyKind.I16 => "INT16_MAX",
     ir.TyKind.I32 => "INT32_MAX",
     ir.TyKind.I64 => "INT64_MAX",
-    ir.TyKind.ISize => "INT64_MAX",
+    ir.TyKind.ISize => "INTPTR_MAX",
     _ => "",
   };
 }
@@ -323,27 +343,27 @@ fn emit_instr_int_cast_checked(pool: ir.TyPool, tid: i32, dst_ty: i32, src_ty: i
   let dst_max: String =
     match dst.kind {
       ir.TyKind.I8 => "INT8_MAX",
-    ir.TyKind.U8 => "UINT8_MAX",
-    ir.TyKind.I16 => "INT16_MAX",
-    ir.TyKind.U16 => "UINT16_MAX",
-    ir.TyKind.I32 => "INT32_MAX",
-    ir.TyKind.U32 => "UINT32_MAX",
-    ir.TyKind.I64 => "INT64_MAX",
-    ir.TyKind.U64 => "UINT64_MAX",
-    ir.TyKind.ISize => "INT64_MAX",
-    ir.TyKind.USize => "UINT64_MAX",
-    _ => "",
-  };
+      ir.TyKind.U8 => "UINT8_MAX",
+      ir.TyKind.I16 => "INT16_MAX",
+      ir.TyKind.U16 => "UINT16_MAX",
+      ir.TyKind.I32 => "INT32_MAX",
+      ir.TyKind.U32 => "UINT32_MAX",
+      ir.TyKind.I64 => "INT64_MAX",
+      ir.TyKind.U64 => "UINT64_MAX",
+      ir.TyKind.ISize => "INTPTR_MAX",
+      ir.TyKind.USize => "UINTPTR_MAX",
+      _ => "",
+    };
   if dst_max.len() == 0 { panic("int_cast_checked dst must be int"); }
   let dst_min: String =
     match dst.kind {
       ir.TyKind.I8 => "INT8_MIN",
-    ir.TyKind.I16 => "INT16_MIN",
-    ir.TyKind.I32 => "INT32_MIN",
-    ir.TyKind.I64 => "INT64_MIN",
-    ir.TyKind.ISize => "INT64_MIN",
-    _ => "0",
-  };
+      ir.TyKind.I16 => "INT16_MIN",
+      ir.TyKind.I32 => "INT32_MIN",
+      ir.TyKind.I64 => "INT64_MIN",
+      ir.TyKind.ISize => "INTPTR_MIN",
+      _ => "0",
+    };
 
   let dst_is_unsigned: bool = is_unsigned_int_kind(dst.kind);
   let src_is_unsigned: bool = is_unsigned_int_kind(src.kind);
@@ -469,8 +489,7 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
   let is_shl: bool = match op { ir.BinOpKind.Shl => true, _ => false };
   let is_shr: bool = match op { ir.BinOpKind.Shr => true, _ => false };
   if is_shl || is_shr {
-    let bits: i32 = int_bits(t.kind);
-    if bits == 0 { panic("shift expects int type"); }
+    let bits_expr: String = int_bits_expr(t.kind);
     let uty: String = unsigned_peer_c_type(t.kind);
     let tmp_name: String = "vox_tmp_".concat(c_temp_name(tid));
     let mut out3: Vec[String] = Vec();
@@ -478,11 +497,13 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
     out3.push("    ".concat(uty).concat(" ua = (").concat(uty).concat(")").concat(c_value(a)).concat(";"));
     if is_signed_int_kind(t.kind) {
       out3.push("    int64_t sh = (int64_t)".concat(c_value(b)).concat(";"));
-      out3.push("    if (sh < 0 || sh >= ".concat(bits.to_string()).concat(") { vox_builtin_panic(\"shift count out of range\"); }"));
+      let lchk: String = "    if (sh < 0 || sh >= (int64_t)".concat(bits_expr).concat(") { vox_builtin_panic(\"shift count out of range\"); }");
+      out3.push(lchk);
       out3.push("    uint64_t n = (uint64_t)sh;");
     } else {
       out3.push("    uint64_t n = (uint64_t)".concat(c_value(b)).concat(";"));
-      out3.push("    if (n >= ".concat(bits.to_string()).concat(") { vox_builtin_panic(\"shift count out of range\"); }"));
+      let lchk2: String = "    if (n >= (uint64_t)".concat(bits_expr).concat(") { vox_builtin_panic(\"shift count out of range\"); }");
+      out3.push(lchk2);
     }
     if is_shl {
       out3.push("    ".concat(uty).concat(" ur = (").concat(uty).concat(")(ua << n);"));
@@ -490,7 +511,8 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
       out3.push("    ".concat(uty).concat(" ur;"));
       out3.push("    if (n == 0) {");
       out3.push("      ur = ua;");
-      out3.push("    } else if ((ua & ((".concat(uty).concat(")1 << ").concat((bits - 1).to_string()).concat(")) != 0) {"));
+      let lsign: String = "    } else if ((ua & ".concat(int_sign_high_bit_expr(t.kind)).concat(") != 0) {");
+      out3.push(lsign);
       out3.push("      ".concat(uty).concat(" m = ~(((").concat(uty).concat(")~(").concat(uty).concat(")0) >> n);"));
       out3.push("      ur = (".concat(uty).concat(")((ua >> n) | m);"));
       out3.push("    } else {");
@@ -748,8 +770,8 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr) -> Vec[String] {
       vec1("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, dst_ty)).concat(")").concat(c_value(v)).concat(";")),
     ir.Instr.RangeCheck(ty, v, lo, hi) => vec1(
       "  if (".concat(c_value(v)).concat(" < (").concat(c_type(pool, ty)).concat(")").concat(lo.to_string())
-      .concat(" || ").concat(c_value(v)).concat(" > (").concat(c_type(pool, ty)).concat(")").concat(hi.to_string())
-      .concat(") { vox_builtin_panic(\"range check failed\"); }"),
+        .concat(" || ").concat(c_value(v)).concat(" > (").concat(c_type(pool, ty)).concat(")").concat(hi.to_string())
+        .concat(") { vox_builtin_panic(\"range check failed\"); }"),
     ),
 
     ir.Instr.Store(sid, v) => vec1("  ".concat(c_slot_name(sid)).concat(" = ").concat(c_value(v)).concat(";")),
@@ -767,14 +789,14 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr) -> Vec[String] {
     ir.Instr.EnumTag(tid, recv) => vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_value(recv)).concat(".tag;")),
     ir.Instr.EnumPayload(tid, _ty, recv, variant, idx) =>
       vec1("  "
-      .concat(c_temp_name(tid))
-      .concat(" = ")
-      .concat(c_value(recv))
-      .concat(".payload.")
-      .concat(c_ident(variant))
-      .concat("._")
-      .concat(idx.to_string())
-      .concat(";")),
+        .concat(c_temp_name(tid))
+        .concat(" = ")
+        .concat(c_value(recv))
+        .concat(".payload.")
+        .concat(c_ident(variant))
+        .concat("._")
+        .concat(idx.to_string())
+        .concat(";")),
 
     ir.Instr.VecNew(tid, _vty, elem) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_vec_new((int32_t)sizeof(").concat(c_type(pool, elem)).concat("));")),
     ir.Instr.VecPush(recv_slot, _elem, v) => vec1("  vox_vec_push(&".concat(c_slot_name(recv_slot)).concat(", &").concat(c_value(v)).concat(");")),

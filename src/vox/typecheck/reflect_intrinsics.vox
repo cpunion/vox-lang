@@ -59,6 +59,10 @@ fn contains_str_reflect(xs: Vec[String], s: String) -> bool {
 
 fn max_i64_reflect(a: i64, b: i64) -> i64 { return if a > b { a } else { b }; }
 
+fn ptr_size_reflect(ctx: Ctx) -> i64 {
+  return (ctx_ptr_bits(ctx) / 8) as i64;
+}
+
 fn align_up_i64(v: i64, a0: i64) -> i64 {
   let a: i64 = if a0 <= 1 { 1 } else { a0 };
   let r: i64 = v % a;
@@ -66,12 +70,16 @@ fn align_up_i64(v: i64, a0: i64) -> i64 {
   return v + (a - r);
 }
 
-fn scalar_layout(k: ir.TyKind) -> TyLayoutResult {
+fn scalar_layout(ctx: Ctx, k: ir.TyKind) -> TyLayoutResult {
   if k == ir.TyKind.Bool || k == ir.TyKind.I8 || k == ir.TyKind.U8 { return layout_ok(1, 1); }
   if k == ir.TyKind.I16 || k == ir.TyKind.U16 { return layout_ok(2, 2); }
   if k == ir.TyKind.I32 || k == ir.TyKind.U32 || k == ir.TyKind.F32 { return layout_ok(4, 4); }
-  if k == ir.TyKind.I64 || k == ir.TyKind.U64 || k == ir.TyKind.ISize || k == ir.TyKind.USize || k == ir.TyKind.F64 {
+  if k == ir.TyKind.I64 || k == ir.TyKind.U64 || k == ir.TyKind.F64 {
     return layout_ok(8, 8);
+  }
+  if k == ir.TyKind.ISize || k == ir.TyKind.USize {
+    let p: i64 = ptr_size_reflect(ctx);
+    return layout_ok(p, p);
   }
   return layout_err("not scalar");
 }
@@ -164,12 +172,19 @@ fn layout_of_ty_seen(ctx: Ctx, ty: i32, seen: Vec[String]) -> TyLayoutResult {
   let base: i32 = strip_range(ctx, ty);
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
 
-  let sl: TyLayoutResult = scalar_layout(t.kind);
+  let sl: TyLayoutResult = scalar_layout(ctx, t.kind);
   if sl.ok { return sl; }
 
   if t.kind == ir.TyKind.Unit { return layout_ok(0, 1); }
-  if t.kind == ir.TyKind.String { return layout_ok(8, 8); } // const char*
-  if t.kind == ir.TyKind.Vec { return layout_ok(24, 8); }   // vox_vec
+  if t.kind == ir.TyKind.String {
+    let p: i64 = ptr_size_reflect(ctx);
+    return layout_ok(p, p); // const char*
+  }
+  if t.kind == ir.TyKind.Vec {
+    // typedef struct { vox_vec_data* h; int32_t len; } vox_vec;
+    let p: i64 = ptr_size_reflect(ctx);
+    return layout_ok(align_up_i64(p + 4, p), p);
+  }
   if t.kind == ir.TyKind.Struct { return layout_struct_seen(ctx, t.mod_path, t.name, seen); }
   if t.kind == ir.TyKind.Enum { return layout_enum_seen(ctx, t.mod_path, t.name, seen); }
   if t.kind == ir.TyKind.Param {

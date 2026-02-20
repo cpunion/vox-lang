@@ -63,7 +63,7 @@ pub fn add(a: i32, b: i32) -> i32 {
 | `bool` | `bool` | C `_Bool` / `<stdbool.h>` |
 | `i8/i16/i32/i64` | `int8_t/int16_t/int32_t/int64_t` | 定宽有符号整型 |
 | `u8/u16/u32/u64` | `uint8_t/uint16_t/uint32_t/uint64_t` | 定宽无符号整型 |
-| `isize/usize` | `int64_t/uint64_t` | Stage2 当前固定为 64 位 |
+| `isize/usize` | `intptr_t/uintptr_t` | 按目标指针宽度映射（32/64） |
 | `f32/f64` | `float/double` | IEEE 浮点 |
 | `String` | `const char*` | UTF-8 字节串，NUL 结尾，调用方负责约定生命周期 |
 
