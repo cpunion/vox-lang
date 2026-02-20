@@ -177,3 +177,4 @@ vox toolchain pin v0.2.10
 - `docs/internal/17-ffi-interop.md`
 - `docs/internal/19-ir-spec.md`
 - `docs/internal/28-vox-libraries.md`
+- `docs/reference/style-guide.md`（项目执行风格指南）

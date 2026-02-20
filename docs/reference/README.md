@@ -7,6 +7,7 @@ This directory contains user-facing reference documents for Vox.
 - `docs/reference/language/README.md`: language reference tree.
 - `docs/reference/syntax.md`: syntax index (redirect to topic pages).
 - `docs/reference/syntax-coverage.md`: syntax ID matrix and test mapping.
+- `docs/reference/style-guide.md`: project execution style guide (design/API/testing/PR workflow).
 
 ## Reference Tree
 
