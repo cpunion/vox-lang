@@ -144,6 +144,14 @@ Governance from now on:
   - [x] A31-4 `src/std` phase-b 接线：`std/runtime` 提供 `wake_wait_any` 封装，`std/async::wait_many/drain_ready_once` 接入批量等待路径，并补回归测试。
   - Source: `docs/internal/09-async-model.md`.
 
+- [x] A32 Socket 就绪等待 intrinsic（fd/socket 级事件接线基础）
+  - [x] A32-1 compiler/runtime 侧新增 `__tcp_wait_read/__tcp_wait_write`，并在 C runtime 提供平台等待分支：
+    - Linux: `epoll`（单 fd 一次等待）
+    - macOS/*BSD: `kqueue`（`EVFILT_READ/EVFILT_WRITE` 一次等待）
+    - Windows: `select` 基线（后续再升级为 IOCP 语义接线）
+  - [ ] A32-2 发布 + bootstrap lock bump 后，放开 `src/std/runtime` 与 `src/std/io` 的公开封装 API。
+  - Source: `docs/internal/09-async-model.md`, `docs/internal/16-platform-support.md`.
+
 - [x] A16 Async cancel/drop 细化：frame 重绑定钩子
   - [x] A16-1 async entry/test wrapper 在取消分支新增可选 `cancel_drop_with/cancel_drop` 调用，并固定顺序为 `cancel_drop -> cancel_cleanup -> cancel_return`。
     - Landed in `src/vox/compile/compile.vox` with regressions in `src/vox/compile/async_test.vox`.

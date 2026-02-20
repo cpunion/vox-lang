@@ -131,3 +131,18 @@ Windows 目标支持两条工具链：
   - 返回 `true` 表示本次调用消费到至少一个 pending wake token。
 
 这些分支由 `src/vox/codegen/c_emit_test.vox` 的 wake regression 用例锁定。
+
+## Socket Wait Intrinsics 平台约束（A32-1）
+
+`__tcp_wait_read(handle, timeout_ms)` / `__tcp_wait_write(handle, timeout_ms)` 在 C runtime 的平台分支：
+
+- Linux: `epoll` 单 fd 一次等待（`EPOLLIN/EPOLLOUT` + `ERR/HUP`）。
+- macOS/*BSD: `kqueue` 单 fd 一次等待（`EVFILT_READ/EVFILT_WRITE` + `EV_ONESHOT`）。
+- Windows: `select` 基线等待（后续升级为 IOCP 语义接线）。
+- 其他 POSIX: `select` 回退。
+
+通用语义：
+
+- `timeout_ms < 0` 会被钳制到 `0`。
+- 非法句柄会触发 panic。
+- 返回 `true` 表示在超时前观察到对应方向的就绪事件。
