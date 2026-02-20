@@ -1,6 +1,6 @@
 # 语法细节
 
-> 本章记录 Vox 的关键字、优先级与若干重要语法决策。未覆盖的语法按 Rust-like 默认直觉处理，后续逐步补全。
+> 本章记录 Vox 的关键字、优先级与重要语法决策。语法覆盖边界以 `docs/reference/syntax-coverage.md` 为准；每个语法条目在 `docs/reference/language/*` 中有对应规范页。
 
 ## 关键字
 
