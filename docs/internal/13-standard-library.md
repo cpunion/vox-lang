@@ -50,7 +50,10 @@
   - `Set[T: Eq]`：去重集合，基于线性 `Vec[T]`；支持 `add`/`remove`/`contains`/`values`/`clear`/`release`。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取、环境变量读取）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
-- `std::io` 已提供：`out`、`out_ln`、`fail`，以及 `File`/`file_read_all`/`file_write_all`/`file_exists`/`mkdir_p`。网络部分提供 `NetAddr` + `NetConn` 与最小 TCP API：`net_connect` / `net_send` / `net_recv` / `net_wait_read` / `net_wait_write` / `net_close`（解释器与 C 后端一致可用；失败时统一 panic）。
+- `std::io` 已提供：`out`、`out_ln`、`fail`。
+  - 文件 API：`File` + 方法 `exists/read_all/write_all/mkdir_p`。
+  - 网络 API：`NetAddr` + `NetConn`，方法 `connect/send/recv/wait_read/wait_write/close`。
+  - 兼容保留 free-function 入口：`file_read_all/file_write_all/file_exists/mkdir_p/net_connect/net_send/net_recv/net_wait_read/net_wait_write/net_close`（内部转发到方法实现）。
 - `std::runtime` 已提供 intrinsic 能力边界：
   - 运行时封装：`args/exe_path/getenv/now_ns/yield_now`、`wake_notify/wake_wait`、文件/进程/TCP/sync 原语。
     - 批量唤醒等待：`wake_wait_any(tokens, timeout_ms) -> i32`（返回命中下标，未命中为 `-1`）。
