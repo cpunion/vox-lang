@@ -294,13 +294,15 @@ len/get：
 
 数值到字符串（最小格式化能力）：
 
-```
+``` 
 %t0 = i32_to_str 123
 %t1 = i64_to_str 123
 %t2 = u64_to_str 123
-%t3 = f32_to_str 1.5
-%t4 = f64_to_str 1.5
-%t5 = bool_to_str true
+%t3 = isize_to_str 123
+%t4 = usize_to_str 123
+%t5 = f32_to_str 1.5
+%t6 = f64_to_str 1.5
+%t7 = bool_to_str true
 ```
 
 ## 6. 终结指令（terminator）
