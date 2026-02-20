@@ -333,6 +333,12 @@ pub struct MaterializePackSigResult {
   pub sig: FuncSig,
 }
 
+pub struct MaterializedPackEffectiveArityResult {
+  pub ok: bool,
+  pub err: String,
+  pub n: i32,
+}
+
 struct ParsePackIndexResult {
   ok: bool,
   err: String,
@@ -504,6 +510,145 @@ fn remap_cw_reflect_rhs(rhs_param: String, pack: String, pack_tys: Vec[i32], idx
   return RemapCwReflectRhsResult { ok: true, err: "", rhs_param: out };
 }
 
+fn max_i32(a: i32, b: i32) -> i32 {
+  if a > b { return a; }
+  return b;
+}
+
+struct PackMaterializationScanResult {
+  ok: bool,
+  err: String,
+  max_idx: i32,
+  next_occ: i32,
+}
+
+fn pack_materialization_scan_ty(ctx: Ctx, ty: i32, pack: String, occ0: i32) -> PackMaterializationScanResult {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind == ir.TyKind.Param {
+    let dr: PackMemberDecodeResult = decode_pack_member(t.name, pack);
+    if !dr.ok {
+      return PackMaterializationScanResult { ok: false, err: dr.err, max_idx: -1, next_occ: occ0 };
+    }
+    if !dr.matched {
+      return PackMaterializationScanResult { ok: true, err: "", max_idx: -1, next_occ: occ0 };
+    }
+    if dr.is_all {
+      return PackMaterializationScanResult { ok: true, err: "", max_idx: occ0, next_occ: occ0 + 1 };
+    }
+    return PackMaterializationScanResult { ok: true, err: "", max_idx: dr.idx, next_occ: occ0 };
+  }
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified {
+    return pack_materialization_scan_ty(ctx, t.elem, pack, occ0);
+  }
+  return PackMaterializationScanResult { ok: true, err: "", max_idx: -1, next_occ: occ0 };
+}
+
+// Compute effective materialization arity from signature shape:
+// - `T` consumes one sequential slot per occurrence.
+// - `T.N` consumes `N + 1`.
+// - constraints over `T` (all-elements semantics) consume full explicit arity.
+pub fn materialized_pack_effective_arity(ctx: Ctx, sig: FuncSig, pack: String, pack_tys: Vec[i32]) -> MaterializedPackEffectiveArityResult {
+  if pack_tys.len() == 0 {
+    return MaterializedPackEffectiveArityResult { ok: true, err: "", n: 0 };
+  }
+
+  let mut occ: i32 = 0;
+  let mut max_idx: i32 = -1;
+
+  let mut i: i32 = 0;
+  while i < sig.params.len() {
+    let sr: PackMaterializationScanResult = pack_materialization_scan_ty(ctx, sig.params.get(i), pack, occ);
+    if !sr.ok {
+      return MaterializedPackEffectiveArityResult { ok: false, err: sr.err, n: 0 };
+    }
+    max_idx = max_i32(max_idx, sr.max_idx);
+    occ = sr.next_occ;
+    i = i + 1;
+  }
+
+  let rr: PackMaterializationScanResult = pack_materialization_scan_ty(ctx, sig.ret, pack, occ);
+  if !rr.ok {
+    return MaterializedPackEffectiveArityResult { ok: false, err: rr.err, n: 0 };
+  }
+  max_idx = max_i32(max_idx, rr.max_idx);
+  occ = rr.next_occ;
+
+  if sig.has_variadic {
+    let vr: PackMaterializationScanResult = pack_materialization_scan_ty(ctx, sig.variadic_elem, pack, occ);
+    if !vr.ok {
+      return MaterializedPackEffectiveArityResult { ok: false, err: vr.err, n: 0 };
+    }
+    max_idx = max_i32(max_idx, vr.max_idx);
+    occ = vr.next_occ;
+  }
+
+  let mut bi: i32 = 0;
+  while bi < sig.type_param_bounds.len() {
+    let b: TypeParamBoundSig = sig.type_param_bounds.get(bi);
+    let drb: PackMemberDecodeResult = decode_pack_member(b.type_param, pack);
+    if !drb.ok {
+      return MaterializedPackEffectiveArityResult { ok: false, err: drb.err, n: 0 };
+    }
+    if drb.matched {
+      if drb.is_all {
+        return MaterializedPackEffectiveArityResult { ok: true, err: "", n: pack_tys.len() };
+      }
+      max_idx = max_i32(max_idx, drb.idx);
+    }
+    bi = bi + 1;
+  }
+
+  let mut ci: i32 = 0;
+  while ci < sig.const_where_bounds.len() {
+    let b2: ConstWhereBoundSig = sig.const_where_bounds.get(ci);
+    if
+      b2.lhs_kind == ast.comptime_where_lhs_size_of() ||
+      b2.lhs_kind == ast.comptime_where_lhs_align_of() ||
+      b2.lhs_kind == ast.comptime_where_lhs_field_count() ||
+      b2.lhs_kind == ast.comptime_where_lhs_type()
+    {
+      let dl: PackMemberDecodeResult = decode_pack_member(b2.name, pack);
+      if !dl.ok {
+        return MaterializedPackEffectiveArityResult { ok: false, err: dl.err, n: 0 };
+      }
+      if dl.matched {
+        if dl.is_all {
+          return MaterializedPackEffectiveArityResult { ok: true, err: "", n: pack_tys.len() };
+        }
+        max_idx = max_i32(max_idx, dl.idx);
+      }
+    }
+
+    if b2.rhs_is_param {
+      let rrhs: DecodeCwReflectRhsResult = decode_cw_reflect_rhs(b2.rhs_param);
+      if !rrhs.ok {
+        return MaterializedPackEffectiveArityResult { ok: false, err: rrhs.err, n: 0 };
+      }
+      if rrhs.is_reflect {
+        let dr: PackMemberDecodeResult = decode_pack_member(rrhs.name, pack);
+        if !dr.ok {
+          return MaterializedPackEffectiveArityResult { ok: false, err: dr.err, n: 0 };
+        }
+        if dr.matched {
+          if dr.is_all {
+            return MaterializedPackEffectiveArityResult { ok: true, err: "", n: pack_tys.len() };
+          }
+          max_idx = max_i32(max_idx, dr.idx);
+        }
+      }
+    }
+    ci = ci + 1;
+  }
+
+  if max_idx < 0 {
+    return MaterializedPackEffectiveArityResult { ok: true, err: "", n: 0 };
+  }
+  if max_idx >= pack_tys.len() {
+    return MaterializedPackEffectiveArityResult { ok: false, err: "pack projection index out of range", n: 0 };
+  }
+  return MaterializedPackEffectiveArityResult { ok: true, err: "", n: max_idx + 1 };
+}
+
 fn materialize_type_param_bounds(sig: FuncSig, pack: String, pack_tys: Vec[i32]) -> MaterializeTypeParamBoundsResult {
   let mut out: Vec[TypeParamBoundSig] = Vec();
   let mut i: i32 = 0;
@@ -598,11 +743,11 @@ fn materialize_const_where_bounds(sig: FuncSig, pack: String, pack_tys: Vec[i32]
         if lhs_is_type && lhs_dr.matched {
           if idx_sel < 0 {
             return MaterializeConstWhereBoundsResult { ok: false, err: "comptime where lhs pack projection requires a concrete index context", bounds: out };
-        }
-        pack_elem_alias_name(pack, idx_sel)
-      } else {
-        b.name
-      };
+          }
+          pack_elem_alias_name(pack, idx_sel)
+        } else {
+          b.name
+        };
       let mut rhs_param2: String = b.rhs_param;
       if b.rhs_is_param {
         let rr: RemapCwReflectRhsResult = remap_cw_reflect_rhs(b.rhs_param, pack, pack_tys, idx_sel);
@@ -672,10 +817,10 @@ fn find_verified_ty_idx_tc_call(ctx: Ctx, elem: i32, mod_path: String, name: Str
 
 fn materialize_pack_ty(
   ctx: Ctx,
-ty: i32,
-pack: String,
-pack_tys: Vec[i32],
-occ0: i32,
+  ty: i32,
+  pack: String,
+  pack_tys: Vec[i32],
+  occ0: i32,
 ) -> MaterializePackTyResult {
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
   if t.kind == ir.TyKind.Param {
@@ -749,9 +894,9 @@ occ0: i32,
 
 pub fn materialize_pack_sig_types(
   ctx: Ctx,
-sig: FuncSig,
-pack: String,
-pack_tys: Vec[i32],
+  sig: FuncSig,
+  pack: String,
+  pack_tys: Vec[i32],
 ) -> MaterializePackSigResult {
   let mut occ: i32 = 0;
   let mut ps: Vec[i32] = Vec();
@@ -985,12 +1130,12 @@ fn ensure_ref_borrow_arg_place(sp: ast.Span, exprs: ast.ExprPool, l0: Locals, ar
 
 fn ensure_borrow_arg_requirements(
   sp: ast.Span,
-exprs: ast.ExprPool,
-l0: Locals,
-arg_id: i32,
-arg_idx0: i32,
-variadic: bool,
-borrow_kind: i32,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  arg_id: i32,
+  arg_idx0: i32,
+  variadic: bool,
+  borrow_kind: i32,
 ) -> TcError {
   if param_borrow_is_mut(borrow_kind) {
     return ensure_mut_borrow_arg_place(sp, exprs, l0, arg_id, arg_idx0, variadic);
@@ -1161,14 +1306,14 @@ fn call_move_slots_for_trait_static(ctx: Ctx, cur_mod: String, trait_mod: String
 
 pub fn resolve_call_move_slots(
   ctx: Ctx,
-w: World,
-mod_path: String,
-imps: Imports,
-exprs: ast.ExprPool,
-l0: Locals,
-callee: i32,
-_type_args: Vec[ast.TypeName],
-args: Vec[i32],
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  callee: i32,
+  _type_args: Vec[ast.TypeName],
+  args: Vec[i32],
 ) -> CallMoveSlotsResult {
   let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
 
@@ -2051,16 +2196,16 @@ fn tc_call_prim_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, expr
 
 fn tc_call_func_unqualified(
   ctx: Ctx,
-w: World,
-mod_path: String,
-imps: Imports,
-exprs: ast.ExprPool,
-l0: Locals,
-call_sp: ast.Span,
-name: String,
-type_args: Vec[ast.TypeName],
-args: Vec[i32],
-expected: i32,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  name: String,
+  type_args: Vec[ast.TypeName],
+  args: Vec[i32],
+  expected: i32,
 ) -> ExprTyResult {
   if name == "@compile_error" {
     if type_args.len() != 0 || args.len() != 1 {
@@ -2262,17 +2407,17 @@ expected: i32,
 
 fn tc_call_func_qualified(
   ctx: Ctx,
-w: World,
-cur_mod: String,
-imps: Imports,
-exprs: ast.ExprPool,
-l0: Locals,
-call_sp: ast.Span,
-target_mod: String,
-name: String,
-type_args: Vec[ast.TypeName],
-args: Vec[i32],
-expected: i32,
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  target_mod: String,
+  name: String,
+  type_args: Vec[ast.TypeName],
+  args: Vec[i32],
+  expected: i32,
 ) -> ExprTyResult {
   if is_reserved_intrinsic_name(name) && target_mod == "" && !is_std_module(cur_mod) {
     let msg: String = "reserved intrinsic is only available in std modules: ".concat(name);
@@ -2288,17 +2433,17 @@ expected: i32,
 
 fn tc_call_func_sig(
   ctx: Ctx,
-w: World,
-cur_mod: String,
-imps: Imports,
-exprs: ast.ExprPool,
-l0: Locals,
-call_sp: ast.Span,
-target_mod: String,
-sig: FuncSig,
-type_args: Vec[ast.TypeName],
-args: Vec[i32],
-expected: i32,
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  target_mod: String,
+  sig: FuncSig,
+  type_args: Vec[ast.TypeName],
+  args: Vec[i32],
+  expected: i32,
 ) -> ExprTyResult {
   let _tm: String = target_mod; // reserved for future: implicit receiver / UFCS.
   let mut pack_mode: bool = false;
@@ -2312,7 +2457,7 @@ expected: i32,
     if args.len() < fixed_n {
       let msgv0: String =
         "wrong number of args: expected at least ".concat(fixed_n.to_string())
-        .concat(", got ").concat(args.len().to_string());
+          .concat(", got ").concat(args.len().to_string());
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgv0) };
     }
     if args.len() > sig.params.len() || args.len() == fixed_n {
@@ -2341,7 +2486,7 @@ expected: i32,
     if args.len() != sig.params.len() {
       let msg: String =
         "wrong number of args: expected ".concat(sig.params.len().to_string())
-        .concat(", got ").concat(args.len().to_string());
+          .concat(", got ").concat(args.len().to_string());
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
     }
   }
@@ -2563,9 +2708,6 @@ expected: i32,
 
   let mut sig_use: FuncSig = sig;
   if has_pack && pack_explicit_tys.len() > 0 {
-    if pack_explicit_tys.len() > materialized_pack_arity_limit() {
-      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, materialized_pack_arity_err(pack_explicit_tys.len())) };
-    }
     let mut all_same: bool = true;
     let mut pi: i32 = 1;
     while pi < pack_explicit_tys.len() {
@@ -2587,8 +2729,21 @@ expected: i32,
     }
     subs = append_pack_alias_subs(subs, pack_name, pack_explicit_tys);
 
+    let mut limit_arity: i32 = pack_explicit_tys.len();
+    let need_materialize: bool = !all_same && !sig_allows_heterogeneous_pack_args(ctx, sig, pack_name);
+    if need_materialize {
+      let ea: MaterializedPackEffectiveArityResult = materialized_pack_effective_arity(ctx, sig, pack_name, pack_explicit_tys);
+      if !ea.ok {
+        return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, ea.err) };
+      }
+      limit_arity = ea.n;
+    }
+    if limit_arity > materialized_pack_arity_limit() {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, materialized_pack_arity_err(limit_arity)) };
+    }
+
     if !all_same {
-      if sig_allows_heterogeneous_pack_args(ctx, sig, pack_name) {
+      if !need_materialize {
         // Placeholder-only pack usage (A01-2a): keep as-is.
       } else {
         let mr: MaterializePackSigResult = materialize_pack_sig_types(ctx, sig, pack_name, pack_explicit_tys);
@@ -2765,18 +2920,18 @@ expected: i32,
 
 fn tc_call_trait_static(
   ctx: Ctx,
-w: World,
-cur_mod: String,
-imps: Imports,
-exprs: ast.ExprPool,
-l0: Locals,
-call_sp: ast.Span,
-trait_mod: String,
-trait_name: String,
-method: String,
-type_args: Vec[ast.TypeName],
-args: Vec[i32],
-expected: i32,
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  trait_mod: String,
+  trait_name: String,
+  method: String,
+  type_args: Vec[ast.TypeName],
+  args: Vec[i32],
+  expected: i32,
 ) -> ExprTyResult {
   let tf: FindTraitResult = find_trait(ctx, trait_mod, trait_name);
   if !tf.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "unknown trait: ".concat(trait_name)) }; }
@@ -2841,19 +2996,19 @@ fn find_enum_for_ctor(ctx: Ctx, enum_mod: String, enum_name: String, expected: i
 
 fn tc_call_enum_ctor(
   ctx: Ctx,
-w: World,
-cur_mod: String,
-imps: Imports,
-exprs: ast.ExprPool,
-l0: Locals,
-call_sp: ast.Span,
-enum_mod: String,
-enum_name: String,
-var_name: String,
-enum_type_parts: Vec[String],
-enum_targs: Vec[ast.TypeName],
-args: Vec[i32],
-expected: i32,
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  enum_mod: String,
+  enum_name: String,
+  var_name: String,
+  enum_type_parts: Vec[String],
+  enum_targs: Vec[ast.TypeName],
+  args: Vec[i32],
+  expected: i32,
 ) -> ExprTyResult {
   let mut out_ty_hint: i32 = -1;
   let mut fe: FindEnumResult = find_enum_for_ctor(ctx, enum_mod, enum_name, expected);
