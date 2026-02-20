@@ -51,6 +51,11 @@ Governance from now on:
   - [x] A23-2 谓词返回 `false` 时在 const-eval 阶段报错 `verified check failed`，并补 typecheck/compile 回归。
   - Source: `docs/internal/01-type-system.md`, `docs/reference/language/types/verified.md`.
 
+- [x] A24 verified `char` 底层类型回归补齐
+  - [x] A24-1 增加 `@verified(... ) char` 的 const/非 const 成功路径覆盖。
+  - [x] A24-2 增加 `@verified(... ) char` 谓词失败路径（const-eval）覆盖。
+  - Source: `docs/internal/01-type-system.md`, `docs/reference/language/types/verified.md`.
+
 - [x] A11 泛型 pack 限制策略收敛
   - [x] A11-1 `type pack arity exceeds materialization limit` 文案统一到 `typecheck` 单一函数出口，移除重复拼接。
   - [x] A11-2 typecheck/const-eval/irgen 统一复用同一 limit+error 文案。
