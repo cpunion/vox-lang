@@ -10,12 +10,15 @@ Coverage ID: `S004`.
 
 ```vox
 RangeType
-  := "@range(" IntConst "..=" IntConst ")" IntBaseType
+  := "@range(" RangeBound "..=" RangeBound ")" IntBaseType
 
 IntBaseType
   := "i8" | "u8" | "i16" | "u16"
    | "i32" | "u32" | "i64" | "u64"
-   | "isize" | "usize"
+   | "isize" | "usize" | "char"
+
+RangeBound
+  := IntConst | CharConst
 ```
 
 ## Semantics
@@ -29,6 +32,12 @@ type Tiny = @range(0..=3) i8
 ```
 
 Values converted into `Tiny` must be within `0..=3`.
+
+For `char` base, bounds may use char literals and are interpreted as Unicode code points.
+
+```vox
+type Lower = @range('a'..='z') char
+```
 
 ## Checks
 

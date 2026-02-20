@@ -56,6 +56,11 @@ Governance from now on:
   - [x] A24-2 增加 `@verified(... ) char` 谓词失败路径（const-eval）覆盖。
   - Source: `docs/internal/01-type-system.md`, `docs/reference/language/types/verified.md`.
 
+- [x] A25 `@range` 边界常量扩展到 `char` 字面量
+  - [x] A25-1 parser 支持 `@range('a'..='z')` / `@range('\n'..='\r')` 形式，边界按 codepoint 归一化存储。
+  - [x] A25-2 typecheck/codegen 回归覆盖 char-bound range（成功与越界失败路径）。
+  - Source: `docs/internal/01-type-system.md`, `docs/internal/14-syntax-details.md`, `docs/reference/language/types/ranges.md`.
+
 - [x] A11 泛型 pack 限制策略收敛
   - [x] A11-1 `type pack arity exceeds materialization limit` 文案统一到 `typecheck` 单一函数出口，移除重复拼接。
   - [x] A11-2 typecheck/const-eval/irgen 统一复用同一 limit+error 文案。
