@@ -189,3 +189,4 @@ fn list_smoke() -> String {
 9. [x] `vox/list`（go list 对标）：输出完整包依赖图（模块、导入边、可选 JSON），并附带模块级 effect/resource 能力聚合信息。
 10. [x] `vox/internal/text` 第二批复用：`has_prefix/has_suffix/contains_str/trim_space` 在 `main/compile/loader/typecheck/world/fmt/list/manifest` 统一复用，减少重复 helper 实现。
 11. [x] `vox/internal/strset` 下沉：`insert_sorted/sort/push_unique_sorted` 在 `main` 与 `vox/list` 统一复用，减少字符串集合排序/去重重复实现。
+12. [x] `vox/internal/text` 第三批复用：`main_lock/main_toolchain` 统一改用 `txt.index_byte/split_lines/unquote_double_trimmed/has_prefix`，移除重复文本解析 helper。
