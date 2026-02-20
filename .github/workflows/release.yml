@@ -57,8 +57,6 @@ jobs:
             platform: linux-amd64
           - os: macos-14
             platform: darwin-arm64
-          - os: windows-latest
-            platform: windows-amd64
 
     env:
       VOX_REQUIRE_ROLLING_BOOTSTRAP: "1"
@@ -179,6 +177,129 @@ jobs:
 
       - name: Upload platform artifacts
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ env.PLATFORM }}
+          path: |
+            dist/vox-lang-${{ env.BUILD_VERSION }}-${{ env.PLATFORM }}.tar.gz
+            dist/vox-lang-${{ env.BUILD_VERSION }}-${{ env.PLATFORM }}.tar.gz.sha256
+
+  build-windows:
+    name: build-and-smoke-windows-amd64-${{ matrix.gate }}
+    runs-on: windows-latest
+    needs: fmt-check
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [host, regression]
+
+    env:
+      VOX_REQUIRE_ROLLING_BOOTSTRAP: "1"
+      PLATFORM: windows-amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+
+      - name: Install C compiler (Windows)
+        shell: powershell
+        run: |
+          choco install mingw -y --no-progress
+          Add-Content -Path $env:GITHUB_PATH -Value 'C:\ProgramData\mingw64\mingw64\bin'
+          Add-Content -Path $env:GITHUB_PATH -Value 'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin'
+
+      - name: Compute build metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/* ]]; then
+            ver="${GITHUB_REF_NAME}"
+          else
+            ver="pr-${GITHUB_SHA::7}"
+          fi
+          echo "BUILD_VERSION=${ver}" >> "$GITHUB_ENV"
+
+      - name: Verify runner host matches platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          host_os="$(go env GOOS)"
+          host_arch="$(go env GOARCH)"
+          case "$host_arch" in
+            amd64) host_arch="amd64" ;;
+            arm64) host_arch="arm64" ;;
+            386) host_arch="x86" ;;
+          esac
+          expected_os="${PLATFORM%%-*}"
+          expected_arch="${PLATFORM#*-}"
+          if [[ "$host_os" != "$expected_os" || "$host_arch" != "$expected_arch" ]]; then
+            echo "runner host mismatch: host=${host_os}-${host_arch} expected=${PLATFORM}" >&2
+            exit 1
+          fi
+
+      - name: Prepare locked bootstrap compiler
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ./scripts/release/prepare-locked-bootstrap.sh "${GITHUB_REPOSITORY}" "${PLATFORM}"
+
+      - name: Build release bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/release/build-release-bundle.sh "${BUILD_VERSION}" "${PLATFORM}"
+
+      - name: Run smoke tests (rolling bootstrap)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/release/smoke-toolchains.sh
+
+      - name: Validate --target host build/test
+        if: matrix.gate == 'host'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/debug
+          COMPILER_BIN="target/release/vox.exe"
+          if [[ ! -f "$COMPILER_BIN" ]]; then
+            echo "compiler not found: $COMPILER_BIN"
+            exit 1
+          fi
+
+          target="${PLATFORM}"
+          "$COMPILER_BIN" build "--target=${target}" target/debug/vox.target_host
+          "$COMPILER_BIN" test "--target=${target}" "--run=*std_sync_runtime_generic_api_smoke" target/debug/vox.target_host.test
+
+      - name: Validate --target regression
+        if: matrix.gate == 'regression'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/debug
+          COMPILER_BIN="target/release/vox.exe"
+          if [[ ! -f "$COMPILER_BIN" ]]; then
+            echo "compiler not found: $COMPILER_BIN"
+            exit 1
+          fi
+          "$COMPILER_BIN" test "--run=*target_matrix_*" target/debug/vox.target_matrix.test
+
+      - name: Verify release bundle manifest
+        if: matrix.gate == 'host'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/release/verify-release-bundle.sh "${BUILD_VERSION}" "${PLATFORM}"
+
+      - name: Upload platform artifacts
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && matrix.gate == 'host'
         uses: actions/upload-artifact@v4
         with:
           name: bundle-${{ env.PLATFORM }}
@@ -322,7 +443,7 @@ jobs:
     name: publish-release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    needs: [build, build-cross-x86, smoke-wasm-node]
+    needs: [build, build-windows, build-cross-x86, smoke-wasm-node]
     permissions:
       contents: write
 
