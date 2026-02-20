@@ -137,6 +137,12 @@ Governance from now on:
     - Landed in `src/std/async/async.vox` + `src/std/async/async_test.vox`.
   - Source: `docs/internal/09-async-model.md`.
 
+- [x] A31 Async 事件源多 context 批量等待（`__wake_wait_any`）
+  - [x] A31-1 C runtime 新增 `__wake_wait_any(tokens, timeout_ms) -> i32`，在 `epoll/kqueue/IOCP` 等待路径上复用单次平台等待 + token 扫描，返回命中下标。
+  - [x] A31-2 typecheck/codegen/compile 回归覆盖新 intrinsic 与生成代码路径。
+  - [x] A31-3 说明更新：当前仅完成 compiler/runtime 侧能力；`src/std` 接线遵循 rolling bootstrap 两阶段发布，留到下一跳 lock bump 后启用。
+  - Source: `docs/internal/09-async-model.md`.
+
 - [x] A16 Async cancel/drop 细化：frame 重绑定钩子
   - [x] A16-1 async entry/test wrapper 在取消分支新增可选 `cancel_drop_with/cancel_drop` 调用，并固定顺序为 `cancel_drop -> cancel_cleanup -> cancel_return`。
     - Landed in `src/vox/compile/compile.vox` with regressions in `src/vox/compile/async_test.vox`.
