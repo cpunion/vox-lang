@@ -57,7 +57,9 @@ bootstrap_cc_env() {
     local cc_bin="${CC%% *}"
     if command -v "$cc_bin" >/dev/null 2>&1; then
       if [[ "$HOST_OS" == "windows" && ( "$cc_bin" == "cl" || "$cc_bin" == "cl.exe" ) ]]; then
-        export CC="cl"
+        if [[ "$CC" == "cl" || "$CC" == "cl.exe" ]]; then
+          export CC="cl /std:c11"
+        fi
         echo "[smoke] using CC from env: $CC"
         return 0
       fi
