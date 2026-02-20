@@ -164,6 +164,7 @@ trait Sink {
 2. 必须保证“未初始化字段不 drop”。
 3. 取消语义保持幂等（重复取消不出错）。
 4. 当前 v1 已落地取消轮询与传播钩子：生成的 async entry/test wrapper 会在 `Pending` 路径查询取消钩子（优先 `cancel_requested_with(rt, cx)`，其次 `cancel_requested(cx)`）；命中后先构建可选 `cancel_hint(cx, f.state, spins)`，然后执行可选 frame 重绑定（优先 `cancel_drop_hint_with/cancel_drop_hint`，再回退 `cancel_drop_state_with/cancel_drop_with/cancel_drop_state/cancel_drop`），再执行可选清理（优先 `cancel_cleanup_hint_with/cancel_cleanup_hint`，再回退 `cancel_cleanup_state_with/cancel_cleanup_with/cancel_cleanup_state/cancel_cleanup`），最后执行可选返回传播（优先 `cancel_return_hint_with/cancel_return_hint`，再回退 `cancel_return_with/cancel_return`），否则回退默认返回（不 panic）。
+5. `std/async` 默认 `CancelHint` 增加 `reclaim`（`keep/shallow/deep`）并通过 `cancel_reclaim_from_state_spins(state, spins)` 计算；默认 hint 钩子会下沉到 state 钩子（`cancel_drop_hint* -> cancel_drop_state*`，`cancel_cleanup_hint* -> cancel_cleanup_state*`），方便宿主按 frame state + reclaim 级别做更细粒度资源回收。
 
 ## 8. 与借用规则的关系（D03-4 目标）
 
@@ -180,4 +181,4 @@ trait Sink {
 ## 9. 当前剩余工作
 
 1. runtime/executor 体验继续增强（当前已支持 `default_runtime + *_with` 注入，默认 runtime 已切到 wake-token 超时等待基线，且有 `EventSource + ReadyQueue + drain_ready_once` 统一接口；后续补真正的 epoll/kqueue/IOCP 事件源实现与接线）。
-2. drop/cancel 语义继续细化与验证（当前已支持“可恢复返回 + 可选清理/传播钩子”基线；后续补更细粒度资源回收策略）。
+2. drop/cancel 语义继续细化与验证（当前已支持“可恢复返回 + hint/state 分层清理/回收策略”基线）。

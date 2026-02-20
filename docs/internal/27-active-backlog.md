@@ -95,6 +95,12 @@ Governance from now on:
     - Landed in `src/std/async/async.vox` + `src/std/async/async_test.vox`.
   - Source: `docs/internal/09-async-model.md`.
 
+- [x] A20 Async cancel/drop 细粒度资源回收策略（hint/state 分层）
+  - [x] A20-1 `std/async::CancelHint` 增加 `reclaim` 字段，并提供 `cancel_reclaim_keep/shallow/deep` 与 `cancel_reclaim_from_state_spins`。
+  - [x] A20-2 默认 hint 钩子下沉到 state 钩子：`cancel_drop_hint* -> cancel_drop_state*`、`cancel_cleanup_hint* -> cancel_cleanup_state*`，并补齐 `cancel_cleanup_{state_with,with,state}` 默认实现。
+  - [x] A20-3 标准库回归覆盖 reclaim 计算与 cleanup state hooks，文档同步。
+  - Source: `docs/internal/09-async-model.md`, `docs/reference/language/async-await.md`.
+
 - [x] A17 Thread-safety marker negative impl（`!Send/!Sync`）
   - [x] A17-1 语法层支持 `impl !Trait for Type {}`（当前用于 `Send/Sync`）。
     - Landed in `src/vox/ast/ast.vox`, `src/vox/parse/parse.vox`, `src/vox/parse/parse_test.vox`.
