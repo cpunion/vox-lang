@@ -99,6 +99,10 @@ Governance from now on:
   - [x] A28-1 `vox/manifest` 移除 `has_prefix/has_suffix/contains_str` 转发 helper，统一改为直接调用 `txt.*`。
   - Source: `docs/internal/28-vox-libraries.md`.
 
+- [x] A29 `vox/internal/text` 复用收敛（第七批）
+  - [x] A29-1 `vox/manifest` 继续移除 `trim/index/split` 转发 helper，统一改为直接调用 `txt.trim_space/txt.index_byte/txt.split_*`。
+  - Source: `docs/internal/28-vox-libraries.md`.
+
 - [x] A13 规范与实现一致性修正
   - [x] A13-1 `docs/internal/09-async-model.md` 示例签名与当前 `EventRuntime` 默认行为一致。
   - [x] A13-2 `docs/internal/14-syntax-details.md` 成员调用说明更新为 trait/impl 已支持现状。
