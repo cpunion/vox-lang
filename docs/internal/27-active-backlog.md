@@ -86,6 +86,11 @@ Governance from now on:
   - [x] A21-2 `main` 与 `vox/list` 复用 `vox/internal/strset`，移除重复实现。
   - Source: `docs/internal/28-vox-libraries.md`.
 
+- [x] A26 `vox/internal/text` 复用收敛（第四批）
+  - [x] A26-1 `vox/typecheck/tc_struct_lit` 的字符串集合包含判断复用 `txt.contains_str`。
+  - [x] A26-2 `vox/irgen/async_lower` 的字符串集合包含与前缀判断复用 `txt.contains_str/txt.has_prefix`。
+  - Source: `docs/internal/28-vox-libraries.md`.
+
 - [x] A13 规范与实现一致性修正
   - [x] A13-1 `docs/internal/09-async-model.md` 示例签名与当前 `EventRuntime` 默认行为一致。
   - [x] A13-2 `docs/internal/14-syntax-details.md` 成员调用说明更新为 trait/impl 已支持现状。
