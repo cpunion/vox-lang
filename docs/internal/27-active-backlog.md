@@ -149,7 +149,7 @@ Governance from now on:
     - Linux: `epoll`（单 fd 一次等待）
     - macOS/*BSD: `kqueue`（`EVFILT_READ/EVFILT_WRITE` 一次等待）
     - Windows: `select` 基线（后续再升级为 IOCP 语义接线）
-  - [ ] A32-2 发布 + bootstrap lock bump 后，放开 `src/std/runtime` 与 `src/std/io` 的公开封装 API。
+  - [x] A32-2 发布 + bootstrap lock bump 后，放开 `src/std/runtime` 与 `src/std/io` 的公开封装 API（`tcp_wait_read/tcp_wait_write` 与 `net_wait_read/net_wait_write`）。
   - Source: `docs/internal/09-async-model.md`, `docs/internal/16-platform-support.md`.
 
 - [x] A16 Async cancel/drop 细化：frame 重绑定钩子
