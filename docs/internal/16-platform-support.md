@@ -120,9 +120,11 @@ Windows 目标支持两条工具链：
 
 `std/async` 的 `EventRuntime` 基于 `__wake_wait/__wake_notify`。C runtime 当前约束如下：
 
-- Windows: 等待循环使用 `Sleep(1)`，配合原子 pending 计数消费 wake token。
-- Emscripten: 等待循环使用 `sched_yield()`（协作式让出），不使用 `nanosleep`。
-- Linux/macOS/POSIX: 等待循环使用 `nanosleep(1ms)`。
+- Linux: `eventfd + epoll` 事件等待；`notify` 写入 `eventfd`，`wait` 使用 `epoll_wait`。
+- macOS/*BSD: `kqueue(EVFILT_USER)` 事件等待；`notify` 使用 `NOTE_TRIGGER`。
+- Windows: `IOCP` 事件等待；`notify` 使用 `PostQueuedCompletionStatus`，`wait` 使用 `GetQueuedCompletionStatus`。
+- Emscripten: 使用 `sched_yield()`（协作式让出）。
+- 其他 POSIX: 使用 `nanosleep` 回退等待。
 - 通用语义：
   - `timeout_ms < 0` 会被钳制到 `0`。
   - `token` 未命中 slot 时立即返回 `false`。

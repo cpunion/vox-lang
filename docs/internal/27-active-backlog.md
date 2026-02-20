@@ -80,6 +80,9 @@ Governance from now on:
     - Baseline landed: `EventSource` + `ReadyPoll` + `ReadyQueue` and queue bridge helpers in `std/async`.
   - [x] A14-3 平台实现补齐与回归（linux/macOS/windows + wasm 行为约束）。
     - Landed: wake runtime platform constraints documented in `docs/internal/16-platform-support.md` and locked by codegen regressions in `src/vox/codegen/c_emit_test.vox`.
+  - [x] A14-4 真实事件源接线（C runtime）：
+    - Linux `eventfd + epoll`、macOS/*BSD `kqueue(EVFILT_USER)`、Windows `IOCP`，并保留 wasm/其他平台回退分支；
+    - `__wake_notify/__wake_wait` 保持 token pending 语义不变，仅替换底层等待机制。
   - Scope: 在保持现有 `Runtime` trait 兼容前提下，把 `EventRuntime` 从 timeout-yield 基线升级为真正事件驱动。
   - Source: `docs/internal/09-async-model.md`, `docs/internal/29-async-expr-await.md`.
 
