@@ -23,6 +23,23 @@ pub struct CancelHint {
   pub state: i32,
   pub spins: i32,
   pub token: i64,
+  pub reclaim: i32,
+}
+
+// Coarse reclaim levels for cancel/drop hooks.
+// Hosts may map these to allocator/runtime-specific policies.
+pub fn cancel_reclaim_keep() -> i32 { return 0; }
+pub fn cancel_reclaim_shallow() -> i32 { return 1; }
+pub fn cancel_reclaim_deep() -> i32 { return 2; }
+
+pub fn cancel_reclaim_from_state_spins(state: i32, spins: i32) -> i32 {
+  if state <= 0 { return cancel_reclaim_keep(); }
+  if spins < 8 { return cancel_reclaim_shallow(); }
+  return cancel_reclaim_deep();
+}
+
+pub fn cancel_reclaim_is_deep(h: CancelHint) -> bool {
+  return h.reclaim == cancel_reclaim_deep();
 }
 
 pub trait Future {
@@ -293,7 +310,12 @@ pub fn cancel_requested(c: Context) -> bool {
 }
 
 pub fn cancel_hint(c: Context, state: i32, spins: i32) -> CancelHint {
-  return CancelHint { state: state, spins: spins, token: c.waker.token };
+  return CancelHint {
+    state: state,
+    spins: spins,
+    token: c.waker.token,
+    reclaim: cancel_reclaim_from_state_spins(state, spins),
+  };
 }
 
 // Optional frame cleanup/rebind hooks for cancel paths.
@@ -302,7 +324,7 @@ pub fn cancel_drop_hint_with[R, F](rt: R, c: Context, h: CancelHint, f: F) -> F 
   rt;
   c;
   h;
-  return f;
+  return cancel_drop_state_with(rt, c, h.state, f);
 }
 
 pub fn cancel_drop_state_with[R, F](rt: R, c: Context, state: i32, f: F) -> F {
@@ -321,7 +343,7 @@ pub fn cancel_drop_with[R, F](rt: R, c: Context, f: F) -> F {
 pub fn cancel_drop_hint[F](c: Context, h: CancelHint, f: F) -> F {
   c;
   h;
-  return f;
+  return cancel_drop_state(c, h.state, f);
 }
 
 pub fn cancel_drop_state[F](c: Context, state: i32, f: F) -> F {
@@ -339,12 +361,40 @@ pub fn cancel_cleanup_hint_with[R](rt: R, c: Context, h: CancelHint) -> () {
   rt;
   c;
   h;
+  cancel_cleanup_state_with(rt, c, h.state);
   return;
 }
 
 pub fn cancel_cleanup_hint(c: Context, h: CancelHint) -> () {
   c;
   h;
+  cancel_cleanup_state(c, h.state);
+  return;
+}
+
+pub fn cancel_cleanup_state_with[R](rt: R, c: Context, state: i32) -> () {
+  rt;
+  c;
+  state;
+  cancel_cleanup_with(rt, c);
+  return;
+}
+
+pub fn cancel_cleanup_with[R](rt: R, c: Context) -> () {
+  rt;
+  c;
+  return;
+}
+
+pub fn cancel_cleanup_state(c: Context, state: i32) -> () {
+  c;
+  state;
+  cancel_cleanup(c);
+  return;
+}
+
+pub fn cancel_cleanup(c: Context) -> () {
+  c;
   return;
 }
 

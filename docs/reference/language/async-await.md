@@ -69,6 +69,11 @@ they route through optional `std/async` hooks with this precedence:
    - else fallback default return value for the function return type.
 
 `hint` is produced from `cancel_hint(cx, frame_state, spins)` when available.
+Default `std/async::CancelHint` also carries coarse reclaim intent (`reclaim`):
+- `cancel_reclaim_keep()`
+- `cancel_reclaim_shallow()`
+- `cancel_reclaim_deep()`
+computed by `cancel_reclaim_from_state_spins(state, spins)`.
 
 ## Diagnostics
 
