@@ -451,6 +451,24 @@ fn parse_name_ref(p: Parser) -> ParseNameRefResult {
   return ParseNameRefResult { p: q, name: out, at: r0.at };
 }
 
+fn parse_range_bound_text(p: Parser) -> ParseConstDefaultResult {
+  // Range bounds accept decimal int constants and char literals.
+  if kind_is(peek_kind(p), lex.TokenKind.Minus) && kind_is(peek2_kind(p), lex.TokenKind.Int) {
+    let ar0: AdvanceResult = advance(p);
+    let ar1: AdvanceResult = expect(ar0.p, lex.TokenKind.Int);
+    return ParseConstDefaultResult { p: ar1.p, ok: true, text: "-".concat(lexeme(ar1.p, ar1.tok)) };
+  }
+  if kind_is(peek_kind(p), lex.TokenKind.Int) {
+    let ar0: AdvanceResult = advance(p);
+    return ParseConstDefaultResult { p: ar0.p, ok: true, text: lexeme(ar0.p, ar0.tok) };
+  }
+  if kind_is(peek_kind(p), lex.TokenKind.Char) {
+    let cr: ParseCharResult = parse_char_inner(p);
+    return ParseConstDefaultResult { p: cr.p, ok: true, text: cr.text };
+  }
+  return ParseConstDefaultResult { p: p, ok: false, text: "" };
+}
+
 fn parse_type_name(p: Parser) -> ParseTypeResult {
   // Unit type: `()`
   if kind_is(peek_kind(p), lex.TokenKind.LParen) && kind_is(peek2_kind(p), lex.TokenKind.RParen) {
@@ -556,21 +574,24 @@ fn parse_type_name(p: Parser) -> ParseTypeResult {
       return ParseTypeResult { p: q, ty: ast.TypeName { parts: Vec(), args: Vec() } };
     }
     let ar1: AdvanceResult = expect(q, lex.TokenKind.LParen);
-    let mut q2: Parser = ar1.p;
-    let mut lo_neg: bool = false;
-    if kind_is(peek_kind(q2), lex.TokenKind.Minus) { lo_neg = true; let arx: AdvanceResult = advance(q2); q2 = arx.p; }
-    let arlo: AdvanceResult = expect(q2, lex.TokenKind.Int);
-    let mut lo_s: String = lexeme(arlo.p, arlo.tok);
-    if lo_neg { lo_s = "-".concat(lo_s); }
-
-    let ardd: AdvanceResult = expect(arlo.p, lex.TokenKind.DotDotEq);
-    let mut q3: Parser = ardd.p;
-    let mut hi_neg: bool = false;
-    if kind_is(peek_kind(q3), lex.TokenKind.Minus) { hi_neg = true; let ary: AdvanceResult = advance(q3); q3 = ary.p; }
-    let arhi: AdvanceResult = expect(q3, lex.TokenKind.Int);
-    let mut hi_s: String = lexeme(arhi.p, arhi.tok);
-    if hi_neg { hi_s = "-".concat(hi_s); }
-    let ar2: AdvanceResult = expect(arhi.p, lex.TokenKind.RParen);
+    let lo_r: ParseConstDefaultResult = parse_range_bound_text(ar1.p);
+    if !lo_r.ok {
+      let mut qerr: Parser = lo_r.p;
+      qerr.has_err = true;
+      qerr.err = ParseError.UnexpectedToken(lex.TokenKind.Int, peek_kind(lo_r.p), peek(lo_r.p).start);
+      return ParseTypeResult { p: qerr, ty: ast.TypeName { parts: Vec(), args: Vec() } };
+    }
+    let lo_s: String = lo_r.text;
+    let ardd: AdvanceResult = expect(lo_r.p, lex.TokenKind.DotDotEq);
+    let hi_r: ParseConstDefaultResult = parse_range_bound_text(ardd.p);
+    if !hi_r.ok {
+      let mut qerr: Parser = hi_r.p;
+      qerr.has_err = true;
+      qerr.err = ParseError.UnexpectedToken(lex.TokenKind.Int, peek_kind(hi_r.p), peek(hi_r.p).start);
+      return ParseTypeResult { p: qerr, ty: ast.TypeName { parts: Vec(), args: Vec() } };
+    }
+    let hi_s: String = hi_r.text;
+    let ar2: AdvanceResult = expect(hi_r.p, lex.TokenKind.RParen);
     let trb: ParseTypeResult = parse_type_name(ar2.p);
     let mut parts: Vec[String] = Vec();
     parts.push("@range");

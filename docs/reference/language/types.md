@@ -27,7 +27,7 @@ Vox currently supports:
 - Integer, float, bool, and char primitive types.
 - `String` and borrowed `str` views.
 - Borrow forms `&T`, `&mut T`, `&'static T`, `&'static mut T`.
-- Integer range refinement through `@range(lo..=hi) BaseInt`.
+- Integer range refinement through `@range(lo..=hi) BaseInt` (bounds support integer and char literals).
 - Integer predicate refinement through `@verified(check_fn) BaseInt`.
 - Explicit casts via `as`.
 
