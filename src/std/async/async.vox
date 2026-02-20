@@ -83,6 +83,12 @@ pub struct ReadyPoll {
   pub token: i64,
 }
 
+pub struct ReadyMany {
+  pub ready: bool,
+  pub index: i32,
+  pub token: i64,
+}
+
 pub struct ReadyQueue {
   pub tokens: Vec[i64],
   pub head: i32,
@@ -98,6 +104,9 @@ pub struct ReadyPop {
 // v0 baseline keeps a minimal "wait once" contract and feeds a token queue.
 pub trait EventSource {
   fn wait(src: Self, timeout_ms: i32, c: Context) -> ReadyPoll;
+  fn wait_many(src: Self, timeout_ms: i32, cs: Vec[Context]) -> i32 {
+    return wait_many_scan(src, timeout_ms, cs);
+  }
 }
 
 impl Runtime for SpinRuntime {
@@ -114,11 +123,39 @@ fn normalized_timeout_ms(ms: i32) -> i32 {
   return ms;
 }
 
+fn context_tokens(cs: Vec[Context]) -> Vec[i64] {
+  let mut out: Vec[i64] = Vec();
+  let mut i: i32 = 0;
+  while i < cs.len() {
+    out.push(cs.get(i).waker.token);
+    i = i + 1;
+  }
+  return out;
+}
+
+fn wait_many_scan[S: EventSource](src: S, timeout_ms: i32, cs: Vec[Context]) -> i32 {
+  let mut i: i32 = 0;
+  while i < cs.len() {
+    let ms: i32 = if i == 0 { timeout_ms } else { 0 };
+    if poll_ready_with(src, ms, cs.get(i)).ready { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 impl EventSource for EventRuntime {
   fn wait(rt: EventRuntime, timeout_ms: i32, c: Context) -> ReadyPoll {
     let ms: i32 = if timeout_ms > 0 { normalized_timeout_ms(timeout_ms) } else { normalized_timeout_ms(rt.timeout_ms) };
     let ok: bool = rti.wake_wait(c.waker.token, ms);
     return ReadyPoll { ready: ok, token: c.waker.token };
+  }
+  fn wait_many(rt: EventRuntime, timeout_ms: i32, cs: Vec[Context]) -> i32 {
+    if cs.len() == 0 { return -1; }
+    let ms: i32 = if timeout_ms > 0 { normalized_timeout_ms(timeout_ms) } else { normalized_timeout_ms(rt.timeout_ms) };
+    if rti.has_cap(rti.IntrinsicCap.WakeWaitAny) {
+      return rti.wake_wait_any(context_tokens(cs), ms);
+    }
+    return wait_many_scan(rt, ms, cs);
   }
 }
 
@@ -212,19 +249,39 @@ pub fn poll_ready_with[S: EventSource](src: S, timeout_ms: i32, c: Context) -> R
   return EventSource.wait(src, timeout_ms, c);
 }
 
+pub fn wait_many_with[S: EventSource](src: S, timeout_ms: i32, cs: Vec[Context]) -> ReadyMany {
+  if cs.len() == 0 {
+    return ReadyMany { ready: false, index: -1, token: 0 };
+  }
+  let idx: i32 = EventSource.wait_many(src, timeout_ms, cs);
+  if idx < 0 || idx >= cs.len() {
+    return ReadyMany { ready: false, index: -1, token: 0 };
+  }
+  return ReadyMany { ready: true, index: idx, token: cs.get(idx).waker.token };
+}
+
+pub fn wait_many(timeout_ms: i32, cs: Vec[Context]) -> ReadyMany {
+  return wait_many_with(default_runtime(), timeout_ms, cs);
+}
+
 pub fn enqueue_ready(q: ReadyQueue, p: ReadyPoll) -> ReadyQueue {
   if p.ready { return q.push(p.token); }
   return q;
 }
 
 // Poll all provided contexts once and enqueue every ready token.
-// This is the baseline bridge for multi-source event loops before
-// platform-specific epoll/kqueue/IOCP backends are wired in.
+// Phase-B: use wait_many for the blocking wait point, then run a non-blocking
+// single pass to collect the remaining ready contexts.
 pub fn drain_ready_once[S: EventSource](src: S, timeout_ms: i32, cs: Vec[Context], q0: ReadyQueue) -> ReadyQueue {
   let mut q: ReadyQueue = q0;
+  let first: ReadyMany = wait_many_with(src, timeout_ms, cs);
+  if !first.ready { return q; }
+  q = q.push(first.token);
   let mut i: i32 = 0;
   while i < cs.len() {
-    q = enqueue_ready(q, poll_ready_with(src, timeout_ms, cs.get(i)));
+    if i != first.index {
+      q = enqueue_ready(q, poll_ready_with(src, 0, cs.get(i)));
+    }
     i = i + 1;
   }
   return q;

@@ -53,6 +53,7 @@
 - `std::io` 已提供：`out`、`out_ln`、`fail`，以及 `File`/`file_read_all`/`file_write_all`/`file_exists`/`mkdir_p`。网络部分提供 `NetAddr` + `NetConn` 与最小 TCP API：`net_connect` / `net_send` / `net_recv` / `net_close`（解释器与 C 后端一致可用；失败时统一 panic）。
 - `std::runtime` 已提供 intrinsic 能力边界：
   - 运行时封装：`args/exe_path/getenv/now_ns/yield_now`、`wake_notify/wake_wait`、文件/进程/TCP/sync 原语。
+    - 批量唤醒等待：`wake_wait_any(tokens, timeout_ms) -> i32`（返回命中下标，未命中为 `-1`）。
   - 兼容探针：`intrinsic_abi() -> i32`、`has_intrinsic(name) -> bool`。
   - 类型化探针：`IntrinsicCap` + `intrinsic_name(cap)` + `has_cap(cap)`（优先用于标准库内部，减少裸字符串能力探测）。
   - 约定：`std` 其它模块不再直接调用 `__*`，统一经 `std::runtime` 转发。
