@@ -192,3 +192,4 @@ fn list_smoke() -> String {
 12. [x] `vox/internal/text` 第三批复用：`main_lock/main_toolchain` 统一改用 `txt.index_byte/split_lines/unquote_double_trimmed/has_prefix`，移除重复文本解析 helper。
 13. [x] `vox/internal/text` 第四批复用：`vox/typecheck/tc_struct_lit`、`vox/irgen/async_lower` 统一改用 `txt.contains_str/txt.has_prefix`，减少跨阶段重复字符串 helper。
 14. [x] `vox/internal/text` 第五批复用：`vox/typecheck/world` 移除 `has_prefix/contains_str` 转发 helper，直接调用 `txt.has_prefix/txt.contains_str`，进一步减少重复实现。
+15. [x] `vox/internal/text` 第六批复用：`vox/manifest` 移除 `has_prefix/has_suffix/contains_str` 转发 helper，直接调用 `txt.*`，保持解析逻辑不变并降低维护面。
