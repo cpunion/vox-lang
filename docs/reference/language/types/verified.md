@@ -25,6 +25,7 @@ IntBaseType
 ## Semantics
 
 `@verified(check_fn) T` refines base integer type `T` with a boolean predicate function.
+`T` may be any integer scalar (including `char`, treated as `u32` domain).
 
 ```vox
 fn in_small(x: i32) -> bool { return x >= 0 && x <= 3; }
