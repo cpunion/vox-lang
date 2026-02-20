@@ -13,22 +13,47 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
   exit 1
 fi
 
-host_arch_from_goarch() {
-  case "$1" in
-    amd64) echo "amd64" ;;
-    arm64) echo "arm64" ;;
-    386) echo "x86" ;;
-    *) echo "$1" ;;
+normalize_host_os() {
+  local os="$1"
+  case "$os" in
+    linux) echo "linux" ;;
+    darwin|macos) echo "darwin" ;;
+    windows|mingw*|msys*|cygwin*) echo "windows" ;;
+    *) echo "$os" ;;
   esac
+}
+
+normalize_host_arch() {
+  local arch="$1"
+  case "$1" in
+    x64|amd64|x86_64) echo "amd64" ;;
+    arm64|aarch64) echo "arm64" ;;
+    x86|386|i386|i686) echo "x86" ;;
+    *) echo "$arch" ;;
+  esac
+}
+
+detect_host_os() {
+  if [[ -n "${RUNNER_OS:-}" ]]; then
+    echo "$(normalize_host_os "$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')")"
+    return 0
+  fi
+  echo "$(normalize_host_os "$(uname -s | tr '[:upper:]' '[:lower:]')")"
+}
+
+detect_host_arch() {
+  if [[ -n "${RUNNER_ARCH:-}" ]]; then
+    echo "$(normalize_host_arch "$(echo "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')")"
+    return 0
+  fi
+  echo "$(normalize_host_arch "$(uname -m | tr '[:upper:]' '[:lower:]')")"
 }
 
 VERSION="$1"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIST_DIR="${DIST_DIR:-$ROOT/dist}"
 
-GOOS="$(go env GOOS)"
-GOARCH="$(go env GOARCH)"
-HOST_PLATFORM="${GOOS}-$(host_arch_from_goarch "$GOARCH")"
+HOST_PLATFORM="$(detect_host_os)-$(detect_host_arch)"
 
 if [[ $# -eq 2 ]]; then
   PLATFORM="$2"
