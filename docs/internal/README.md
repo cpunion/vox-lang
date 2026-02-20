@@ -29,6 +29,7 @@ Core docs:
 - `docs/internal/27-active-backlog.md`
 - `docs/internal/28-vox-libraries.md`
 - `docs/internal/29-async-expr-await.md`
+- `docs/internal/30-stdlib-roadmap.md`
 
 Archive:
 
