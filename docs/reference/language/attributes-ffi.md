@@ -34,7 +34,8 @@ AttributedFn
 - `@ffi_import("wasm", "module", "symbol")` binds wasm import with module+symbol.
 - `@ffi_export("abi", "symbol")` exports function symbol for foreign linkage.
 - Same function can have multiple `@ffi_export` with different target.
-- FFI import/export functions cannot be generic or variadic.
+- FFI import/export functions cannot be generic.
+- FFI variadic functions are currently unsupported.
 
 ### Caller Tracking
 
@@ -54,7 +55,8 @@ Parser/type errors include:
 - malformed attribute argument list
 - unsupported attribute target placement
 - invalid ABI/symbol usage under FFI checker rules
-- generic/variadic FFI function declarations
+- generic FFI function declarations
+- variadic FFI function declarations (unsupported)
 
 ## Example
 
