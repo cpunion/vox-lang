@@ -51,6 +51,8 @@
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取、环境变量读取）。
   - `std::fs` 新增 `Path` 方法式 API：`path(raw)` + `Path.exists/read_to_string/write_string/mkdir_p/walk_vox_files`。
   - `std::fs` 仍保留 free-function 入口：`exists/read_to_string/write_string/mkdir_p/walk_vox_files`（内部转发到 `Path`）。
+  - `std::process` 新增 `Command` 方法式 API：`command(prog)` + `Command.env/arg/args/render/run`。
+  - `std::process` 仍保留 free-function 入口：`exec/args/exe_path/getenv`（`exec` 可直接执行 `Command.render()` 结果）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`。
   - 文件 API：`File` + 方法 `exists/read_all/write_all/mkdir_p`。

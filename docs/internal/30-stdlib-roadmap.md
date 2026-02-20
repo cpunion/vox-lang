@@ -1,0 +1,39 @@
+# Stdlib Roadmap (Execution Checklist)
+
+Status: active.
+
+本清单用于标准库持续演进，遵循 `docs/reference/style-guide.md`。
+
+## S0 已落地基线
+
+- [x] `std/io` 方法式 API（`File` / `NetAddr` / `NetConn`）+ free-function 兼容包装
+- [x] `std/fs` 方法式 API（`Path`）+ free-function 兼容包装
+- [x] `std/process` 方法式 API（`Command`）+ free-function 兼容包装
+
+## S1 下一批（P0）
+
+- [ ] `std/net` 请求对象化：`Client`/`Request`/`Response` 方法式入口收敛
+  - 保留 `http_get/http_roundtrip` 兼容包装
+  - 增加解析/构造 API 的结构化错误入口（不破坏现有 panic 行为）
+- [ ] `std/io` 连接级安全释放语义增强
+  - 明确 `NetConn.close()` 后行为（重复 close、后续 send/recv 的错误语义）
+  - 补跨平台回归
+- [ ] `std/fs` 路径拼接与规范化 helper（避免调用方重复字符串拼接）
+  - `Path.join/base_name/dir_name`（最小稳定集）
+
+## S2 中期（P1）
+
+- [ ] `std/process` 增加 `Command.cwd` / `Command.env_remove` / `Command.clear_env`
+- [ ] `std/collections` 与 `std/string` 的 OOP 风格一致性收敛（保持兼容包装）
+- [ ] `std/testing` 增加模块化断言扩展（不破坏当前 `t.assert*`）
+
+## 执行要求
+
+每个条目完成标准：
+
+1. 标准库实现完成（方法式 + 兼容包装策略一致）
+2. `src/std/*` 行为测试覆盖
+3. `src/vox/typecheck/*` 与 `src/vox/compile/*` smoke 覆盖
+4. 文档同步更新
+5. PR review + CI 绿后合并
+
