@@ -71,6 +71,8 @@ fn pick_first[T...](a: T.0, _b: T.1) -> T.0 { return a; }
 ### Impl-Head Constraints
 
 Constraints can appear on impl heads, including comptime predicates.
+Specialization ranking treats stronger comptime inequality bounds as more specific
+when they target the same lhs/rhs basis (for example `<= 8` is stronger than `<= 16`).
 
 ## Current Limits
 

@@ -786,11 +786,11 @@ fn trait_is_or_extends_impl(ctx: Ctx, mod_path: String, name: String, want_mod: 
 
 fn impl_bound_on_pos_covers(
   ctx: Ctx,
-a_tps: Vec[String],
-a_bounds: Vec[TypeParamBoundSig],
-b_pos: i32,
-b_trait_mod: String,
-b_trait_name: String,
+  a_tps: Vec[String],
+  a_bounds: Vec[TypeParamBoundSig],
+  b_pos: i32,
+  b_trait_mod: String,
+  b_trait_name: String,
 ) -> bool {
   let mut i: i32 = 0;
   while i < a_bounds.len() {
@@ -808,10 +808,10 @@ b_trait_name: String,
 
 fn impl_bounds_cover(
   ctx: Ctx,
-a_tps: Vec[String],
-a_bounds: Vec[TypeParamBoundSig],
-b_tps: Vec[String],
-b_bounds: Vec[TypeParamBoundSig],
+  a_tps: Vec[String],
+  a_bounds: Vec[TypeParamBoundSig],
+  b_tps: Vec[String],
+  b_bounds: Vec[TypeParamBoundSig],
 ) -> bool {
   let mut i: i32 = 0;
   while i < b_bounds.len() {
@@ -828,10 +828,10 @@ b_bounds: Vec[TypeParamBoundSig],
 
 fn impl_bounds_more_specific(
   ctx: Ctx,
-a_tps: Vec[String],
-a_bounds: Vec[TypeParamBoundSig],
-b_tps: Vec[String],
-b_bounds: Vec[TypeParamBoundSig],
+  a_tps: Vec[String],
+  a_bounds: Vec[TypeParamBoundSig],
+  b_tps: Vec[String],
+  b_bounds: Vec[TypeParamBoundSig],
 ) -> bool {
   if !impl_bounds_cover(ctx, a_tps, a_bounds, b_tps, b_bounds) { return false; }
   return !impl_bounds_cover(ctx, b_tps, b_bounds, a_tps, a_bounds);
@@ -869,11 +869,142 @@ fn impl_map_type_param_name_for_cmp(name: String, from_tps: Vec[String], to_tps:
   return name;
 }
 
+struct CtiConstInterval {
+  empty: bool,
+  has_min: bool,
+  min: i64,
+  has_max: bool,
+  max: i64,
+}
+
+fn cti_op_is_eq(op: ast.BinaryOp) -> bool { return match op { ast.BinaryOp.Eq => true, _ => false }; }
+fn cti_op_is_ne(op: ast.BinaryOp) -> bool { return match op { ast.BinaryOp.Ne => true, _ => false }; }
+fn cti_op_is_lt(op: ast.BinaryOp) -> bool { return match op { ast.BinaryOp.Lt => true, _ => false }; }
+fn cti_op_is_le(op: ast.BinaryOp) -> bool { return match op { ast.BinaryOp.Le => true, _ => false }; }
+fn cti_op_is_gt(op: ast.BinaryOp) -> bool { return match op { ast.BinaryOp.Gt => true, _ => false }; }
+fn cti_op_is_ge(op: ast.BinaryOp) -> bool { return match op { ast.BinaryOp.Ge => true, _ => false }; }
+
+fn cti_const_interval(op: ast.BinaryOp, rhs: i64) -> CtiConstInterval {
+  if cti_op_is_eq(op) {
+    return CtiConstInterval { empty: false, has_min: true, min: rhs, has_max: true, max: rhs };
+  }
+  if cti_op_is_lt(op) {
+    return CtiConstInterval { empty: false, has_min: false, min: 0, has_max: true, max: rhs - 1 };
+  }
+  if cti_op_is_le(op) {
+    return CtiConstInterval { empty: false, has_min: false, min: 0, has_max: true, max: rhs };
+  }
+  if cti_op_is_gt(op) {
+    return CtiConstInterval { empty: false, has_min: true, min: rhs + 1, has_max: false, max: 0 };
+  }
+  if cti_op_is_ge(op) {
+    return CtiConstInterval { empty: false, has_min: true, min: rhs, has_max: false, max: 0 };
+  }
+  return CtiConstInterval { empty: false, has_min: false, min: 0, has_max: false, max: 0 };
+}
+
+fn cti_interval_may_equal(op: ast.BinaryOp, rhs: i64, v: i64) -> bool {
+  if cti_op_is_eq(op) { return v == rhs; }
+  if cti_op_is_lt(op) { return v < rhs; }
+  if cti_op_is_le(op) { return v <= rhs; }
+  if cti_op_is_gt(op) { return v > rhs; }
+  if cti_op_is_ge(op) { return v >= rhs; }
+  return false;
+}
+
+fn cti_symbolic_op_implies(a_op: ast.BinaryOp, b_op: ast.BinaryOp) -> bool {
+  if cti_op_is_eq(a_op) && cti_op_is_eq(b_op) { return true; }
+  if cti_op_is_ne(a_op) && cti_op_is_ne(b_op) { return true; }
+  if cti_op_is_lt(a_op) && cti_op_is_lt(b_op) { return true; }
+  if cti_op_is_le(a_op) && cti_op_is_le(b_op) { return true; }
+  if cti_op_is_gt(a_op) && cti_op_is_gt(b_op) { return true; }
+  if cti_op_is_ge(a_op) && cti_op_is_ge(b_op) { return true; }
+  if cti_op_is_eq(a_op) && cti_op_is_le(b_op) { return true; }
+  if cti_op_is_eq(a_op) && cti_op_is_ge(b_op) { return true; }
+  if cti_op_is_lt(a_op) && cti_op_is_le(b_op) { return true; }
+  if cti_op_is_gt(a_op) && cti_op_is_ge(b_op) { return true; }
+  if cti_op_is_lt(a_op) && cti_op_is_ne(b_op) { return true; }
+  if cti_op_is_gt(a_op) && cti_op_is_ne(b_op) { return true; }
+  return false;
+}
+
+fn cti_literal_op_implies(a_op: ast.BinaryOp, a_rhs: i64, b_op: ast.BinaryOp, b_rhs: i64) -> bool {
+  // Conservative handling for `!=`: enough for specialization improvements on
+  // monotonic inequalities without introducing unsound ordering.
+  if cti_op_is_ne(a_op) {
+    if cti_op_is_ne(b_op) { return a_rhs == b_rhs; }
+    return false;
+  }
+
+  let iv: CtiConstInterval = cti_const_interval(a_op, a_rhs);
+  if iv.empty { return true; }
+
+  if cti_op_is_ne(b_op) {
+    return !cti_interval_may_equal(a_op, a_rhs, b_rhs);
+  }
+  if cti_op_is_eq(b_op) {
+    return iv.has_min && iv.has_max && iv.min == b_rhs && iv.max == b_rhs;
+  }
+  if cti_op_is_le(b_op) {
+    if !iv.has_max { return false; }
+    return iv.max <= b_rhs;
+  }
+  if cti_op_is_lt(b_op) {
+    if !iv.has_max { return false; }
+    return iv.max < b_rhs;
+  }
+  if cti_op_is_ge(b_op) {
+    if !iv.has_min { return false; }
+    return iv.min >= b_rhs;
+  }
+  if cti_op_is_gt(b_op) {
+    if !iv.has_min { return false; }
+    return iv.min > b_rhs;
+  }
+  return false;
+}
+
+fn impl_const_where_bound_implied(
+  a: ConstWhereBoundSig,
+  lhs_kind: i32,
+  name: String,
+  op: ast.BinaryOp,
+  rhs_is_param: bool,
+  rhs_param: String,
+  rhs_iv: i64,
+) -> bool {
+  if a.lhs_kind != lhs_kind || a.name != name { return false; }
+  if a.rhs_is_param != rhs_is_param { return false; }
+  if rhs_is_param {
+    if a.rhs_param != rhs_param { return false; }
+    return cti_symbolic_op_implies(a.op, op);
+  }
+  return cti_literal_op_implies(a.op, a.rhs_iv, op, rhs_iv);
+}
+
+fn impl_const_where_has_implied(
+  a_bounds: Vec[ConstWhereBoundSig],
+  lhs_kind: i32,
+  name: String,
+  op: ast.BinaryOp,
+  rhs_is_param: bool,
+  rhs_param: String,
+  rhs_iv: i64,
+) -> bool {
+  let mut i: i32 = 0;
+  while i < a_bounds.len() {
+    let a: ConstWhereBoundSig = a_bounds.get(i);
+    if impl_const_where_bound_implied(a, lhs_kind, name, op, rhs_is_param, rhs_param, rhs_iv) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn impl_const_where_cover(
   a_tps: Vec[String],
-a_bounds: Vec[ConstWhereBoundSig],
-b_tps: Vec[String],
-b_bounds: Vec[ConstWhereBoundSig],
+  a_bounds: Vec[ConstWhereBoundSig],
+  b_tps: Vec[String],
+  b_bounds: Vec[ConstWhereBoundSig],
 ) -> bool {
   let mut i: i32 = 0;
   while i < b_bounds.len() {
@@ -887,7 +1018,7 @@ b_bounds: Vec[ConstWhereBoundSig],
         rhs_param = cti_const_where_rhs_reflect_encode(rr.kind, mapped);
       }
     }
-    if !has_const_where_sig(a_bounds, b.lhs_kind, lhs_name, b.op, b.rhs_is_param, rhs_param, b.rhs_iv) {
+    if !impl_const_where_has_implied(a_bounds, b.lhs_kind, lhs_name, b.op, b.rhs_is_param, rhs_param, b.rhs_iv) {
       return false;
     }
     i = i + 1;
@@ -897,9 +1028,9 @@ b_bounds: Vec[ConstWhereBoundSig],
 
 fn impl_const_where_more_specific(
   a_tps: Vec[String],
-a_bounds: Vec[ConstWhereBoundSig],
-b_tps: Vec[String],
-b_bounds: Vec[ConstWhereBoundSig],
+  a_bounds: Vec[ConstWhereBoundSig],
+  b_tps: Vec[String],
+  b_bounds: Vec[ConstWhereBoundSig],
 ) -> bool {
   if !impl_const_where_cover(a_tps, a_bounds, b_tps, b_bounds) { return false; }
   return !impl_const_where_cover(b_tps, b_bounds, a_tps, a_bounds);
@@ -907,14 +1038,14 @@ b_bounds: Vec[ConstWhereBoundSig],
 
 fn impl_sig_more_specific_parts(
   ctx: Ctx,
-a_for_ty: i32,
-a_tps: Vec[String],
-a_bounds: Vec[TypeParamBoundSig],
-a_cw_bounds: Vec[ConstWhereBoundSig],
-b_for_ty: i32,
-b_tps: Vec[String],
-b_bounds: Vec[TypeParamBoundSig],
-b_cw_bounds: Vec[ConstWhereBoundSig],
+  a_for_ty: i32,
+  a_tps: Vec[String],
+  a_bounds: Vec[TypeParamBoundSig],
+  a_cw_bounds: Vec[ConstWhereBoundSig],
+  b_for_ty: i32,
+  b_tps: Vec[String],
+  b_bounds: Vec[TypeParamBoundSig],
+  b_cw_bounds: Vec[ConstWhereBoundSig],
 ) -> bool {
   let a_head_more: bool = impl_for_ty_more_specific(ctx, a_for_ty, b_for_ty);
   let b_head_more: bool = impl_for_ty_more_specific(ctx, b_for_ty, a_for_ty);
@@ -934,8 +1065,8 @@ b_cw_bounds: Vec[ConstWhereBoundSig],
 pub fn impl_sig_more_specific(ctx: Ctx, a: ImplSig, b: ImplSig) -> bool {
   return impl_sig_more_specific_parts(
     ctx,
-  a.for_ty, a.head_type_params, a.head_type_param_bounds, a.head_const_where_bounds,
-  b.for_ty, b.head_type_params, b.head_type_param_bounds, b.head_const_where_bounds,
+    a.for_ty, a.head_type_params, a.head_type_param_bounds, a.head_const_where_bounds,
+    b.for_ty, b.head_type_params, b.head_type_param_bounds, b.head_const_where_bounds,
   );
 }
 
@@ -1714,13 +1845,13 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
             }
             let new_more: bool = impl_sig_more_specific_parts(
               c,
-            for_ty, id.type_params, head_tpbs, head_cwbs,
-            ds.for_ty, ds.head_type_params, ds.head_type_param_bounds, ds.head_const_where_bounds,
+              for_ty, id.type_params, head_tpbs, head_cwbs,
+              ds.for_ty, ds.head_type_params, ds.head_type_param_bounds, ds.head_const_where_bounds,
             );
             let old_more: bool = impl_sig_more_specific_parts(
               c,
-            ds.for_ty, ds.head_type_params, ds.head_type_param_bounds, ds.head_const_where_bounds,
-            for_ty, id.type_params, head_tpbs, head_cwbs,
+              ds.for_ty, ds.head_type_params, ds.head_type_param_bounds, ds.head_const_where_bounds,
+              for_ty, id.type_params, head_tpbs, head_cwbs,
             );
             if !new_more && !old_more {
               let cur_sig: ImplSig = ImplSig {
@@ -1739,11 +1870,11 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
               };
               let msg_ov: String =
                 "overlapping impl without strict specialization: "
-                .concat(ty_inst_str(c, for_ty))
-                .concat(" vs ")
-                .concat(ty_inst_str(c, ds.for_ty))
-                .concat(" | ")
-                .concat(impl_rank_trace_text(c, cur_sig, ds));
+                  .concat(ty_inst_str(c, for_ty))
+                  .concat(" vs ")
+                  .concat(ty_inst_str(c, ds.for_ty))
+                  .concat(" | ")
+                  .concat(impl_rank_trace_text(c, cur_sig, ds));
               return TcCtxResult { ok: false, err: type_error_at(id.sp, msg_ov), ctx: c };
             }
           }
@@ -1864,28 +1995,28 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         if !effect_set_equal(efr_md.effects, want.effects) {
           let msg_eff: String =
             "impl method effect set mismatch: expected ["
-            .concat(effect_join_names(want.effects, ", "))
-            .concat("], got [")
-            .concat(effect_join_names(efr_md.effects, ", "))
-            .concat("]");
+              .concat(effect_join_names(want.effects, ", "))
+              .concat("], got [")
+              .concat(effect_join_names(efr_md.effects, ", "))
+              .concat("]");
           return TcCtxResult { ok: false, err: type_error_at(md.sp, msg_eff), ctx: c };
         }
         if !resource_set_equal(rfr_md.reads, want.resource_reads) {
           let msg_rr: String =
             "impl method read resource set mismatch: expected ["
-            .concat(resource_join_names(want.resource_reads, ", "))
-            .concat("], got [")
-            .concat(resource_join_names(rfr_md.reads, ", "))
-            .concat("]");
+              .concat(resource_join_names(want.resource_reads, ", "))
+              .concat("], got [")
+              .concat(resource_join_names(rfr_md.reads, ", "))
+              .concat("]");
           return TcCtxResult { ok: false, err: type_error_at(md.sp, msg_rr), ctx: c };
         }
         if !resource_set_equal(rfr_md.writes, want.resource_writes) {
           let msg_rw: String =
             "impl method write resource set mismatch: expected ["
-            .concat(resource_join_names(want.resource_writes, ", "))
-            .concat("], got [")
-            .concat(resource_join_names(rfr_md.writes, ", "))
-            .concat("]");
+              .concat(resource_join_names(want.resource_writes, ", "))
+              .concat("], got [")
+              .concat(resource_join_names(rfr_md.writes, ", "))
+              .concat("]");
           return TcCtxResult { ok: false, err: type_error_at(md.sp, msg_rw), ctx: c };
         }
         if md.const_params.len() != want.const_params.len() {
@@ -1935,9 +2066,9 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
         if got_cwr.bounds.len() != want.const_where_bounds.len() {
           let msgc: String =
             "impl method comptime where bound count mismatch: expected "
-            .concat(want.const_where_bounds.len().to_string())
-            .concat(", got ")
-            .concat(got_cwr.bounds.len().to_string());
+              .concat(want.const_where_bounds.len().to_string())
+              .concat(", got ")
+              .concat(got_cwr.bounds.len().to_string());
           return TcCtxResult { ok: false, err: type_error_at(md.sp, msgc), ctx: c };
         }
         let mut cbi0: i32 = 0;
@@ -2058,11 +2189,11 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           if !cti_ty_compat(c, want.params.get(pi), gotp) {
             let msgp: String =
               "impl method param type mismatch at index "
-              .concat(pi.to_string())
-              .concat(": got ")
-              .concat(ty_inst_str(c, gotp))
-              .concat(", want ")
-              .concat(ty_inst_str(c, want.params.get(pi)));
+                .concat(pi.to_string())
+                .concat(": got ")
+                .concat(ty_inst_str(c, gotp))
+                .concat(", want ")
+                .concat(ty_inst_str(c, want.params.get(pi)));
             return TcCtxResult { ok: false, err: type_error_at(md.sp, msgp), ctx: c };
           }
           pi = pi + 1;
@@ -2086,9 +2217,9 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           if !cti_ty_compat(c, want_out, got_ret) {
             let msgr: String =
               "impl async method output type mismatch: got "
-              .concat(ty_inst_str(c, got_ret))
-              .concat(", want ")
-              .concat(ty_inst_str(c, want_out));
+                .concat(ty_inst_str(c, got_ret))
+                .concat(", want ")
+                .concat(ty_inst_str(c, want_out));
             return TcCtxResult { ok: false, err: type_error_at(md.sp, msgr), ctx: c };
           }
           // Before async lowering runs, store the declared output type in the lowered fn signature.
@@ -2098,9 +2229,9 @@ fn collect_impls(ctx: Ctx, w: World) -> TcCtxResult {
           if !cti_ty_compat(c, want.ret, got_ret) {
             let msgr: String =
               "impl method ret type mismatch: got "
-              .concat(ty_inst_str(c, got_ret))
-              .concat(", want ")
-              .concat(ty_inst_str(c, want.ret));
+                .concat(ty_inst_str(c, got_ret))
+                .concat(", want ")
+                .concat(ty_inst_str(c, want.ret));
             return TcCtxResult { ok: false, err: type_error_at(md.sp, msgr), ctx: c };
           }
         }
