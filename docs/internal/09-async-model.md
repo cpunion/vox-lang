@@ -54,13 +54,17 @@ trait Runtime {
 }
 
 struct ReadyPoll { ready: bool, token: i64 }
+struct ReadyMany { ready: bool, index: i32, token: i64 }
 struct ReadyQueue { tokens: Vec[i64], head: i32 }
 trait EventSource {
   fn wait(src: Self, timeout_ms: i32, c: Context) -> ReadyPoll;
+  fn wait_many(src: Self, timeout_ms: i32, cs: Vec[Context]) -> i32;
 }
 
 fn wake(c: Context) -> ();
 fn default_runtime() -> EventRuntime;
+fn wait_many_with[S: EventSource](src: S, timeout_ms: i32, cs: Vec[Context]) -> ReadyMany;
+fn wait_many(timeout_ms: i32, cs: Vec[Context]) -> ReadyMany;
 fn park_until_wake(i: i32, c: Context) -> bool;
 fn park(i: i32, c: Context) -> ();
 fn pending_wait(i: i32, c: Context) -> (); // 兼容别名，默认转到 park
@@ -95,8 +99,9 @@ fn cancel_return[T](c: Context) -> T; // 可选钩子；不提供时回退默认
    并暴露 `default_runtime()` + `*_with(rt, ...)` 供宿主注入自定义 runtime。
 5. `EventSource + ReadyQueue` 提供“事件源抽象 + 多源就绪队列”基线：
    - `EventSource.wait(...)` 统一“单次等待 -> ReadyPoll”接口；
+   - `EventSource.wait_many(...)` 统一“多 context 批量等待 -> ready index”接口；
    - `ReadyQueue` 提供 token 队列（push/pop）作为多源事件汇聚结构；
-   - `drain_ready_once(...)` 提供“多 context 单轮扫描并入队”基线，避免宿主重复拼接轮询样板；
+   - `drain_ready_once(...)` phase-b：阻塞点优先走 `wait_many`（`EventRuntime` 会接到 `__wake_wait_any`），再做一次 non-blocking 扫描收集同轮其它 ready；
    - 现阶段先用于接口收敛，后续由平台后端（epoll/kqueue/IOCP）填充具体事件源实现。
 
 ## 4. lowering 设计（D03-3 目标）
