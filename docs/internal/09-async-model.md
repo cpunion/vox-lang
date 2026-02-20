@@ -180,5 +180,5 @@ trait Sink {
 
 ## 9. 当前剩余工作
 
-1. runtime/executor 体验继续增强（当前已支持 `default_runtime + *_with` 注入，默认 runtime 已切到 wake-token 超时等待基线，且有 `EventSource + ReadyQueue + drain_ready_once` 统一接口；后续补真正的 epoll/kqueue/IOCP 事件源实现与接线）。
+1. runtime/executor 体验继续增强（当前已支持 `default_runtime + *_with` 注入，默认 runtime 基于 wake-token 事件等待，Linux/macOS/*BSD/Windows 已分别接入 `epoll+kqueue+IOCP` 的底层等待路径，并保留 wasm/其他目标回退分支；`EventSource + ReadyQueue + drain_ready_once` 继续作为统一接口层）。
 2. drop/cancel 语义继续细化与验证（当前已支持“可恢复返回 + hint/state 分层清理/回收策略”基线）。
