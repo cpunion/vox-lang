@@ -52,6 +52,24 @@ Otherwise type checking rejects the await expression.
 - completion returns `Poll::Ready(output)`-equivalent behavior at runtime layer.
 - await operands must not capture non-static borrows across suspension points.
 
+## Cancellation Hooks
+
+When compiler-generated async entry/test wrappers observe cancellation on `Pending`,
+they route through optional `std/async` hooks with this precedence:
+
+1. drop/rebind:
+   - `cancel_drop_hint_with(rt, cx, hint, f)` / `cancel_drop_hint(cx, hint, f)`
+   - then `cancel_drop_state_with` / `cancel_drop_with` / `cancel_drop_state` / `cancel_drop`
+2. cleanup:
+   - `cancel_cleanup_hint_with(rt, cx, hint)` / `cancel_cleanup_hint(cx, hint)`
+   - then `cancel_cleanup_state_with` / `cancel_cleanup_with` / `cancel_cleanup_state` / `cancel_cleanup`
+3. return:
+   - `cancel_return_hint_with(rt, cx, hint)` / `cancel_return_hint(cx, hint)`
+   - then `cancel_return_with` / `cancel_return`
+   - else fallback default return value for the function return type.
+
+`hint` is produced from `cancel_hint(cx, frame_state, spins)` when available.
+
 ## Diagnostics
 
 Parser errors:
