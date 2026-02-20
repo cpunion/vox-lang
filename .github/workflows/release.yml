@@ -173,12 +173,8 @@ jobs:
             dist/vox-lang-${{ env.BUILD_VERSION }}-${{ env.PLATFORM }}.tar.gz.sha256
 
   build-windows:
-    name: build-and-smoke-windows-amd64-${{ matrix.gate }}
+    name: build-and-smoke-windows-amd64
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        gate: [host, regression]
 
     env:
       VOX_REQUIRE_ROLLING_BOOTSTRAP: "1"
@@ -266,8 +262,75 @@ jobs:
           set -euo pipefail
           ./scripts/release/smoke-toolchains.sh
 
+      - name: Verify release bundle manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/release/verify-release-bundle.sh "${BUILD_VERSION}" "${VOX_PLATFORM}"
+
+      - name: Upload platform artifacts
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ env.VOX_PLATFORM }}
+          path: |
+            dist/vox-lang-${{ env.BUILD_VERSION }}-${{ env.VOX_PLATFORM }}.tar.gz
+            dist/vox-lang-${{ env.BUILD_VERSION }}-${{ env.VOX_PLATFORM }}.tar.gz.sha256
+
+      - name: Upload Windows compiler for downstream gates
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-compiler
+          path: |
+            target/release/vox.exe
+
+  windows-host-gate:
+    name: windows-target-host-gate
+    runs-on: windows-latest
+    needs: build-windows
+    env:
+      VOX_REQUIRE_ROLLING_BOOTSTRAP: "1"
+      VOX_PLATFORM: windows-amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install C compiler (Windows)
+        shell: powershell
+        run: |
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if ($gcc) {
+            Write-Host "[ci] gcc already present: $($gcc.Path)"
+          } else {
+            Write-Host "[ci] gcc not found; installing MinGW via chocolatey"
+            choco install mingw -y --no-progress
+          }
+          $cand = @(
+            'C:\ProgramData\mingw64\mingw64\bin',
+            'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin'
+          )
+          foreach ($p in $cand) {
+            if (Test-Path $p) {
+              Add-Content -Path $env:GITHUB_PATH -Value $p
+            }
+          }
+          $gcc2 = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc2) { throw "gcc not found after setup" }
+          gcc --version | Select-Object -First 1
+
+      - name: Use MinGW compiler on Windows
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CC=gcc" >> "$GITHUB_ENV"
+
+      - name: Download compiler artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-compiler
+          path: target/release
+
       - name: Validate --target host build/test
-        if: matrix.gate == 'host'
         shell: bash
         run: |
           set -euo pipefail
@@ -277,13 +340,27 @@ jobs:
             echo "compiler not found: $COMPILER_BIN"
             exit 1
           fi
-
           target="${VOX_PLATFORM}"
           "$COMPILER_BIN" build "--target=${target}" target/debug/vox.target_host
           "$COMPILER_BIN" test "--target=${target}" "--run=*std_sync_runtime_generic_api_smoke" target/debug/vox.target_host.test
 
+  windows-regression-gate:
+    name: windows-target-regression-gate
+    runs-on: windows-latest
+    needs: build-windows
+    env:
+      VOX_REQUIRE_ROLLING_BOOTSTRAP: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download compiler artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-compiler
+          path: target/release
+
       - name: Validate --target regression
-        if: matrix.gate == 'regression'
         shell: bash
         env:
           CC: ""
@@ -296,22 +373,6 @@ jobs:
             exit 1
           fi
           "$COMPILER_BIN" test "--run=*target_matrix_*" target/debug/vox.target_matrix.test
-
-      - name: Verify release bundle manifest
-        if: matrix.gate == 'host'
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./scripts/release/verify-release-bundle.sh "${BUILD_VERSION}" "${VOX_PLATFORM}"
-
-      - name: Upload platform artifacts
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && matrix.gate == 'host'
-        uses: actions/upload-artifact@v4
-        with:
-          name: bundle-${{ env.VOX_PLATFORM }}
-          path: |
-            dist/vox-lang-${{ env.BUILD_VERSION }}-${{ env.VOX_PLATFORM }}.tar.gz
-            dist/vox-lang-${{ env.BUILD_VERSION }}-${{ env.VOX_PLATFORM }}.tar.gz.sha256
 
   build-cross-x86:
     name: build-cross-x86
@@ -435,7 +496,7 @@ jobs:
     name: publish-release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    needs: [fmt-check, build, build-windows, build-cross-x86, smoke-wasm-node]
+    needs: [fmt-check, build, build-windows, windows-host-gate, windows-regression-gate, build-cross-x86, smoke-wasm-node]
     permissions:
       contents: write
 
