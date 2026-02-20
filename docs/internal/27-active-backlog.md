@@ -41,6 +41,11 @@ Governance from now on:
   - [x] A10-2 typecheck/compile 回归覆盖 `rank_trace` 文案。
   - Source: `docs/internal/06-advanced-generics.md`.
 
+- [x] A22 specialization where-comptime rhs 链式蕴含增强
+  - [x] A22-1 头部比较支持 rhs 符号链传递推理（例如 `@size_of(T) <= @align_of(U)` 与 `@align_of(U) <= 16` 推导 `@size_of(T) <= 16`）。
+  - [x] A22-2 `generics_test` 增加对应 overlap/specialization 回归，保证 strict-order 判定稳定。
+  - Source: `docs/internal/06-advanced-generics.md`.
+
 - [x] A11 泛型 pack 限制策略收敛
   - [x] A11-1 `type pack arity exceeds materialization limit` 文案统一到 `typecheck` 单一函数出口，移除重复拼接。
   - [x] A11-2 typecheck/const-eval/irgen 统一复用同一 limit+error 文案。
