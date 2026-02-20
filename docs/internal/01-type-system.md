@@ -21,6 +21,7 @@
 - `f32/f64` 已支持基础表达式语义：字面量、`+ - * /`、比较（`< <= > >=`）与相等（`== !=`）。
 - `const` 已支持 `f32/f64` 字面量、常量引用、`-x`、`f32 <-> f64 as`，以及 `+ - * / < <= > >= == !=`。
 - `@range` 仍仅支持整数底层类型（不支持 `f32/f64` 作为 range base）。
+- `@verified` 当前也仅支持整数底层类型（通过 `@verified(check_fn) T` 附加谓词约束）。
 - `char` 当前实现为 `u32` 的类型别名（整数标量语义）。
 - `char` 字面量已支持（如 `'A'`、`'\n'`、`'你'`），在 parser 阶段 lowering 为对应码点整数常量。
 
@@ -173,6 +174,28 @@ fn f(x: i8) -> Option[Tiny] {
   Tiny::try_from(x)
 }
 ```
+
+## Verified 约束类型（`@verified`，已定）
+
+Vox 支持对整数类型附加“谓词约束”，谓词由普通函数给出：
+
+```vox
+fn in_small(x: i32) -> bool { return x >= 0 && x <= 3; }
+type Small = @verified(in_small) i32;
+```
+
+规则（已定）：
+
+- 语法：`@verified(check_fn) T`，`check_fn` 可写成 `name` 或 `alias.name`。
+- `T` 当前仅支持整数类型（`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`，`char` 按 `u32`）。
+- 进入 verified 类型需显式转换（`as`）；隐式从 base 进入不允许。
+- verified 类型可隐式 widening 回 base 类型（与 `@range` 一致）。
+- 运行时在 cast 点插入谓词调用；返回 `false` 时 panic（`"verified check failed"`）。
+
+当前实现约束：
+
+- 验证函数必须是单参、返回 `bool`、非 async、无泛型、无 effect/resource/FFI 属性。
+- `const` 场景下的 `as @verified(...)` 目前直接报错（不做 compile-time 谓词执行）。
 
 ## 泛型
 

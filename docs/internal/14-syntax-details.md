@@ -330,6 +330,23 @@ type Small = @range(-5..=5) i32;
 - `T` 仅支持整数类型（当前实现：`i8/u8/i16/u16/i32/u32/i64/u64/isize/usize`，以及别名 `char -> u32`）。
 - `lo/hi` 仅支持十进制整数字面量（允许前缀 `-`）。
 
+## Verified 类型语法（已定）
+
+类型位置允许 `@verified(check_fn) T`：
+
+```vox
+fn in_small(x: i32) -> bool { return x >= 0 && x <= 3; }
+type Small = @verified(in_small) i32;
+type NonNeg = @verified(util.nonneg) i32;
+```
+
+规则：
+
+- `check_fn` 支持 `name` 和 `alias.name` 两种引用形式。
+- `T` 当前仅支持整数类型。
+- 从 base 进入 verified 类型必须显式 `as`。
+- cast 到 verified 时生成运行时谓词检查；失败 panic（`verified check failed`）。
+
 ## 枚举构造子点前缀简写（已定）
 
 当枚举类型可由上下文确定时，允许用 `.Variant` 代替 `Enum.Variant`：

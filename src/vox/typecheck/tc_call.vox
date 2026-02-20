@@ -242,7 +242,7 @@ fn type_name_is_pack_member(name: String, pack: String) -> bool {
 fn ty_contains_pack_param(ctx: Ctx, ty: i32, pack: String) -> bool {
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
   if t.kind == ir.TyKind.Param { return type_name_is_pack_member(t.name, pack); }
-  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range { return ty_contains_pack_param(ctx, t.elem, pack); }
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified { return ty_contains_pack_param(ctx, t.elem, pack); }
   return false;
 }
 
@@ -279,7 +279,7 @@ fn ty_contains_pack_projection(ctx: Ctx, ty: i32, pack: String) -> bool {
     if !dr.ok { return false; }
     return dr.matched && !dr.is_all;
   }
-  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range {
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified {
     return ty_contains_pack_projection(ctx, t.elem, pack);
   }
   return false;
@@ -598,11 +598,11 @@ fn materialize_const_where_bounds(sig: FuncSig, pack: String, pack_tys: Vec[i32]
         if lhs_is_type && lhs_dr.matched {
           if idx_sel < 0 {
             return MaterializeConstWhereBoundsResult { ok: false, err: "comptime where lhs pack projection requires a concrete index context", bounds: out };
-          }
-          pack_elem_alias_name(pack, idx_sel)
-        } else {
-          b.name
-        };
+        }
+        pack_elem_alias_name(pack, idx_sel)
+      } else {
+        b.name
+      };
       let mut rhs_param2: String = b.rhs_param;
       if b.rhs_is_param {
         let rr: RemapCwReflectRhsResult = remap_cw_reflect_rhs(b.rhs_param, pack, pack_tys, idx_sel);
@@ -660,12 +660,22 @@ fn find_range_ty_idx_tc_call(ctx: Ctx, elem: i32, lo: i64, hi: i64) -> i32 {
   return -1;
 }
 
+fn find_verified_ty_idx_tc_call(ctx: Ctx, elem: i32, mod_path: String, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Verified && t.elem == elem && t.mod_path == mod_path && t.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 fn materialize_pack_ty(
   ctx: Ctx,
-  ty: i32,
-  pack: String,
-  pack_tys: Vec[i32],
-  occ0: i32,
+ty: i32,
+pack: String,
+pack_tys: Vec[i32],
+occ0: i32,
 ) -> MaterializePackTyResult {
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
   if t.kind == ir.TyKind.Param {
@@ -721,14 +731,27 @@ fn materialize_pack_ty(
     return MaterializePackTyResult { ok: true, err: "", ty: ridx, next: br.next };
   }
 
+  if t.kind == ir.TyKind.Verified {
+    let br: MaterializePackTyResult = materialize_pack_ty(ctx, t.elem, pack, pack_tys, occ0);
+    if !br.ok { return br; }
+    if br.ty == t.elem {
+      return MaterializePackTyResult { ok: true, err: "", ty: ty, next: br.next };
+    }
+    let vidx: i32 = find_verified_ty_idx_tc_call(ctx, br.ty, t.mod_path, t.name);
+    if vidx == -1 {
+      return MaterializePackTyResult { ok: false, err: "pack materialization produced unknown verified base type", ty: ctx.ty_bad, next: br.next };
+    }
+    return MaterializePackTyResult { ok: true, err: "", ty: vidx, next: br.next };
+  }
+
   return MaterializePackTyResult { ok: true, err: "", ty: ty, next: occ0 };
 }
 
 pub fn materialize_pack_sig_types(
   ctx: Ctx,
-  sig: FuncSig,
-  pack: String,
-  pack_tys: Vec[i32],
+sig: FuncSig,
+pack: String,
+pack_tys: Vec[i32],
 ) -> MaterializePackSigResult {
   let mut occ: i32 = 0;
   let mut ps: Vec[i32] = Vec();
@@ -962,12 +985,12 @@ fn ensure_ref_borrow_arg_place(sp: ast.Span, exprs: ast.ExprPool, l0: Locals, ar
 
 fn ensure_borrow_arg_requirements(
   sp: ast.Span,
-  exprs: ast.ExprPool,
-  l0: Locals,
-  arg_id: i32,
-  arg_idx0: i32,
-  variadic: bool,
-  borrow_kind: i32,
+exprs: ast.ExprPool,
+l0: Locals,
+arg_id: i32,
+arg_idx0: i32,
+variadic: bool,
+borrow_kind: i32,
 ) -> TcError {
   if param_borrow_is_mut(borrow_kind) {
     return ensure_mut_borrow_arg_place(sp, exprs, l0, arg_id, arg_idx0, variadic);
@@ -1138,14 +1161,14 @@ fn call_move_slots_for_trait_static(ctx: Ctx, cur_mod: String, trait_mod: String
 
 pub fn resolve_call_move_slots(
   ctx: Ctx,
-  w: World,
-  mod_path: String,
-  imps: Imports,
-  exprs: ast.ExprPool,
-  l0: Locals,
-  callee: i32,
-  _type_args: Vec[ast.TypeName],
-  args: Vec[i32],
+w: World,
+mod_path: String,
+imps: Imports,
+exprs: ast.ExprPool,
+l0: Locals,
+callee: i32,
+_type_args: Vec[ast.TypeName],
+args: Vec[i32],
 ) -> CallMoveSlotsResult {
   let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
 
@@ -1339,6 +1362,16 @@ fn find_range_ty_idx_local(ctx: Ctx, elem: i32, lo: i64, hi: i64) -> i32 {
   return -1;
 }
 
+fn find_verified_ty_idx_local(ctx: Ctx, elem: i32, mod_path: String, name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < ctx.pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(ctx.pool, i);
+    if t.kind == ir.TyKind.Verified && t.elem == elem && t.mod_path == mod_path && t.name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 fn has_self_assoc_prefix(name: String) -> bool {
   return name.len() > 5 && name.slice(0, 5) == "Self.";
 }
@@ -1369,6 +1402,13 @@ fn subst_self_ty(ctx: Ctx, ty: i32, recv_ty: i32) -> i32 {
     if e2 == t.elem { return ty; }
     let r: i32 = find_range_ty_idx_local(ctx, e2, t.lo, t.hi);
     if r != -1 { return r; }
+    return ctx.ty_bad;
+  }
+  if t.kind == ir.TyKind.Verified {
+    let e2: i32 = subst_self_ty(ctx, t.elem, recv_ty);
+    if e2 == t.elem { return ty; }
+    let v: i32 = find_verified_ty_idx_local(ctx, e2, t.mod_path, t.name);
+    if v != -1 { return v; }
     return ctx.ty_bad;
   }
   return ty;
@@ -2011,16 +2051,16 @@ fn tc_call_prim_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, expr
 
 fn tc_call_func_unqualified(
   ctx: Ctx,
-  w: World,
-  mod_path: String,
-  imps: Imports,
-  exprs: ast.ExprPool,
-  l0: Locals,
-  call_sp: ast.Span,
-  name: String,
-  type_args: Vec[ast.TypeName],
-  args: Vec[i32],
-  expected: i32,
+w: World,
+mod_path: String,
+imps: Imports,
+exprs: ast.ExprPool,
+l0: Locals,
+call_sp: ast.Span,
+name: String,
+type_args: Vec[ast.TypeName],
+args: Vec[i32],
+expected: i32,
 ) -> ExprTyResult {
   if name == "@compile_error" {
     if type_args.len() != 0 || args.len() != 1 {
@@ -2222,17 +2262,17 @@ fn tc_call_func_unqualified(
 
 fn tc_call_func_qualified(
   ctx: Ctx,
-  w: World,
-  cur_mod: String,
-  imps: Imports,
-  exprs: ast.ExprPool,
-  l0: Locals,
-  call_sp: ast.Span,
-  target_mod: String,
-  name: String,
-  type_args: Vec[ast.TypeName],
-  args: Vec[i32],
-  expected: i32,
+w: World,
+cur_mod: String,
+imps: Imports,
+exprs: ast.ExprPool,
+l0: Locals,
+call_sp: ast.Span,
+target_mod: String,
+name: String,
+type_args: Vec[ast.TypeName],
+args: Vec[i32],
+expected: i32,
 ) -> ExprTyResult {
   if is_reserved_intrinsic_name(name) && target_mod == "" && !is_std_module(cur_mod) {
     let msg: String = "reserved intrinsic is only available in std modules: ".concat(name);
@@ -2248,17 +2288,17 @@ fn tc_call_func_qualified(
 
 fn tc_call_func_sig(
   ctx: Ctx,
-  w: World,
-  cur_mod: String,
-  imps: Imports,
-  exprs: ast.ExprPool,
-  l0: Locals,
-  call_sp: ast.Span,
-  target_mod: String,
-  sig: FuncSig,
-  type_args: Vec[ast.TypeName],
-  args: Vec[i32],
-  expected: i32,
+w: World,
+cur_mod: String,
+imps: Imports,
+exprs: ast.ExprPool,
+l0: Locals,
+call_sp: ast.Span,
+target_mod: String,
+sig: FuncSig,
+type_args: Vec[ast.TypeName],
+args: Vec[i32],
+expected: i32,
 ) -> ExprTyResult {
   let _tm: String = target_mod; // reserved for future: implicit receiver / UFCS.
   let mut pack_mode: bool = false;
@@ -2272,7 +2312,7 @@ fn tc_call_func_sig(
     if args.len() < fixed_n {
       let msgv0: String =
         "wrong number of args: expected at least ".concat(fixed_n.to_string())
-          .concat(", got ").concat(args.len().to_string());
+        .concat(", got ").concat(args.len().to_string());
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgv0) };
     }
     if args.len() > sig.params.len() || args.len() == fixed_n {
@@ -2301,7 +2341,7 @@ fn tc_call_func_sig(
     if args.len() != sig.params.len() {
       let msg: String =
         "wrong number of args: expected ".concat(sig.params.len().to_string())
-          .concat(", got ").concat(args.len().to_string());
+        .concat(", got ").concat(args.len().to_string());
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
     }
   }
@@ -2725,18 +2765,18 @@ fn tc_call_func_sig(
 
 fn tc_call_trait_static(
   ctx: Ctx,
-  w: World,
-  cur_mod: String,
-  imps: Imports,
-  exprs: ast.ExprPool,
-  l0: Locals,
-  call_sp: ast.Span,
-  trait_mod: String,
-  trait_name: String,
-  method: String,
-  type_args: Vec[ast.TypeName],
-  args: Vec[i32],
-  expected: i32,
+w: World,
+cur_mod: String,
+imps: Imports,
+exprs: ast.ExprPool,
+l0: Locals,
+call_sp: ast.Span,
+trait_mod: String,
+trait_name: String,
+method: String,
+type_args: Vec[ast.TypeName],
+args: Vec[i32],
+expected: i32,
 ) -> ExprTyResult {
   let tf: FindTraitResult = find_trait(ctx, trait_mod, trait_name);
   if !tf.found { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "unknown trait: ".concat(trait_name)) }; }
@@ -2801,19 +2841,19 @@ fn find_enum_for_ctor(ctx: Ctx, enum_mod: String, enum_name: String, expected: i
 
 fn tc_call_enum_ctor(
   ctx: Ctx,
-  w: World,
-  cur_mod: String,
-  imps: Imports,
-  exprs: ast.ExprPool,
-  l0: Locals,
-  call_sp: ast.Span,
-  enum_mod: String,
-  enum_name: String,
-  var_name: String,
-  enum_type_parts: Vec[String],
-  enum_targs: Vec[ast.TypeName],
-  args: Vec[i32],
-  expected: i32,
+w: World,
+cur_mod: String,
+imps: Imports,
+exprs: ast.ExprPool,
+l0: Locals,
+call_sp: ast.Span,
+enum_mod: String,
+enum_name: String,
+var_name: String,
+enum_type_parts: Vec[String],
+enum_targs: Vec[ast.TypeName],
+args: Vec[i32],
+expected: i32,
 ) -> ExprTyResult {
   let mut out_ty_hint: i32 = -1;
   let mut fe: FindEnumResult = find_enum_for_ctor(ctx, enum_mod, enum_name, expected);

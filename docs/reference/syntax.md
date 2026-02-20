@@ -15,6 +15,7 @@ Topic docs:
 - `docs/reference/language/types/structs.md`
 - `docs/reference/language/types/enums.md`
 - `docs/reference/language/types/ranges.md`
+- `docs/reference/language/types/verified.md`
 - `docs/reference/language/types/conversions.md`
 - `docs/reference/language/types/compatibility.md`
 - `docs/reference/language/types/literals.md`

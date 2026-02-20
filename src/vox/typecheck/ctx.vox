@@ -88,6 +88,7 @@ fn ty_eq(a: ir.Ty, b: ir.Ty) -> bool {
     ir.TyKind.Enum => match b.kind { ir.TyKind.Enum => a.mod_path == b.mod_path && a.name == b.name, _ => false },
     ir.TyKind.Vec => match b.kind { ir.TyKind.Vec => a.elem == b.elem, _ => false },
     ir.TyKind.Range => match b.kind { ir.TyKind.Range => a.elem == b.elem && a.lo == b.lo && a.hi == b.hi, _ => false },
+    ir.TyKind.Verified => match b.kind { ir.TyKind.Verified => a.elem == b.elem && a.mod_path == b.mod_path && a.name == b.name, _ => false },
   };
 }
 
@@ -340,8 +341,10 @@ fn subs_from_args(type_params: Vec[String], arg_tys: Vec[i32]) -> Vec[TySub] {
 
 struct FindStructDeclResult { found: bool, d: ast.StructDecl }
 struct FindEnumDeclResult { found: bool, d: ast.EnumDecl }
+struct FindFuncDeclResult { found: bool, d: ast.FuncDecl }
 struct NominalComptimeWhereResult { ok: bool, err: TcError, ctx: Ctx }
 struct NominalTraitBoundsResult { ok: bool, err: TcError, ctx: Ctx }
+struct ResolveVerifiedPredRefResult { ok: bool, mod_path: String, name: String }
 
 fn find_struct_decl_in_mod(m: WorldModule, name: String) -> FindStructDeclResult {
   let mut i: i32 = 0;
@@ -364,6 +367,66 @@ fn find_struct_decl_in_mod(m: WorldModule, name: String) -> FindStructDeclResult
       fields: Vec(),
     },
   };
+}
+
+fn find_func_decl_in_mod(m: WorldModule, name: String) -> FindFuncDeclResult {
+  let mut i: i32 = 0;
+  while i < m.prog.funcs.len() {
+    let d: ast.FuncDecl = m.prog.funcs.get(i);
+    if d.name == name { return FindFuncDeclResult { found: true, d: d }; }
+    i = i + 1;
+  }
+  return FindFuncDeclResult {
+    found: false,
+    d: ast.FuncDecl {
+      file: "",
+      sp: ast.span0(),
+      vis: ast.vis_private(),
+      is_pub: false,
+      is_async: false,
+      track_caller: false,
+      name: "",
+      type_params: Vec(),
+      type_param_packs: Vec(),
+      const_params: Vec(),
+      type_param_bounds: Vec(),
+      const_where_bounds: Vec(),
+      params: Vec(),
+      ret: ast.TypeName { parts: Vec(), args: Vec() },
+      ffi_imports: Vec(),
+      ffi_exports: Vec(),
+      effects: Vec(),
+      resources: Vec(),
+      body: ast.Block { stmts: Vec() },
+    },
+  };
+}
+
+fn split_last_dot_ctx(s: String) -> i32 {
+  let mut i: i32 = s.len() - 1;
+  while i >= 0 {
+    if s.byte_at(i) == 46 { return i; }
+    i = i - 1;
+  }
+  return -1;
+}
+
+fn resolve_verified_pred_ref(imps: Imports, cur_mod: String, text: String) -> ResolveVerifiedPredRefResult {
+  if text.len() == 0 { return ResolveVerifiedPredRefResult { ok: false, mod_path: "", name: "" }; }
+  let d: i32 = split_last_dot_ctx(text);
+  if d == -1 {
+    let nf: NamedFuncImport = find_named_func(imps.named_funcs, text);
+    if nf.local != "" {
+      return ResolveVerifiedPredRefResult { ok: true, mod_path: nf.mod_path, name: nf.name };
+    }
+    return ResolveVerifiedPredRefResult { ok: true, mod_path: cur_mod, name: text };
+  }
+  if d <= 0 || d + 1 >= text.len() { return ResolveVerifiedPredRefResult { ok: false, mod_path: "", name: "" }; }
+  let alias: String = text.slice(0, d);
+  let name: String = text.slice(d + 1, text.len());
+  let mod_path: String = find_alias(imps.aliases, alias);
+  if mod_path == "" { return ResolveVerifiedPredRefResult { ok: false, mod_path: "", name: "" }; }
+  return ResolveVerifiedPredRefResult { ok: true, mod_path: mod_path, name: name };
 }
 
 fn find_enum_decl_in_mod(m: WorldModule, name: String) -> FindEnumDeclResult {
@@ -410,13 +473,13 @@ fn type_param_idx_nominal(tps: Vec[String], name: String) -> i32 {
 
 fn nominal_check_type_param_bounds(
   ctx0: Ctx,
-  w: World,
-  cur_mod: String,
-  imps: Imports,
-  sp: ast.Span,
-  tps: Vec[String],
-  tpbs: Vec[ast.TypeParamBoundsDecl],
-  arg_tys: Vec[i32],
+w: World,
+cur_mod: String,
+imps: Imports,
+sp: ast.Span,
+tps: Vec[String],
+tpbs: Vec[ast.TypeParamBoundsDecl],
+arg_tys: Vec[i32],
 ) -> NominalTraitBoundsResult {
   let mut c: Ctx = ctx0;
   let mut bi: i32 = 0;
@@ -460,26 +523,26 @@ fn nominal_check_type_param_bounds(
         if fi.ambiguous {
           let msg0: String =
             "type argument "
-              .concat(ty_inst_str(c, arg_ty))
-              .concat(" has ambiguous impls for trait ")
-              .concat(rtr.name)
-              .concat(" (candidates: ")
-              .concat(fi.candidates)
-              .concat(")");
+            .concat(ty_inst_str(c, arg_ty))
+            .concat(" has ambiguous impls for trait ")
+            .concat(rtr.name)
+            .concat(" (candidates: ")
+            .concat(fi.candidates)
+            .concat(")");
           return NominalTraitBoundsResult { ok: false, err: type_error_at(sp, msg0), ctx: c };
         }
         if !fi.found {
           let cands: String = trait_impl_candidates_text(c, rtr.mod_path, rtr.name);
           let msg1: String =
             "type argument "
-              .concat(ty_inst_str(c, arg_ty))
-              .concat(" does not satisfy trait bound ")
-              .concat(bdecl.name)
-              .concat(": ")
-              .concat(rtr.name)
-              .concat(" (available impls: ")
-              .concat(cands)
-              .concat(")");
+            .concat(ty_inst_str(c, arg_ty))
+            .concat(" does not satisfy trait bound ")
+            .concat(bdecl.name)
+            .concat(": ")
+            .concat(rtr.name)
+            .concat(" (available impls: ")
+            .concat(cands)
+            .concat(")");
           return NominalTraitBoundsResult { ok: false, err: type_error_at(sp, msg1), ctx: c };
         }
       }
@@ -676,6 +739,62 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
     if (bt.kind == ir.TyKind.U64 || bt.kind == ir.TyKind.USize) && lo < 0 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
 
     let ir0: InternResult = intern_ty(c, ir.ty_range(br.idx, lo, hi));
+    c = ir0.ctx;
+    return ResolveTyResult { ctx: c, ok: true, idx: ir0.idx };
+  }
+
+  // @verified(check_fn) Base
+  // `check_fn` may be:
+  // - local / named import: `check_ok`
+  // - module alias reference: `util.check_ok`
+  if tn.parts.len() == 2 && tn.parts.get(0) == "@verified" && tn.args.len() == 1 {
+    let pred_ref: String = tn.parts.get(1);
+    let pr: ResolveVerifiedPredRefResult = resolve_verified_pred_ref(imps, cur_mod, pred_ref);
+    if !pr.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+
+    let br: ResolveTyResult = resolve_type_bound(c, w, cur_mod, imps, type_params, binds, tn.args.get(0));
+    c = br.ctx;
+    if !br.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let bt: ir.Ty = ir.ty_pool_get(c.pool, br.idx);
+    let is_int: bool = match bt.kind {
+      ir.TyKind.I8 => true,
+      ir.TyKind.U8 => true,
+      ir.TyKind.I16 => true,
+      ir.TyKind.U16 => true,
+      ir.TyKind.I32 => true,
+      ir.TyKind.U32 => true,
+      ir.TyKind.I64 => true,
+      ir.TyKind.U64 => true,
+      ir.TyKind.ISize => true,
+      ir.TyKind.USize => true,
+      _ => false,
+    };
+    if !is_int { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+
+    let fm: FindModResult = find_mod(w, pr.mod_path);
+    if !fm.found { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let pm: WorldModule = w.mods.get(fm.idx);
+    let fdr: FindFuncDeclResult = find_func_decl_in_mod(pm, pr.name);
+    if !fdr.found { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let fd: ast.FuncDecl = fdr.d;
+    if fd.is_async || fd.type_params.len() != 0 || fd.const_params.len() != 0 || fd.params.len() != 1 {
+      return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
+    }
+    if fd.effects.len() != 0 || fd.resources.len() != 0 || fd.ffi_imports.len() != 0 || fd.ffi_exports.len() != 0 {
+      return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
+    }
+
+    let irp: ImportsResult = build_imports(w, pr.mod_path, pm.prog.imports, fd.file);
+    if !irp.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let ptyr: ResolveTyResult = resolve_type_bound(c, w, pr.mod_path, irp.imps, Vec(), Vec(), fd.params.get(0).ty);
+    c = ptyr.ctx;
+    if !ptyr.ok { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    if strip_range(c, ptyr.idx) != br.idx { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+    let rtyr: ResolveTyResult = resolve_type_bound(c, w, pr.mod_path, irp.imps, Vec(), Vec(), fd.ret);
+    c = rtyr.ctx;
+    if !rtyr.ok || strip_range(c, rtyr.idx) != c.ty_bool { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
+
+    let ir0: InternResult = intern_ty(c, ir.ty_verified(br.idx, pr.mod_path, pr.name));
     c = ir0.ctx;
     return ResolveTyResult { ctx: c, ok: true, idx: ir0.idx };
   }

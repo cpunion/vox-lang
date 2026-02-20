@@ -24,6 +24,7 @@ CastExpr
 - Integer-to-integer casts are supported.
 - Narrowing behavior follows runtime/backend conversion semantics.
 - Additional runtime checks apply when casting into `@range(...)` refined types.
+- Additional runtime checks apply when casting into `@verified(...)` refined types.
 
 ## Float and Integer Conversions
 
@@ -48,6 +49,7 @@ Type checking rejects:
 - casts to unsupported target kinds,
 - invalid reference or mutability casts,
 - refinement casts violating range constraints (const-time failure or runtime panic).
+- refinement casts violating verified predicate constraints (runtime panic).
 
 ## Example
 
