@@ -1919,10 +1919,6 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
   let mut sig_use: tc.FuncSig = sig;
   let mut materialized_pack_hetero: bool = false;
   if has_pack && pack_explicit_tys.len() > 0 {
-    if pack_explicit_tys.len() > tc.materialized_pack_arity_limit() {
-      let msg_pack: String = tc.materialized_pack_arity_err(pack_explicit_tys.len());
-      return GenExprResult { ok: false, err: msg_pack, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
-    }
     let mut all_same: bool = true;
     let mut pi0: i32 = 1;
     while pi0 < pack_explicit_tys.len() {
@@ -1943,8 +1939,22 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
 
     subs = tc.append_pack_alias_subs(subs, pack_name, pack_explicit_tys);
 
+    let mut limit_arity: i32 = pack_explicit_tys.len();
+    let need_materialize: bool = !all_same && !gen_sig_allows_heterogeneous_pack_args(g.ctx, sig, pack_name);
+    if need_materialize {
+      let ea: tc.MaterializedPackEffectiveArityResult = tc.materialized_pack_effective_arity(g.ctx, sig, pack_name, pack_explicit_tys);
+      if !ea.ok {
+        return GenExprResult { ok: false, err: ea.err, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+      }
+      limit_arity = ea.n;
+    }
+    if limit_arity > tc.materialized_pack_arity_limit() {
+      let msg_pack: String = tc.materialized_pack_arity_err(limit_arity);
+      return GenExprResult { ok: false, err: msg_pack, g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+    }
+
     if !all_same {
-      if gen_sig_allows_heterogeneous_pack_args(g.ctx, sig, pack_name) {
+      if !need_materialize {
         // Placeholder-only pack usage (A01-2a): keep as-is.
       } else {
         let mr: tc.MaterializePackSigResult = tc.materialize_pack_sig_types(g.ctx, sig, pack_name, pack_explicit_tys);

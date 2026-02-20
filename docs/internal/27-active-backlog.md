@@ -46,6 +46,11 @@ Governance from now on:
   - [x] A11-2 typecheck/const-eval/irgen 统一复用同一 limit+error 文案。
   - Source: `docs/internal/06-advanced-generics.md`.
 
+- [x] A18 泛型 pack arity/shape 上限策略增强
+  - [x] A18-1 对异构且需要 materialization 的 pack，限制判定从“显式总长度”升级为“有效 shape arity”（按实际投影/消费位置计算）。
+  - [x] A18-2 typecheck/const-eval/irgen 三路径统一该判定策略，并补充长 pack + 投影场景回归。
+  - Source: `docs/internal/06-advanced-generics.md`.
+
 - [x] A12 `vox/internal/*` 下沉继续推进
   - [x] A12-1 CLI 主流程复用 `vox/internal/text.trim_space`，移除 `src/main.vox` 重复实现。
   - [x] A12-2 新增 `vox/internal/path`，并让 `src/main.vox` / `vox/macroexpand` 复用统一路径辅助逻辑（`base_name/dirname/join/slash-normalize/is_abs_path`）。

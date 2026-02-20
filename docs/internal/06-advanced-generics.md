@@ -133,11 +133,11 @@ where
   - 已支持 pack 成员投影（`Pack.N`）参与物化。
   - 对无 pack 的普通泛型，仍保留 `expected at most N, got M` 的 arity 检查。
 
-后续增强（非阻塞）：
-
-- 基于 arity/shape 的进一步专门化优化与代码体积控制策略。
-
 当前已落地的代码体积控制基线：
 
-- 对需要 materialization 的 type-pack 调用增加 arity 上限（`16`），超出时报错：
+- 对 type-pack 调用统一保持上限约束（`16`）。
+- 对异构 pack 且需要 materialization 的场景，采用“按 shape 计算的有效 arity”判定上限：
+  - 只引用 `Pack.0/Pack.1` 这类前缀投影时，有效 arity 仅按实际参与位置计算，不再按显式 pack 总长度计算。
+  - 若约束含有 `Pack`（全体语义），则有效 arity 退化为显式 pack 总长度。
+- 超出上限时报错：
   - `type pack arity exceeds materialization limit: <n> > 16`

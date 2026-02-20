@@ -76,7 +76,9 @@ when they target the same lhs/rhs basis (for example `<= 8` is stronger than `<=
 
 ## Current Limits
 
-- Pack materialization enforces an arity limit; exceeding it is a type error.
+- Pack materialization enforces an arity limit.
+- For heterogeneous packs that require materialization, the checker uses effective shape arity
+  (actual projected/consumed pack positions) instead of raw explicit pack length.
 - Specialization ordering follows current checker ranking rules and rejects incomparable overlaps.
 
 ## Diagnostics
