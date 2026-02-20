@@ -964,7 +964,7 @@ fn cti_literal_op_implies(a_op: ast.BinaryOp, a_rhs: i64, b_op: ast.BinaryOp, b_
   return false;
 }
 
-fn impl_const_where_bound_implied(
+fn impl_const_where_bound_implied_direct(
   a: ConstWhereBoundSig,
   lhs_kind: i32,
   name: String,
@@ -982,6 +982,108 @@ fn impl_const_where_bound_implied(
   return cti_literal_op_implies(a.op, a.rhs_iv, op, rhs_iv);
 }
 
+struct CtiRhsSymbolDecodeResult {
+  ok: bool,
+  lhs_kind: i32,
+  name: String,
+}
+
+struct CtiComposeMidOpResult {
+  ok: bool,
+  op: ast.BinaryOp,
+}
+
+fn cti_rhs_symbol_decode(rhs_param: String) -> CtiRhsSymbolDecodeResult {
+  let rr: CollectRhsReflectDecode = collect_rhs_reflect_decode(rhs_param);
+  if rr.ok {
+    return CtiRhsSymbolDecodeResult { ok: true, lhs_kind: rr.kind, name: rr.name };
+  }
+  if rhs_param == "" {
+    return CtiRhsSymbolDecodeResult { ok: false, lhs_kind: ast.comptime_where_lhs_const_param(), name: "" };
+  }
+  return CtiRhsSymbolDecodeResult { ok: true, lhs_kind: ast.comptime_where_lhs_const_param(), name: rhs_param };
+}
+
+fn cti_bound_symbol_key(lhs_kind: i32, name: String) -> String {
+  return lhs_kind.to_string().concat(":").concat(name);
+}
+
+fn cti_compose_mid_op(src_op: ast.BinaryOp, goal_op: ast.BinaryOp) -> CtiComposeMidOpResult {
+  if cti_op_is_eq(src_op) {
+    return CtiComposeMidOpResult { ok: true, op: goal_op };
+  }
+  if cti_op_is_le(src_op) {
+    if cti_op_is_le(goal_op) { return CtiComposeMidOpResult { ok: true, op: ast.BinaryOp.Le }; }
+    if cti_op_is_lt(goal_op) { return CtiComposeMidOpResult { ok: true, op: ast.BinaryOp.Lt }; }
+    return CtiComposeMidOpResult { ok: false, op: ast.BinaryOp.Eq };
+  }
+  if cti_op_is_lt(src_op) {
+    if cti_op_is_le(goal_op) { return CtiComposeMidOpResult { ok: true, op: ast.BinaryOp.Le }; }
+    if cti_op_is_lt(goal_op) { return CtiComposeMidOpResult { ok: true, op: ast.BinaryOp.Le }; }
+    return CtiComposeMidOpResult { ok: false, op: ast.BinaryOp.Eq };
+  }
+  if cti_op_is_ge(src_op) {
+    if cti_op_is_ge(goal_op) { return CtiComposeMidOpResult { ok: true, op: ast.BinaryOp.Ge }; }
+    if cti_op_is_gt(goal_op) { return CtiComposeMidOpResult { ok: true, op: ast.BinaryOp.Gt }; }
+    return CtiComposeMidOpResult { ok: false, op: ast.BinaryOp.Eq };
+  }
+  if cti_op_is_gt(src_op) {
+    if cti_op_is_ge(goal_op) { return CtiComposeMidOpResult { ok: true, op: ast.BinaryOp.Ge }; }
+    if cti_op_is_gt(goal_op) { return CtiComposeMidOpResult { ok: true, op: ast.BinaryOp.Ge }; }
+    return CtiComposeMidOpResult { ok: false, op: ast.BinaryOp.Eq };
+  }
+  return CtiComposeMidOpResult { ok: false, op: ast.BinaryOp.Eq };
+}
+
+fn impl_const_where_has_implied_with_seen(
+  a_bounds: Vec[ConstWhereBoundSig],
+  lhs_kind: i32,
+  name: String,
+  op: ast.BinaryOp,
+  rhs_is_param: bool,
+  rhs_param: String,
+  rhs_iv: i64,
+  seen0: Vec[String],
+) -> bool {
+  let mut i: i32 = 0;
+  while i < a_bounds.len() {
+    let a: ConstWhereBoundSig = a_bounds.get(i);
+    if impl_const_where_bound_implied_direct(a, lhs_kind, name, op, rhs_is_param, rhs_param, rhs_iv) { return true; }
+    i = i + 1;
+  }
+
+  let key: String = cti_bound_symbol_key(lhs_kind, name);
+  if contains_str_local(seen0, key) { return false; }
+  let mut seen: Vec[String] = seen0;
+  seen.push(key);
+
+  i = 0;
+  while i < a_bounds.len() {
+    let a: ConstWhereBoundSig = a_bounds.get(i);
+    if a.lhs_kind == lhs_kind && a.name == name && a.rhs_is_param {
+      let mid_op: CtiComposeMidOpResult = cti_compose_mid_op(a.op, op);
+      if mid_op.ok {
+        let dr: CtiRhsSymbolDecodeResult = cti_rhs_symbol_decode(a.rhs_param);
+        if dr.ok &&
+          impl_const_where_has_implied_with_seen(
+          a_bounds,
+          dr.lhs_kind,
+          dr.name,
+          mid_op.op,
+          rhs_is_param,
+          rhs_param,
+          rhs_iv,
+          seen,
+        ) {
+          return true;
+        }
+      }
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn impl_const_where_has_implied(
   a_bounds: Vec[ConstWhereBoundSig],
   lhs_kind: i32,
@@ -991,13 +1093,16 @@ fn impl_const_where_has_implied(
   rhs_param: String,
   rhs_iv: i64,
 ) -> bool {
-  let mut i: i32 = 0;
-  while i < a_bounds.len() {
-    let a: ConstWhereBoundSig = a_bounds.get(i);
-    if impl_const_where_bound_implied(a, lhs_kind, name, op, rhs_is_param, rhs_param, rhs_iv) { return true; }
-    i = i + 1;
-  }
-  return false;
+  return impl_const_where_has_implied_with_seen(
+    a_bounds,
+    lhs_kind,
+    name,
+    op,
+    rhs_is_param,
+    rhs_param,
+    rhs_iv,
+    Vec(),
+  );
 }
 
 fn impl_const_where_cover(
