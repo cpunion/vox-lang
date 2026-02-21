@@ -22,6 +22,14 @@ Governance from now on:
 3. Deferred items stay in Deferred and are not counted as active scope.
 4. If a closed item must reopen, add explicit reason + regression evidence.
 
+Builtin end-state (agreed):
+1. `vox_builtin_*` runtime capability exits language builtin surface; standard-library implementation only.
+2. Builtin/intrinsic keep scope is limited to compile-time reflection:
+   - type relations
+   - type predicates
+   - target reflection
+3. Atomic behavior is modeled as IR instruction semantics, not runtime builtin function surface.
+
 ## Active Scope (non-deferred)
 
 ### P0
