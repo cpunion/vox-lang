@@ -18,9 +18,10 @@ Status: active.
 - [x] `std/net` 请求对象化：`Client`/`Request`/`Response` 方法式入口收敛
   - 保留 `http_get/http_roundtrip` 兼容包装
   - 增加解析/构造 API 的结构化错误入口（不破坏现有 panic 行为）
-- [ ] `std/io` 连接级安全释放语义增强
-  - 明确 `NetConn.close()` 后行为（重复 close、后续 send/recv 的错误语义）
-  - 补跨平台回归
+- [x] `std/io` 连接级安全释放语义增强
+  - `NetConn.close()` 幂等并返回关闭后的 `NetConn`（`net_close` 同步）
+  - 增加 checked API：`try_send/try_recv/try_wait_read/try_wait_write/try_close` 与公开结果类型
+  - 补 `std/io` 行为测试 + `vox/typecheck` / `vox/compile` smoke 回归
 - [x] `std/fs` 路径拼接与规范化 helper（避免调用方重复字符串拼接）
   - `Path.clean/join/base_name/dir_name/ext/stem/is_abs` + free-function 同名入口
 

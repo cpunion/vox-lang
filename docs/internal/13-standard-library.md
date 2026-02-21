@@ -63,8 +63,15 @@
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`。
   - 文件 API：`File` + 方法 `exists/read_all/write_all/mkdir_p`。
-  - 网络 API：`NetAddr` + `NetConn`，方法 `connect/send/recv/wait_read/wait_write/close`。
-  - 兼容保留 free-function 入口：`file_read_all/file_write_all/file_exists/mkdir_p/net_connect/net_send/net_recv/net_wait_read/net_wait_write/net_close`（内部转发到方法实现）。
+  - 网络 API：`NetAddr` + `NetConn`。
+    - panic 风格方法：`connect/send/recv/wait_read/wait_write/close`（`close` 返回已关闭的 `NetConn`，幂等）。
+    - checked 风格方法：`is_closed/try_send/try_recv/try_wait_read/try_wait_write/try_close`。
+    - checked 结果类型：`NetI32Result/NetStringResult/NetBoolResult/NetCloseResult`（字段公开）。
+    - 哨兵构造：`closed_conn()`（用于显式“已关闭连接”语义）。
+  - 兼容保留 free-function 入口：
+    - 文件：`file_read_all/file_write_all/file_exists/mkdir_p`
+    - 网络：`net_connect/net_is_closed/net_try_send/net_send/net_try_recv/net_recv/net_try_wait_read/net_wait_read/net_try_wait_write/net_wait_write/net_try_close/net_close`
+    - 其中 `net_close` 返回 `NetConn`（与方法 `close` 一致）。
 - `std::runtime` 已提供 intrinsic 能力边界：
   - 运行时封装：`args/exe_path/getenv/now_ns/yield_now`、`wake_notify/wake_wait`、文件/进程/TCP/sync 原语。
     - 批量唤醒等待：`wake_wait_any(tokens, timeout_ms) -> i32`（返回命中下标，未命中为 `-1`）。
