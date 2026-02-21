@@ -82,8 +82,9 @@
   - 同一函数中同名资源不能同时声明 `read` 与 `write`；需要写能力时应仅声明 `write`。
   - `impl Trait for T` 方法需与 trait 方法声明的资源集合一致（按 read/write 集合匹配）。
 - `@ffi_import/@ffi_export` 仅允许出现在顶层函数上；trait/impl 方法位置会报错。
-- `@deprecated`（`@deprecated("message")` 或无参 `@deprecated`）仅允许出现在顶层函数上。
-  - 当前用于标记“宏函数”弃用（通过 `name!(...)` 调用时会产生命令行编译告警）。
+- `@deprecated`（`@deprecated("message")` 或无参 `@deprecated`）支持顶层函数、trait 方法、impl/inherent 方法。
+  - 编译器会在调用点输出弃用告警（`W_DEPRECATED_0001`）。
+  - 方法调用告警按已解析调用目标判定（包含 `x.m()` / UFCS / trait default / async lowered 方法路径）。
 
 ## 运算符优先级
 
