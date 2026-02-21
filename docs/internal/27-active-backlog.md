@@ -254,6 +254,37 @@ Governance from now on:
   - [x] A34-3 diagnostics 文档补充 warning 格式与 `W_DEPRECATED_0001` 稳定码说明。
   - Source: `docs/internal/18-diagnostics.md`.
 
+- [x] A35 builtin/intrinsic 冻结门禁
+  - [x] A35-1 新增 `scripts/release/frozen-builtins.lock`，固化 `collect.vox` 当前 builtin/intrinsic 符号集合。
+  - [x] A35-2 新增 `scripts/ci/check-frozen-builtins.sh`，若集合发生增删则 CI 失败。
+  - [x] A35-3 `Makefile` 与 CI workflow 接入冻结检查，防止未审阅的 builtin/intrinsic 扩张进入主线。
+  - Source: `docs/reference/style-guide.md`.
+
+- [x] A36 builtin/intrinsic 收缩（batch-1）
+  - [x] A36-1 移除 `__intrinsic_abi` / `__has_intrinsic` 两个 runtime-backed builtin 声明与 codegen 分支。
+  - [x] A36-2 同步删减 C runtime 里对应 `vox_builtin_*` 实现，保留 `std/runtime` 语言层能力。
+  - [x] A36-3 更新冻结清单与回归测试（`typecheck`/`codegen`）。
+
+- [x] A37 builtin/intrinsic 收缩（batch-2）
+  - [x] A37-1 将 `__exe_path/__getenv/__now_ns/__yield_now/__exec` 从 builtin 路径迁到 `std/runtime` 的 `@ffi_import("c", "vox_builtin_*")` 调用。
+  - [x] A37-2 删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering，改走常规 FFI 调用路径。
+  - [x] A37-3 `c_runtime` 将对应 `vox_builtin_*` 实现改为可外部链接，满足编译器自举二进制内 FFI 绑定。
+  - [x] A37-4 更新冻结清单并补齐回归（`typecheck/compile/codegen` 的 std override 与 yield 场景）。
+  - Source: `docs/reference/style-guide.md`.
+
+- [x] A38 builtin/intrinsic 收缩（batch-3）
+  - [x] A38-1 将 `__read_file/__write_file/__path_exists/__mkdir_p` 从 builtin 路径迁到 `std/runtime` 的 `@ffi_import("c", "vox_builtin_*")` 调用。
+  - [x] A38-2 删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering，改走常规 FFI 调用路径。
+  - [x] A38-3 `c_runtime` 将对应 `vox_builtin_*` 实现改为可外部链接，满足编译器自举二进制内 FFI 绑定。
+  - [x] A38-4 更新冻结清单并补齐回归（`typecheck/compile` 的 std io/fs override 场景）。
+  - Source: `docs/reference/style-guide.md`.
+
+- [ ] A39 builtin/intrinsic 收缩（batch-4）
+  - [x] A39-1 扩展 FFI 类型白名单，支持 `Vec[String]` 的参数与返回（用于 runtime bridge，不放开任意 `Vec[T]`）。
+  - [ ] A39-2 在 bootstrap lock 升级后，将 `__args/__walk_vox_files` 从 builtin 路径迁到 `std/runtime` 的 `@ffi_import("c", "vox_builtin_*")` 调用。
+  - [ ] A39-3 同步删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering，并更新冻结清单。
+  - Source: `docs/reference/style-guide.md`.
+
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.
