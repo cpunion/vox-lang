@@ -196,3 +196,4 @@ fn list_smoke() -> String {
 16. [x] `vox/internal/text` 第七批复用：`vox/manifest` 继续移除 `trim/index/split` 转发 helper，直接调用 `txt.trim_space/txt.index_byte/txt.split_*`，进一步减少解析层中间封装。
 17. [x] `vox/internal/text` 第八批复用：`main_toolchain/main_lock` 移除 `has_prefix/unquote/index/split` 转发 helper，统一改为直接调用 `txt.*`，减少 CLI 路由与锁文件解析的重复封装。
 18. [x] `vox/internal/source` 下沉：将编译器专用 `.vox` 源扫描命名（`walk_vox_files`）收敛到 `vox/internal/*`，`std/fs` 仅暴露通用 `walk_files`。
+19. [x] `vox/internal/text` 第九批复用：`vox/loader` 与 `vox/compile` 移除 `has_prefix` 转发 helper，统一改为直接调用 `txt.has_prefix`，继续收敛重复实现。
