@@ -74,34 +74,144 @@ pub fn net_addr(host: String, port: i32) -> NetAddr {
 
 impl NetAddr {
   fn connect(addr: NetAddr) -> NetConn {
-    return NetConn { handle: rt_api().tcp_connect(addr.host, addr.port) };
+    return NetConn { handle: rt_api().tcp_connect(addr.host, addr.port), closed: false };
   }
 }
 
 pub struct NetConn {
   handle: isize,
+  closed: bool,
+}
+
+pub struct NetI32Result {
+  pub ok: bool,
+  pub err: String,
+  pub n: i32,
+}
+
+pub struct NetStringResult {
+  pub ok: bool,
+  pub err: String,
+  pub text: String,
+}
+
+pub struct NetBoolResult {
+  pub ok: bool,
+  pub err: String,
+  pub ready: bool,
+}
+
+pub struct NetCloseResult {
+  pub ok: bool,
+  pub err: String,
+  pub conn: NetConn,
+  pub closed_now: bool,
+}
+
+fn net_conn_closed_err() -> String {
+  return "net conn is closed";
+}
+
+fn net_conn_is_closed0(c: &NetConn) -> bool {
+  return c.closed || c.handle < 0;
+}
+
+fn net_i32_ok(n: i32) -> NetI32Result {
+  return NetI32Result { ok: true, err: "", n: n };
+}
+
+fn net_i32_err(err: String) -> NetI32Result {
+  return NetI32Result { ok: false, err: err, n: 0 };
+}
+
+fn net_string_ok(text: String) -> NetStringResult {
+  return NetStringResult { ok: true, err: "", text: text };
+}
+
+fn net_string_err(err: String) -> NetStringResult {
+  return NetStringResult { ok: false, err: err, text: "" };
+}
+
+fn net_bool_ok(ready: bool) -> NetBoolResult {
+  return NetBoolResult { ok: true, err: "", ready: ready };
+}
+
+fn net_bool_err(err: String) -> NetBoolResult {
+  return NetBoolResult { ok: false, err: err, ready: false };
+}
+
+fn net_close_ok(conn: NetConn, closed_now: bool) -> NetCloseResult {
+  return NetCloseResult { ok: true, err: "", conn: conn, closed_now: closed_now };
+}
+
+pub fn closed_conn() -> NetConn {
+  return NetConn { handle: -1 as isize, closed: true };
 }
 
 impl NetConn {
+  fn is_closed(c: &NetConn) -> bool {
+    return net_conn_is_closed0(c);
+  }
+
+  fn try_send(c: &NetConn, text: String) -> NetI32Result {
+    if c.is_closed() { return net_i32_err(net_conn_closed_err()); }
+    return net_i32_ok(rt_api().tcp_send(c.handle, text));
+  }
+
   fn send(c: &NetConn, text: String) -> i32 {
-    return rt_api().tcp_send(c.handle, text);
+    let r: NetI32Result = c.try_send(text);
+    if !r.ok { panic(r.err); }
+    return r.n;
+  }
+
+  fn try_recv(c: &NetConn, max_n: i32) -> NetStringResult {
+    if c.is_closed() { return net_string_err(net_conn_closed_err()); }
+    return net_string_ok(rt_api().tcp_recv(c.handle, max_n));
   }
 
   fn recv(c: &NetConn, max_n: i32) -> String {
-    return rt_api().tcp_recv(c.handle, max_n);
+    let r: NetStringResult = c.try_recv(max_n);
+    if !r.ok { panic(r.err); }
+    return r.text;
+  }
+
+  fn try_wait_read(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
+    if c.is_closed() { return net_bool_err(net_conn_closed_err()); }
+    return net_bool_ok(rt_api().tcp_wait_read(c.handle, timeout_ms));
   }
 
   fn wait_read(c: &NetConn, timeout_ms: i32) -> bool {
-    return rt_api().tcp_wait_read(c.handle, timeout_ms);
+    let r: NetBoolResult = c.try_wait_read(timeout_ms);
+    if !r.ok { panic(r.err); }
+    return r.ready;
+  }
+
+  fn try_wait_write(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
+    if c.is_closed() { return net_bool_err(net_conn_closed_err()); }
+    return net_bool_ok(rt_api().tcp_wait_write(c.handle, timeout_ms));
   }
 
   fn wait_write(c: &NetConn, timeout_ms: i32) -> bool {
-    return rt_api().tcp_wait_write(c.handle, timeout_ms);
+    let r: NetBoolResult = c.try_wait_write(timeout_ms);
+    if !r.ok { panic(r.err); }
+    return r.ready;
   }
 
-  fn close(c: NetConn) -> () {
+  fn try_close(c0: NetConn) -> NetCloseResult {
+    let mut c: NetConn = c0;
+    if c.is_closed() {
+      c.handle = -1 as isize;
+      c.closed = true;
+      return net_close_ok(c, false);
+    }
     rt_api().tcp_close(c.handle);
-    return;
+    c.handle = -1 as isize;
+    c.closed = true;
+    return net_close_ok(c, true);
+  }
+
+  fn close(c: NetConn) -> NetConn {
+    return c.try_close().conn;
   }
 }
 
@@ -109,23 +219,46 @@ pub fn net_connect(addr: NetAddr) -> NetConn {
   return addr.connect();
 }
 
-pub fn net_send(c: NetConn, text: String) -> i32 {
+pub fn net_is_closed(c: &NetConn) -> bool {
+  return c.is_closed();
+}
+
+pub fn net_try_send(c: &NetConn, text: String) -> NetI32Result {
+  return c.try_send(text);
+}
+
+pub fn net_send(c: &NetConn, text: String) -> i32 {
   return c.send(text);
 }
 
-pub fn net_recv(c: NetConn, max_n: i32) -> String {
+pub fn net_try_recv(c: &NetConn, max_n: i32) -> NetStringResult {
+  return c.try_recv(max_n);
+}
+
+pub fn net_recv(c: &NetConn, max_n: i32) -> String {
   return c.recv(max_n);
 }
 
-pub fn net_wait_read(c: NetConn, timeout_ms: i32) -> bool {
+pub fn net_try_wait_read(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
+  return c.try_wait_read(timeout_ms);
+}
+
+pub fn net_wait_read(c: &NetConn, timeout_ms: i32) -> bool {
   return c.wait_read(timeout_ms);
 }
 
-pub fn net_wait_write(c: NetConn, timeout_ms: i32) -> bool {
+pub fn net_try_wait_write(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
+  return c.try_wait_write(timeout_ms);
+}
+
+pub fn net_wait_write(c: &NetConn, timeout_ms: i32) -> bool {
   return c.wait_write(timeout_ms);
 }
 
-pub fn net_close(c: NetConn) -> () {
-  c.close();
-  return;
+pub fn net_try_close(c: NetConn) -> NetCloseResult {
+  return c.try_close();
+}
+
+pub fn net_close(c: NetConn) -> NetConn {
+  return c.close();
 }
