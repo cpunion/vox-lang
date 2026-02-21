@@ -47,6 +47,19 @@
 4. 目标平台行为必须文档化，并有至少一条对应回归测试。
 5. `builtin/intrinsic` 集合冻结：默认禁止新增；如确需变更，必须同 PR 更新 `scripts/release/frozen-builtins.lock` 并给出设计理由。
 
+### 3.1 Builtin 终局目标（约束）
+
+`vox_builtin_*` runtime 能力的目标是“清零语言内建暴露”，统一下沉到标准库实现（`std` + `ffi` + 平台封装）。
+
+仅允许保留“编译期类型与目标反射”相关 intrinsic：
+
+1. 类型关系（如 `@same_type/@assignable_to/@castable_to/@ordered_with`）。
+2. 类型谓词（如 `@is_*` 系列）。
+3. 目标反射（`@target_os/@target_arch/@target_ptr_bits`）。
+4. 原子语义走 IR 指令模型，不以 runtime builtin 函数暴露。
+
+除此之外（进程/环境/时间/文件路径/唤醒/网络/互斥锁等）一律通过标准库能力实现，不进入 builtin 集合。
+
 ## 4. 文档规范
 
 1. `docs/reference/` 放稳定、对用户可见的规范。
