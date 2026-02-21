@@ -45,6 +45,7 @@
 2. 不引入“半完成语义”长期停留主线；若暂不可做，明确标记 deferred。
 3. 内建能力优先经 `std/runtime`、`std/*` 封装；避免业务层直接依赖 `__*`。
 4. 目标平台行为必须文档化，并有至少一条对应回归测试。
+5. `builtin/intrinsic` 集合冻结：默认禁止新增；如确需变更，必须同 PR 更新 `scripts/release/frozen-builtins.lock` 并给出设计理由。
 
 ## 4. 文档规范
 

@@ -254,6 +254,12 @@ Governance from now on:
   - [x] A34-3 diagnostics 文档补充 warning 格式与 `W_DEPRECATED_0001` 稳定码说明。
   - Source: `docs/internal/18-diagnostics.md`.
 
+- [x] A35 builtin/intrinsic 冻结门禁
+  - [x] A35-1 新增 `scripts/release/frozen-builtins.lock`，固化 `collect.vox` 当前 builtin/intrinsic 符号集合。
+  - [x] A35-2 新增 `scripts/ci/check-frozen-builtins.sh`，若集合发生增删则 CI 失败。
+  - [x] A35-3 `Makefile` 与 CI workflow 接入冻结检查，防止未审阅的 builtin/intrinsic 扩张进入主线。
+  - Source: `docs/reference/style-guide.md`.
+
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.
