@@ -272,6 +272,13 @@ Governance from now on:
   - [x] A37-4 更新冻结清单并补齐回归（`typecheck/compile/codegen` 的 std override 与 yield 场景）。
   - Source: `docs/reference/style-guide.md`.
 
+- [x] A38 builtin/intrinsic 收缩（batch-3）
+  - [x] A38-1 将 `__read_file/__write_file/__path_exists/__mkdir_p` 从 builtin 路径迁到 `std/runtime` 的 `@ffi_import("c", "vox_builtin_*")` 调用。
+  - [x] A38-2 删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering，改走常规 FFI 调用路径。
+  - [x] A38-3 `c_runtime` 将对应 `vox_builtin_*` 实现改为可外部链接，满足编译器自举二进制内 FFI 绑定。
+  - [x] A38-4 更新冻结清单并补齐回归（`typecheck/compile` 的 std io/fs override 场景）。
+  - Source: `docs/reference/style-guide.md`.
+
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.
