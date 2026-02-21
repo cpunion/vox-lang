@@ -285,6 +285,13 @@ Governance from now on:
   - [ ] A39-3 同步删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering，并更新冻结清单。
   - Source: `docs/reference/style-guide.md`.
 
+- [x] A40 builtin/intrinsic 收缩（batch-5）
+  - [x] A40-1 将 `std/runtime` 的 `sync` 句柄族（`mutex/atomic` i32+i64）改为 `@ffi_import("c", "vox_builtin_*")` 调用。
+  - [x] A40-2 删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering，改走常规 FFI 路径。
+  - [x] A40-3 `c_runtime` 对应 `vox_builtin_*` 实现改为可外部链接（非 `static`），满足同一产物内 FFI 绑定。
+  - [x] A40-4 更新冻结清单并补回归（`typecheck/compile/codegen` 同步场景）。
+  - Source: `docs/reference/style-guide.md`.
+
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.
