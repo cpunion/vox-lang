@@ -46,6 +46,8 @@
     - `get`、`get_or`（缺失键时返回调用方提供的 fallback）
     - `keys`、`values`（按当前存储顺序返回拷贝）
     - `set`（存在则覆盖，不存在则插入）、`remove`、`clear`、`release`（需接收返回值，释放后旧变量读取会报 `use of moved value`）
+    - `set_if_absent`（仅在缺失键时插入）
+    - `get_or_set`（单次查找完成“读取或插入”，返回 `MapGetOrSetResult[K,V] { map, value, inserted }`）
   - 当前实现优化：`set` 覆盖路径与 `remove` 路径已改为 `Vec.set/remove` 原地更新，避免旧实现的整表重建拷贝。
   - 其中键比较相关 API 需要 `K: Eq`。
   - 另外提供 `impl[K: Eq + Clone, V: Clone] Clone for Map[K,V]`（深拷贝 keys/vals，不共享底层 Vec 存储）。
