@@ -279,10 +279,10 @@ Governance from now on:
   - [x] A38-4 更新冻结清单并补齐回归（`typecheck/compile` 的 std io/fs override 场景）。
   - Source: `docs/reference/style-guide.md`.
 
-- [ ] A39 builtin/intrinsic 收缩（batch-4）
+- [x] A39 builtin/intrinsic 收缩（batch-4）
   - [x] A39-1 扩展 FFI 类型白名单，支持 `Vec[String]` 的参数与返回（用于 runtime bridge，不放开任意 `Vec[T]`）。
-  - [ ] A39-2 在 bootstrap lock 升级后，将 `__args/__walk_vox_files` 从 builtin 路径迁到 `std/runtime` 的 `@ffi_import("c", "vox_builtin_*")` 调用。
-  - [ ] A39-3 同步删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering，并更新冻结清单。
+  - [x] A39-2 在 bootstrap lock 升级后，将 `__walk_vox_files` 从 builtin 路径迁到 `std/runtime` 的 `@ffi_import("c", "vox_builtin_*")` 调用。
+  - [x] A39-3 同步删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering，并更新冻结清单。
   - Source: `docs/reference/style-guide.md`.
 
 - [x] A40 builtin/intrinsic 收缩（batch-5）
@@ -296,7 +296,7 @@ Governance from now on:
   - [x] A41-1 将 `std/runtime` 的 `tcp` 与 `wake_notify/wake_wait` 路径改为 `@ffi_import("c", "vox_builtin_*")` 调用。
   - [x] A41-2 删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering，保留 `__wake_wait_any` 作为当前最小 builtin。
   - [x] A41-3 `c_runtime` 对应 `vox_builtin_*` 实现改为可外部链接（非 `static`），并补齐 `typecheck/compile/codegen` 回归。
-  - [x] A41-4 更新冻结清单（仅剩 `__args/__walk_vox_files/__wake_wait_any` + `panic/print` 及反射内建）。
+  - [x] A41-4 更新冻结清单（仅剩 `__args/__wake_wait_any` + `panic/print` 及反射内建）。
   - Source: `docs/reference/style-guide.md`.
 
 ## Deferred Scope
