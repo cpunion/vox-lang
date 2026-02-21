@@ -203,13 +203,13 @@ fn test_typecheck_std_fs_method_style_smoke() -> () {
       fn write_string(p: &Path, text: String) -> () { __write_file(p.raw, text); }
       fn exists(p: &Path) -> bool { return __path_exists(p.raw); }
       fn mkdir_p(p: &Path) -> () { __mkdir_p(p.raw); }
-      fn walk_vox_files(p: &Path) -> Vec[String] { return __walk_vox_files(p.raw); }
+      fn walk_files(p: &Path) -> Vec[String] { return __walk_vox_files(p.raw); }
     }
     pub fn read_to_string(raw: String) -> String { let p: Path = path(raw); return p.read_to_string(); }
     pub fn write_string(raw: String, text: String) -> () { let p: Path = path(raw); p.write_string(text); return; }
     pub fn exists(raw: String) -> bool { let p: Path = path(raw); return p.exists(); }
     pub fn mkdir_p(raw: String) -> () { let p: Path = path(raw); p.mkdir_p(); return; }
-    pub fn walk_vox_files(raw: String) -> Vec[String] { let p: Path = path(raw); return p.walk_vox_files(); }
+    pub fn walk_files(raw: String) -> Vec[String] { let p: Path = path(raw); return p.walk_files(); }
   """);
   w = add_mod(w, "main", """
     import "std/fs" as fs
@@ -220,12 +220,12 @@ fn test_typecheck_std_fs_method_style_smoke() -> () {
       let _b: bool = p.exists();
       let d: fs.Path = fs.path("tmp");
       d.mkdir_p();
-      let _xs: Vec[String] = d.walk_vox_files();
+      let _xs: Vec[String] = d.walk_files();
       fs.write_string("b.txt", "x");
       let _s2: String = fs.read_to_string("b.txt");
       let _b2: bool = fs.exists("b.txt");
       fs.mkdir_p("tmp2");
-      let _xs2: Vec[String] = fs.walk_vox_files("tmp2");
+      let _xs2: Vec[String] = fs.walk_files("tmp2");
       return 0;
     }
   """);
@@ -289,6 +289,141 @@ fn test_typecheck_std_process_command_style_smoke() -> () {
       let _rc1: i32 = cmd.run();
       let _as: Vec[String] = p.args();
       let _g: String = p.getenv("HOME");
+      return 0;
+    }
+  """);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(ok(r));
+}
+
+fn test_typecheck_std_net_socket_addr_style_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/io", """
+    pub struct NetAddr { pub host: String, pub port: i32 }
+    pub struct NetConn { handle: isize }
+    pub fn net_addr(host: String, port: i32) -> NetAddr { return NetAddr { host: host, port: port }; }
+    impl NetAddr {
+      fn connect(a: &NetAddr) -> NetConn { return NetConn { handle: __tcp_connect(a.host, a.port) as isize }; }
+    }
+  """);
+  w = add_mod(w, "std/net", """
+    import "std/io" as io
+    pub enum NetProto { Tcp, Udp }
+    pub struct SocketAddr { pub proto: NetProto, pub host: String, pub port: i32 }
+    pub struct SocketAddrParseResult { pub ok: bool, pub err: String, pub addr: SocketAddr }
+    pub struct UdpSocket { local: SocketAddr }
+    pub fn socket_addr(proto: NetProto, host: String, port: i32) -> SocketAddr {
+      return SocketAddr { proto: proto, host: host, port: port };
+    }
+    pub fn tcp_addr(host: String, port: i32) -> SocketAddr { return socket_addr(NetProto.Tcp, host, port); }
+    pub fn udp_addr(host: String, port: i32) -> SocketAddr { return socket_addr(NetProto.Udp, host, port); }
+    impl SocketAddr {
+      fn is_tcp(a: &SocketAddr) -> bool { return match a.proto { NetProto.Tcp => true, _ => false }; }
+      fn is_udp(a: &SocketAddr) -> bool { return match a.proto { NetProto.Udp => true, _ => false }; }
+      fn uri(a: &SocketAddr) -> String {
+        let scheme: String = match a.proto { NetProto.Tcp => "tcp", _ => "udp" };
+        return scheme.concat("://").concat(a.host).concat(":").concat(a.port.to_string());
+      }
+      fn to_net_addr(a: &SocketAddr) -> io.NetAddr { return io.net_addr(a.host, a.port); }
+      fn tcp_connect(a: &SocketAddr) -> io.NetConn {
+        let na: io.NetAddr = a.to_net_addr();
+        return na.connect();
+      }
+    }
+    pub fn socket_uri(a: SocketAddr) -> String { return a.uri(); }
+    pub fn parse_socket_uri(_raw: String) -> SocketAddrParseResult {
+      return SocketAddrParseResult { ok: true, err: "", addr: tcp_addr("127.0.0.1", 9000) };
+    }
+    pub fn tcp_connect_addr(a: SocketAddr) -> io.NetConn { return a.tcp_connect(); }
+    pub fn udp_bind(local: SocketAddr) -> UdpSocket { return UdpSocket { local: local }; }
+    impl UdpSocket {
+      fn local_addr(x: &UdpSocket) -> SocketAddr { return x.local; }
+      fn send_to(_x: &UdpSocket, _to: SocketAddr, _data: String) -> i32 { return 0; }
+      fn recv_from(_x: &UdpSocket, _max_n: i32) -> String { return ""; }
+    }
+  """);
+  w = add_mod(w, "main", """
+    import "std/net" as net
+    fn main() -> i32 {
+      let a: net.SocketAddr = net.tcp_addr("127.0.0.1", 9000);
+      let _u: String = a.uri();
+      let _b0: bool = a.is_tcp();
+      let _b1: bool = a.is_udp();
+      let _c = net.tcp_connect_addr(a);
+      let p: net.SocketAddrParseResult = net.parse_socket_uri("tcp://127.0.0.1:9000");
+      if p.ok {
+        let _u2: String = net.socket_uri(p.addr);
+      }
+      let u: net.SocketAddr = net.udp_addr("0.0.0.0", 53);
+      let s: net.UdpSocket = net.udp_bind(u);
+      let _lu: net.SocketAddr = s.local_addr();
+      let _sn: i32 = s.send_to(net.udp_addr("127.0.0.1", 53), "x");
+      let _rx: String = s.recv_from(16);
+      return 0;
+    }
+  """);
+  let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert(ok(r));
+}
+
+fn test_typecheck_std_fs_virtual_fs_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/fs", """
+    pub trait FS {
+      fn read_to_string(x: &Self, path: String) -> String;
+      fn exists(x: &Self, path: String) -> bool;
+      fn walk_files(x: &Self, root: String) -> Vec[String];
+    }
+    pub trait WritableFS {
+      fn write_string(x: Self, path: String, text: String) -> Self;
+      fn mkdir_p(x: Self, path: String) -> Self;
+    }
+    pub struct MemFS { files: Vec[String] }
+    pub fn mem_fs() -> MemFS { return MemFS { files: Vec() }; }
+    impl MemFS {
+      fn read_to_string(_x: &MemFS, _p: String) -> String { return "ok"; }
+      fn exists(x: &MemFS, p: String) -> bool {
+        let mut i: i32 = 0;
+        while i < x.files.len() { if x.files.get(i) == p { return true; } i = i + 1; }
+        return false;
+      }
+      fn walk_files(x: &MemFS, _root: String) -> Vec[String] { return x.files; }
+      fn write_string(x: MemFS, p: String, _text: String) -> MemFS {
+        let mut ys: Vec[String] = x.files;
+        ys.push(p);
+        return MemFS { files: ys };
+      }
+      fn mkdir_p(x: MemFS, _p: String) -> MemFS { return x; }
+    }
+    impl FS for MemFS {
+      fn read_to_string(x: &MemFS, p: String) -> String { return x.read_to_string(p); }
+      fn exists(x: &MemFS, p: String) -> bool { return x.exists(p); }
+      fn walk_files(x: &MemFS, root: String) -> Vec[String] { return x.walk_files(root); }
+    }
+    impl WritableFS for MemFS {
+      fn write_string(x: MemFS, p: String, text: String) -> MemFS { return x.write_string(p, text); }
+      fn mkdir_p(x: MemFS, p: String) -> MemFS { return x.mkdir_p(p); }
+    }
+    pub fn fs_read_to_string[T: FS](x: T, p: String) -> String { return FS.read_to_string(x, p); }
+    pub fn fs_exists[T: FS](x: T, p: String) -> bool { return FS.exists(x, p); }
+    pub fn fs_walk_files[T: FS](x: T, root: String) -> Vec[String] { return FS.walk_files(x, root); }
+    pub fn fs_write_string[T: WritableFS](x: T, p: String, text: String) -> T { return WritableFS.write_string(x, p, text); }
+    pub fn fs_mkdir_p[T: WritableFS](x: T, p: String) -> T { return WritableFS.mkdir_p(x, p); }
+  """);
+  w = add_mod(w, "main", """
+    import "std/fs" as fs
+    fn main() -> i32 {
+      let mut m: fs.MemFS = fs.mem_fs();
+      m = m.mkdir_p("/src");
+      m = m.write_string("/src/main.vox", "fn main() -> i32 { return 0; }");
+      let _b0: bool = m.exists("/src/main.vox");
+      let _s: String = m.read_to_string("/src/main.vox");
+      let _xs: Vec[String] = m.walk_files("/src");
+      m = fs.fs_mkdir_p(m, "/pkg");
+      m = fs.fs_write_string(m, "/pkg/lib.vox", "fn lib() -> i32 { return 1; }");
+      let _b1: bool = fs.fs_exists(m, "/pkg/lib.vox");
+      let _s2: String = fs.fs_read_to_string(m, "/pkg/lib.vox");
+      let _ys: Vec[String] = fs.fs_walk_files(m, "/pkg");
       return 0;
     }
   """);

@@ -9,6 +9,9 @@ Status: active.
 - [x] `std/io` 方法式 API（`File` / `NetAddr` / `NetConn`）+ free-function 兼容包装
 - [x] `std/fs` 方法式 API（`Path`）+ free-function 兼容包装
 - [x] `std/process` 方法式 API（`Command`）+ free-function 兼容包装
+- [x] `std/fs` 虚拟文件系统基线（`FS`/`WritableFS` + `OsFS`/`MemFS` + 泛型 helper）
+- [x] `std/net` 地址抽象基线（`NetProto`/`SocketAddr` + `tcp://`/`udp://` URI parse/render）
+  - `UdpSocket.send_to/recv_from` 当前为占位语义，待后续 runtime 事件源接线
 
 ## S1 下一批（P0）
 
@@ -36,4 +39,3 @@ Status: active.
 3. `src/vox/typecheck/*` 与 `src/vox/compile/*` smoke 覆盖
 4. 文档同步更新
 5. PR review + CI 绿后合并
-
