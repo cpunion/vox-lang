@@ -335,6 +335,14 @@ fn test_typecheck_std_net_socket_addr_style_smoke() -> () {
     pub struct SocketAddr { pub proto: NetProto, pub host: String, pub port: i32 }
     pub struct SocketAddrParseResult { pub ok: bool, pub err: String, pub addr: SocketAddr }
     pub struct UdpSocket { local: SocketAddr }
+    pub struct HttpRequest { pub method: String, pub host: String, pub path: String, pub headers: Vec[String], pub body: String }
+    pub struct Request { pub url: String, pub inner: HttpRequest }
+    pub struct RequestResult { pub ok: bool, pub err: String, pub req: Request }
+    pub struct HttpResponseHead { pub code: i32, pub reason: String }
+    pub struct Response { pub raw: String, pub status: HttpResponseHead, pub body: String }
+    pub struct ResponseResult { pub ok: bool, pub err: String, pub resp: Response }
+    pub struct RoundtripResult { pub ok: bool, pub err: String, pub raw: String }
+    pub struct Client { recv_limit: i32 }
     pub fn socket_addr(proto: NetProto, host: String, port: i32) -> SocketAddr {
       return SocketAddr { proto: proto, host: host, port: port };
     }
@@ -364,6 +372,54 @@ fn test_typecheck_std_net_socket_addr_style_smoke() -> () {
       fn send_to(_x: &UdpSocket, _to: SocketAddr, _data: String) -> i32 { return 0; }
       fn recv_from(_x: &UdpSocket, _max_n: i32) -> String { return ""; }
     }
+    pub fn new_request(method: String, url: String) -> RequestResult {
+      let req: Request = Request { url: url, inner: HttpRequest { method: method, host: "x", path: "/", headers: Vec(), body: "" } };
+      return RequestResult { ok: true, err: "", req: req };
+    }
+    pub fn request(method: String, url: String) -> Request {
+      return Request { url: url, inner: HttpRequest { method: method, host: "x", path: "/", headers: Vec(), body: "" } };
+    }
+    impl Request {
+      fn with_header(r: Request, _name: String, _value: String) -> Request { return r; }
+      fn with_body(r: Request, _body: String) -> Request { return r; }
+      fn render(_r: &Request) -> String { return "GET / HTTP/1.1\\r\\n\\r\\n"; }
+    }
+    pub fn response_from_raw(raw: String) -> Response {
+      return Response { raw: raw, status: HttpResponseHead { code: 200, reason: "OK" }, body: "" };
+    }
+    impl Response {
+      fn status_code(r: &Response) -> i32 { return r.status.code; }
+      fn reason(r: &Response) -> String { return r.status.reason; }
+      fn header(_r: &Response, _name: String) -> String { return ""; }
+    }
+    pub fn http_roundtrip_checked(_url: String, _req: HttpRequest, _recv_limit: i32) -> RoundtripResult {
+      return RoundtripResult { ok: true, err: "", raw: "HTTP/1.1 200 OK\\r\\n\\r\\n" };
+    }
+    pub fn http_roundtrip(_url: String, _req: HttpRequest, _recv_limit: i32) -> String {
+      return "HTTP/1.1 200 OK\\r\\n\\r\\n";
+    }
+    pub fn client() -> Client { return Client { recv_limit: 8192 }; }
+    impl Client {
+      fn with_recv_limit(c: Client, recv_limit: i32) -> Client {
+        let mut out: Client = c;
+        out.recv_limit = recv_limit;
+        return out;
+      }
+      fn recv_limit(c: &Client) -> i32 { return c.recv_limit; }
+      fn try_send(_c: &Client, req: Request) -> ResponseResult {
+        return ResponseResult { ok: true, err: "", resp: response_from_raw(req.render()) };
+      }
+      fn send(c: &Client, req: Request) -> Response {
+        return c.try_send(req).resp;
+      }
+      fn try_get(c: &Client, _url: String) -> ResponseResult {
+        return c.try_send(request("GET", "https://x"));
+      }
+      fn get(c: &Client, _url: String) -> Response {
+        return c.try_get("https://x").resp;
+      }
+    }
+    pub fn http_get(_url: String, _recv_limit: i32) -> String { return "HTTP/1.1 200 OK\\r\\n\\r\\n"; }
   """);
   w = add_mod(w, "main", """
     import "std/net" as net
@@ -382,6 +438,22 @@ fn test_typecheck_std_net_socket_addr_style_smoke() -> () {
       let _lu: net.SocketAddr = s.local_addr();
       let _sn: i32 = s.send_to(net.udp_addr("127.0.0.1", 53), "x");
       let _rx: String = s.recv_from(16);
+      let rq: net.RequestResult = net.new_request("GET", "https://x");
+      let req: net.Request = rq.req.with_header("K", "V").with_body("b");
+      let _req_text: String = req.render();
+      let c0: net.Client = net.client();
+      let c: net.Client = c0.with_recv_limit(1024);
+      let _lim: i32 = c.recv_limit();
+      let rr0: net.ResponseResult = c.try_send(req);
+      let _resp0: net.Response = rr0.resp;
+      let _resp1: net.Response = c.send(net.request("GET", "https://x"));
+      let rr1: net.ResponseResult = c.try_get("https://x");
+      let _resp2: net.Response = rr1.resp;
+      let resp: net.Response = c.get("https://x");
+      let _sc: i32 = resp.status_code();
+      let _rs: String = resp.reason();
+      let _hv: String = resp.header("X");
+      let _raw: String = net.http_get("https://x", 1024);
       return 0;
     }
   """);

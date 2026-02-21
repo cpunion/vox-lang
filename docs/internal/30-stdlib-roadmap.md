@@ -15,7 +15,7 @@ Status: active.
 
 ## S1 下一批（P0）
 
-- [ ] `std/net` 请求对象化：`Client`/`Request`/`Response` 方法式入口收敛
+- [x] `std/net` 请求对象化：`Client`/`Request`/`Response` 方法式入口收敛
   - 保留 `http_get/http_roundtrip` 兼容包装
   - 增加解析/构造 API 的结构化错误入口（不破坏现有 panic 行为）
 - [ ] `std/io` 连接级安全释放语义增强
