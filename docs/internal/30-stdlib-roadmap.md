@@ -21,8 +21,8 @@ Status: active.
 - [ ] `std/io` 连接级安全释放语义增强
   - 明确 `NetConn.close()` 后行为（重复 close、后续 send/recv 的错误语义）
   - 补跨平台回归
-- [ ] `std/fs` 路径拼接与规范化 helper（避免调用方重复字符串拼接）
-  - `Path.join/base_name/dir_name`（最小稳定集）
+- [x] `std/fs` 路径拼接与规范化 helper（避免调用方重复字符串拼接）
+  - `Path.clean/join/base_name/dir_name/ext/stem/is_abs` + free-function 同名入口
 
 ## S2 中期（P1）
 
