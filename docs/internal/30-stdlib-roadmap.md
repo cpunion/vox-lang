@@ -27,7 +27,10 @@ Status: active.
 
 ## S2 中期（P1）
 
-- [ ] `std/process` 增加 `Command.cwd` / `Command.env_remove` / `Command.clear_env`
+- [x] `std/process` 增加 `Command.cwd` / `Command.env_remove` / `Command.clear_env`
+  - 支持命令级 cwd 前缀渲染（`cd <dir> && ...`）
+  - 支持按键移除环境变量与清空环境变量集合
+  - 补 `std/process` 行为测试 + `vox/typecheck` / `vox/compile` smoke 回归
 - [ ] `std/collections` 与 `std/string` 的 OOP 风格一致性收敛（保持兼容包装）
 - [ ] `std/testing` 增加模块化断言扩展（不破坏当前 `t.assert*`）
 
