@@ -108,6 +108,39 @@ pub struct HttpResponseHead {
   pub reason: String,
 }
 
+pub struct Request {
+  pub url: String,
+  pub inner: HttpRequest,
+}
+
+pub struct RequestResult {
+  pub ok: bool,
+  pub err: String,
+  pub req: Request,
+}
+
+pub struct Response {
+  pub raw: String,
+  pub status: HttpResponseHead,
+  pub body: String,
+}
+
+pub struct ResponseResult {
+  pub ok: bool,
+  pub err: String,
+  pub resp: Response,
+}
+
+pub struct RoundtripResult {
+  pub ok: bool,
+  pub err: String,
+  pub raw: String,
+}
+
+pub struct Client {
+  recv_limit: i32,
+}
+
 pub enum NetProto {
   Tcp,
   Udp,
@@ -131,6 +164,14 @@ pub struct UdpSocket {
 
 fn bad_addr() -> SocketAddr {
   return SocketAddr { proto: NetProto.Tcp, host: "", port: 0 };
+}
+
+fn bad_request() -> Request {
+  return Request { url: "", inner: http_request("GET", "", "/") };
+}
+
+fn bad_response() -> Response {
+  return Response { raw: "", status: HttpResponseHead { code: -1, reason: "" }, body: "" };
 }
 
 pub fn socket_addr(proto: NetProto, host: String, port: i32) -> SocketAddr {
@@ -418,6 +459,47 @@ impl HttpRequest {
   }
 }
 
+pub fn new_request(method: String, url: String) -> RequestResult {
+  let u: Url = parse_url(url);
+  if u.host == "" {
+    return RequestResult { ok: false, err: "request url host is empty", req: bad_request() };
+  }
+  if u.port <= 0 {
+    return RequestResult { ok: false, err: "request url port must be > 0", req: bad_request() };
+  }
+
+  let mut path: String = u.path;
+  if u.query != "" {
+    path = path.concat("?").concat(u.query);
+  }
+  let req: HttpRequest = http_request(method, u.host, path);
+  return RequestResult { ok: true, err: "", req: Request { url: url, inner: req } };
+}
+
+pub fn request(method: String, url: String) -> Request {
+  let rr: RequestResult = new_request(method, url);
+  if !rr.ok { panic(rr.err); }
+  return rr.req;
+}
+
+impl Request {
+  fn with_header(r: Request, name: String, value: String) -> Request {
+    let mut out: Request = r;
+    out.inner = out.inner.with_header(name, value);
+    return out;
+  }
+
+  fn with_body(r: Request, body: String) -> Request {
+    let mut out: Request = r;
+    out.inner = out.inner.with_body(body);
+    return out;
+  }
+
+  fn render(r: &Request) -> String {
+    return r.inner.render();
+  }
+}
+
 pub fn parse_status(resp: String) -> HttpResponseHead {
   let line: String = first_line(resp);
   let first_sp: i32 = s.index_of(s.view_all(line), " ");
@@ -433,6 +515,28 @@ pub fn parse_status(resp: String) -> HttpResponseHead {
   let code: i32 = parse_decimal(rest.slice(0, second_sp));
   let reason: String = rest.slice(second_sp + 1, rest.len());
   return HttpResponseHead { code: code, reason: reason };
+}
+
+pub fn response_from_raw(raw: String) -> Response {
+  return Response {
+    raw: raw,
+    status: parse_status(raw),
+    body: response_body(raw),
+  };
+}
+
+impl Response {
+  fn status_code(r: &Response) -> i32 {
+    return r.status.code;
+  }
+
+  fn reason(r: &Response) -> String {
+    return r.status.reason;
+  }
+
+  fn header(r: &Response, name: String) -> String {
+    return header_value(r.raw, name);
+  }
 }
 
 pub fn parse_status_code(resp: String) -> i32 {
@@ -463,8 +567,18 @@ pub fn header_value(resp: String, name: String) -> String {
   return "";
 }
 
-pub fn http_roundtrip(url: String, req: HttpRequest, recv_limit: i32) -> String {
+pub fn http_roundtrip_checked(url: String, req: HttpRequest, recv_limit: i32) -> RoundtripResult {
+  if recv_limit <= 0 {
+    return RoundtripResult { ok: false, err: "recv_limit must be > 0", raw: "" };
+  }
+
   let u: Url = parse_url(url);
+  if u.host == "" {
+    return RoundtripResult { ok: false, err: "http url host is empty", raw: "" };
+  }
+  if u.port <= 0 {
+    return RoundtripResult { ok: false, err: "http url port must be > 0", raw: "" };
+  }
   let mut out_req: HttpRequest = req;
 
   if out_req.host == "" {
@@ -484,16 +598,62 @@ pub fn http_roundtrip(url: String, req: HttpRequest, recv_limit: i32) -> String 
   conn.send(raw);
   let resp: String = conn.recv(recv_limit);
   conn.close();
-  return resp;
+  return RoundtripResult { ok: true, err: "", raw: resp };
+}
+
+pub fn http_roundtrip(url: String, req: HttpRequest, recv_limit: i32) -> String {
+  let rr: RoundtripResult = http_roundtrip_checked(url, req, recv_limit);
+  if !rr.ok { panic(rr.err); }
+  return rr.raw;
+}
+
+pub fn client() -> Client {
+  return Client { recv_limit: 8192 };
+}
+
+impl Client {
+  fn with_recv_limit(c: Client, recv_limit: i32) -> Client {
+    let mut out: Client = c;
+    out.recv_limit = recv_limit;
+    return out;
+  }
+
+  fn recv_limit(c: &Client) -> i32 {
+    return c.recv_limit;
+  }
+
+  fn try_send(c: &Client, req: Request) -> ResponseResult {
+    let rr: RoundtripResult = http_roundtrip_checked(req.url, req.inner, c.recv_limit);
+    if !rr.ok {
+      return ResponseResult { ok: false, err: rr.err, resp: bad_response() };
+    }
+    return ResponseResult { ok: true, err: "", resp: response_from_raw(rr.raw) };
+  }
+
+  fn send(c: &Client, req: Request) -> Response {
+    let rr: ResponseResult = c.try_send(req);
+    if !rr.ok { panic(rr.err); }
+    return rr.resp;
+  }
+
+  fn try_get(c: &Client, url: String) -> ResponseResult {
+    let rq: RequestResult = new_request("GET", url);
+    if !rq.ok {
+      return ResponseResult { ok: false, err: rq.err, resp: bad_response() };
+    }
+    let req: Request = rq.req.with_header("Connection", "close");
+    return c.try_send(req);
+  }
+
+  fn get(c: &Client, url: String) -> Response {
+    let rr: ResponseResult = c.try_get(url);
+    if !rr.ok { panic(rr.err); }
+    return rr.resp;
+  }
 }
 
 pub fn http_get(url: String, recv_limit: i32) -> String {
-  let u: Url = parse_url(url);
-  let mut path: String = u.path;
-  if u.query != "" {
-    path = path.concat("?").concat(u.query);
-  }
-  let mut req: HttpRequest = http_request("GET", u.host, path);
-  req = req.with_header("Connection", "close");
-  return http_roundtrip(url, req, recv_limit);
+  let c: Client = client().with_recv_limit(recv_limit);
+  let r: Response = c.get(url);
+  return r.raw;
 }

@@ -74,6 +74,10 @@
   - OOP 门面：`runtime() -> Runtime`，支持 `runtime().has_cap(...)`、`runtime().wake_wait(...)`、`runtime().tcp_wait_read(...)` 等方法式调用（free function 仍保留兼容）。
   - 约定：`std` 其它模块不再直接调用 `__*`，统一经 `std::runtime` 转发。
 - `std::net` 已提供：
+  - 请求对象化入口：
+    - `Request/Response/Client` 方法式 API（`new_request/request`、`Request.with_header/with_body/render`、`client().try_send/send/try_get/get`）
+    - `response_from_raw` 结构化响应构造与 `Response.status_code/reason/header`
+    - 结构化错误入口：`new_request`、`http_roundtrip_checked`、`Client.try_*`（兼容 API 仍保留 panic 语义）
   - 地址/传输抽象：`NetProto`（`Tcp/Udp`）、`SocketAddr`、`socket_uri/parse_socket_uri`、`tcp_addr/udp_addr`、`tcp_connect_addr`、`udp_bind`（UDP I/O 目前是占位语义，后续接入底层 runtime）。
   - URL/Query：`Url`、`parse_url`、`url_to_string`、`query_escape`、`build_query`
   - HTTP 文本：`HttpRequest` + `with_header`/`with_body`/`render`，`parse_status`/`parse_status_code`/`header_value`/`response_body`
