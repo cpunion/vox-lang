@@ -264,6 +264,11 @@ struct ParseBracedExprResult { p: Parser, id: i32 }
 struct ParseTypeDeclResult { p: Parser, is_union: bool, t: ast.TypeAliasDecl, e: ast.EnumDecl }
 struct ParsePubResult { p: Parser, vis: i32, is_pub: bool }
 struct ParseConstDefaultResult { p: Parser, ok: bool, text: String }
+struct ParseBuildExprResult { p: Parser, expr: String, at: i32 }
+struct ParseTopFileAttrsResult {
+  p: Parser,
+  file_builds: Vec[ast.FileBuildAttr],
+}
 struct ParseTopFnAttrsResult {
   p: Parser,
   ffi_imports: Vec[ast.FfiImportAttr],
@@ -3150,6 +3155,91 @@ fn is_cfg_key(s: String) -> bool {
   return s == "target_os" || s == "target_arch" || s == "target_ptr_bits";
 }
 
+fn is_build_atom_token(k: lex.TokenKind) -> bool {
+  return kind_is(k, lex.TokenKind.Ident) || kind_is(k, lex.TokenKind.Int);
+}
+
+fn parse_build_expr_primary(p: Parser) -> ParseBuildExprResult {
+  if is_build_atom_token(peek_kind(p)) {
+    let ar: AdvanceResult = advance(p);
+    return ParseBuildExprResult { p: ar.p, expr: lexeme(ar.p, ar.tok), at: ar.tok.start };
+  }
+  if kind_is(peek_kind(p), lex.TokenKind.LParen) {
+    let ar1: AdvanceResult = advance(p);
+    let r2: ParseBuildExprResult = parse_build_expr_or(ar1.p);
+    let ar3: AdvanceResult = expect(r2.p, lex.TokenKind.RParen);
+    return ParseBuildExprResult {
+      p: ar3.p,
+      expr: "(".concat(r2.expr).concat(")"),
+      at: ar1.tok.start,
+    };
+  }
+  let mut q: Parser = p;
+  q.has_err = true;
+  q.err = ParseError.InvalidType(peek(p).start, "bad build attribute expression");
+  return ParseBuildExprResult { p: q, expr: "", at: peek(p).start };
+}
+
+fn parse_build_expr_unary(p: Parser) -> ParseBuildExprResult {
+  if kind_is(peek_kind(p), lex.TokenKind.Not) {
+    let ar1: AdvanceResult = advance(p);
+    let r2: ParseBuildExprResult = parse_build_expr_unary(ar1.p);
+    return ParseBuildExprResult { p: r2.p, expr: "!".concat(r2.expr), at: ar1.tok.start };
+  }
+  return parse_build_expr_primary(p);
+}
+
+fn parse_build_expr_and(p: Parser) -> ParseBuildExprResult {
+  let mut r0: ParseBuildExprResult = parse_build_expr_unary(p);
+  let mut q: Parser = r0.p;
+  let mut out: String = r0.expr;
+  while !q.has_err && kind_is(peek_kind(q), lex.TokenKind.AndAnd) {
+    let ar2: AdvanceResult = advance(q);
+    let r3: ParseBuildExprResult = parse_build_expr_unary(ar2.p);
+    q = r3.p;
+    out = out.concat("&&").concat(r3.expr);
+  }
+  return ParseBuildExprResult { p: q, expr: out, at: r0.at };
+}
+
+fn parse_build_expr_or(p: Parser) -> ParseBuildExprResult {
+  let mut r0: ParseBuildExprResult = parse_build_expr_and(p);
+  let mut q: Parser = r0.p;
+  let mut out: String = r0.expr;
+  while !q.has_err && kind_is(peek_kind(q), lex.TokenKind.OrOr) {
+    let ar2: AdvanceResult = advance(q);
+    let r3: ParseBuildExprResult = parse_build_expr_and(ar2.p);
+    q = r3.p;
+    out = out.concat("||").concat(r3.expr);
+  }
+  return ParseBuildExprResult { p: q, expr: out, at: r0.at };
+}
+
+fn parse_top_file_attrs(p: Parser) -> ParseTopFileAttrsResult {
+  let mut q: Parser = p;
+  let mut file_builds: Vec[ast.FileBuildAttr] = Vec();
+  while !q.has_err && kind_is(peek_kind(q), lex.TokenKind.At) && peek2_ident_is(q, "build") {
+    let ar_at: AdvanceResult = expect(q, lex.TokenKind.At);
+    let sp0: ast.Span = span_tok(q, ar_at.tok);
+    let rn: ParseIdentResult = parse_ident(ar_at.p);
+    let ar_l: AdvanceResult = expect(rn.p, lex.TokenKind.LParen);
+    let r_expr: ParseBuildExprResult = parse_build_expr_or(ar_l.p);
+    let ar_r: AdvanceResult = expect(r_expr.p, lex.TokenKind.RParen);
+    q = ar_r.p;
+    if q.has_err {
+      return ParseTopFileAttrsResult { p: q, file_builds: file_builds };
+    }
+    if r_expr.expr == "" {
+      let mut qe: Parser = q;
+      qe.has_err = true;
+      qe.err = ParseError.InvalidType(rn.at, "bad build attribute expression");
+      return ParseTopFileAttrsResult { p: qe, file_builds: file_builds };
+    }
+    file_builds.push(ast.FileBuildAttr { file: p.file, sp: sp0, expr: r_expr.expr });
+  }
+  return ParseTopFileAttrsResult { p: q, file_builds: file_builds };
+}
+
 fn parse_attr_arg_text(p: Parser) -> ParseStringResult {
   if kind_is(peek_kind(p), lex.TokenKind.Str) {
     return parse_string_inner(p);
@@ -3414,6 +3504,20 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
           deprecated_message: deprecated_message,
         };
       }
+    } else if rn.name == "build" {
+      let mut qe_build: Parser = q;
+      qe_build.has_err = true;
+      qe_build.err = ParseError.InvalidType(rn.at, "build attribute is only allowed at file scope");
+      return ParseTopFnAttrsResult {
+        p: qe_build,
+        ffi_imports: ffi_imports,
+        ffi_exports: ffi_exports,
+        effects: effects,
+        resources: resources,
+        cfgs: cfgs,
+        track_caller: track_caller,
+        deprecated_message: deprecated_message,
+      };
     } else {
       let mut qe3: Parser = q;
       qe3.has_err = true;
@@ -3473,6 +3577,9 @@ fn parse_pub_marker(p: Parser) -> ParsePubResult {
 
 fn parse_program(p: Parser) -> ParseProgramResult {
   let mut q: Parser = p;
+  let far: ParseTopFileAttrsResult = parse_top_file_attrs(q);
+  q = far.p;
+  let file_builds: Vec[ast.FileBuildAttr] = far.file_builds;
   let mut imports: Vec[ast.ImportDecl] = Vec();
   let mut types: Vec[ast.TypeAliasDecl] = Vec();
   let mut consts: Vec[ast.ConstDecl] = Vec();
@@ -3550,13 +3657,41 @@ fn parse_program(p: Parser) -> ParseProgramResult {
     }
   }
 
-  return ParseProgramResult { p: q, prog: ast.Program { imports: imports, types: types, consts: consts, structs: structs, enums: enums, traits: traits, impls: impls, funcs: funcs, exprs: q.exprs } };
+  return ParseProgramResult {
+    p: q,
+    prog: ast.Program {
+      file_builds: file_builds,
+      imports: imports,
+      types: types,
+      consts: consts,
+      structs: structs,
+      enums: enums,
+      traits: traits,
+      impls: impls,
+      funcs: funcs,
+      exprs: q.exprs,
+    },
+  };
 }
 
 pub fn parse_text_with_path(path: String, text: String) -> ParseResult {
   let lr: lex.LexResult = lex.lex_text(text);
   if !lex_err_none(lr.err) {
-    return ParseResult { prog: ast.Program { imports: Vec(), types: Vec(), consts: Vec(), structs: Vec(), enums: Vec(), traits: Vec(), impls: Vec(), funcs: Vec(), exprs: ast.expr_pool() }, err: ParseError.Lex(lr.err) };
+    return ParseResult {
+      prog: ast.Program {
+        file_builds: Vec(),
+        imports: Vec(),
+        types: Vec(),
+        consts: Vec(),
+        structs: Vec(),
+        enums: Vec(),
+        traits: Vec(),
+        impls: Vec(),
+        funcs: Vec(),
+        exprs: ast.expr_pool(),
+      },
+      err: ParseError.Lex(lr.err),
+    };
   }
   let p: Parser = Parser { file: path, text: text, toks: lr.tokens, pos: 0, has_err: false, err: ParseError.None, exprs: ast.expr_pool() };
   let r: ParseProgramResult = parse_program(p);

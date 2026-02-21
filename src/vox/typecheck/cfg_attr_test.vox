@@ -1,4 +1,5 @@
 import "std/testing" as t
+import "vox/ast" as ast
 import "vox/parse" as p
 import "vox/typecheck" as tc
 
@@ -12,6 +13,12 @@ fn cfg_tc_run_with_target(w: tc.World, ptr_bits: i32, target_os: String, target_
   let br: tc.BuildCtxResult = tc.build_ctx_with_target(w, ptr_bits, target_os, target_arch);
   if !br.ok { return tc.TcResult { ok: false, err: br.err }; }
   return tc.typecheck_world_with_ctx(w, br.ctx);
+}
+
+fn cfg_tc_parse(path: String, src: String) -> ast.Program {
+  let r: p.ParseResult = p.parse_text_with_path(path, src);
+  t.assert_with(r.err == p.ParseError.None, p.parse_error_to_string(r.err));
+  return r.prog;
 }
 
 fn test_typecheck_cfg_target_os_match_smoke() -> () {
@@ -50,5 +57,35 @@ fn test_typecheck_cfg_multi_clause_all_must_match() -> () {
   let r: tc.TcResult = cfg_tc_run_with_target(w, 64, "linux", "arm64");
   t.assert(!r.ok);
   let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "unknown fn"), msg);
+}
+
+fn test_typecheck_build_file_attr_target_selects_file() -> () {
+  let p0: ast.Program = cfg_tc_parse("src/main.vox", "fn main() -> i32 { return pick(); }");
+  let p1: ast.Program = cfg_tc_parse("src/pick_unix.vox", "@build(unix && linux)\nfn pick() -> i32 { return 7; }");
+  let p2: ast.Program = cfg_tc_parse("src/pick_windows.vox", "@build(windows)\nfn pick() -> i32 { return 9; }");
+  let pm: ast.Program = ast.program_merge(ast.program_merge(p0, p1), p2);
+
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "main", pm);
+
+  let r_linux: tc.TcResult = cfg_tc_run_with_target(w, 64, "linux", "amd64");
+  t.assert_with(r_linux.ok, tc.tc_error_to_string(r_linux.err));
+
+  let r_windows: tc.TcResult = cfg_tc_run_with_target(w, 64, "windows", "amd64");
+  t.assert_with(r_windows.ok, tc.tc_error_to_string(r_windows.err));
+}
+
+fn test_typecheck_build_file_attr_complex_expr_mismatch_prunes() -> () {
+  let p0: ast.Program = cfg_tc_parse("src/main.vox", "fn main() -> i32 { return pick(); }");
+  let p1: ast.Program = cfg_tc_parse("src/pick.vox", "@build(unix && (linux || darwin) && amd64)\nfn pick() -> i32 { return 1; }");
+  let pm: ast.Program = ast.program_merge(p0, p1);
+
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "main", pm);
+
+  let r_bad: tc.TcResult = cfg_tc_run_with_target(w, 64, "darwin", "arm64");
+  t.assert(!r_bad.ok);
+  let msg: String = tc.tc_error_to_string(r_bad.err);
   t.assert_with(contains(msg, "unknown fn"), msg);
 }
