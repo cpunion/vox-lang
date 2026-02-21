@@ -10,7 +10,8 @@ Coverage IDs: `S701`, `S702`, `S703`, `S704`.
 
 ```vox
 Attr
-  := "@effect(" Ident ")"
+  := "@build(" BuildExpr ")"
+   | "@effect(" Ident ")"
    | "@resource(" Ident "," Ident ")"
    | "@cfg(" ("target_os" | "target_arch" | "target_ptr_bits") "," (Ident | StringLit | IntLit) ")"
    | "@ffi_import(" StringLit "," StringLit ")"
@@ -20,6 +21,16 @@ Attr
 
 AttributedFn
   := Attr* FnDecl
+
+BuildExpr
+  := BuildAtom
+   | "!" BuildExpr
+   | BuildExpr "&&" BuildExpr
+   | BuildExpr "||" BuildExpr
+   | "(" BuildExpr ")"
+
+BuildAtom
+  := Ident | IntLit
 ```
 
 ## Attribute Set
@@ -31,11 +42,19 @@ AttributedFn
 
 ### Target Config
 
+- `@build(expr)` is **file-scope only** and must appear at file header.
 - `@cfg(target_os, value)` gates function on OS name.
 - `@cfg(target_arch, value)` gates function on architecture name.
 - `@cfg(target_ptr_bits, value)` gates function on pointer width (`32`/`64`).
 - Multiple `@cfg(...)` on one function are AND-combined.
 - Current keys: `target_os`, `target_arch`, `target_ptr_bits`.
+- `@build(expr)` atoms currently match target tags:
+  - OS: `linux` / `darwin` / `windows` / `wasm`
+  - ARCH: `amd64` / `arm64` / `x86` / `wasm32`
+  - FAMILY: `unix` (currently `linux` or `darwin`)
+  - PTR bits: `32` / `64` / `ptr32` / `ptr64`
+- File effective condition: all file `@build(...)` AND-combined.
+- Final declaration condition: `file @build` AND declaration `@cfg`.
 
 ### FFI Import/Export
 
@@ -55,6 +74,7 @@ AttributedFn
 Current enforced rules:
 
 - `@cfg`, `@ffi_import`, `@ffi_export`, `@track_caller` are top-level function attributes.
+- `@build` is only allowed at file scope (using it on function/impl/trait methods is rejected).
 - unsupported placement (for example impl methods) is rejected.
 
 ## Diagnostics

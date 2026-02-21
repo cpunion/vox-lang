@@ -190,10 +190,11 @@ fn synth_params(names: Vec[String]) -> Vec[ast.Param] {
 }
 
 pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
+  let w0: World = world_filter_by_file_build(c, w);
   // Typecheck function/impl/default bodies (including generic bodies).
   let mut mi2: i32 = 0;
-  while mi2 < w.mods.len() {
-    let m2: WorldModule = w.mods.get(mi2);
+  while mi2 < w0.mods.len() {
+    let m2: WorldModule = w0.mods.get(mi2);
     let mut fi2: i32 = 0;
     while fi2 < m2.prog.funcs.len() {
       let fd: ast.FuncDecl = m2.prog.funcs.get(fi2);
@@ -201,10 +202,10 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
         fi2 = fi2 + 1;
         continue;
       }
-      let ir: ImportsResult = build_imports(w, m2.path, m2.prog.imports, fd.file);
+      let ir: ImportsResult = build_imports(w0, m2.path, m2.prog.imports, fd.file);
       if !ir.ok { return TcResult { ok: false, err: ir.err }; }
       let imps: Imports = ir.imps;
-      let fr: TcResult = typecheck_fn(c, w, m2.path, imps, m2.prog.exprs, fd);
+      let fr: TcResult = typecheck_fn(c, w0, m2.path, imps, m2.prog.exprs, fd);
       if !fr.ok { return fr; }
       fi2 = fi2 + 1;
     }
@@ -216,7 +217,7 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
       let fr0: FindImplByDeclResult = find_impl_by_decl(c, m2.path, ii2);
       if !fr0.found { return TcResult { ok: false, err: type_error_at(id.sp, "missing impl sig") }; }
 
-      let ir0: ImportsResult = build_imports(w, m2.path, m2.prog.imports, id.file);
+      let ir0: ImportsResult = build_imports(w0, m2.path, m2.prog.imports, id.file);
       if !ir0.ok { return TcResult { ok: false, err: ir0.err }; }
       let imps0: Imports = ir0.imps;
 
@@ -249,7 +250,7 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
           resources: md.resources,
           body: md.body,
         };
-        let tr: TcResult = typecheck_fn_with_sig(c, w, m2.path, m2.path, imps0, m2.prog.exprs, md2, mf.m.sig);
+        let tr: TcResult = typecheck_fn_with_sig(c, w0, m2.path, m2.path, imps0, m2.prog.exprs, md2, mf.m.sig);
         if !tr.ok { return tr; }
         mdi = mdi + 1;
       }
@@ -267,10 +268,10 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
               if tmf.found { is_async = tmf.m.is_async; }
             }
           }
-          let fmd: FindModResult = find_mod(w, ms.default_mod_path);
+          let fmd: FindModResult = find_mod(w0, ms.default_mod_path);
           if !fmd.found { return TcResult { ok: false, err: type_error_at(id.sp, "missing default trait method module") }; }
-          let mdm: WorldModule = w.mods.get(fmd.idx);
-          let ird: ImportsResult = build_imports(w, mdm.path, mdm.prog.imports, ms.default_file);
+          let mdm: WorldModule = w0.mods.get(fmd.idx);
+          let ird: ImportsResult = build_imports(w0, mdm.path, mdm.prog.imports, ms.default_file);
           if !ird.ok { return TcResult { ok: false, err: ird.err }; }
           let impsd: Imports = ird.imps;
           let fd: ast.FuncDecl = ast.FuncDecl {
@@ -299,7 +300,7 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
           // Default method bodies resolve names using their defining module context (mdm.path),
           // but async lowering metadata is keyed by the lowered impl symbol (in impl mod m2.path).
           let async_meta_mod: String = if is_async { m2.path } else { mdm.path };
-          let tr2: TcResult = typecheck_fn_with_sig(c, w, mdm.path, async_meta_mod, impsd, mdm.prog.exprs, fd, ms.sig);
+          let tr2: TcResult = typecheck_fn_with_sig(c, w0, mdm.path, async_meta_mod, impsd, mdm.prog.exprs, fd, ms.sig);
           if !tr2.ok { return tr2; }
         }
         mi3 = mi3 + 1;
@@ -334,22 +335,24 @@ pub fn build_ctx_with_ptr_bits(w: World, ptr_bits: i32) -> BuildCtxResult {
 }
 
 pub fn build_ctx_with_target(w: World, ptr_bits: i32, target_os: String, target_arch: String) -> BuildCtxResult {
+  let mut c: Ctx = new_ctx_with_target(ptr_bits, target_os, target_arch);
+  let w0: World = world_filter_by_file_build(c, w);
   // Validate that all imported modules exist.
   let mut mi: i32 = 0;
-  while mi < w.mods.len() {
-    let m: WorldModule = w.mods.get(mi);
+  while mi < w0.mods.len() {
+    let m: WorldModule = w0.mods.get(mi);
     let imps: Vec[ast.ImportDecl] = m.prog.imports;
     let mut ii: i32 = 0;
     while ii < imps.len() {
       let imp: ast.ImportDecl = imps.get(ii);
-      let rr: ResolveImportResult = resolve_import_path(w, imp.file, imp.path, imp.sp);
-      if !rr.ok { return BuildCtxResult { ok: false, err: rr.err, ctx: new_ctx_with_target(ptr_bits, target_os, target_arch) }; }
-      let fm: FindModResult = find_mod(w, rr.path);
+      let rr: ResolveImportResult = resolve_import_path(w0, imp.file, imp.path, imp.sp);
+      if !rr.ok { return BuildCtxResult { ok: false, err: rr.err, ctx: c }; }
+      let fm: FindModResult = find_mod(w0, rr.path);
       if !fm.found {
         return BuildCtxResult {
           ok: false,
           err: import_error_at_code(imp.sp, "unknown module import: ".concat(imp.path), diag_code_import_unknown_module()),
-          ctx: new_ctx_with_target(ptr_bits, target_os, target_arch),
+          ctx: c,
         };
       }
       ii = ii + 1;
@@ -357,32 +360,31 @@ pub fn build_ctx_with_target(w: World, ptr_bits: i32, target_os: String, target_
     mi = mi + 1;
   }
 
-  let mut c: Ctx = new_ctx_with_target(ptr_bits, target_os, target_arch);
-  let r0: TcCtxResult = collect_type_aliases(c, w);
+  let r0: TcCtxResult = collect_type_aliases(c, w0);
   if !r0.ok { return BuildCtxResult { ok: false, err: r0.err, ctx: r0.ctx }; }
   c = r0.ctx;
-  let r1: TcCtxResult = collect_structs(c, w);
+  let r1: TcCtxResult = collect_structs(c, w0);
   if !r1.ok { return BuildCtxResult { ok: false, err: r1.err, ctx: r1.ctx }; }
   c = r1.ctx;
-  let r2: TcCtxResult = collect_enums(c, w);
+  let r2: TcCtxResult = collect_enums(c, w0);
   if !r2.ok { return BuildCtxResult { ok: false, err: r2.err, ctx: r2.ctx }; }
   c = r2.ctx;
-  let r25: TcCtxResult = collect_traits(c, w);
+  let r25: TcCtxResult = collect_traits(c, w0);
   if !r25.ok { return BuildCtxResult { ok: false, err: r25.err, ctx: r25.ctx }; }
   c = r25.ctx;
-  let r3: TcCtxResult = collect_funcs(c, w);
+  let r3: TcCtxResult = collect_funcs(c, w0);
   if !r3.ok { return BuildCtxResult { ok: false, err: r3.err, ctx: r3.ctx }; }
   c = r3.ctx;
-  let r35: TcCtxResult = collect_impls(c, w);
+  let r35: TcCtxResult = collect_impls(c, w0);
   if !r35.ok { return BuildCtxResult { ok: false, err: r35.err, ctx: r35.ctx }; }
   c = r35.ctx;
-  let r3a: TcCtxResult = collect_async_fns(c, w);
+  let r3a: TcCtxResult = collect_async_fns(c, w0);
   if !r3a.ok { return BuildCtxResult { ok: false, err: r3a.err, ctx: r3a.ctx }; }
   c = r3a.ctx;
-  let r00: TcCtxResult = collect_consts(c, w);
+  let r00: TcCtxResult = collect_consts(c, w0);
   if !r00.ok { return BuildCtxResult { ok: false, err: r00.err, ctx: r00.ctx }; }
   c = r00.ctx;
-  let r4: TcCtxResult = collect_body_type_names(c, w);
+  let r4: TcCtxResult = collect_body_type_names(c, w0);
   if !r4.ok { return BuildCtxResult { ok: false, err: r4.err, ctx: r4.ctx }; }
   c = r4.ctx;
   return BuildCtxResult { ok: true, err: TcError.None, ctx: c };

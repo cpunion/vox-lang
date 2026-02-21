@@ -7,6 +7,230 @@ fn cfg_attr_matches(c: Ctx, a: ast.CfgAttr) -> bool {
   return false;
 }
 
+fn is_build_ident_start(ch: i32) -> bool {
+  return (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95 || (ch >= 48 && ch <= 57);
+}
+
+fn is_build_ident_continue(ch: i32) -> bool {
+  return is_build_ident_start(ch);
+}
+
+fn skip_ws(s: String, i0: i32) -> i32 {
+  let mut i: i32 = i0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
+      i = i + 1;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+struct BuildAtomResult { ok: bool, text: String, next: i32 }
+struct BuildEvalResult { ok: bool, value: bool, next: i32 }
+
+fn read_build_atom(s: String, i0: i32) -> BuildAtomResult {
+  let i: i32 = skip_ws(s, i0);
+  if i >= s.len() { return BuildAtomResult { ok: false, text: "", next: i }; }
+  if !is_build_ident_start(s.byte_at(i)) {
+    return BuildAtomResult { ok: false, text: "", next: i };
+  }
+  let mut j: i32 = i + 1;
+  while j < s.len() && is_build_ident_continue(s.byte_at(j)) {
+    j = j + 1;
+  }
+  return BuildAtomResult { ok: true, text: s.slice(i, j), next: j };
+}
+
+fn build_tag_matches(c: Ctx, tag: String) -> bool {
+  let os: String = ctx_target_os(c);
+  let arch: String = ctx_target_arch(c);
+  let bits: String = ctx_ptr_bits(c).to_string();
+  if tag == os { return true; }
+  if tag == arch { return true; }
+  if tag == "unix" { return os == "linux" || os == "darwin"; }
+  if tag == "ptr32" { return bits == "32"; }
+  if tag == "ptr64" { return bits == "64"; }
+  if tag == "32" || tag == "64" { return bits == tag; }
+  return false;
+}
+
+fn build_eval_primary(c: Ctx, s: String, i0: i32) -> BuildEvalResult {
+  let i: i32 = skip_ws(s, i0);
+  if i >= s.len() { return BuildEvalResult { ok: false, value: false, next: i }; }
+  if s.byte_at(i) == 40 { // (
+    let r0: BuildEvalResult = build_eval_or(c, s, i + 1);
+    if !r0.ok { return r0; }
+    let j: i32 = skip_ws(s, r0.next);
+    if j >= s.len() || s.byte_at(j) != 41 { // )
+      return BuildEvalResult { ok: false, value: false, next: j };
+    }
+    return BuildEvalResult { ok: true, value: r0.value, next: j + 1 };
+  }
+  let ar: BuildAtomResult = read_build_atom(s, i);
+  if !ar.ok { return BuildEvalResult { ok: false, value: false, next: i }; }
+  return BuildEvalResult { ok: true, value: build_tag_matches(c, ar.text), next: ar.next };
+}
+
+fn build_eval_unary(c: Ctx, s: String, i0: i32) -> BuildEvalResult {
+  let i: i32 = skip_ws(s, i0);
+  if i < s.len() && s.byte_at(i) == 33 { // !
+    let r0: BuildEvalResult = build_eval_unary(c, s, i + 1);
+    if !r0.ok { return r0; }
+    return BuildEvalResult { ok: true, value: !r0.value, next: r0.next };
+  }
+  return build_eval_primary(c, s, i);
+}
+
+fn build_eval_and(c: Ctx, s: String, i0: i32) -> BuildEvalResult {
+  let mut r0: BuildEvalResult = build_eval_unary(c, s, i0);
+  if !r0.ok { return r0; }
+  let mut out: bool = r0.value;
+  let mut i: i32 = r0.next;
+  while true {
+    let j: i32 = skip_ws(s, i);
+    if (j + 1) < s.len() && s.byte_at(j) == 38 && s.byte_at(j + 1) == 38 { // &&
+      let r1: BuildEvalResult = build_eval_unary(c, s, j + 2);
+      if !r1.ok { return r1; }
+      out = out && r1.value;
+      i = r1.next;
+      continue;
+    }
+    return BuildEvalResult { ok: true, value: out, next: j };
+  }
+  return BuildEvalResult { ok: true, value: out, next: i };
+}
+
+fn build_eval_or(c: Ctx, s: String, i0: i32) -> BuildEvalResult {
+  let mut r0: BuildEvalResult = build_eval_and(c, s, i0);
+  if !r0.ok { return r0; }
+  let mut out: bool = r0.value;
+  let mut i: i32 = r0.next;
+  while true {
+    let j: i32 = skip_ws(s, i);
+    if (j + 1) < s.len() && s.byte_at(j) == 124 && s.byte_at(j + 1) == 124 { // ||
+      let r1: BuildEvalResult = build_eval_and(c, s, j + 2);
+      if !r1.ok { return r1; }
+      out = out || r1.value;
+      i = r1.next;
+      continue;
+    }
+    return BuildEvalResult { ok: true, value: out, next: j };
+  }
+  return BuildEvalResult { ok: true, value: out, next: i };
+}
+
+fn build_expr_matches(c: Ctx, expr: String) -> bool {
+  if expr == "" { return true; }
+  let r: BuildEvalResult = build_eval_or(c, expr, 0);
+  if !r.ok { return false; }
+  let j: i32 = skip_ws(expr, r.next);
+  if j != expr.len() { return false; }
+  return r.value;
+}
+
+pub fn file_build_enabled(c: Ctx, prog: ast.Program, file: String) -> bool {
+  let mut i: i32 = 0;
+  while i < prog.file_builds.len() {
+    let b: ast.FileBuildAttr = prog.file_builds.get(i);
+    if b.file == file && !build_expr_matches(c, b.expr) { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+pub fn world_filter_by_file_build(c: Ctx, w: World) -> World {
+  let mut mods: Vec[WorldModule] = Vec();
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: WorldModule = w.mods.get(mi);
+    let mut imports: Vec[ast.ImportDecl] = Vec();
+    let mut types: Vec[ast.TypeAliasDecl] = Vec();
+    let mut consts: Vec[ast.ConstDecl] = Vec();
+    let mut structs: Vec[ast.StructDecl] = Vec();
+    let mut enums: Vec[ast.EnumDecl] = Vec();
+    let mut traits: Vec[ast.TraitDecl] = Vec();
+    let mut impls: Vec[ast.ImplDecl] = Vec();
+    let mut funcs: Vec[ast.FuncDecl] = Vec();
+
+    let mut ii: i32 = 0;
+    while ii < m.prog.imports.len() {
+      let it: ast.ImportDecl = m.prog.imports.get(ii);
+      if file_build_enabled(c, m.prog, it.file) { imports.push(it); }
+      ii = ii + 1;
+    }
+
+    let mut ti: i32 = 0;
+    while ti < m.prog.types.len() {
+      let it: ast.TypeAliasDecl = m.prog.types.get(ti);
+      if file_build_enabled(c, m.prog, it.file) { types.push(it); }
+      ti = ti + 1;
+    }
+
+    let mut ci: i32 = 0;
+    while ci < m.prog.consts.len() {
+      let it: ast.ConstDecl = m.prog.consts.get(ci);
+      if file_build_enabled(c, m.prog, it.file) { consts.push(it); }
+      ci = ci + 1;
+    }
+
+    let mut si: i32 = 0;
+    while si < m.prog.structs.len() {
+      let it: ast.StructDecl = m.prog.structs.get(si);
+      if file_build_enabled(c, m.prog, it.file) { structs.push(it); }
+      si = si + 1;
+    }
+
+    let mut ei: i32 = 0;
+    while ei < m.prog.enums.len() {
+      let it: ast.EnumDecl = m.prog.enums.get(ei);
+      if file_build_enabled(c, m.prog, it.file) { enums.push(it); }
+      ei = ei + 1;
+    }
+
+    let mut tri: i32 = 0;
+    while tri < m.prog.traits.len() {
+      let it: ast.TraitDecl = m.prog.traits.get(tri);
+      if file_build_enabled(c, m.prog, it.file) { traits.push(it); }
+      tri = tri + 1;
+    }
+
+    let mut imi: i32 = 0;
+    while imi < m.prog.impls.len() {
+      let it: ast.ImplDecl = m.prog.impls.get(imi);
+      if file_build_enabled(c, m.prog, it.file) { impls.push(it); }
+      imi = imi + 1;
+    }
+
+    let mut fi: i32 = 0;
+    while fi < m.prog.funcs.len() {
+      let it: ast.FuncDecl = m.prog.funcs.get(fi);
+      if file_build_enabled(c, m.prog, it.file) { funcs.push(it); }
+      fi = fi + 1;
+    }
+
+    mods.push(WorldModule {
+      path: m.path,
+      prog: ast.Program {
+        file_builds: m.prog.file_builds,
+        imports: imports,
+        types: types,
+        consts: consts,
+        structs: structs,
+        enums: enums,
+        traits: traits,
+        impls: impls,
+        funcs: funcs,
+        exprs: m.prog.exprs,
+      },
+    });
+    mi = mi + 1;
+  }
+  return World { mods: mods };
+}
+
 pub fn fn_cfg_enabled(c: Ctx, fd: ast.FuncDecl) -> bool {
   let mut i: i32 = 0;
   while i < fd.cfgs.len() {
