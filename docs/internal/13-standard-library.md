@@ -48,6 +48,7 @@
     - `set`（存在则覆盖，不存在则插入）、`remove`、`clear`、`release`（需接收返回值，释放后旧变量读取会报 `use of moved value`）
     - `set_if_absent`（仅在缺失键时插入）
     - `get_or_set`（单次查找完成“读取或插入”，返回 `MapGetOrSetResult[K,V] { map, value, inserted }`）
+    - `try_remove_or`（单次查找完成“读取并删除或回退”，返回 `MapTryRemoveResult[K,V] { map, value, removed }`）
   - 当前实现优化：`set` 覆盖路径与 `remove` 路径已改为 `Vec.set/remove` 原地更新，避免旧实现的整表重建拷贝。
   - 其中键比较相关 API 需要 `K: Eq`。
   - 另外提供 `impl[K: Eq + Clone, V: Clone] Clone for Map[K,V]`（深拷贝 keys/vals，不共享底层 Vec 存储）。
@@ -56,7 +57,7 @@
   - `Queue[T]`：FIFO 队列，基于 `Vec` + `head` 指针与惰性 compact；支持 `push`/`push_all`/`front`/`pop`/`pop_n`/`to_vec`/`clear`/`release`。
     - 额外提供 `impl[T: Eq] Queue[T].contains`（并保留 `queue_contains` 兼容入口）。
   - `Set[T: Eq]`：去重集合，基于线性 `Vec[T]`；支持 `add`/`remove`/`contains`/`values`/`clear`/`release`。
-    - 额外提供 `add_all`、`contains_all`、`remove_all`、`intersects` 批量能力。
+    - 额外提供 `add_all`、`contains_all`、`remove_all`、`intersects` 批量能力（`intersects` 走小集合优先扫描路径）。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、文件枚举、命令执行、参数读取、环境变量读取）。
   - `std::fs` 新增 `Path` 方法式 API：`path(raw)` + `Path.exists/read_to_string/write_string/mkdir_p/walk_files`。
   - `std::fs` 路径 helper（OOP + free-function）：
