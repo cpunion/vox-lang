@@ -89,6 +89,8 @@ fn main() -> i32 { return compile!(make_add1(41)); }
       - 普通上下文补 `__caller!()`
       - 另一个 `@track_caller` 函数内部补 `caller`（透传外层调用者）
     - 在 `@track_caller fn` 内部，`__caller!()` 会展开为该转发参数 `caller`（而非函数体内源码位置）。
+  - `@deprecated("...") fn macro_name() -> AstExpr/AstStmt/...`：
+    - 当以 `macro_name!(...)` 形式调用时，编译器会输出弃用告警（`W_DEPRECATED_0001`）。
   - `dirname!(path)`：1 个字符串参数，编译期返回其父目录；支持嵌套 `dirname!(__file!())`。
 - `quote!(expr)`：仅 1 个值参数、无 type args，表达式级 quote MVP（当前直接产出内联表达式节点）。
 - `unquote!(expr)`：仅 1 个值参数、无 type args，表达式级 unquote MVP（当前直接产出内联表达式节点）。
