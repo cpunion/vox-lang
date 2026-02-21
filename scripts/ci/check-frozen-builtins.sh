@@ -26,8 +26,14 @@ extract_lock() {
 }
 
 extract_current() {
-  rg -o 'builtin_func_sym\("[^\"]+"' "$SRC_FILE" \
-    | sed -E 's/.*\("([^\"]+)"/\1/' \
+  if command -v rg >/dev/null 2>&1; then
+    rg -o 'builtin_func_sym\("[^\"]+"' "$SRC_FILE" \
+      | sed -E 's/.*\("([^\"]+)"/\1/' \
+      | LC_ALL=C sort -u
+    return
+  fi
+  grep -oE 'builtin_func_sym\("[^"]+"' "$SRC_FILE" \
+    | sed -E 's/.*\("([^"]+)"/\1/' \
     | LC_ALL=C sort -u
 }
 
