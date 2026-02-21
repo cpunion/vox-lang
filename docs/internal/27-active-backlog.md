@@ -260,6 +260,12 @@ Governance from now on:
   - [x] A35-3 `Makefile` 与 CI workflow 接入冻结检查，防止未审阅的 builtin/intrinsic 扩张进入主线。
   - Source: `docs/reference/style-guide.md`.
 
+- [x] A36 builtin/intrinsic 收缩（batch-1）
+  - [x] A36-1 移除 `__intrinsic_abi` / `__has_intrinsic` 两个 runtime-backed builtin 声明与 codegen 分支。
+  - [x] A36-2 同步删减 C runtime 里对应 `vox_builtin_*` 实现，保留 `std/runtime` 语言层能力。
+  - [x] A36-3 更新冻结清单与回归测试（`typecheck`/`codegen`）。
+  - Source: `docs/reference/style-guide.md`.
+
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.
