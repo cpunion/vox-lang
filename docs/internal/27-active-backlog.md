@@ -23,7 +23,7 @@ Governance from now on:
 4. If a closed item must reopen, add explicit reason + regression evidence.
 
 Builtin end-state (agreed):
-1. `vox_builtin_*` runtime capability exits language builtin surface; standard-library implementation only.
+1. `vox_rt_*` runtime capability exits language builtin surface; standard-library implementation only.
 2. Builtin/intrinsic keep scope is limited to compile-time reflection:
    - type relations
    - type predicates
