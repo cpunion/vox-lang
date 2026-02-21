@@ -86,6 +86,7 @@ fn crc_table() -> [u32; 256] { ... }
 - `@eq_comparable_with(A, B)` 与 `==/!=` 二元规则对齐。
 - `@ordered_with(A, B)` 与 `< <= > >=` 二元规则对齐。
 - `@same_layout(A, B)` 判断两类型在当前布局模型下是否同尺寸且同对齐。
+  - 当前实现已标记弃用（编译告警 `W_DEPRECATED_0001`），建议改用 `@bitcastable(A, B)`。
 - `@bitcastable(A, B)` 当前与 `@same_layout` 等价（可按位重解释的最小判定）。
 - `@is_*` 返回类型分类判定（当前要求 `T` 为 concrete type）。
 - `@is_eq_comparable` 与 `==/!=` 能力对齐（含递归 struct/enum 字段检查）。

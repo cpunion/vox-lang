@@ -242,6 +242,12 @@ Governance from now on:
     - Covered in `src/vox/typecheck/collect_traits_impls.vox` with paired tests in `src/vox/typecheck/generics_test.vox` and `src/vox/compile/compile_test.vox`.
   - Source: `docs/internal/06-advanced-generics.md`.
 
+- [ ] A33 `@deprecated` 扩展到方法（trait/impl/inherent）并补齐调用点告警
+  - [ ] A33-1 parser 放开方法上的 `@deprecated`（当前限制仅顶层 `fn`），保留参数规则（`@deprecated` / `@deprecated("msg")`）。
+  - [ ] A33-2 告警从 compile AST 扫描补强到 typecheck 调用解析点，覆盖 `x.m()`/`Type.m(x)`/trait dispatch/default method/async lowered method，避免漏报与错报。
+  - [ ] A33-3 回归测试补齐：parser（trait/impl/inherent 方法）、typecheck/compile（方法调用告警去重与定位）、文档同步。
+  - Source: `docs/internal/14-syntax-details.md`, `docs/internal/18-diagnostics.md`.
+
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.
