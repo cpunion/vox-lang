@@ -24,7 +24,9 @@ extract_used() {
   (
     cd "$ROOT"
     (
-      rg --no-filename -o "__[A-Za-z0-9_]+" src/std -g '*.vox' 2>/dev/null || true
+      rg --no-filename -o "__[A-Za-z0-9_]+[[:space:]]*\\(" src/std -g '*.vox' 2>/dev/null \
+        | sed -E 's/[[:space:]]*\($//' \
+        || true
     ) | LC_ALL=C sort -u
   )
 }
