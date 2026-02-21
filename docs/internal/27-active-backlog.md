@@ -316,6 +316,7 @@ Builtin end-state (agreed):
   - [x] A43-2 说明：`print` 语言 builtin 的移除与调用路径切换需要“先发布再 bump bootstrap.lock”的两阶段落地，避免锁定 bootstrap 链路断裂。
   - [x] A43-3 发布桥接版本 `v0.2.19`（包含 `vox_rt_print`）并验证多平台 release 产物。
   - [x] A43-4 更新 `scripts/release/bootstrap.lock` 到 `v0.2.19`，使后续 `print` 去 builtin 化可在锁定 bootstrap 下安全落地。
+  - [x] A43-5 移除 `print` builtin（`collect/c_func/frozen lock`），由 `std/prelude::print` 通过 `@ffi_import("c", "vox_rt_print")` 提供并补齐回归测试。
   - Source: `docs/reference/style-guide.md`.
 
 ## Deferred Scope
