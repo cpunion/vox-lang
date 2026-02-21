@@ -31,7 +31,10 @@ Status: active.
   - 支持命令级 cwd 前缀渲染（`cd <dir> && ...`）
   - 支持按键移除环境变量与清空环境变量集合
   - 补 `std/process` 行为测试 + `vox/typecheck` / `vox/compile` smoke 回归
-- [ ] `std/collections` 与 `std/string` 的 OOP 风格一致性收敛（保持兼容包装）
+- [x] `std/collections` 与 `std/string` 的 OOP 风格一致性收敛（保持兼容包装）
+  - `StrView` / `Slice[T]` 方法式核心 API 已对齐 free-function
+  - `Queue.contains`、`Set.add_all/contains_all` 已补齐并保留兼容包装
+  - `Map.set/remove` 覆盖/删除路径已切换为原地更新以降低拷贝成本
 - [ ] `std/testing` 增加模块化断言扩展（不破坏当前 `t.assert*`）
 
 ## 执行要求

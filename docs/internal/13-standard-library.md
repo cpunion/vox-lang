@@ -27,6 +27,7 @@
   - 匹配/查找 API：
     - `String` 参数版本：`starts_with`、`ends_with`、`contains`、`index_of`、`last_index_of`、`equals`、`compare`
     - `StrView` 参数版本：`starts_with_view`、`ends_with_view`、`contains_view`、`index_of_view`、`last_index_of_view`、`equals_view`、`compare_view`
+  - inherent impl（`impl StrView`）已与 free-function 对齐：`len/is_empty/byte_at/sub/take_prefix/take_suffix/drop_prefix/drop_suffix/to_string/starts_with/ends_with/contains/index_of/last_index_of/equals/compare`。
   - 语言层当前不支持裸 `str`（会报错）；请使用 `String`（拥有）或 `&str`/`&'static str`（借用）。同时支持 `&T` / `&mut T` / `&'static T` / `&'static mut T` 语法（借用形状在类型系统/IR 中保留为 `Ref`，`&'a T` 这类命名 lifetime 在 parser 阶段拒绝）。
   - 显式释放基线：`release(s: String) -> String`，返回空字符串并断开当前值（不触发别名 UAF）。该调用必须接收返回值（例如 `s = release(s)`），裸表达式语句会报错；被释放变量后续读取会报 `use of moved value`（除非先重绑定）。
 - `std::collections` 已提供 `Slice[T]`（拥有型 `Vec[T]` 视图）。
@@ -34,6 +35,9 @@
   - view-first 子切片 API（推荐）：`take_prefix`、`take_suffix`、`drop_prefix`、`drop_suffix`。
   - 查找与匹配 API：`contains`、`index_of`、`last_index_of`、`starts_with`、`ends_with`、`contains_slice`、`index_of_slice`、`last_index_of_slice`（相关 API 需要 `T: Eq`）。
   - 比较 API：`equals`/`equals_vec`（`T: Eq`）、`compare`/`compare_vec`（`T: Ord`）。
+  - inherent impl 已对齐：
+    - `impl[T] Slice[T]`：`len/is_empty/get/sub/take_prefix/take_suffix/drop_prefix/drop_suffix/to_vec`
+    - `impl[T: Eq] Slice[T]`：`index_of/last_index_of/contains`
   - 显式释放基线：`release_vec[T](v: Vec[T]) -> Vec[T]`，返回新的空 `Vec`，不释放共享底层存储（避免别名 UAF）。该调用必须接收返回值；被释放变量后续读取会报 `use of moved value`（除非先重绑定）。
 - `std::collections` 还提供最小泛型 `Map[K,V]`（线性实现）：
   - 构造函数：`map[K,V]()`
@@ -42,12 +46,15 @@
     - `get`、`get_or`（缺失键时返回调用方提供的 fallback）
     - `keys`、`values`（按当前存储顺序返回拷贝）
     - `set`（存在则覆盖，不存在则插入）、`remove`、`clear`、`release`（需接收返回值，释放后旧变量读取会报 `use of moved value`）
+  - 当前实现优化：`set` 覆盖路径与 `remove` 路径已改为 `Vec.set/remove` 原地更新，避免旧实现的整表重建拷贝。
   - 其中键比较相关 API 需要 `K: Eq`。
   - 另外提供 `impl[K: Eq + Clone, V: Clone] Clone for Map[K,V]`（深拷贝 keys/vals，不共享底层 Vec 存储）。
   - 另外提供 `impl[K: Eq, V] Release for Map[K,V]`（返回空 `Map`，显式断开当前值）。
 - `std::collections` 新增通用容器：
   - `Queue[T]`：FIFO 队列，基于 `Vec` + `head` 指针与惰性 compact；支持 `push`/`front`/`pop`/`to_vec`/`clear`/`release`。
+    - 额外提供 `impl[T: Eq] Queue[T].contains`（并保留 `queue_contains` 兼容入口）。
   - `Set[T: Eq]`：去重集合，基于线性 `Vec[T]`；支持 `add`/`remove`/`contains`/`values`/`clear`/`release`。
+    - 额外提供 `add_all`、`contains_all` 批量能力。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、文件枚举、命令执行、参数读取、环境变量读取）。
   - `std::fs` 新增 `Path` 方法式 API：`path(raw)` + `Path.exists/read_to_string/write_string/mkdir_p/walk_files`。
   - `std::fs` 路径 helper（OOP + free-function）：
