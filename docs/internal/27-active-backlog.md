@@ -311,11 +311,9 @@ Builtin end-state (agreed):
   - [x] A41-4 更新冻结清单（移除 `__wake_wait_any`；仅保留 `panic/print` 与反射内建）。
   - Source: `docs/reference/style-guide.md`.
 
-- [x] A43 builtin/intrinsic 收缩（batch-7）
-  - [x] A43-1 移除 `print` 的语言 builtin 声明，改为 `std/prelude` 的 FFI 函数导出（`@ffi_import("c", "vox_rt_print")`）。
-  - [x] A43-2 删除 `c_func` 对 `print` 的硬编码 lowering，统一走常规函数/FFI 调用路径。
-  - [x] A43-3 C runtime 增加 `vox_rt_print` 外部符号（内部复用 `vox_builtin_print` 实现），避免直接暴露语言 builtin 语义。
-  - [x] A43-4 更新冻结清单并补齐 typecheck/codegen 回归。
+- [x] A43 builtin/intrinsic 收缩（batch-7，bootstrap 兼容前置）
+  - [x] A43-1 C runtime 增加 `vox_rt_print` 外部桥接符号（内部复用 `vox_builtin_print` 实现），为后续 `print` 去 builtin 化做 bootstrap 前置准备。
+  - [x] A43-2 说明：`print` 语言 builtin 的移除与调用路径切换需要“先发布再 bump bootstrap.lock”的两阶段落地，避免锁定 bootstrap 链路断裂。
   - Source: `docs/reference/style-guide.md`.
 
 ## Deferred Scope
