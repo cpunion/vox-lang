@@ -35,7 +35,9 @@ Status: active.
   - `StrView` / `Slice[T]` 方法式核心 API 已对齐 free-function
   - `Queue.contains`、`Set.add_all/contains_all` 已补齐并保留兼容包装
   - `Map.set/remove` 覆盖/删除路径已切换为原地更新以降低拷贝成本
-- [ ] `std/testing` 增加模块化断言扩展（不破坏当前 `t.assert*`）
+- [x] `std/testing` 增加模块化断言扩展（不破坏当前 `t.assert*`）
+  - 新增 `std/testing/asserts` 子模块（`is_true/is_false`、字符串断言族）
+  - `std/testing` 现有 `t.assert*` 入口保持兼容不变
 
 ## 执行要求
 
