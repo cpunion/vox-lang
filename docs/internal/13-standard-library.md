@@ -16,6 +16,7 @@
 - `std::io`：输出 + 最小文件抽象 + 最小 TCP 抽象
 - `std::net`：URL/Query/HTTP 文本编解码 + 基于 TCP 的最小 HTTP roundtrip
 - `std::dotenv`：`.env` 读取与键查找（供 CLI/agent 配置加载）
+- `std::testing`：测试断言入口（`t.assert*` 兼容层 + 模块化断言扩展）
 
 当前实现落地：
 
@@ -103,5 +104,11 @@
   - `value(path, key)`：读取单个 `.env` 文件中的键值（支持 `KEY=...` 与 `export KEY=...`）
   - `value_from_paths(paths, key)`：按路径顺序查找首个非空值
 - `std::sync` 当前 API 为泛型句柄：`Mutex[T]` / `Atomic[T]`（当前 `T` 由 `SyncScalar` 约束，已覆盖 `i32/i64`）；标准库层句柄类型为 `isize`（按目标指针宽度），内部通过 `std::runtime` 适配到现有 intrinsic。`fetch_add/swap/load/store` 已在解释器与 C 后端对齐。
+- `std::testing` 当前实现：
+  - 兼容层：`std/testing` 继续导出 `assert/assert_with/fail/assert_eq/assert_ne/assert_lt/assert_le/assert_gt/assert_ge`。
+  - 模块化扩展：`std/testing/asserts` 新增断言 helper：
+    - `is_true/is_false`
+    - `str_contains/str_not_contains/str_starts_with/str_ends_with`
+    - `str_empty/str_not_empty`
 
 重要：由于 Vox 的“临时借用”规则，标准库应优先提供“可长期保存的拥有型视图”（例如 `StrView` / `Slice[T]`），并优先使用 view-first API（避免不必要的 `to_string` / `to_vec` 物化）。
