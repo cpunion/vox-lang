@@ -94,14 +94,14 @@ fn cancel_return[T](c: Context) -> T; // 可选钩子；不提供时回退默认
 2. `Ready(T)` 表示完成，返回结果。
 3. `Context/Waker` 定义最小执行器接口契约；具体调度策略由 runtime/宿主决定。
 4. `Runtime` trait 定义“Pending 时如何等待/让出 + 取消轮询”的 runtime 分层接口，当前标准库提供：
-   - `EventRuntime`（基于 `__wake_wait(token, timeout_ms)` 的超时等待/唤醒消费，作为 `default_runtime()`）
+   - `EventRuntime`（基于 `std/runtime.wake_wait(token, timeout_ms)` 的超时等待/唤醒消费，作为 `default_runtime()`）
    - `SpinRuntime`（`yield_now` 兼容路径）
    并暴露 `default_runtime()` + `*_with(rt, ...)` 供宿主注入自定义 runtime。
 5. `EventSource + ReadyQueue` 提供“事件源抽象 + 多源就绪队列”基线：
    - `EventSource.wait(...)` 统一“单次等待 -> ReadyPoll”接口；
    - `EventSource.wait_many(...)` 统一“多 context 批量等待 -> ready index”接口；
    - `ReadyQueue` 提供 token 队列（push/pop）作为多源事件汇聚结构；
-   - `drain_ready_once(...)` phase-b：阻塞点优先走 `wait_many`（`EventRuntime` 会接到 `__wake_wait_any`），再做一次 non-blocking 扫描收集同轮其它 ready；
+   - `drain_ready_once(...)` phase-b：阻塞点优先走 `wait_many`（`EventRuntime` 会接到 `std/runtime.wake_wait_any`），再做一次 non-blocking 扫描收集同轮其它 ready；
    - 现阶段先用于接口收敛，后续由平台后端（epoll/kqueue/IOCP）填充具体事件源实现。
 
 ## 4. lowering 设计（D03-3 目标）
