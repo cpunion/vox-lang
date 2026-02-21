@@ -58,7 +58,7 @@
     - trait：`FS`（读/存在/枚举）与 `WritableFS`（写/建目录）
     - 实现：`OsFS`（系统文件系统包装）与 `MemFS`（内存文件系统）
     - 泛型 helper：`fs_read_to_string/fs_write_string/fs_exists/fs_walk_files/fs_mkdir_p`
-  - `std::process` 新增 `Command` 方法式 API：`command(prog)` + `Command.env/arg/args/render/run`。
+  - `std::process` 新增 `Command` 方法式 API：`command(prog)` + `Command.env/env_remove/clear_env/cwd/arg/args/render/run`。
   - `std::process` 仍保留 free-function 入口：`exec/args/exe_path/getenv`（`exec` 可直接执行 `Command.render()` 结果）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`。
