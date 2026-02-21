@@ -279,6 +279,12 @@ Governance from now on:
   - [x] A38-4 更新冻结清单并补齐回归（`typecheck/compile` 的 std io/fs override 场景）。
   - Source: `docs/reference/style-guide.md`.
 
+- [ ] A39 builtin/intrinsic 收缩（batch-4）
+  - [x] A39-1 扩展 FFI 类型白名单，支持 `Vec[String]` 的参数与返回（用于 runtime bridge，不放开任意 `Vec[T]`）。
+  - [ ] A39-2 在 bootstrap lock 升级后，将 `__args/__walk_vox_files` 从 builtin 路径迁到 `std/runtime` 的 `@ffi_import("c", "vox_builtin_*")` 调用。
+  - [ ] A39-3 同步删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering，并更新冻结清单。
+  - Source: `docs/reference/style-guide.md`.
+
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.
