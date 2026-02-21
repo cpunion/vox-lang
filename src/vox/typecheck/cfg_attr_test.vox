@@ -1,0 +1,54 @@
+import "std/testing" as t
+import "vox/parse" as p
+import "vox/typecheck" as tc
+
+fn cfg_tc_add_mod(w: tc.World, path: String, src: String) -> tc.World {
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert_with(r.err == p.ParseError.None, p.parse_error_to_string(r.err));
+  return tc.world_add(w, path, r.prog);
+}
+
+fn cfg_tc_run_with_target(w: tc.World, ptr_bits: i32, target_os: String, target_arch: String) -> tc.TcResult {
+  let br: tc.BuildCtxResult = tc.build_ctx_with_target(w, ptr_bits, target_os, target_arch);
+  if !br.ok { return tc.TcResult { ok: false, err: br.err }; }
+  return tc.typecheck_world_with_ctx(w, br.ctx);
+}
+
+fn test_typecheck_cfg_target_os_match_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = cfg_tc_add_mod(w, "main", "@cfg(target_os, linux)\nfn pick() -> i32 { return 7; }\nfn main() -> i32 { return pick(); }");
+  let r: tc.TcResult = cfg_tc_run_with_target(w, 64, "linux", "amd64");
+  t.assert_with(r.ok, tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_cfg_target_os_mismatch_prunes_fn() -> () {
+  let mut w: tc.World = tc.world();
+  w = cfg_tc_add_mod(w, "main", "@cfg(target_os, linux)\nfn pick() -> i32 { return 7; }\nfn main() -> i32 { return pick(); }");
+  let r: tc.TcResult = cfg_tc_run_with_target(w, 64, "darwin", "arm64");
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "unknown fn"), msg);
+}
+
+fn test_typecheck_cfg_target_arch_match_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = cfg_tc_add_mod(w, "main", "@cfg(target_arch, amd64)\nfn pick() -> i32 { return 3; }\nfn main() -> i32 { return pick(); }");
+  let r: tc.TcResult = cfg_tc_run_with_target(w, 64, "linux", "amd64");
+  t.assert_with(r.ok, tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_cfg_target_ptr_bits_match_smoke() -> () {
+  let mut w: tc.World = tc.world();
+  w = cfg_tc_add_mod(w, "main", "@cfg(target_ptr_bits, 32)\nfn pick() -> i32 { return 1; }\nfn main() -> i32 { return pick(); }");
+  let r: tc.TcResult = cfg_tc_run_with_target(w, 32, "linux", "x86");
+  t.assert_with(r.ok, tc.tc_error_to_string(r.err));
+}
+
+fn test_typecheck_cfg_multi_clause_all_must_match() -> () {
+  let mut w: tc.World = tc.world();
+  w = cfg_tc_add_mod(w, "main", "@cfg(target_os, linux)\n@cfg(target_arch, amd64)\nfn pick() -> i32 { return 5; }\nfn main() -> i32 { return pick(); }");
+  let r: tc.TcResult = cfg_tc_run_with_target(w, 64, "linux", "arm64");
+  t.assert(!r.ok);
+  let msg: String = tc.tc_error_to_string(r.err);
+  t.assert_with(contains(msg, "unknown fn"), msg);
+}

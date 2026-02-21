@@ -270,6 +270,7 @@ struct ParseTopFnAttrsResult {
   ffi_exports: Vec[ast.FfiExportAttr],
   effects: Vec[ast.EffectAttr],
   resources: Vec[ast.ResourceAttr],
+  cfgs: Vec[ast.CfgAttr],
   track_caller: bool,
   deprecated_message: String
 }
@@ -2107,6 +2108,7 @@ fn parse_fn_decl(
   ffi_exports: Vec[ast.FfiExportAttr],
   effects: Vec[ast.EffectAttr],
   resources: Vec[ast.ResourceAttr],
+  cfgs: Vec[ast.CfgAttr],
   track_caller: bool,
   deprecated_message: String,
 ) -> ParseFnResult {
@@ -2200,6 +2202,7 @@ fn parse_fn_decl(
       const_where_bounds: cwbs2,
       params: params,
       ret: r8.ty,
+      cfgs: cfgs,
       ffi_imports: ffi_imports,
       ffi_exports: ffi_exports,
       effects: effects,
@@ -2879,6 +2882,10 @@ fn parse_trait_decl(p: Parser, vis: i32, is_pub: bool) -> ParseTraitResult {
           q = set_method_ffi_attr_error(q);
           continue;
         }
+        if ar.cfgs.len() != 0 {
+          q = set_method_cfg_attr_error(q);
+          continue;
+        }
         if ar.track_caller {
           q = set_method_track_caller_attr_error(q);
           continue;
@@ -2979,11 +2986,15 @@ fn parse_impl_decl(p: Parser) -> ParseImplResult {
         q = set_method_ffi_attr_error(q);
         continue;
       }
+      if ar0.cfgs.len() != 0 {
+        q = set_method_cfg_attr_error(q);
+        continue;
+      }
       if ar0.track_caller {
         q = set_method_track_caller_attr_error(q);
         continue;
       }
-      let r: ParseFnResult = parse_fn_decl(q, ast.vis_private(), false, Vec(), Vec(), ar0.effects, ar0.resources, false, ar0.deprecated_message);
+      let r: ParseFnResult = parse_fn_decl(q, ast.vis_private(), false, Vec(), Vec(), ar0.effects, ar0.resources, Vec(), false, ar0.deprecated_message);
       q = r.p;
       methods.push(r.f);
     }
@@ -3135,9 +3146,17 @@ fn is_ffi_target(s: String) -> bool {
   return s == "c" || s == "wasm";
 }
 
+fn is_cfg_key(s: String) -> bool {
+  return s == "target_os" || s == "target_arch" || s == "target_ptr_bits";
+}
+
 fn parse_attr_arg_text(p: Parser) -> ParseStringResult {
   if kind_is(peek_kind(p), lex.TokenKind.Str) {
     return parse_string_inner(p);
+  }
+  if kind_is(peek_kind(p), lex.TokenKind.Int) {
+    let ar: AdvanceResult = expect(p, lex.TokenKind.Int);
+    return ParseStringResult { p: ar.p, s: lexeme(ar.p, ar.tok), at: ar.tok.start };
   }
   if kind_is(peek_kind(p), lex.TokenKind.Ident) {
     let ri: ParseIdentResult = parse_ident(p);
@@ -3163,12 +3182,20 @@ fn set_method_track_caller_attr_error(p: Parser) -> Parser {
   return q;
 }
 
+fn set_method_cfg_attr_error(p: Parser) -> Parser {
+  let mut q: Parser = p;
+  q.has_err = true;
+  q.err = ParseError.InvalidType(peek(p).start, "cfg attribute is only allowed on top-level fn");
+  return q;
+}
+
 fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
   let mut q: Parser = p;
   let mut ffi_imports: Vec[ast.FfiImportAttr] = Vec();
   let mut ffi_exports: Vec[ast.FfiExportAttr] = Vec();
   let mut effects: Vec[ast.EffectAttr] = Vec();
   let mut resources: Vec[ast.ResourceAttr] = Vec();
+  let mut cfgs: Vec[ast.CfgAttr] = Vec();
   let mut track_caller: bool = false;
   let mut deprecated_message: String = "";
 
@@ -3192,6 +3219,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
               ffi_exports: ffi_exports,
               effects: effects,
               resources: resources,
+              cfgs: cfgs,
               track_caller: track_caller,
               deprecated_message: deprecated_message,
             };
@@ -3220,6 +3248,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
         ffi_exports: ffi_exports,
         effects: effects,
         resources: resources,
+        cfgs: cfgs,
         track_caller: track_caller,
         deprecated_message: deprecated_message,
       };
@@ -3231,6 +3260,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
         ffi_exports: ffi_exports,
         effects: effects,
         resources: resources,
+        cfgs: cfgs,
         track_caller: track_caller,
         deprecated_message: deprecated_message,
       };
@@ -3251,6 +3281,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
           ffi_exports: ffi_exports,
           effects: effects,
           resources: resources,
+          cfgs: cfgs,
           track_caller: track_caller,
           deprecated_message: deprecated_message,
         };
@@ -3268,6 +3299,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
           ffi_exports: ffi_exports,
           effects: effects,
           resources: resources,
+          cfgs: cfgs,
           track_caller: track_caller,
           deprecated_message: deprecated_message,
         };
@@ -3285,6 +3317,25 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
           ffi_exports: ffi_exports,
           effects: effects,
           resources: resources,
+          cfgs: cfgs,
+          track_caller: track_caller,
+          deprecated_message: deprecated_message,
+        };
+      }
+    } else if rn.name == "cfg" {
+      if args.len() == 2 && is_cfg_key(args.get(0)) && args.get(1) != "" {
+        cfgs.push(ast.CfgAttr { sp: sp0, key: args.get(0), value: args.get(1) });
+      } else {
+        let mut qe_cfg: Parser = q;
+        qe_cfg.has_err = true;
+        qe_cfg.err = ParseError.InvalidType(rn.at, "bad cfg attribute arguments");
+        return ParseTopFnAttrsResult {
+          p: qe_cfg,
+          ffi_imports: ffi_imports,
+          ffi_exports: ffi_exports,
+          effects: effects,
+          resources: resources,
+          cfgs: cfgs,
           track_caller: track_caller,
           deprecated_message: deprecated_message,
         };
@@ -3305,6 +3356,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
             ffi_exports: ffi_exports,
             effects: effects,
             resources: resources,
+            cfgs: cfgs,
             track_caller: track_caller,
             deprecated_message: deprecated_message,
           };
@@ -3319,6 +3371,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
           ffi_exports: ffi_exports,
           effects: effects,
           resources: resources,
+          cfgs: cfgs,
           track_caller: track_caller,
           deprecated_message: deprecated_message,
         };
@@ -3336,6 +3389,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
           ffi_exports: ffi_exports,
           effects: effects,
           resources: resources,
+          cfgs: cfgs,
           track_caller: track_caller,
           deprecated_message: deprecated_message,
         };
@@ -3355,6 +3409,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
           ffi_exports: ffi_exports,
           effects: effects,
           resources: resources,
+          cfgs: cfgs,
           track_caller: track_caller,
           deprecated_message: deprecated_message,
         };
@@ -3369,6 +3424,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
         ffi_exports: ffi_exports,
         effects: effects,
         resources: resources,
+        cfgs: cfgs,
         track_caller: track_caller,
         deprecated_message: deprecated_message,
       };
@@ -3381,6 +3437,7 @@ fn parse_top_fn_attrs(p: Parser) -> ParseTopFnAttrsResult {
     ffi_exports: ffi_exports,
     effects: effects,
     resources: resources,
+    cfgs: cfgs,
     track_caller: track_caller,
     deprecated_message: deprecated_message,
   };
@@ -3447,6 +3504,7 @@ fn parse_program(p: Parser) -> ParseProgramResult {
       ar.ffi_exports.len() != 0 ||
       ar.effects.len() != 0 ||
       ar.resources.len() != 0 ||
+      ar.cfgs.len() != 0 ||
       ar.track_caller ||
       ar.deprecated_message != "";
     if has_fn_attrs && !kind_is(k, lex.TokenKind.KwFn) && !kind_is(k, lex.TokenKind.KwAsync) {
@@ -3486,7 +3544,7 @@ fn parse_program(p: Parser) -> ParseProgramResult {
       q = r.p;
       impls.push(r.i);
     } else {
-      let r: ParseFnResult = parse_fn_decl(q, vis, is_pub, ar.ffi_imports, ar.ffi_exports, ar.effects, ar.resources, ar.track_caller, ar.deprecated_message);
+      let r: ParseFnResult = parse_fn_decl(q, vis, is_pub, ar.ffi_imports, ar.ffi_exports, ar.effects, ar.resources, ar.cfgs, ar.track_caller, ar.deprecated_message);
       q = r.p;
       funcs.push(r.f);
     }

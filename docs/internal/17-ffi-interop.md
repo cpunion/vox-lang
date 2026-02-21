@@ -64,6 +64,7 @@ pub fn add(a: i32, b: i32) -> i32 {
 | `i8/i16/i32/i64` | `int8_t/int16_t/int32_t/int64_t` | 定宽有符号整型 |
 | `u8/u16/u32/u64` | `uint8_t/uint16_t/uint32_t/uint64_t` | 定宽无符号整型 |
 | `isize/usize` | `intptr_t/uintptr_t` | 按目标指针宽度映射（32/64） |
+| `rawptr` | `void*` | FFI 互操作专用的不透明指针类型 |
 | `f32/f64` | `float/double` | IEEE 浮点 |
 | `String` | `const char*` | UTF-8 字节串，NUL 结尾，调用方负责约定生命周期 |
 

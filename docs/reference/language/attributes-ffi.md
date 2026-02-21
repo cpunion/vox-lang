@@ -12,6 +12,7 @@ Coverage IDs: `S701`, `S702`, `S703`, `S704`.
 Attr
   := "@effect(" Ident ")"
    | "@resource(" Ident "," Ident ")"
+   | "@cfg(" ("target_os" | "target_arch" | "target_ptr_bits") "," (Ident | StringLit | IntLit) ")"
    | "@ffi_import(" StringLit "," StringLit ")"
    | "@ffi_import(" StringLit "," StringLit "," StringLit ")"
    | "@ffi_export(" StringLit "," StringLit ")"
@@ -27,6 +28,14 @@ AttributedFn
 
 - `@effect(Name)` declares capability metadata on function.
 - `@resource(mode, Name)` declares resource access intent.
+
+### Target Config
+
+- `@cfg(target_os, value)` gates function on OS name.
+- `@cfg(target_arch, value)` gates function on architecture name.
+- `@cfg(target_ptr_bits, value)` gates function on pointer width (`32`/`64`).
+- Multiple `@cfg(...)` on one function are AND-combined.
+- Current keys: `target_os`, `target_arch`, `target_ptr_bits`.
 
 ### FFI Import/Export
 
@@ -45,7 +54,7 @@ AttributedFn
 
 Current enforced rules:
 
-- `@ffi_import`, `@ffi_export`, `@track_caller` are top-level function attributes.
+- `@cfg`, `@ffi_import`, `@ffi_export`, `@track_caller` are top-level function attributes.
 - unsupported placement (for example impl methods) is rejected.
 
 ## Diagnostics
