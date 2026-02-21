@@ -20,8 +20,6 @@ fn rt_yield_now_raw() -> ();
 fn rt_wake_notify_raw(token: i64) -> ();
 @ffi_import("c", "vox_builtin_wake_wait")
 fn rt_wake_wait_raw(token: i64, timeout_ms: i32) -> bool;
-@ffi_import("c", "vox_builtin_wake_wait_any_str")
-fn rt_wake_wait_any_raw(tokens: Vec[String], timeout_ms: i32) -> i32;
 @ffi_import("c", "vox_builtin_exec")
 fn rt_exec_raw(cmd: String) -> i32;
 @ffi_import("c", "vox_builtin_walk_vox_files")
@@ -126,18 +124,34 @@ pub fn wake_wait(token: i64, timeout_ms: i32) -> bool {
   return rt_wake_wait_raw(token, timeout_ms);
 }
 
-fn wake_tokens_text(tokens: Vec[i64]) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+pub fn wake_wait_any(tokens: Vec[i64], timeout_ms: i32) -> i32 {
+  let n: i32 = tokens.len();
+  if n == 0 { return -1; }
+
+  // Non-blocking scan first.
   let mut i: i32 = 0;
-  while i < tokens.len() {
-    out.push(tokens.get(i).to_string());
+  while i < n {
+    if wake_wait(tokens.get(i), 0) { return i; }
     i = i + 1;
   }
-  return out;
-}
+  if timeout_ms <= 0 { return -1; }
 
-pub fn wake_wait_any(tokens: Vec[i64], timeout_ms: i32) -> i32 {
-  return rt_wake_wait_any_raw(wake_tokens_text(tokens), timeout_ms);
+  let deadline: i64 = now_ns() + ((timeout_ms as i64) * (1000 as i64) * (1000 as i64));
+  while true {
+    let rem_ns: i64 = deadline - now_ns();
+    if rem_ns <= 0 { return -1; }
+    let mut rem_ms: i32 = (rem_ns / ((1000 as i64) * (1000 as i64))) as i32;
+    if rem_ms <= 0 { rem_ms = 1; }
+    if wake_wait(tokens.get(0), rem_ms) { return 0; }
+
+    // Re-scan other tokens after one blocking wait on the anchor token.
+    let mut j: i32 = 1;
+    while j < n {
+      if wake_wait(tokens.get(j), 0) { return j; }
+      j = j + 1;
+    }
+  }
+  return -1;
 }
 
 pub fn read_file(path: String) -> String { return rt_read_file_raw(path); }
