@@ -209,6 +209,63 @@ fn find_deprecated_fn_message(ds: Vec[DeprecatedFnDecl], mod_path: String, name:
   return "";
 }
 
+struct QNameSplitResult {
+  mod_path: String,
+  name: String,
+}
+
+fn qname_split(qn: String) -> QNameSplitResult {
+  let mut cut: i32 = -1;
+  let mut i: i32 = 0;
+  while (i + 1) < qn.len() {
+    if qn.byte_at(i) == 58 && qn.byte_at(i + 1) == 58 {
+      cut = i;
+    }
+    i = i + 1;
+  }
+  if cut == -1 {
+    return QNameSplitResult { mod_path: "", name: qn };
+  }
+  return QNameSplitResult { mod_path: qn.slice(0, cut), name: qn.slice(cut + 2, qn.len()) };
+}
+
+fn collect_deprecated_warnings_ir(ctx: tc.Ctx, prog: ir.Program, ws0: Vec[String]) -> Vec[String] {
+  let mut ws: Vec[String] = ws0;
+  let mut fi: i32 = 0;
+  while fi < prog.funcs.len() {
+    let f: ir.Func = prog.funcs.get(fi);
+    let fn_q: QNameSplitResult = qname_split(f.name);
+    if warning_skip_mod(fn_q.mod_path) {
+      fi = fi + 1;
+      continue;
+    }
+    let mut bi: i32 = 0;
+    while bi < f.blocks.len() {
+      let b: ir.Block = f.blocks.get(bi);
+      let mut ii: i32 = 0;
+      while ii < b.instrs.len() {
+        let ins: ir.Instr = b.instrs.get(ii);
+        if match ins { ir.Instr.Call(_, _, _, _, _) => true, _ => false } {
+          let qn: String = match ins { ir.Instr.Call(_, _, _, n, _) => n, _ => "" };
+          let cq: QNameSplitResult = qname_split(qn);
+          let fr: tc.FindFuncResult = tc.find_func(ctx, cq.mod_path, cq.name);
+          if fr.found && fr.deprecated_message != "" {
+            let line: String = compile_warn_render(
+              ast.span0(),
+              "deprecated function `".concat(qn).concat("`: ").concat(fr.deprecated_message),
+            );
+            ws = warnings_add_unique(ws, line);
+          }
+        }
+        ii = ii + 1;
+      }
+      bi = bi + 1;
+    }
+    fi = fi + 1;
+  }
+  return ws;
+}
+
 struct ResolveMacroTargetResult {
   found: bool,
   mod_path: String,
@@ -1772,7 +1829,7 @@ pub fn compile_main_text_to_c_for_target(src: String, opts: cg.EmitOptions, ptr_
 
   let mut w: tc.World = tc.world();
   w = tc.world_add(w, "main", pr.prog);
-  let warnings: Vec[String] = collect_deprecated_warnings_world(w);
+  let warnings0: Vec[String] = collect_deprecated_warnings_world(w);
 
   let xr: mx.ExpandResult = mx.expand_world(w, mx.default_config());
   if !xr.ok {
@@ -1780,25 +1837,26 @@ pub fn compile_main_text_to_c_for_target(src: String, opts: cg.EmitOptions, ptr_
     let msg0: String = tc.tc_error_message(xr.err);
     let msg: String = if msg0 != "" { msg0 } else { tc.tc_error_to_string(xr.err) };
     let rendered: String = tc.tc_error_to_string(xr.err).concat(" [").concat(code).concat("]");
-    return compile_err(compile_diag_kind_macroexpand(), code, msg, rendered, warnings);
+    return compile_err(compile_diag_kind_macroexpand(), code, msg, rendered, warnings0);
   }
 
   let w2: tc.World = rewrite_async_entrypoints(xr.world, opts);
   let br: tc.BuildCtxResult = tc.build_ctx_with_target(w2, ptr_bits, target_os, target_arch);
   if !br.ok {
     let rendered: String = with_macroexpand_notes(tc.tc_error_to_string(br.err), xr.notes);
-    return compile_err(compile_kind_from_tc(tc.tc_error_kind(br.err)), tc.tc_error_code(br.err), tc.tc_error_message(br.err), rendered, warnings);
+    return compile_err(compile_kind_from_tc(tc.tc_error_kind(br.err)), tc.tc_error_code(br.err), tc.tc_error_message(br.err), rendered, warnings0);
   }
   let tr: tc.TcResult = tc.typecheck_world_with_ctx(w2, br.ctx);
   if !tr.ok {
     let rendered: String = with_macroexpand_notes(tc.tc_error_to_string(tr.err), xr.notes);
-    return compile_err(compile_kind_from_tc(tc.tc_error_kind(tr.err)), tc.tc_error_code(tr.err), tc.tc_error_message(tr.err), rendered, warnings);
+    return compile_err(compile_kind_from_tc(tc.tc_error_kind(tr.err)), tc.tc_error_code(tr.err), tc.tc_error_message(tr.err), rendered, warnings0);
   }
 
   let gr: irgen.GenResult = irgen.generate_world_with_ctx(w2, br.ctx);
   if !gr.ok {
-    return compile_err(compile_diag_kind_irgen(), tc.diag_code_irgen(), gr.err, gr.err, warnings);
+    return compile_err(compile_diag_kind_irgen(), tc.diag_code_irgen(), gr.err, gr.err, warnings0);
   }
+  let warnings: Vec[String] = collect_deprecated_warnings_ir(br.ctx, gr.prog, warnings0);
   let vr: ir.VerifyResult = ir.verify_program(gr.prog);
   if !vr.ok {
     let code: String = compile_code_ir_verify();
@@ -1843,7 +1901,7 @@ pub fn compile_files_to_c_profile_for_target(files: Vec[ld.SourceFile], opts: cg
   if !lr.ok {
     return prof_ok(compile_err(compile_kind_from_loader(lr.err_kind), lr.err_code, lr.err_message, lr.err, Vec()), prof);
   }
-  let warnings: Vec[String] = collect_deprecated_warnings_world(lr.world);
+  let warnings0: Vec[String] = collect_deprecated_warnings_world(lr.world);
   let t0_expand: i64 = tm.now_ns();
   let xr: mx.ExpandResult = mx.expand_world(lr.world, mx.default_config());
   prof.macroexpand_ns = dur_nonneg_ns(t0_expand, tm.now_ns());
@@ -1852,7 +1910,7 @@ pub fn compile_files_to_c_profile_for_target(files: Vec[ld.SourceFile], opts: cg
     let msg0: String = tc.tc_error_message(xr.err);
     let msg: String = if msg0 != "" { msg0 } else { tc.tc_error_to_string(xr.err) };
     let rendered: String = tc.tc_error_to_string(xr.err).concat(" [").concat(code).concat("]");
-    return prof_ok(compile_err(compile_diag_kind_macroexpand(), code, msg, rendered, warnings), prof);
+    return prof_ok(compile_err(compile_diag_kind_macroexpand(), code, msg, rendered, warnings0), prof);
   }
 
   let t0_rewrite: i64 = tm.now_ns();
@@ -1864,21 +1922,22 @@ pub fn compile_files_to_c_profile_for_target(files: Vec[ld.SourceFile], opts: cg
   if !br.ok {
     prof.typecheck_ns = dur_nonneg_ns(t0_tc, tm.now_ns());
     let rendered: String = with_macroexpand_notes(tc.tc_error_to_string(br.err), xr.notes);
-    return prof_ok(compile_err(compile_kind_from_tc(tc.tc_error_kind(br.err)), tc.tc_error_code(br.err), tc.tc_error_message(br.err), rendered, warnings), prof);
+    return prof_ok(compile_err(compile_kind_from_tc(tc.tc_error_kind(br.err)), tc.tc_error_code(br.err), tc.tc_error_message(br.err), rendered, warnings0), prof);
   }
   let tr: tc.TcResult = tc.typecheck_world_with_ctx(w2, br.ctx);
   prof.typecheck_ns = dur_nonneg_ns(t0_tc, tm.now_ns());
   if !tr.ok {
     let rendered: String = with_macroexpand_notes(tc.tc_error_to_string(tr.err), xr.notes);
-    return prof_ok(compile_err(compile_kind_from_tc(tc.tc_error_kind(tr.err)), tc.tc_error_code(tr.err), tc.tc_error_message(tr.err), rendered, warnings), prof);
+    return prof_ok(compile_err(compile_kind_from_tc(tc.tc_error_kind(tr.err)), tc.tc_error_code(tr.err), tc.tc_error_message(tr.err), rendered, warnings0), prof);
   }
 
   let t0_irgen: i64 = tm.now_ns();
   let gr: irgen.GenResult = irgen.generate_world_with_ctx(w2, br.ctx);
   prof.irgen_ns = dur_nonneg_ns(t0_irgen, tm.now_ns());
   if !gr.ok {
-    return prof_ok(compile_err(compile_diag_kind_irgen(), tc.diag_code_irgen(), gr.err, gr.err, warnings), prof);
+    return prof_ok(compile_err(compile_diag_kind_irgen(), tc.diag_code_irgen(), gr.err, gr.err, warnings0), prof);
   }
+  let warnings: Vec[String] = collect_deprecated_warnings_ir(br.ctx, gr.prog, warnings0);
 
   let t0_verify: i64 = tm.now_ns();
   let vr: ir.VerifyResult = ir.verify_program(gr.prog);
