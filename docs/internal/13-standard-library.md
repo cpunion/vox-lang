@@ -53,7 +53,7 @@
   - 另外提供 `impl[K: Eq + Clone, V: Clone] Clone for Map[K,V]`（深拷贝 keys/vals，不共享底层 Vec 存储）。
   - 另外提供 `impl[K: Eq, V] Release for Map[K,V]`（返回空 `Map`，显式断开当前值）。
 - `std::collections` 新增通用容器：
-  - `Queue[T]`：FIFO 队列，基于 `Vec` + `head` 指针与惰性 compact；支持 `push`/`front`/`pop`/`to_vec`/`clear`/`release`。
+  - `Queue[T]`：FIFO 队列，基于 `Vec` + `head` 指针与惰性 compact；支持 `push`/`push_all`/`front`/`pop`/`pop_n`/`to_vec`/`clear`/`release`。
     - 额外提供 `impl[T: Eq] Queue[T].contains`（并保留 `queue_contains` 兼容入口）。
   - `Set[T: Eq]`：去重集合，基于线性 `Vec[T]`；支持 `add`/`remove`/`contains`/`values`/`clear`/`release`。
     - 额外提供 `add_all`、`contains_all` 批量能力。
