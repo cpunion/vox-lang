@@ -248,6 +248,12 @@ Governance from now on:
   - [x] A33-3 回归测试补齐：parser（trait/impl/inherent 方法）与 compile（方法调用告警），并同步文档。
   - Source: `docs/internal/14-syntax-details.md`, `docs/internal/18-diagnostics.md`.
 
+- [x] A34 `@deprecated` 告警可读性与覆盖补充
+  - [x] A34-1 告警文案补充调用者函数名（`called from`），提升 `<unknown>` 位置信息场景下可读性。
+  - [x] A34-2 compile 回归补充：顶层函数调用与 trait default 方法调用的 `@deprecated` 告警覆盖。
+  - [x] A34-3 diagnostics 文档补充 warning 格式与 `W_DEPRECATED_0001` 稳定码说明。
+  - Source: `docs/internal/18-diagnostics.md`.
+
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.

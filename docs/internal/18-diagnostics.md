@@ -98,6 +98,19 @@ src/main.vox:3:5: lex error: unexpected char
 
 这样上层工具可在不解析错误字符串的前提下完成分流、统计和重试策略。
 
+## 5. 告警（warnings）
+
+当前编译器会输出结构化告警文本（不影响编译成功），格式与错误保持一致：
+
+```text
+<file>:<line>:<col>: warning: <message> [<warning-code>]
+```
+
+当前已稳定的 warning code：
+
+- `W_DEPRECATED_0001`
+  - 用途：`@deprecated` 调用点告警（包含顶层函数、trait/impl/inherent 方法、宏函数）与已标记弃用 builtin（如 `@same_layout`）。
+
 诊断升级（已落地）：
 
 - AST/expr pool 节点已携带最小 span（`file/line/col`）。
