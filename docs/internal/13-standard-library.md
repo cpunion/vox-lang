@@ -48,9 +48,13 @@
 - `std::collections` 新增通用容器：
   - `Queue[T]`：FIFO 队列，基于 `Vec` + `head` 指针与惰性 compact；支持 `push`/`front`/`pop`/`to_vec`/`clear`/`release`。
   - `Set[T: Eq]`：去重集合，基于线性 `Vec[T]`；支持 `add`/`remove`/`contains`/`values`/`clear`/`release`。
-- `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、`.vox` 枚举、命令执行、参数读取、环境变量读取）。
-  - `std::fs` 新增 `Path` 方法式 API：`path(raw)` + `Path.exists/read_to_string/write_string/mkdir_p/walk_vox_files`。
-  - `std::fs` 仍保留 free-function 入口：`exists/read_to_string/write_string/mkdir_p/walk_vox_files`（内部转发到 `Path`）。
+- `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、文件枚举、命令执行、参数读取、环境变量读取）。
+  - `std::fs` 新增 `Path` 方法式 API：`path(raw)` + `Path.exists/read_to_string/write_string/mkdir_p/walk_files`。
+  - `std::fs` 仍保留 free-function 入口：`exists/read_to_string/write_string/mkdir_p/walk_files`（内部转发到 `Path`）。
+  - `std::fs` 新增虚拟文件系统基线（借鉴 Go `io/fs` 思路）：
+    - trait：`FS`（读/存在/枚举）与 `WritableFS`（写/建目录）
+    - 实现：`OsFS`（系统文件系统包装）与 `MemFS`（内存文件系统）
+    - 泛型 helper：`fs_read_to_string/fs_write_string/fs_exists/fs_walk_files/fs_mkdir_p`
   - `std::process` 新增 `Command` 方法式 API：`command(prog)` + `Command.env/arg/args/render/run`。
   - `std::process` 仍保留 free-function 入口：`exec/args/exe_path/getenv`（`exec` 可直接执行 `Command.render()` 结果）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
@@ -67,6 +71,7 @@
   - OOP 门面：`runtime() -> Runtime`，支持 `runtime().has_cap(...)`、`runtime().wake_wait(...)`、`runtime().tcp_wait_read(...)` 等方法式调用（free function 仍保留兼容）。
   - 约定：`std` 其它模块不再直接调用 `__*`，统一经 `std::runtime` 转发。
 - `std::net` 已提供：
+  - 地址/传输抽象：`NetProto`（`Tcp/Udp`）、`SocketAddr`、`socket_uri/parse_socket_uri`、`tcp_addr/udp_addr`、`tcp_connect_addr`、`udp_bind`（UDP I/O 目前是占位语义，后续接入底层 runtime）。
   - URL/Query：`Url`、`parse_url`、`url_to_string`、`query_escape`、`build_query`
   - HTTP 文本：`HttpRequest` + `with_header`/`with_body`/`render`，`parse_status`/`parse_status_code`/`header_value`/`response_body`
   - 最小 TCP HTTP：`http_roundtrip` 与 `http_get`（基于 `std::io` 的 `NetConn`）
