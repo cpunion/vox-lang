@@ -50,6 +50,9 @@
   - `Set[T: Eq]`：去重集合，基于线性 `Vec[T]`；支持 `add`/`remove`/`contains`/`values`/`clear`/`release`。
 - `std::fs` / `std::process` 已提供最小工具链内建封装（文件读写、路径存在性、`mkdir -p`、文件枚举、命令执行、参数读取、环境变量读取）。
   - `std::fs` 新增 `Path` 方法式 API：`path(raw)` + `Path.exists/read_to_string/write_string/mkdir_p/walk_files`。
+  - `std::fs` 路径 helper（OOP + free-function）：
+    - `Path.clean/join/base_name/dir_name/ext/stem/is_abs`
+    - `clean/join/base_name/dir_name/ext/stem/is_abs`
   - `std::fs` 仍保留 free-function 入口：`exists/read_to_string/write_string/mkdir_p/walk_files`（内部转发到 `Path`）。
   - `std::fs` 新增虚拟文件系统基线（借鉴 Go `io/fs` 思路）：
     - trait：`FS`（读/存在/枚举）与 `WritableFS`（写/建目录）

@@ -2,6 +2,185 @@
 
 import "std/runtime" as rt
 
+fn is_alpha_ascii_fs(ch: i32) -> bool {
+  if ch >= 65 && ch <= 90 { return true; }
+  if ch >= 97 && ch <= 122 { return true; }
+  return false;
+}
+
+fn has_drive_prefix_fs(p: String) -> bool {
+  return p.len() >= 2 && is_alpha_ascii_fs(p.byte_at(0)) && p.byte_at(1) == 58;
+}
+
+fn to_slash_fs(raw: String) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < raw.len() {
+    if raw.byte_at(i) == 92 {
+      out = out.concat("/");
+    } else {
+      out = out.concat(raw.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn is_abs_norm_fs(p: String) -> bool {
+  if p.len() == 0 { return false; }
+  if p.byte_at(0) == 47 { return true; }
+  return has_drive_prefix_fs(p);
+}
+
+pub fn is_abs(raw: String) -> bool {
+  return is_abs_norm_fs(to_slash_fs(raw));
+}
+
+pub fn clean(raw: String) -> String {
+  if raw.len() == 0 { return "."; }
+
+  let mut p: String = to_slash_fs(raw);
+  let mut prefix: String = "";
+  if has_drive_prefix_fs(p) {
+    prefix = p.slice(0, 2);
+    p = p.slice(2, p.len());
+  }
+
+  let mut abs: bool = false;
+  if p.len() > 0 && p.byte_at(0) == 47 {
+    abs = true;
+    while p.len() > 0 && p.byte_at(0) == 47 {
+      p = p.slice(1, p.len());
+    }
+  }
+
+  let mut segs: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  let mut start: i32 = 0;
+  while i <= p.len() {
+    if i == p.len() || p.byte_at(i) == 47 {
+      let seg: String = p.slice(start, i);
+      if seg == "" || seg == "." {
+      } else if seg == ".." {
+        if segs.len() > 0 && segs.get(segs.len() - 1) != ".." {
+          let _drop: String = segs.pop();
+        } else if !abs {
+          segs.push("..");
+        }
+      } else {
+        segs.push(seg);
+      }
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+
+  let mut out: String = "";
+  let mut j: i32 = 0;
+  while j < segs.len() {
+    if j > 0 { out = out.concat("/"); }
+    out = out.concat(segs.get(j));
+    j = j + 1;
+  }
+
+  if prefix != "" {
+    if abs {
+      if out == "" { return prefix.concat("/"); }
+      return prefix.concat("/").concat(out);
+    }
+    if out == "" { return prefix; }
+    return prefix.concat("/").concat(out);
+  }
+
+  if abs {
+    if out == "" { return "/"; }
+    return "/".concat(out);
+  }
+  if out == "" { return "."; }
+  return out;
+}
+
+pub fn join(a: String, b: String) -> String {
+  let bb: String = clean(b);
+  if is_abs_norm_fs(bb) { return bb; }
+
+  let aa: String = clean(a);
+  if aa == "." { return bb; }
+  if bb == "." { return aa; }
+  if aa == "/" { return clean("/".concat(bb)); }
+  if has_drive_prefix_fs(aa) && aa.len() == 2 {
+    return clean(aa.concat("/").concat(bb));
+  }
+  return clean(aa.concat("/").concat(bb));
+}
+
+pub fn base_name(raw: String) -> String {
+  let mut p: String = clean(raw);
+  if p == "/" { return "/"; }
+  if has_drive_prefix_fs(p) && p.len() == 2 { return p; }
+
+  while p.len() > 1 && p.byte_at(p.len() - 1) == 47 {
+    if has_drive_prefix_fs(p) && p.len() == 3 { return p; }
+    p = p.slice(0, p.len() - 1);
+  }
+
+  let mut i: i32 = p.len() - 1;
+  while i >= 0 {
+    if p.byte_at(i) == 47 {
+      return p.slice(i + 1, p.len());
+    }
+    i = i - 1;
+  }
+  return p;
+}
+
+pub fn dir_name(raw: String) -> String {
+  let mut p: String = clean(raw);
+  if p == "/" { return "/"; }
+  if has_drive_prefix_fs(p) && p.len() == 2 { return p; }
+  if has_drive_prefix_fs(p) && p.len() == 3 && p.byte_at(2) == 47 { return p; }
+
+  while p.len() > 1 && p.byte_at(p.len() - 1) == 47 {
+    if has_drive_prefix_fs(p) && p.len() == 3 { return p; }
+    p = p.slice(0, p.len() - 1);
+  }
+
+  let mut i: i32 = p.len() - 1;
+  while i >= 0 {
+    if p.byte_at(i) == 47 {
+      if i == 0 { return "/"; }
+      if has_drive_prefix_fs(p) && i == 2 { return p.slice(0, 3); }
+      return p.slice(0, i);
+    }
+    i = i - 1;
+  }
+  if has_drive_prefix_fs(p) { return p.slice(0, 2); }
+  return ".";
+}
+
+pub fn ext(raw: String) -> String {
+  let bn: String = base_name(raw);
+  if bn == "/" || bn == "." || bn == ".." { return ""; }
+  let mut i: i32 = bn.len() - 1;
+  while i >= 0 {
+    let ch: i32 = bn.byte_at(i);
+    if ch == 46 {
+      if i == 0 { return ""; }
+      return bn.slice(i, bn.len());
+    }
+    if ch == 47 { return ""; }
+    i = i - 1;
+  }
+  return "";
+}
+
+pub fn stem(raw: String) -> String {
+  let bn: String = base_name(raw);
+  let ex: String = ext(raw);
+  if ex == "" { return bn; }
+  return bn.slice(0, bn.len() - ex.len());
+}
+
 pub struct Path {
   raw: String,
 }
@@ -11,6 +190,34 @@ pub fn path(raw: String) -> Path {
 }
 
 impl Path {
+  fn clean(p: &Path) -> Path {
+    return path(clean(p.raw));
+  }
+
+  fn join(p: &Path, elem: String) -> Path {
+    return path(join(p.raw, elem));
+  }
+
+  fn base_name(p: &Path) -> String {
+    return base_name(p.raw);
+  }
+
+  fn dir_name(p: &Path) -> String {
+    return dir_name(p.raw);
+  }
+
+  fn ext(p: &Path) -> String {
+    return ext(p.raw);
+  }
+
+  fn stem(p: &Path) -> String {
+    return stem(p.raw);
+  }
+
+  fn is_abs(p: &Path) -> bool {
+    return is_abs(p.raw);
+  }
+
   fn read_to_string(p: &Path) -> String {
     return rt.read_file(p.raw);
   }
