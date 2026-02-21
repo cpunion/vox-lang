@@ -87,9 +87,8 @@
   - 运行时封装：`args/exe_path/getenv/now_ns/yield_now`、`wake_notify/wake_wait`、文件/进程/TCP/sync 原语。
     - 批量唤醒等待：`wake_wait_any(tokens, timeout_ms) -> i32`（返回命中下标，未命中为 `-1`）。
     - TCP 就绪等待：`tcp_wait_read(handle, timeout_ms) -> bool`、`tcp_wait_write(handle, timeout_ms) -> bool`。
-  - 兼容探针：`intrinsic_abi() -> i32`、`has_intrinsic(name) -> bool`。
-  - 类型化探针：`IntrinsicCap` + `intrinsic_name(cap)` + `has_cap(cap)`（优先用于标准库内部，减少裸字符串能力探测）。
-  - OOP 门面：`runtime() -> Runtime`，支持 `runtime().has_cap(...)`、`runtime().wake_wait(...)`、`runtime().tcp_wait_read(...)` 等方法式调用（free function 仍保留兼容）。
+  - 兼容探针：`intrinsic_abi() -> i32`、`has_intrinsic(name) -> bool`（保留兼容，当前返回 `false`）。
+  - OOP 门面：`runtime() -> Runtime`，支持 `runtime().wake_wait(...)`、`runtime().wake_wait_any(...)`、`runtime().tcp_wait_read(...)` 等方法式调用（free function 仍保留兼容）。
   - 约定：`std` 其它模块不再直接调用 `__*`，统一经 `std::runtime` 转发。
 - `std::net` 已提供：
   - 请求对象化入口：

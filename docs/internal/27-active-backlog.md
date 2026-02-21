@@ -302,9 +302,9 @@ Builtin end-state (agreed):
 
 - [x] A41 builtin/intrinsic 收缩（batch-6）
   - [x] A41-1 将 `std/runtime` 的 `tcp` 与 `wake_notify/wake_wait` 路径改为 `@ffi_import("c", "vox_builtin_*")` 调用。
-  - [x] A41-2 删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering，保留 `__wake_wait_any` 作为当前最小 builtin。
+  - [x] A41-2 删除上述符号在 `collect` 与 `c_func` 的 builtin 声明/硬编码 lowering。
   - [x] A41-3 `c_runtime` 对应 `vox_builtin_*` 实现改为可外部链接（非 `static`），并补齐 `typecheck/compile/codegen` 回归。
-  - [x] A41-4 更新冻结清单（仅剩 `__wake_wait_any` + `panic/print` 及反射内建）。
+  - [x] A41-4 更新冻结清单（移除 `__wake_wait_any`；仅保留 `panic/print` 与反射内建）。
   - Source: `docs/reference/style-guide.md`.
 
 ## Deferred Scope
