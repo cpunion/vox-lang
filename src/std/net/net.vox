@@ -1,5 +1,5 @@
-import "std/io" as io
 import "std/string" as s
+import "std/sys" as sys
 
 fn is_ascii_alnum(ch: i32) -> bool {
   if ch >= 48 && ch <= 57 { return true; }
@@ -162,6 +162,41 @@ pub struct UdpSocket {
   local: SocketAddr,
 }
 
+pub struct NetConn {
+  handle: isize,
+  closed: bool,
+}
+
+pub struct NetI32Result {
+  pub ok: bool,
+  pub err: String,
+  pub n: i32,
+}
+
+pub struct NetStringResult {
+  pub ok: bool,
+  pub err: String,
+  pub text: String,
+}
+
+pub struct NetBoolResult {
+  pub ok: bool,
+  pub err: String,
+  pub ready: bool,
+}
+
+pub struct NetCloseResult {
+  pub ok: bool,
+  pub err: String,
+  pub conn: NetConn,
+  pub closed_now: bool,
+}
+
+pub struct TcpListener {
+  handle: isize,
+  closed: bool,
+}
+
 fn bad_addr() -> SocketAddr {
   return SocketAddr { proto: NetProto.Tcp, host: "", port: 0 };
 }
@@ -172,6 +207,58 @@ fn bad_request() -> Request {
 
 fn bad_response() -> Response {
   return Response { raw: "", status: HttpResponseHead { code: -1, reason: "" }, body: "" };
+}
+
+fn net_conn_closed_err() -> String {
+  return "net conn is closed";
+}
+
+fn net_conn_is_closed0(c: &NetConn) -> bool {
+  return c.closed || c.handle < 0;
+}
+
+fn net_i32_ok(n: i32) -> NetI32Result {
+  return NetI32Result { ok: true, err: "", n: n };
+}
+
+fn net_i32_err(err: String) -> NetI32Result {
+  return NetI32Result { ok: false, err: err, n: 0 };
+}
+
+fn net_string_ok(text: String) -> NetStringResult {
+  return NetStringResult { ok: true, err: "", text: text };
+}
+
+fn net_string_err(err: String) -> NetStringResult {
+  return NetStringResult { ok: false, err: err, text: "" };
+}
+
+fn net_bool_ok(ready: bool) -> NetBoolResult {
+  return NetBoolResult { ok: true, err: "", ready: ready };
+}
+
+fn net_bool_err(err: String) -> NetBoolResult {
+  return NetBoolResult { ok: false, err: err, ready: false };
+}
+
+fn net_close_ok(conn: NetConn, closed_now: bool) -> NetCloseResult {
+  return NetCloseResult { ok: true, err: "", conn: conn, closed_now: closed_now };
+}
+
+fn listener_closed(l: &TcpListener) -> bool {
+  return l.closed || l.handle < 0;
+}
+
+pub fn closed_conn() -> NetConn {
+  return NetConn { handle: -1 as isize, closed: true };
+}
+
+pub fn net_conn_open(handle: isize) -> NetConn {
+  return NetConn { handle: handle, closed: false };
+}
+
+pub fn closed_listener() -> TcpListener {
+  return TcpListener { handle: -1 as isize, closed: true };
 }
 
 pub fn socket_addr(proto: NetProto, host: String, port: i32) -> SocketAddr {
@@ -210,19 +297,11 @@ impl SocketAddr {
       .concat(a.port.to_string());
   }
 
-  fn to_net_addr(a: &SocketAddr) -> io.NetAddr {
-    return io.net_addr(a.host, a.port);
-  }
-
-  fn tcp_connect(a: &SocketAddr) -> io.NetConn {
+  fn tcp_connect(a: &SocketAddr) -> NetConn {
     if !a.is_tcp() { panic("tcp_connect requires tcp:// address"); }
-    let na: io.NetAddr = a.to_net_addr();
-    return na.connect();
+    let h: isize = sys.connect(a.host, a.port);
+    return net_conn_open(h);
   }
-}
-
-pub fn socket_uri(a: SocketAddr) -> String {
-  return a.uri();
 }
 
 pub fn parse_socket_uri(raw: String) -> SocketAddrParseResult {
@@ -246,8 +325,10 @@ pub fn parse_socket_uri(raw: String) -> SocketAddrParseResult {
   return SocketAddrParseResult { ok: true, err: "", addr: socket_addr(proto, u.host, u.port) };
 }
 
-pub fn tcp_connect_addr(a: SocketAddr) -> io.NetConn {
-  return a.tcp_connect();
+pub fn net_listen(a: SocketAddr, backlog: i32) -> TcpListener {
+  if !a.is_tcp() { panic("net_listen requires tcp:// address"); }
+  let h: isize = sys.listen(a.host, a.port, backlog);
+  return TcpListener { handle: h, closed: false };
 }
 
 pub fn udp_bind(local: SocketAddr) -> UdpSocket {
@@ -268,6 +349,98 @@ impl UdpSocket {
   fn recv_from(_x: &UdpSocket, _max_n: i32) -> String {
     panic("udp recv_from is not supported yet");
     return "";
+  }
+}
+
+impl NetConn {
+  fn is_closed(c: &NetConn) -> bool {
+    return net_conn_is_closed0(c);
+  }
+
+  fn try_send(c: &NetConn, text: String) -> NetI32Result {
+    if c.is_closed() { return net_i32_err(net_conn_closed_err()); }
+    return net_i32_ok(sys.send(c.handle, text, text.len() as usize));
+  }
+
+  fn send(c: &NetConn, text: String) -> i32 {
+    let r: NetI32Result = c.try_send(text);
+    if !r.ok { panic(r.err); }
+    return r.n;
+  }
+
+  fn try_recv(c: &NetConn, max_n: i32) -> NetStringResult {
+    if c.is_closed() { return net_string_err(net_conn_closed_err()); }
+    return net_string_ok(sys.recv(c.handle, max_n));
+  }
+
+  fn recv(c: &NetConn, max_n: i32) -> String {
+    let r: NetStringResult = c.try_recv(max_n);
+    if !r.ok { panic(r.err); }
+    return r.text;
+  }
+
+  fn try_wait_read(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
+    if c.is_closed() { return net_bool_err(net_conn_closed_err()); }
+    return net_bool_ok(sys.wait_read(c.handle, timeout_ms));
+  }
+
+  fn wait_read(c: &NetConn, timeout_ms: i32) -> bool {
+    let r: NetBoolResult = c.try_wait_read(timeout_ms);
+    if !r.ok { panic(r.err); }
+    return r.ready;
+  }
+
+  fn try_wait_write(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
+    if c.is_closed() { return net_bool_err(net_conn_closed_err()); }
+    return net_bool_ok(sys.wait_write(c.handle, timeout_ms));
+  }
+
+  fn wait_write(c: &NetConn, timeout_ms: i32) -> bool {
+    let r: NetBoolResult = c.try_wait_write(timeout_ms);
+    if !r.ok { panic(r.err); }
+    return r.ready;
+  }
+
+  fn try_close(c0: NetConn) -> NetCloseResult {
+    let mut c: NetConn = c0;
+    if c.is_closed() {
+      c.handle = -1 as isize;
+      c.closed = true;
+      return net_close_ok(c, false);
+    }
+    sys.close_socket(c.handle);
+    c.handle = -1 as isize;
+    c.closed = true;
+    return net_close_ok(c, true);
+  }
+
+  fn close(c: NetConn) -> NetConn {
+    return c.try_close().conn;
+  }
+}
+
+impl TcpListener {
+  fn is_closed(l: &TcpListener) -> bool {
+    return listener_closed(l);
+  }
+
+  fn close(l0: TcpListener) -> TcpListener {
+    let mut l: TcpListener = l0;
+    if l.is_closed() {
+      l.handle = -1 as isize;
+      l.closed = true;
+      return l;
+    }
+    sys.close_socket(l.handle);
+    l.handle = -1 as isize;
+    l.closed = true;
+    return l;
+  }
+
+  fn accept(l: &TcpListener) -> NetConn {
+    l;
+    panic("tcp accept is not supported yet");
+    return closed_conn();
   }
 }
 
@@ -592,8 +765,8 @@ pub fn http_roundtrip_checked(url: String, req: HttpRequest, recv_limit: i32) ->
     }
   }
 
-  let addr: io.NetAddr = io.net_addr(u.host, u.port);
-  let mut conn: io.NetConn = addr.connect();
+  let addr: SocketAddr = tcp_addr(u.host, u.port);
+  let mut conn: NetConn = addr.tcp_connect();
   let raw: String = out_req.render();
   conn.send(raw);
   let resp: String = conn.recv(recv_limit);

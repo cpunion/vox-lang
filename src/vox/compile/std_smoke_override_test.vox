@@ -303,37 +303,41 @@ fn test_compile_std_io_net_intrinsics_smoke() -> () {
       pub struct NetCloseResult { pub ok: bool, pub err: String, pub conn: NetConn, pub closed_now: bool }
       pub fn closed_conn() -> NetConn { return NetConn { handle: -1 as isize, closed: true }; }
       pub fn net_addr(host: String, port: i32) -> NetAddr { return NetAddr { host: host, port: port }; }
-      pub fn net_connect(a: NetAddr) -> NetConn { return NetConn { handle: rt_tcp_connect_raw(a.host, a.port), closed: false }; }
-      pub fn net_is_closed(c: &NetConn) -> bool { return c.closed || c.handle < 0; }
-      pub fn net_try_send(c: &NetConn, text: String) -> NetI32Result {
-        if net_is_closed(c) { return NetI32Result { ok: false, err: "closed", n: 0 }; }
-        return NetI32Result { ok: true, err: "", n: rt_tcp_send_raw(c.handle, text) };
+      impl NetAddr {
+        fn connect(a: NetAddr) -> NetConn { return NetConn { handle: rt_tcp_connect_raw(a.host, a.port), closed: false }; }
       }
-      pub fn net_send(c: &NetConn, text: String) -> i32 { return net_try_send(c, text).n; }
-      pub fn net_try_recv(c: &NetConn, max_n: i32) -> NetStringResult {
-        if net_is_closed(c) { return NetStringResult { ok: false, err: "closed", text: "" }; }
-        return NetStringResult { ok: true, err: "", text: rt_tcp_recv_raw(c.handle, max_n) };
+      impl NetConn {
+        fn is_closed(c: &NetConn) -> bool { return c.closed || c.handle < 0; }
+        fn try_send(c: &NetConn, text: String) -> NetI32Result {
+          if c.is_closed() { return NetI32Result { ok: false, err: "closed", n: 0 }; }
+          return NetI32Result { ok: true, err: "", n: rt_tcp_send_raw(c.handle, text) };
+        }
+        fn try_recv(c: &NetConn, max_n: i32) -> NetStringResult {
+          if c.is_closed() { return NetStringResult { ok: false, err: "closed", text: "" }; }
+          return NetStringResult { ok: true, err: "", text: rt_tcp_recv_raw(c.handle, max_n) };
+        }
+        fn try_wait_read(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
+          if c.is_closed() { return NetBoolResult { ok: false, err: "closed", ready: false }; }
+          return NetBoolResult { ok: true, err: "", ready: rt_tcp_wait_read_raw(c.handle, timeout_ms) };
+        }
+        fn try_wait_write(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
+          if c.is_closed() { return NetBoolResult { ok: false, err: "closed", ready: false }; }
+          return NetBoolResult { ok: true, err: "", ready: rt_tcp_wait_write_raw(c.handle, timeout_ms) };
+        }
+        fn send(c: &NetConn, text: String) -> i32 { return rt_tcp_send_raw(c.handle, text); }
+        fn recv(c: &NetConn, max_n: i32) -> String { return rt_tcp_recv_raw(c.handle, max_n); }
+        fn wait_read(c: &NetConn, timeout_ms: i32) -> bool { return rt_tcp_wait_read_raw(c.handle, timeout_ms); }
+        fn wait_write(c: &NetConn, timeout_ms: i32) -> bool { return rt_tcp_wait_write_raw(c.handle, timeout_ms); }
+        fn try_close(c0: NetConn) -> NetCloseResult {
+          let mut c: NetConn = c0;
+          if c.is_closed() { c.handle = -1 as isize; c.closed = true; return NetCloseResult { ok: true, err: "", conn: c, closed_now: false }; }
+          rt_tcp_close_raw(c.handle);
+          c.handle = -1 as isize;
+          c.closed = true;
+          return NetCloseResult { ok: true, err: "", conn: c, closed_now: true };
+        }
+        fn close(c: NetConn) -> NetConn { return c.try_close().conn; }
       }
-      pub fn net_recv(c: &NetConn, max_n: i32) -> String { return net_try_recv(c, max_n).text; }
-      pub fn net_try_wait_read(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
-        if net_is_closed(c) { return NetBoolResult { ok: false, err: "closed", ready: false }; }
-        return NetBoolResult { ok: true, err: "", ready: rt_tcp_wait_read_raw(c.handle, timeout_ms) };
-      }
-      pub fn net_wait_read(c: &NetConn, timeout_ms: i32) -> bool { return net_try_wait_read(c, timeout_ms).ready; }
-      pub fn net_try_wait_write(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
-        if net_is_closed(c) { return NetBoolResult { ok: false, err: "closed", ready: false }; }
-        return NetBoolResult { ok: true, err: "", ready: rt_tcp_wait_write_raw(c.handle, timeout_ms) };
-      }
-      pub fn net_wait_write(c: &NetConn, timeout_ms: i32) -> bool { return net_try_wait_write(c, timeout_ms).ready; }
-      pub fn net_try_close(c0: NetConn) -> NetCloseResult {
-        let mut c: NetConn = c0;
-        if net_is_closed(c) { c.handle = -1 as isize; c.closed = true; return NetCloseResult { ok: true, err: "", conn: c, closed_now: false }; }
-        rt_tcp_close_raw(c.handle);
-        c.handle = -1 as isize;
-        c.closed = true;
-        return NetCloseResult { ok: true, err: "", conn: c, closed_now: true };
-      }
-      pub fn net_close(c: NetConn) -> NetConn { return net_try_close(c).conn; }
     """,
   });
   fs.push(ld.SourceFile {
@@ -342,19 +346,19 @@ fn test_compile_std_io_net_intrinsics_smoke() -> () {
       import "std/io" as io
       fn main() -> i32 {
         let a: io.NetAddr = io.net_addr("127.0.0.1", 7);
-        let mut c: io.NetConn = io.net_connect(a);
-        let _n: i32 = io.net_send(c, "x");
-        let _s: String = io.net_recv(c, 8);
-        let _r: bool = io.net_wait_read(c, 1);
-        let _w: bool = io.net_wait_write(c, 1);
-        let _t0: io.NetI32Result = io.net_try_send(c, "x");
-        let _t1: io.NetStringResult = io.net_try_recv(c, 8);
-        let _t2: io.NetBoolResult = io.net_try_wait_read(c, 1);
-        let _t3: io.NetBoolResult = io.net_try_wait_write(c, 1);
-        let cr: io.NetCloseResult = io.net_try_close(c);
+        let mut c: io.NetConn = a.connect();
+        let _n: i32 = c.send("x");
+        let _s: String = c.recv(8);
+        let _r: bool = c.wait_read(1);
+        let _w: bool = c.wait_write(1);
+        let _t0: io.NetI32Result = c.try_send("x");
+        let _t1: io.NetStringResult = c.try_recv(8);
+        let _t2: io.NetBoolResult = c.try_wait_read(1);
+        let _t3: io.NetBoolResult = c.try_wait_write(1);
+        let cr: io.NetCloseResult = c.try_close();
         c = cr.conn;
-        c = io.net_close(c);
-        let _closed: bool = io.net_is_closed(c);
+        c = c.close();
+        let _closed: bool = c.is_closed();
         return 0;
       }
     """,
@@ -862,11 +866,9 @@ fn test_compile_std_net_socket_addr_style_smoke() -> () {
           return na.connect();
         }
       }
-      pub fn socket_uri(a: SocketAddr) -> String { return a.uri(); }
       pub fn parse_socket_uri(_raw: String) -> SocketAddrParseResult {
         return SocketAddrParseResult { ok: true, err: "", addr: tcp_addr("127.0.0.1", 9000) };
       }
-      pub fn tcp_connect_addr(a: SocketAddr) -> io.NetConn { return a.tcp_connect(); }
       pub fn udp_bind(local: SocketAddr) -> UdpSocket { return UdpSocket { local: local }; }
       impl UdpSocket {
         fn local_addr(x: &UdpSocket) -> SocketAddr { return x.local; }
@@ -932,10 +934,10 @@ fn test_compile_std_net_socket_addr_style_smoke() -> () {
         let _u: String = a.uri();
         let _b0: bool = a.is_tcp();
         let _b1: bool = a.is_udp();
-        let _c = net.tcp_connect_addr(a);
+        let _c = a.tcp_connect();
         let p: net.SocketAddrParseResult = net.parse_socket_uri("tcp://127.0.0.1:9000");
         if p.ok {
-          let _u2: String = net.socket_uri(p.addr);
+          let _u2: String = p.addr.uri();
         }
         let u: net.SocketAddr = net.udp_addr("0.0.0.0", 53);
         let s: net.UdpSocket = net.udp_bind(u);
