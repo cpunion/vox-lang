@@ -66,10 +66,18 @@ pub fn add(a: i32, b: i32) -> i32 {
 | `isize/usize` | `intptr_t/uintptr_t` | 按目标指针宽度映射（32/64） |
 | `rawptr` | `void*` | FFI 互操作专用的不透明指针类型 |
 | `f32/f64` | `float/double` | IEEE 浮点 |
-| `String` | `const char*` | UTF-8 字节串，NUL 结尾，调用方负责约定生命周期 |
+| `String` | `const char*` | 兼容映射（历史保留）；新接口不建议把文本边界直接建模为 C-string |
 | `Vec[String]` | `vox_vec` | 运行时 `Vec` 句柄（元素为 `const char*`） |
 
 不在白名单的类型（如结构体、枚举、除 `Vec[String]` 外的 `Vec`、引用、range、泛型实例等）在类型检查阶段报错。
+
+### 3.1 文本/字节边界约定（A44）
+
+当前约定：
+
+- 新增跨边界 I/O 接口优先使用 `rawptr + len`（例如 `write(fd, p, n)`）。
+- `String` 形参仅用于必须传递 C 风格路径/命令等接口，作为兼容映射保留。
+- 需要 NUL 终止时，由适配层显式构造终止缓冲；业务 API 不应隐式依赖“输入文本天然带 `\\0`”。
 
 ## 4. 代码生成模型（C 后端）
 

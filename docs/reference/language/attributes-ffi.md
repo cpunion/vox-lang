@@ -65,6 +65,12 @@ BuildAtom
 - FFI import/export functions cannot be generic.
 - FFI variadic functions are currently unsupported.
 
+### FFI Boundary Guidance
+
+- For byte/text payload across FFI, prefer `rawptr + usize` length parameters.
+- `String` in FFI is kept as compatibility mapping for APIs that are naturally C-string based (for example path/command style APIs).
+- Do not assume ordinary Vox text APIs implicitly require trailing `\\0`; NUL adaptation should be explicit at the compatibility layer when needed.
+
 ### Caller Tracking
 
 - `@track_caller` enables caller-site metadata propagation.
