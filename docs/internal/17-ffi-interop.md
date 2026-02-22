@@ -69,7 +69,9 @@ pub fn add(a: i32, b: i32) -> i32 {
 | `String` | `const char*` | 兼容映射（历史保留）；新接口不建议把文本边界直接建模为 C-string |
 | `Vec[String]` | `vox_vec` | 运行时 `Vec` 句柄（元素为 `const char*`） |
 
-不在白名单的类型（如结构体、枚举、除 `Vec[String]` 外的 `Vec`、引用、range、泛型实例等）在类型检查阶段报错。
+不在白名单的类型（如结构体、枚举、除 `Vec[String]` 外的 `Vec`、`&T`、range、泛型实例等）在类型检查阶段报错。
+
+补充：FFI 参数位置允许有限的 inout 形态 `&mut Scalar`（例如 `&mut i32`），用于对接 C 的 `T*` 输出参数；返回值仍限制为普通 ABI 值，不允许返回引用。
 
 ### 3.1 文本/字节边界约定（A44）
 
