@@ -35,6 +35,7 @@ test-build-style:
 # Guard runtime alias surface in source code.
 test-runtime-alias:
 	./scripts/ci/check-no-vox-rt-in-src.sh
+	./scripts/ci/check-no-vox-builtin-in-src.sh
 
 # Guard reference syntax matrix/doc/test mapping.
 test-reference:
