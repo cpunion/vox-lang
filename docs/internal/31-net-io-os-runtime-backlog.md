@@ -223,6 +223,7 @@ Drop（迁出）：
 - `c_runtime` 已删除 `vox_host_{args,exe_path,getenv,now_ns,yield_now,exec,walk_vox_files,read_file,tcp_*}` alias 导出（保留 wake/atomic host 兼容面）。
 - `c_runtime` 已移除未再使用的 `vox_impl_exec`；`std/process` 语义继续通过 `sys.system`。
 - `c_runtime` 已移除未被 std 调用链使用的 `vox_impl_write_file/vox_impl_path_exists/vox_impl_mkdir_p` 死代码段。
+- `std/runtime` 的 wake/atomic FFI 已从 `vox_host_*` 切到 `vox_impl_*`，并删除 `c_runtime` 中对应 `vox_host_wake_*`、`vox_host_atomic_*` 纯转发别名导出。
 - `vox_*` FFI gate 更新为仅允许 `std/runtime`、`std/sys/sys_common`。
 
 关键落地文件：
