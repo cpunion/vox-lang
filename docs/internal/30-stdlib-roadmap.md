@@ -26,7 +26,8 @@ Status: active.
   - `Path.clean/join/base_name/dir_name/ext/stem/is_abs` + free-function 同名入口
 - [ ] A44-1 `String -> C` 边界收敛（先迁 payload，后收敛路径类接口）
   - [x] 文档盘点当前边界（见 `docs/internal/17-ffi-interop.md` 3.2）
-  - [ ] 先迁移 payload 类接口到 `ptr + len`（如 `tcp_send`）
+  - [x] `std/io::NetConn.try_send` 已切到 `std/sys::send(handle, ptr, len)`，不新增 `c_runtime` 网络符号
+  - [ ] 其余 payload 类接口继续迁移到 `ptr + len`
   - [ ] 路径/命令类接口保留阶段性适配，等待更完整文本/指针模型后继续收敛
 
 ## S2 中期（P1）

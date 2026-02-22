@@ -86,7 +86,7 @@ pub fn add(a: i32, b: i32) -> i32 {
 为推进 `ptr + len` 收敛，当前按“可先迁移”和“暂时保留”分层：
 
 - 优先迁移（字节载荷）：
-  - `std/runtime::tcp_send(handle, text)`：文本发送应优先演进为 `const rawptr + len` 形态。
+  - `std/io::NetConn.try_send`：已落地为 `std/sys::send(handle, ptr, len)`（平台 `@build` 分支直接绑定 OS `send`），不新增 `vox_host_*` 网络桥接符号。
   - 其它新增跨边界 payload API：默认禁止直接使用 `String` 作为 C ABI 文本载荷。
 - 暂时保留（路径/命令/环境）：
   - `std/sys::{open/access/mkdir/creat/system}` 及其平台分支。
