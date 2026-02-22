@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-syntax test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-frozen-builtins test-intrinsics test-reference test-build-style \
+.PHONY: fmt fmt-check test test-syntax test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-frozen-builtins test-intrinsics test-reference test-build-style test-runtime-alias \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run \
 	release-source-bundle release-source-verify
 
@@ -15,10 +15,10 @@ fmt-check:
 	"$$COMPILER_BIN" fmt --check $(FMT_PATHS)
 
 # Run core repo tests: rolling selfhost gates + syntax/reference gates + example package smoke.
-test: test-frozen-builtins test-intrinsics test-build-style test-reference test-syntax test-rolling test-examples
+test: test-frozen-builtins test-intrinsics test-build-style test-runtime-alias test-reference test-syntax test-rolling test-examples
 
 # Active development gate.
-test-active: test-frozen-builtins test-intrinsics test-build-style test-reference test-syntax test-rolling
+test-active: test-frozen-builtins test-intrinsics test-build-style test-runtime-alias test-reference test-syntax test-rolling
 
 # Guard builtin/intrinsic symbol set against uncontrolled growth.
 test-frozen-builtins:
@@ -31,6 +31,10 @@ test-intrinsics:
 # Guard platform-partition style in production code.
 test-build-style:
 	./scripts/ci/check-no-cfg-in-code.sh
+
+# Guard runtime alias surface in source code.
+test-runtime-alias:
+	./scripts/ci/check-no-vox-rt-in-src.sh
 
 # Guard reference syntax matrix/doc/test mapping.
 test-reference:
