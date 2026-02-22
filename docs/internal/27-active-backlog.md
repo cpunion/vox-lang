@@ -322,7 +322,7 @@ Builtin end-state (agreed):
 - [ ] A44 字符串 FFI/运行时收敛：从 C-string 语义迁移到 `ptr + len`，并优先平台 API
   - [ ] A44-1 约束收敛：标准库/FFI 设计不再依赖“字符串必须 `\\0` 结尾”；跨边界文本/字节接口统一采用 `(ptr,len)` 视图（必要时由适配层显式构造终止符缓冲）。
   - [x] A44-1a `std/sys` 新增跨平台 `write(fd, const rawptr, len)`，`std/prelude::print` 改为 `String -> const rawptr + len` 调用，不再依赖 `vox_builtin_print` 绑定。
-  - [x] A44-1b `std/io::NetConn.try_send` 已改为 `std/sys::socket_send(handle, ptr, len)`，平台分支直接走 OS `send`（`@build`），避免向 `c_runtime` 扩增网络桥接符号。
+  - [x] A44-1b `std/io::NetConn.try_send` 已改为 `std/sys::socket_send_text(handle, text, len)`，平台分支直接走 OS `send`（`@build`），避免向 `c_runtime` 扩增网络桥接符号。
   - [ ] A44-2 平台抽象收敛：`std/sys` 以平台原生 API 为主（Linux syscall/Unix/POSIX、Darwin、Windows API），避免将 `libc` 作为默认统一抽象层。
   - [x] A44-2a `std/fs::write_string` 改为 `std/sys::creat + write + close` 路径（linux/darwin/windows/wasm 平台分流），`exists/mkdir_p` 已在前序改造走 `std/sys::access/mkdir`。
   - [x] A44-2b `std/io::File` 文件能力（`exists/read_all/write_all/mkdir_p`）统一委托给 `std/fs`，移除对 `std/runtime` 文件接口的直接调用。
