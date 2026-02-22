@@ -757,9 +757,7 @@ fn test_typecheck_std_fs_virtual_fs_smoke() -> () {
 fn test_typecheck_std_time_smoke() -> () {
   let mut w: tc.World = tc.world();
   w = add_mod(w, "std/time", """
-    @ffi_import("c", "vox_impl_now_ns")
-    fn rt_now_ns_raw() -> i64;
-    pub fn now_ns() -> i64 { return rt_now_ns_raw(); }
+    pub fn now_ns() -> i64 { return 0 as i64; }
   """);
   w = add_mod(w, "main", """
     import "std/time" as tm
@@ -824,10 +822,8 @@ fn test_typecheck_rejects_reserved_yield_intrinsic_outside_std() -> () {
 fn test_typecheck_std_async_wake_intrinsics_smoke() -> () {
   let mut w: tc.World = tc.world();
   w = add_mod(w, "std/async", """
-    @ffi_import("c", "vox_impl_wake_notify")
-    fn rt_wake_notify_raw(token: i64) -> ();
-    @ffi_import("c", "vox_impl_wake_wait")
-    fn rt_wake_wait_raw(token: i64, timeout_ms: i32) -> bool;
+    fn rt_wake_notify_raw(token: i64) -> () { token; return; }
+    fn rt_wake_wait_raw(token: i64, timeout_ms: i32) -> bool { token; timeout_ms; return false; }
     pub struct Waker { pub token: i64 }
     pub struct Context { pub waker: Waker }
     pub fn wake(c: Context) -> () { rt_wake_notify_raw(c.waker.token); return; }
@@ -863,16 +859,11 @@ fn test_typecheck_std_async_wake_intrinsics_smoke() -> () {
 fn test_typecheck_std_sync_smoke() -> () {
   let mut w: tc.World = tc.world();
   w = add_mod(w, "std/sync", """
-    @ffi_import("c", "vox_impl_atomic_i32_new")
-    fn rt_atomic_i32_new(v: i32) -> isize;
-    @ffi_import("c", "vox_impl_atomic_i32_load")
-    fn rt_atomic_i32_load(handle: isize) -> i32;
-    @ffi_import("c", "vox_impl_atomic_i32_store")
-    fn rt_atomic_i32_store(handle: isize, v: i32) -> ();
-    @ffi_import("c", "vox_impl_atomic_i32_fetch_add")
-    fn rt_atomic_i32_fetch_add(handle: isize, delta: i32) -> i32;
-    @ffi_import("c", "vox_impl_atomic_i32_swap")
-    fn rt_atomic_i32_swap(handle: isize, v: i32) -> i32;
+    fn rt_atomic_i32_new(v: i32) -> isize { v; return 0 as isize; }
+    fn rt_atomic_i32_load(handle: isize) -> i32 { handle; return 0; }
+    fn rt_atomic_i32_store(handle: isize, v: i32) -> () { handle; v; return; }
+    fn rt_atomic_i32_fetch_add(handle: isize, delta: i32) -> i32 { handle; return delta; }
+    fn rt_atomic_i32_swap(handle: isize, v: i32) -> i32 { handle; return v; }
     pub trait SyncScalar {
       fn mutex_new(v: Self) -> isize;
       fn mutex_load(sample: Self, handle: isize) -> Self;
@@ -938,14 +929,10 @@ fn test_typecheck_std_sync_smoke() -> () {
 fn test_typecheck_std_sync_i64_smoke() -> () {
   let mut w: tc.World = tc.world();
   w = add_mod(w, "std/sync", """
-    @ffi_import("c", "vox_impl_atomic_i64_new")
-    fn rt_atomic_i64_new(v: i64) -> isize;
-    @ffi_import("c", "vox_impl_atomic_i64_load")
-    fn rt_atomic_i64_load(handle: isize) -> i64;
-    @ffi_import("c", "vox_impl_atomic_i64_store")
-    fn rt_atomic_i64_store(handle: isize, v: i64) -> ();
-    @ffi_import("c", "vox_impl_atomic_i64_fetch_add")
-    fn rt_atomic_i64_fetch_add(handle: isize, delta: i64) -> i64;
+    fn rt_atomic_i64_new(v: i64) -> isize { v; return 0 as isize; }
+    fn rt_atomic_i64_load(handle: isize) -> i64 { handle; return 0 as i64; }
+    fn rt_atomic_i64_store(handle: isize, v: i64) -> () { handle; v; return; }
+    fn rt_atomic_i64_fetch_add(handle: isize, delta: i64) -> i64 { handle; return delta; }
     pub trait SyncScalar {
       fn mutex_new(v: Self) -> isize;
       fn mutex_load(sample: Self, handle: isize) -> Self;
@@ -997,36 +984,12 @@ fn test_typecheck_std_sync_i64_smoke() -> () {
 fn test_typecheck_std_io_net_intrinsics_smoke() -> () {
   let mut w: tc.World = tc.world();
   w = add_mod(w, "std/sys", """
-    @ffi_import("c", "vox_impl_tcp_connect")
-    fn rt_tcp_connect_raw(host: String, port: i32) -> isize;
-    @ffi_import("c", "send")
-    fn rt_send_raw(fd: i32, buf: const rawptr, n: usize, flags: i32) -> isize;
-    @ffi_import("c", "vox_impl_tcp_recv")
-    fn rt_tcp_recv_raw(handle: isize, max_n: i32) -> String;
-    @ffi_import("c", "vox_impl_tcp_close")
-    fn rt_tcp_close_raw(handle: isize) -> ();
-    @ffi_import("c", "vox_impl_tcp_wait_read")
-    fn rt_tcp_wait_read_raw(handle: isize, timeout_ms: i32) -> bool;
-    @ffi_import("c", "vox_impl_tcp_wait_write")
-    fn rt_tcp_wait_write_raw(handle: isize, timeout_ms: i32) -> bool;
-    fn handle_to_fd(handle: isize) -> i32 {
-      if handle < -2147483648 as isize || handle > 2147483647 as isize {
-        panic("tcp handle out of i32 range");
-      }
-      return handle as i32;
-    }
-    pub fn connect(host: String, port: i32) -> isize { return rt_tcp_connect_raw(host, port); }
-    pub fn send(handle: isize, text: String, n: usize) -> i32 {
-      let fd: i32 = handle_to_fd(handle);
-      let sent: isize = rt_send_raw(fd, text as const rawptr, n, 0);
-      if sent < 0 { panic("tcp send failed"); }
-      if sent > 2147483647 as isize { panic("tcp send count too large"); }
-      return sent as i32;
-    }
-    pub fn recv(handle: isize, max_n: i32) -> String { return rt_tcp_recv_raw(handle, max_n); }
-    pub fn close_socket(handle: isize) -> () { rt_tcp_close_raw(handle); return; }
-    pub fn wait_read(handle: isize, timeout_ms: i32) -> bool { return rt_tcp_wait_read_raw(handle, timeout_ms); }
-    pub fn wait_write(handle: isize, timeout_ms: i32) -> bool { return rt_tcp_wait_write_raw(handle, timeout_ms); }
+    pub fn connect(host: String, port: i32) -> isize { host; port; return -1 as isize; }
+    pub fn send(handle: isize, text: String, n: usize) -> i32 { handle; n; return text.len(); }
+    pub fn recv(handle: isize, max_n: i32) -> String { handle; max_n; return ""; }
+    pub fn close_socket(handle: isize) -> () { handle; return; }
+    pub fn wait_read(handle: isize, timeout_ms: i32) -> bool { handle; timeout_ms; return false; }
+    pub fn wait_write(handle: isize, timeout_ms: i32) -> bool { handle; timeout_ms; return false; }
   """);
   w = add_mod(w, "std/net", """
     import "std/sys" as sys

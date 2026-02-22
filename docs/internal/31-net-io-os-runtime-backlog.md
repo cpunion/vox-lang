@@ -228,6 +228,7 @@ Drop（迁出）：
 - `vox_*` FFI gate 更新为仅允许 `std/runtime`、`std/sys/sys_common`。
 - `vox/compile` 与 `vox/typecheck` 的 std override smoke 已去除遗留 `vox_host_*`（`tcp_send/path_exists/write_file/mkdir_p`），统一改为直接 `c` FFI（`send/access/creat/write/close/mkdir`）或薄封装。
 - `vox/compile` 与 `vox/typecheck` 的非核心 smoke 已进一步去除非必要 `vox_impl_*` 绑定（`read_file/walk_vox_files/args/exe_path/getenv/tcp_connect`），改为本地 stub，保留仅用于 runtime 能力覆盖的 `vox_impl_*` 用例。
+- `vox/compile/std_smoke_override_test.vox`、`vox/typecheck/typecheck_test.vox`、`vox/typecheck/ffi_attr_test.vox` 已清空 `vox_impl_*` 绑定；当前剩余 `vox_impl_*` 仅在 `std/sys`、`std/runtime` 以及 runtime 能力专项测试（`c_emit/module_visibility`）。
 
 关键落地文件：
 
@@ -245,4 +246,3 @@ Drop（迁出）：
 
 - `NIO-01`：`sys.accept` 与各平台 listen/accept 语义补齐。
 - `NIO-03`：`io.copy/read_all/write_all`。
-- `NIO-07`：`vox/typecheck` 与 `vox/compile` 的 std override smoke 同步到新分层。
