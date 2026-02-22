@@ -215,9 +215,12 @@ Drop（迁出）：
 - `std/io` 移除网络连接职责，仅保留 IO 基础 + `Reader/Writer/Closer/ReadWriter` 与 `BufReader/BufWriter` 基线。
 - 已移除 `NetConn`/`File` 上冗余全局转发函数（优先方法风格调用，避免双入口 API）。
 - `std/process` 的 `args/exe_path/getenv` 已切到 `std/os`。
+- `std/os` 与 `std/time` 已去除 `vox_*` FFI，统一改为调用 `std/sys`。
+- `std/sys` 的 `args/exe_path/getenv/read_file/walk_files/now_ns/yield_now/tcp_*` 已切到 `vox_impl_*` 薄桥。
 - `std/runtime` 已去除 `args/exe/getenv/time/os/tcp/mutex` 入口，仅保留 intrinsic/wake/atomic。
 - `std/sync::Mutex` 底层改为复用 atomic 句柄；`std/os` 已移除 `mutex_i32/i64_*`；`c_runtime` 已删除 `vox_impl/vox_host_mutex_i32/i64_*` 实现与导出。
-- `vox_*` FFI gate 更新为仅允许 `std/runtime`、`std/os`、`std/time`、`std/sys/sys_common`。
+- `c_runtime` 已删除 `vox_host_{args,exe_path,getenv,now_ns,yield_now,exec,walk_vox_files,read_file,tcp_*}` alias 导出（保留 wake/atomic host 兼容面）。
+- `vox_*` FFI gate 更新为仅允许 `std/runtime`、`std/sys/sys_common`。
 
 关键落地文件：
 
