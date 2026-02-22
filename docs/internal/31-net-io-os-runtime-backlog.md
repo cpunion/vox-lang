@@ -217,6 +217,7 @@ Drop（迁出）：
 - `std/process` 的 `args/exe_path/getenv` 已切到 `std/os`。
 - `std/os` 与 `std/time` 已去除 `vox_*` FFI，统一改为调用 `std/sys`。
 - `std/sys` 的 `args/exe_path/getenv/read_file/walk_files/now_ns/yield_now/tcp_*` 已切到 `vox_impl_*` 薄桥。
+- `std/time::yield_now` 已从 `c_runtime` 特殊实现下沉到各平台 `std/sys` 直接 FFI（linux/darwin/wasm: `sched_yield`，windows: `Sleep(0)`），并删除 `c_runtime` 中 `vox_impl_yield_now`。
 - `std/runtime` 已去除 `args/exe/getenv/time/os/tcp/mutex` 入口，仅保留 intrinsic/wake/atomic。
 - `std/sync::Mutex` 底层改为复用 atomic 句柄；`std/os` 已移除 `mutex_i32/i64_*`；`c_runtime` 已删除 `vox_impl/vox_host_mutex_i32/i64_*` 实现与导出。
 - `c_runtime` 已删除 `vox_host_{args,exe_path,getenv,now_ns,yield_now,exec,walk_vox_files,read_file,tcp_*}` alias 导出（保留 wake/atomic host 兼容面）。
