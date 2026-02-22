@@ -324,6 +324,7 @@ Builtin end-state (agreed):
   - [x] A44-1a `std/sys` 新增跨平台 `write(fd, const rawptr, len)`，`std/prelude::print` 改为 `String -> const rawptr + len` 调用，不再依赖 `vox_builtin_print` 绑定。
   - [x] A44-1b `std/io::NetConn.try_send` 已改为 `std/sys::socket_send_text(handle, text, len)`，平台分支直接走 OS `send`（`@build`），避免向 `c_runtime` 扩增网络桥接符号。
     - 注：windows-x86 仍为占位分支（winsock `send` 在 x86 为 stdcall，当前 FFI 尚不支持按符号 calling convention）。
+  - [x] A44-1c `std/runtime` 收敛：移除未被 `std/*` 使用的 legacy facade（`tcp_send/write_file/path_exists/mkdir_p`）并同步收缩 `c_runtime` 对应 alias 导出。
   - [ ] A44-2 平台抽象收敛：`std/sys` 以平台原生 API 为主（Linux syscall/Unix/POSIX、Darwin、Windows API），避免将 `libc` 作为默认统一抽象层。
   - [x] A44-2a `std/fs::write_string` 改为 `std/sys::creat + write + close` 路径（linux/darwin/windows/wasm 平台分流），`exists/mkdir_p` 已在前序改造走 `std/sys::access/mkdir`。
   - [x] A44-2b `std/io::File` 文件能力（`exists/read_all/write_all/mkdir_p`）统一委托给 `std/fs`，移除对 `std/runtime` 文件接口的直接调用。
