@@ -216,6 +216,7 @@ Drop（迁出）：
 - 已移除 `NetConn`/`File` 上冗余全局转发函数（优先方法风格调用，避免双入口 API）。
 - `std/process` 的 `args/exe_path/getenv` 已切到 `std/os`。
 - `std/runtime` 已去除 `args/exe/getenv/time/os/tcp/mutex` 入口，仅保留 intrinsic/wake/atomic。
+- `std/sync::Mutex` 底层改为复用 atomic 句柄；`std/os` 已移除 `mutex_i32/i64_*`；`c_runtime` 已删除 `vox_impl/vox_host_mutex_i32/i64_*` 实现与导出。
 - `vox_*` FFI gate 更新为仅允许 `std/runtime`、`std/os`、`std/time`、`std/sys/sys_common`。
 
 关键落地文件：
