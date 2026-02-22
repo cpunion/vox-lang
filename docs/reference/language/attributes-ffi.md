@@ -68,6 +68,7 @@ BuildAtom
 ### FFI Boundary Guidance
 
 - For byte/text payload across FFI, prefer `rawptr + usize` length parameters.
+- FFI parameters may use limited inout form `&mut Scalar` (for example `&mut i32`) to map to C `T*` output parameters.
 - `String` in FFI is kept as compatibility mapping for APIs that are naturally C-string based (for example path/command style APIs).
 - Do not assume ordinary Vox text APIs implicitly require trailing `\\0`; NUL adaptation should be explicit at the compatibility layer when needed.
 

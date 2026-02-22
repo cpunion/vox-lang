@@ -1257,7 +1257,7 @@ fn collect_fn_resources(fd: ast.FuncDecl) -> CollectResourcesResult {
   return collect_resource_names(fd.resources);
 }
 
-fn ffi_ty_allowed(ctx: Ctx, ty: i32) -> bool {
+fn ffi_plain_ty_allowed(ctx: Ctx, ty: i32) -> bool {
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
   if t.kind == ir.TyKind.Vec {
     let et: ir.Ty = ir.ty_pool_get(ctx.pool, t.elem);
@@ -1282,6 +1282,41 @@ fn ffi_ty_allowed(ctx: Ctx, ty: i32) -> bool {
     ir.TyKind.String => true,
     _ => false,
   };
+}
+
+fn ffi_mut_ref_param_allowed(ctx: Ctx, ty: i32) -> bool {
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  if t.kind != ir.TyKind.Ref || !ir.ty_ref_is_mut(t) { return false; }
+  let et: ir.Ty = ir.ty_pool_get(ctx.pool, t.elem);
+  if et.kind == ir.TyKind.Range || et.kind == ir.TyKind.Verified { return false; }
+  return match et.kind {
+    ir.TyKind.Bool => true,
+    ir.TyKind.I8 => true,
+    ir.TyKind.U8 => true,
+    ir.TyKind.I16 => true,
+    ir.TyKind.U16 => true,
+    ir.TyKind.I32 => true,
+    ir.TyKind.U32 => true,
+    ir.TyKind.I64 => true,
+    ir.TyKind.U64 => true,
+    ir.TyKind.ISize => true,
+    ir.TyKind.USize => true,
+    ir.TyKind.RawPtr => true,
+    ir.TyKind.F32 => true,
+    ir.TyKind.F64 => true,
+    _ => false,
+  };
+}
+
+fn ffi_param_ty_allowed(ctx: Ctx, ty: i32) -> bool {
+  if ffi_plain_ty_allowed(ctx, ty) { return true; }
+  return ffi_mut_ref_param_allowed(ctx, ty);
+}
+
+fn ffi_ret_ty_allowed(ctx: Ctx, ty: i32) -> bool {
+  // FFI return keeps plain ABI values only. Inout pointer-style APIs should
+  // model output as an explicit `&mut` parameter.
+  return ffi_plain_ty_allowed(ctx, ty);
 }
 
 struct ValidateFfiAttrsResult { ok: bool, err: TcError, ctx: Ctx }
@@ -1364,12 +1399,12 @@ fn validate_ffi_attrs(c0: Ctx, mod_path: String, fd: ast.FuncDecl, cps: Vec[Cons
   }
 
   if has_ffi_import || has_ffi_export {
-    if !ffi_ty_allowed(c, ret_ty) {
+    if !ffi_ret_ty_allowed(c, ret_ty) {
       return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi return type not supported"));
     }
     let mut i: i32 = 0;
     while i < ps.len() {
-      if !ffi_ty_allowed(c, ps.get(i)) {
+      if !ffi_param_ty_allowed(c, ps.get(i)) {
         return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi parameter type not supported"));
       }
       i = i + 1;
