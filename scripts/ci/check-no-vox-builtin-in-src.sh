@@ -12,7 +12,7 @@ output=$(
   (
     find "$ROOT/src/std" -type f -name '*.vox' -print0
     find "$ROOT/src" -maxdepth 1 -type f -name 'main*.vox' -print0
-  ) | xargs -0 grep -nH "vox_builtin_" || true
+  ) | xargs -0 grep -nHE 'vox_builtin_[[:alnum:]_]+' || true
 )
 
 if [[ -n "$output" ]]; then
