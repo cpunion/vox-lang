@@ -227,6 +227,7 @@ Drop（迁出）：
 - `c_runtime` 已删除未再使用的 `vox_impl_wake_wait_any` 及其扫描辅助函数，`std/runtime` 侧统一使用 `wake_wait` 组合实现 `wake_wait_any`。
 - `vox_*` FFI gate 更新为仅允许 `std/runtime`、`std/sys/sys_common`。
 - `vox/compile` 与 `vox/typecheck` 的 std override smoke 已去除遗留 `vox_host_*`（`tcp_send/path_exists/write_file/mkdir_p`），统一改为直接 `c` FFI（`send/access/creat/write/close/mkdir`）或薄封装。
+- `vox/compile` 与 `vox/typecheck` 的非核心 smoke 已进一步去除非必要 `vox_impl_*` 绑定（`read_file/walk_vox_files/args/exe_path/getenv/tcp_connect`），改为本地 stub，保留仅用于 runtime 能力覆盖的 `vox_impl_*` 用例。
 
 关键落地文件：
 
