@@ -118,18 +118,22 @@ fn test_typecheck_std_testing_assert_lt_wrapper_smoke() -> () {
 fn test_typecheck_std_io_smoke() -> () {
   let mut w: tc.World = tc.world();
   w = add_mod(w, "std/io", """
-    @ffi_import("c", "vox_host_path_exists")
-    fn rt_path_exists_raw(path: String) -> bool;
+    @ffi_import("c", "access")
+    fn rt_access_raw(path: String, mode: i32) -> i32;
     @ffi_import("c", "vox_impl_read_file")
     fn rt_read_file_raw(path: String) -> String;
-    @ffi_import("c", "vox_host_write_file")
-    fn rt_write_file_raw(path: String, text: String) -> ();
-    @ffi_import("c", "vox_host_mkdir_p")
-    fn rt_mkdir_p_raw(path: String) -> ();
+    @ffi_import("c", "creat")
+    fn rt_creat_raw(path: String, mode: u32) -> i32;
+    @ffi_import("c", "write")
+    fn rt_write_raw(fd: i32, buf: const rawptr, n: usize) -> isize;
+    @ffi_import("c", "close")
+    fn rt_close_raw(fd: i32) -> i32;
+    @ffi_import("c", "mkdir")
+    fn rt_mkdir_raw(path: String, mode: u32) -> i32;
     @ffi_import("c", "vox_impl_tcp_connect")
     fn rt_tcp_connect_raw(host: String, port: i32) -> isize;
-    @ffi_import("c", "vox_host_tcp_send")
-    fn rt_tcp_send_raw(handle: isize, text: String) -> i32;
+    @ffi_import("c", "send")
+    fn rt_send_raw(fd: i32, buf: const rawptr, n: usize, flags: i32) -> isize;
     @ffi_import("c", "vox_impl_tcp_recv")
     fn rt_tcp_recv_raw(handle: isize, max_n: i32) -> String;
     @ffi_import("c", "vox_impl_tcp_close")
@@ -140,6 +144,34 @@ fn test_typecheck_std_io_smoke() -> () {
     fn rt_tcp_wait_write_raw(handle: isize, timeout_ms: i32) -> bool;
     @ffi_import("c", "vox_impl_walk_vox_files")
     fn rt_walk_files_raw(path: String) -> Vec[String];
+    fn handle_to_fd(handle: isize) -> i32 {
+      if handle < -2147483648 as isize || handle > 2147483647 as isize {
+        panic("tcp handle out of i32 range");
+      }
+      return handle as i32;
+    }
+    fn rt_path_exists_raw(path: String) -> bool { return rt_access_raw(path, 0) == 0; }
+    fn rt_write_file_raw(path: String, text: String) -> () {
+      let fd: i32 = rt_creat_raw(path, 438 as u32);
+      if fd < 0 { panic("write_file failed"); }
+      let _nw: isize = rt_write_raw(fd, text as const rawptr, text.len() as usize);
+      let _rc: i32 = rt_close_raw(fd);
+      _nw;
+      _rc;
+      return;
+    }
+    fn rt_mkdir_p_raw(path: String) -> () {
+      let _rc: i32 = rt_mkdir_raw(path, 511 as u32);
+      _rc;
+      return;
+    }
+    fn rt_tcp_send_raw(handle: isize, text: String) -> i32 {
+      let fd: i32 = handle_to_fd(handle);
+      let sent: isize = rt_send_raw(fd, text as const rawptr, text.len() as usize, 0);
+      if sent < 0 { panic("tcp send failed"); }
+      if sent > 2147483647 as isize { panic("tcp send count too large"); }
+      return sent as i32;
+    }
     pub fn out(msg: String) -> () { msg; return; }
     pub fn out_ln(msg: String) -> () { msg; return; }
     pub fn fail(msg: String) -> () { panic(msg); }
@@ -175,14 +207,33 @@ fn test_typecheck_std_io_smoke() -> () {
 fn test_typecheck_std_io_method_style_smoke() -> () {
   let mut w: tc.World = tc.world();
   w = add_mod(w, "std/io", """
-    @ffi_import("c", "vox_host_path_exists")
-    fn rt_path_exists_raw(path: String) -> bool;
+    @ffi_import("c", "access")
+    fn rt_access_raw(path: String, mode: i32) -> i32;
     @ffi_import("c", "vox_impl_read_file")
     fn rt_read_file_raw(path: String) -> String;
-    @ffi_import("c", "vox_host_write_file")
-    fn rt_write_file_raw(path: String, text: String) -> ();
-    @ffi_import("c", "vox_host_mkdir_p")
-    fn rt_mkdir_p_raw(path: String) -> ();
+    @ffi_import("c", "creat")
+    fn rt_creat_raw(path: String, mode: u32) -> i32;
+    @ffi_import("c", "write")
+    fn rt_write_raw(fd: i32, buf: const rawptr, n: usize) -> isize;
+    @ffi_import("c", "close")
+    fn rt_close_raw(fd: i32) -> i32;
+    @ffi_import("c", "mkdir")
+    fn rt_mkdir_raw(path: String, mode: u32) -> i32;
+    fn rt_path_exists_raw(path: String) -> bool { return rt_access_raw(path, 0) == 0; }
+    fn rt_write_file_raw(path: String, text: String) -> () {
+      let fd: i32 = rt_creat_raw(path, 438 as u32);
+      if fd < 0 { panic("write_file failed"); }
+      let _nw: isize = rt_write_raw(fd, text as const rawptr, text.len() as usize);
+      let _rc: i32 = rt_close_raw(fd);
+      _nw;
+      _rc;
+      return;
+    }
+    fn rt_mkdir_p_raw(path: String) -> () {
+      let _rc: i32 = rt_mkdir_raw(path, 511 as u32);
+      _rc;
+      return;
+    }
     pub struct File { path: String }
     pub fn file(path: String) -> File { return File { path: path }; }
     impl File {
@@ -211,16 +262,35 @@ fn test_typecheck_std_io_method_style_smoke() -> () {
 fn test_typecheck_std_fs_method_style_smoke() -> () {
   let mut w: tc.World = tc.world();
   w = add_mod(w, "std/fs", """
-    @ffi_import("c", "vox_host_path_exists")
-    fn rt_path_exists_raw(path: String) -> bool;
+    @ffi_import("c", "access")
+    fn rt_access_raw(path: String, mode: i32) -> i32;
     @ffi_import("c", "vox_impl_read_file")
     fn rt_read_file_raw(path: String) -> String;
-    @ffi_import("c", "vox_host_write_file")
-    fn rt_write_file_raw(path: String, text: String) -> ();
-    @ffi_import("c", "vox_host_mkdir_p")
-    fn rt_mkdir_p_raw(path: String) -> ();
+    @ffi_import("c", "creat")
+    fn rt_creat_raw(path: String, mode: u32) -> i32;
+    @ffi_import("c", "write")
+    fn rt_write_raw(fd: i32, buf: const rawptr, n: usize) -> isize;
+    @ffi_import("c", "close")
+    fn rt_close_raw(fd: i32) -> i32;
+    @ffi_import("c", "mkdir")
+    fn rt_mkdir_raw(path: String, mode: u32) -> i32;
     @ffi_import("c", "vox_impl_walk_vox_files")
     fn rt_walk_files_raw(path: String) -> Vec[String];
+    fn rt_path_exists_raw(path: String) -> bool { return rt_access_raw(path, 0) == 0; }
+    fn rt_write_file_raw(path: String, text: String) -> () {
+      let fd: i32 = rt_creat_raw(path, 438 as u32);
+      if fd < 0 { panic("write_file failed"); }
+      let _nw: isize = rt_write_raw(fd, text as const rawptr, text.len() as usize);
+      let _rc: i32 = rt_close_raw(fd);
+      _nw;
+      _rc;
+      return;
+    }
+    fn rt_mkdir_p_raw(path: String) -> () {
+      let _rc: i32 = rt_mkdir_raw(path, 511 as u32);
+      _rc;
+      return;
+    }
     pub struct Path { raw: String }
     pub fn path(raw: String) -> Path { return Path { raw: raw }; }
     pub fn clean(raw: String) -> String { return raw; }
@@ -964,8 +1034,8 @@ fn test_typecheck_std_io_net_intrinsics_smoke() -> () {
   w = add_mod(w, "std/sys", """
     @ffi_import("c", "vox_impl_tcp_connect")
     fn rt_tcp_connect_raw(host: String, port: i32) -> isize;
-    @ffi_import("c", "vox_host_tcp_send")
-    fn rt_tcp_send_raw(handle: isize, text: String) -> i32;
+    @ffi_import("c", "send")
+    fn rt_send_raw(fd: i32, buf: const rawptr, n: usize, flags: i32) -> isize;
     @ffi_import("c", "vox_impl_tcp_recv")
     fn rt_tcp_recv_raw(handle: isize, max_n: i32) -> String;
     @ffi_import("c", "vox_impl_tcp_close")
@@ -974,8 +1044,20 @@ fn test_typecheck_std_io_net_intrinsics_smoke() -> () {
     fn rt_tcp_wait_read_raw(handle: isize, timeout_ms: i32) -> bool;
     @ffi_import("c", "vox_impl_tcp_wait_write")
     fn rt_tcp_wait_write_raw(handle: isize, timeout_ms: i32) -> bool;
+    fn handle_to_fd(handle: isize) -> i32 {
+      if handle < -2147483648 as isize || handle > 2147483647 as isize {
+        panic("tcp handle out of i32 range");
+      }
+      return handle as i32;
+    }
     pub fn connect(host: String, port: i32) -> isize { return rt_tcp_connect_raw(host, port); }
-    pub fn send(handle: isize, text: String, _n: usize) -> i32 { return rt_tcp_send_raw(handle, text); }
+    pub fn send(handle: isize, text: String, n: usize) -> i32 {
+      let fd: i32 = handle_to_fd(handle);
+      let sent: isize = rt_send_raw(fd, text as const rawptr, n, 0);
+      if sent < 0 { panic("tcp send failed"); }
+      if sent > 2147483647 as isize { panic("tcp send count too large"); }
+      return sent as i32;
+    }
     pub fn recv(handle: isize, max_n: i32) -> String { return rt_tcp_recv_raw(handle, max_n); }
     pub fn close_socket(handle: isize) -> () { rt_tcp_close_raw(handle); return; }
     pub fn wait_read(handle: isize, timeout_ms: i32) -> bool { return rt_tcp_wait_read_raw(handle, timeout_ms); }

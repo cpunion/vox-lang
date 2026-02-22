@@ -166,7 +166,7 @@ Drop（迁出）：
 
 - [ ] NIO-07 测试与 CI 门禁
   - [x] `std/sys/std/net/std/io/std/os/std/runtime` 单测补齐。
-  - [ ] `vox/typecheck` 与 `vox/compile` smoke 同步。
+  - [x] `vox/typecheck` 与 `vox/compile` smoke 同步。
   - [x] 如有 gate 规则（例如 `vox_*` FFI 使用范围）按新分层更新并补回归。
 
 ## 5. 发布/Bootstrap 决策矩阵
@@ -226,6 +226,7 @@ Drop（迁出）：
 - `std/runtime` 的 wake/atomic FFI 已从 `vox_host_*` 切到 `vox_impl_*`，并删除 `c_runtime` 中对应 `vox_host_wake_*`、`vox_host_atomic_*` 纯转发别名导出。
 - `c_runtime` 已删除未再使用的 `vox_impl_wake_wait_any` 及其扫描辅助函数，`std/runtime` 侧统一使用 `wake_wait` 组合实现 `wake_wait_any`。
 - `vox_*` FFI gate 更新为仅允许 `std/runtime`、`std/sys/sys_common`。
+- `vox/compile` 与 `vox/typecheck` 的 std override smoke 已去除遗留 `vox_host_*`（`tcp_send/path_exists/write_file/mkdir_p`），统一改为直接 `c` FFI（`send/access/creat/write/close/mkdir`）或薄封装。
 
 关键落地文件：
 
