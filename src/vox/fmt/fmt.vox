@@ -149,6 +149,53 @@ fn line_is_comment_only(s0: String) -> bool {
   return s.len() >= 2 && s.byte_at(0) == 47 && s.byte_at(1) == 47; // "//"
 }
 
+fn starts_with_keyword(s: String, kw: String) -> bool {
+  if s.len() < kw.len() { return false; }
+  if s.slice(0, kw.len()) != kw { return false; }
+  if s.len() == kw.len() { return true; }
+  return !is_ident_continue_ascii(s.byte_at(kw.len()));
+}
+
+fn top_level_decl_kind(s0: String) -> i32 {
+  let s: String = trim_left_ws(strip_line_comment(s0));
+  if s.len() == 0 { return 0; }
+  if starts_with_keyword(s, "import") { return 1; }
+  if s.byte_at(0) == 64 { return 2; } // '@'
+  if starts_with_keyword(s, "pub") {
+    let tail: String = trim_left_ws(s.slice(3, s.len()));
+    if starts_with_keyword(tail, "fn")
+      || starts_with_keyword(tail, "const")
+      || starts_with_keyword(tail, "struct")
+      || starts_with_keyword(tail, "enum")
+      || starts_with_keyword(tail, "trait")
+      || starts_with_keyword(tail, "impl")
+      || starts_with_keyword(tail, "type") {
+      return 3;
+    }
+    return 0;
+  }
+  if starts_with_keyword(s, "fn")
+    || starts_with_keyword(s, "const")
+    || starts_with_keyword(s, "struct")
+    || starts_with_keyword(s, "enum")
+    || starts_with_keyword(s, "trait")
+    || starts_with_keyword(s, "impl")
+    || starts_with_keyword(s, "type") {
+    return 3;
+  }
+  return 0;
+}
+
+fn should_insert_top_level_blank(prev_kind: i32, curr_kind: i32) -> bool {
+  // Keep import block contiguous.
+  if prev_kind == 1 && curr_kind == 1 { return false; }
+  // Keep attribute stacks contiguous.
+  if prev_kind == 2 && curr_kind == 2 { return false; }
+  // Attribute + declaration belong to one item.
+  if prev_kind == 2 && curr_kind != 2 { return false; }
+  return true;
+}
+
 fn next_nonblank_content(src: String, from0: i32) -> String {
   let mut pos: i32 = from0;
   if pos < 0 { pos = 0; }
@@ -355,6 +402,7 @@ pub fn format_text(src: String) -> String {
   let mut continuation_block_depths: Vec[i32] = Vec();
   let mut paren_depth: i32 = 0;
   let mut paren_field_scope: i32 = 0;
+  let mut prev_top_decl_kind: i32 = 0;
 
   let mut line_start: i32 = 0;
   let mut i: i32 = 0;
@@ -432,6 +480,9 @@ pub fn format_text(src: String) -> String {
       if blank_run <= 1 {
         out = out.concat("\n");
       }
+      if indent == 0 && paren_depth == 0 {
+        prev_top_decl_kind = 0;
+      }
       continue_next = false;
       continue;
     }
@@ -457,6 +508,15 @@ pub fn format_text(src: String) -> String {
     let mut content_out: String = content;
     if should_add_trailing_comma_in_multiline_paren(content, next_content, paren_for_line) {
       content_out = content.concat(",");
+    }
+
+    let at_top_level: bool = indent == 0 && paren_depth == 0;
+    let curr_top_decl_kind: i32 = if at_top_level { top_level_decl_kind(content_out) } else { 0 };
+    if curr_top_decl_kind != 0
+      && prev_top_decl_kind != 0
+      && blank_run == 0
+      && should_insert_top_level_blank(prev_top_decl_kind, curr_top_decl_kind) {
+      out = out.concat("\n");
     }
 
     let starts_cont: bool = line_starts_with_continuation(content_out);
@@ -487,6 +547,17 @@ pub fn format_text(src: String) -> String {
       }
     }
     out = out.concat(repeat_spaces(line_indent * 2)).concat(content_out).concat("\n");
+
+    if at_top_level {
+      if curr_top_decl_kind != 0 {
+        prev_top_decl_kind = curr_top_decl_kind;
+      } else if line_is_comment_only(content_out) {
+        // Comments can document the next top-level item; do not force a gap after them.
+        prev_top_decl_kind = 0;
+      } else {
+        prev_top_decl_kind = 0;
+      }
+    }
 
     indent = indent + st.brace_delta;
     if indent < 0 { indent = 0; }
