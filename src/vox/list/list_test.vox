@@ -82,6 +82,16 @@ fn has_schedule_hint(g: lst.Graph, mod0: String, class0: String, exec: String, m
   return false;
 }
 
+fn has_edge(g: lst.Graph, from_mod: String, to_mod: String) -> bool {
+  let mut i: i32 = 0;
+  while i < g.edges.len() {
+    let e: lst.Edge = g.edges.get(i);
+    if e.from_mod == from_mod && e.to_mod == to_mod { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
 fn test_list_graph_from_files_smoke() -> () {
   let mut files: Vec[ld.SourceFile] = Vec();
   files.push(ld.SourceFile {
@@ -248,4 +258,70 @@ fn test_list_graph_loader_error_meta() -> () {
   let r: lst.BuildResult = lst.graph_from_files(files);
   t.assert(!r.ok);
   t.assert_eq(r.err_kind, lst.list_diag_kind_loader());
+}
+
+fn test_list_graph_with_target_filters_file_build_edges() -> () {
+  let mut files: Vec[ld.SourceFile] = Vec();
+  files.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn main() -> i32 { return 0; }",
+  });
+  files.push(ld.SourceFile {
+    path: "src/main_windows.vox",
+    text: """
+      @build(windows)
+      import "winonly"
+      fn only_windows() -> i32 { return winonly.one(); }
+    """,
+  });
+  files.push(ld.SourceFile {
+    path: "src/winonly/w.vox",
+    text: "pub fn one() -> i32 { return 1; }",
+  });
+
+  let mut o_linux: lst.GraphOptions = lst.graph_options_default();
+  o_linux.include_tests = false;
+  o_linux.target_os = "linux";
+  o_linux.target_arch = "amd64";
+  o_linux.target_ptr_bits = 64;
+  let r_linux: lst.BuildResult = lst.graph_from_files_with_options(files, o_linux);
+  t.assert_with(r_linux.ok, r_linux.err);
+  t.assert(!has_edge(r_linux.graph, "main", "winonly"));
+
+  let mut o_win: lst.GraphOptions = lst.graph_options_default();
+  o_win.include_tests = false;
+  o_win.target_os = "windows";
+  o_win.target_arch = "amd64";
+  o_win.target_ptr_bits = 64;
+  let r_win: lst.BuildResult = lst.graph_from_files_with_options(files, o_win);
+  t.assert_with(r_win.ok, r_win.err);
+  t.assert(has_edge(r_win.graph, "main", "winonly"));
+}
+
+fn test_list_graph_include_tests_switch() -> () {
+  let mut files: Vec[ld.SourceFile] = Vec();
+  files.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: "fn main() -> i32 { return 0; }",
+  });
+  files.push(ld.SourceFile {
+    path: "tests/basic.vox",
+    text: "import \"util\"\nfn test_ok() -> () { util.one(); return; }",
+  });
+  files.push(ld.SourceFile {
+    path: "src/util/u.vox",
+    text: "pub fn one() -> i32 { return 1; }",
+  });
+
+  let mut o0: lst.GraphOptions = lst.graph_options_default();
+  o0.include_tests = false;
+  let r0: lst.BuildResult = lst.graph_from_files_with_options(files, o0);
+  t.assert_with(r0.ok, r0.err);
+  t.assert_eq(find_module(r0.graph, "tests").path, "");
+
+  let mut o1: lst.GraphOptions = lst.graph_options_default();
+  o1.include_tests = true;
+  let r1: lst.BuildResult = lst.graph_from_files_with_options(files, o1);
+  t.assert_with(r1.ok, r1.err);
+  t.assert_eq(find_module(r1.graph, "tests").path, "tests");
 }

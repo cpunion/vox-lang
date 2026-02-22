@@ -88,6 +88,13 @@ pub struct BuildResult {
   pub graph: Graph,
 }
 
+pub struct GraphOptions {
+  pub include_tests: bool,
+  pub target_os: String,
+  pub target_arch: String,
+  pub target_ptr_bits: i32,
+}
+
 pub fn list_diag_kind_none() -> i32 { return 0; }
 
 pub fn list_diag_kind_loader() -> i32 { return 1; }
@@ -122,6 +129,124 @@ fn kind_from_loader(_k: i32) -> i32 { return list_diag_kind_loader(); }
 fn kind_from_tc(k: i32) -> i32 {
   if k == tc.diag_kind_import() { return list_diag_kind_import(); }
   return list_diag_kind_type();
+}
+
+pub fn graph_options_default() -> GraphOptions {
+  return GraphOptions {
+    include_tests: true,
+    target_os: "unknown",
+    target_arch: "unknown",
+    target_ptr_bits: 64,
+  };
+}
+
+fn module_is_test_path(path: String) -> bool {
+  if path == "tests" || txt.has_prefix(path, "tests/") { return true; }
+  if txt.has_suffix(path, "/tests") || path.contains("/tests/") { return true; }
+  return false;
+}
+
+fn file_is_test_path(path: String) -> bool {
+  if txt.has_prefix(path, "tests/") { return true; }
+  if txt.has_suffix(path, "_test.vox") { return true; }
+  return false;
+}
+
+fn world_filter_tests(w: tc.World, include_tests: bool) -> tc.World {
+  if include_tests { return w; }
+  let mut mods: Vec[tc.WorldModule] = Vec();
+  let mut i: i32 = 0;
+  while i < w.mods.len() {
+    let m: tc.WorldModule = w.mods.get(i);
+    if module_is_test_path(m.path) {
+      i = i + 1;
+      continue;
+    }
+
+    let mut file_builds: Vec[ast.FileBuildAttr] = Vec();
+    let mut imports: Vec[ast.ImportDecl] = Vec();
+    let mut types: Vec[ast.TypeAliasDecl] = Vec();
+    let mut consts: Vec[ast.ConstDecl] = Vec();
+    let mut structs: Vec[ast.StructDecl] = Vec();
+    let mut enums: Vec[ast.EnumDecl] = Vec();
+    let mut traits: Vec[ast.TraitDecl] = Vec();
+    let mut impls: Vec[ast.ImplDecl] = Vec();
+    let mut funcs: Vec[ast.FuncDecl] = Vec();
+
+    let mut bi: i32 = 0;
+    while bi < m.prog.file_builds.len() {
+      let x: ast.FileBuildAttr = m.prog.file_builds.get(bi);
+      if !file_is_test_path(x.file) { file_builds.push(x); }
+      bi = bi + 1;
+    }
+
+    let mut ii: i32 = 0;
+    while ii < m.prog.imports.len() {
+      let x: ast.ImportDecl = m.prog.imports.get(ii);
+      if !file_is_test_path(x.file) { imports.push(x); }
+      ii = ii + 1;
+    }
+    let mut ti: i32 = 0;
+    while ti < m.prog.types.len() {
+      let x: ast.TypeAliasDecl = m.prog.types.get(ti);
+      if !file_is_test_path(x.file) { types.push(x); }
+      ti = ti + 1;
+    }
+    let mut ci: i32 = 0;
+    while ci < m.prog.consts.len() {
+      let x: ast.ConstDecl = m.prog.consts.get(ci);
+      if !file_is_test_path(x.file) { consts.push(x); }
+      ci = ci + 1;
+    }
+    let mut si: i32 = 0;
+    while si < m.prog.structs.len() {
+      let x: ast.StructDecl = m.prog.structs.get(si);
+      if !file_is_test_path(x.file) { structs.push(x); }
+      si = si + 1;
+    }
+    let mut ei: i32 = 0;
+    while ei < m.prog.enums.len() {
+      let x: ast.EnumDecl = m.prog.enums.get(ei);
+      if !file_is_test_path(x.file) { enums.push(x); }
+      ei = ei + 1;
+    }
+    let mut tri: i32 = 0;
+    while tri < m.prog.traits.len() {
+      let x: ast.TraitDecl = m.prog.traits.get(tri);
+      if !file_is_test_path(x.file) { traits.push(x); }
+      tri = tri + 1;
+    }
+    let mut imi: i32 = 0;
+    while imi < m.prog.impls.len() {
+      let x: ast.ImplDecl = m.prog.impls.get(imi);
+      if !file_is_test_path(x.file) { impls.push(x); }
+      imi = imi + 1;
+    }
+    let mut fi: i32 = 0;
+    while fi < m.prog.funcs.len() {
+      let x: ast.FuncDecl = m.prog.funcs.get(fi);
+      if !file_is_test_path(x.file) { funcs.push(x); }
+      fi = fi + 1;
+    }
+
+    mods.push(tc.WorldModule {
+      path: m.path,
+      prog: ast.Program {
+        file_builds: file_builds,
+        imports: imports,
+        types: types,
+        consts: consts,
+        structs: structs,
+        enums: enums,
+        traits: traits,
+        impls: impls,
+        funcs: funcs,
+        exprs: m.prog.exprs,
+      },
+    });
+    i = i + 1;
+  }
+  return tc.World { mods: mods };
 }
 
 fn has_str(vs: Vec[String], s: String) -> bool {
@@ -790,20 +915,23 @@ fn module_insert_sorted(xs0: Vec[ModuleNode], x0: ModuleNode) -> Vec[ModuleNode]
   return out;
 }
 
-pub fn graph_from_world(w: tc.World) -> BuildResult {
+pub fn graph_from_world_with_options(w: tc.World, opts: GraphOptions) -> BuildResult {
+  let ctx: tc.Ctx = tc.new_ctx_with_target(opts.target_ptr_bits, opts.target_os, opts.target_arch);
+  let w0: tc.World = tc.world_filter_by_file_build(ctx, w);
+  let w1: tc.World = world_filter_tests(w0, opts.include_tests);
   let mut mods: Vec[ModuleNode] = Vec();
   let mut edges: Vec[Edge] = Vec();
   let mut funcs: Vec[FunctionNode] = Vec();
 
   let mut i: i32 = 0;
-  while i < w.mods.len() {
-    let m: tc.WorldModule = w.mods.get(i);
+  while i < w1.mods.len() {
+    let m: tc.WorldModule = w1.mods.get(i);
     let files: Vec[String] = module_import_files(m);
     let mut imports: Vec[String] = Vec();
 
     let mut fi: i32 = 0;
     while fi < files.len() {
-      let ir: tc.ImportsResult = tc.build_imports(w, m.path, m.prog.imports, files.get(fi));
+      let ir: tc.ImportsResult = tc.build_imports(w1, m.path, m.prog.imports, files.get(fi));
       if !ir.ok {
         return err0(kind_from_tc(tc.tc_error_kind(ir.err)), tc.tc_error_code(ir.err), tc.tc_error_message(ir.err), tc.tc_error_to_string(ir.err));
       }
@@ -856,12 +984,20 @@ pub fn graph_from_world(w: tc.World) -> BuildResult {
   });
 }
 
-pub fn graph_from_files(files: Vec[ld.SourceFile]) -> BuildResult {
+pub fn graph_from_world(w: tc.World) -> BuildResult {
+  return graph_from_world_with_options(w, graph_options_default());
+}
+
+pub fn graph_from_files_with_options(files: Vec[ld.SourceFile], opts: GraphOptions) -> BuildResult {
   let lr: ld.LoadWorldResult = ld.world_from_files(files);
   if !lr.ok {
     return err0(kind_from_loader(lr.err_kind), lr.err_code, lr.err_message, lr.err);
   }
-  return graph_from_world(lr.world);
+  return graph_from_world_with_options(lr.world, opts);
+}
+
+pub fn graph_from_files(files: Vec[ld.SourceFile]) -> BuildResult {
+  return graph_from_files_with_options(files, graph_options_default());
 }
 
 fn json_quote(s: String) -> String {

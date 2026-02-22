@@ -319,6 +319,14 @@ Builtin end-state (agreed):
   - [x] A43-5 移除 `print` builtin（`collect/c_func/frozen lock`），由 `std/prelude::print` 通过 `@ffi_import("c", "vox_rt_print")` 提供并补齐回归测试。
   - Source: `docs/reference/style-guide.md`.
 
+- [ ] A44 字符串 FFI/运行时收敛：从 C-string 语义迁移到 `ptr + len`，并优先平台 API
+  - [ ] A44-1 约束收敛：标准库/FFI 设计不再依赖“字符串必须 `\\0` 结尾”；跨边界文本/字节接口统一采用 `(ptr,len)` 视图（必要时由适配层显式构造终止符缓冲）。
+  - [ ] A44-2 平台抽象收敛：`std/sys` 以平台原生 API 为主（Linux syscall/Unix/POSIX、Darwin、Windows API），避免将 `libc` 作为默认统一抽象层。
+  - [ ] A44-3 编译器与标准库边界收敛：新增/迁移后不引入新的 `vox_builtin_*` / `vox_rt_*` 功能面；同等能力优先通过 `@ffi_import + @cfg/@build` 在 `std/*` 实现。
+  - [ ] A44-4 回归与文档：补齐 `std/sys` + `std/fs` + FFI 相关测试，文档明确“何时需要 NUL 适配缓冲、何时直接 `ptr+len`”。
+  - [ ] A44-5 最终目标：移除对 `libc` 的运行时依赖（含默认 `libc` I/O/socket/path 兜底路径）；平台实现以系统调用/原生 OS API 为主，仅在无法避免处保留最小兼容垫片并单独标注。
+  - Source: `docs/internal/17-ffi-interop.md`, `docs/internal/13-standard-library.md`, `docs/internal/16-platform-support.md`.
+
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.

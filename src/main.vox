@@ -529,7 +529,7 @@ fn cc_cmdline_for_target(host_os: String, host_arch: String, target_os: String, 
 }
 
 fn cmd_supports_target(cmd: String) -> bool {
-  return cmd == "build" || cmd == "test" || cmd == "run" || cmd == "install";
+  return cmd == "build" || cmd == "test" || cmd == "run" || cmd == "install" || cmd == "list";
 }
 
 fn cmd_supports_artifact(cmd: String) -> bool {
@@ -548,7 +548,7 @@ fn usage() -> () {
   print("  ".concat(bin).concat(" run   [--driver=user|tool] [--artifact=exe] [--target=<value>] [out.bin]\n"));
   print("  ".concat(bin).concat(" run fmt [--check] [path...] # alias of `vox fmt` in compiler repo\n"));
   print("  ".concat(bin).concat(" install [--target=<value>] [out.bin]   # build local pkg and install to ~/.vox/bin\n"));
-  print("  ".concat(bin).concat(" list [--json]       # print package module dependency graph\n"));
+  print("  ".concat(bin).concat(" list [--json] [--target=<value>] [--tests|--no-tests]  # print package module dependency graph\n"));
   print("  ".concat(bin).concat(" fmt [--check] [path...]\n"));
   print("  ".concat(bin).concat(" lsp                   # start language server (stdio)\n"));
   print("  ".concat(bin).concat(" toolchain <subcmd>    # install/use/pin/current/list\n"));
@@ -564,7 +564,9 @@ fn usage() -> () {
   print("  --list              test: list selected tests and exit\n");
   print("  --rerun-failed      test: run only previously failed tests\n");
   print("  --json              test/list: print JSON report\n");
-  print("  --target=<value>    build/test/run/install: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc, i686-w64-mingw32, wasm32-unknown-unknown)\n");
+  print("  --target=<value>    build/test/run/install/list: target os/arch or triple (e.g. darwin-arm64, x86_64-w64-mingw32, x86_64-pc-windows-msvc, i686-w64-mingw32, wasm32-unknown-unknown)\n");
+  print("  --tests             list: include tests/** and *_test.vox in graph input\n");
+  print("  --no-tests          list: exclude tests/** and *_test.vox (default)\n");
   print("  --artifact=<kind>   build/run/install: artifact kind (exe|static|shared)\n");
   print("  --emit-c[=<path>]   build/test/run: write generated C (default keeps compiler C output path)\n");
   print("  -x                  print external commands before execution\n");
@@ -2680,6 +2682,7 @@ fn main() -> i32 {
   let mut test_fail_fast: bool = false;
   let mut test_list_only: bool = false;
   let mut test_rerun_failed: bool = false;
+  let mut list_include_tests: bool = false;
   let mut test_json: bool = false;
   let mut target_flag: String = "";
   let mut artifact_flag: String = "";
@@ -2854,6 +2857,26 @@ fn main() -> i32 {
       i = i + 1;
       continue;
     }
+    if a == "--tests" {
+      if cmd != "list" {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      list_include_tests = true;
+      i = i + 1;
+      continue;
+    }
+    if a == "--no-tests" {
+      if cmd != "list" {
+        usage();
+        print("unknown flag: ".concat(a).concat("\n"));
+        return 1;
+      }
+      list_include_tests = false;
+      i = i + 1;
+      continue;
+    }
     if has_prefix(a, "--target=") {
       if !cmd_supports_target(cmd.slice(0, cmd.len())) {
         usage();
@@ -3002,7 +3025,7 @@ fn main() -> i32 {
 
   if cmd == "list" {
     let all: Vec[String] = srcw.walk_vox_files(".");
-    let paths: Vec[String] = filter_pkg_sources(all);
+    let paths: Vec[String] = if list_include_tests { filter_pkg_test_sources(all) } else { filter_pkg_sources(all) };
     let mut paths_for_std: Vec[String] = Vec();
     let mut psi: i32 = 0;
     while psi < paths.len() {
@@ -3035,7 +3058,13 @@ fn main() -> i32 {
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
 
-    let lr: lst.BuildResult = lst.graph_from_files(files);
+    let opts: lst.GraphOptions = lst.GraphOptions {
+      include_tests: list_include_tests,
+      target_os: target_os,
+      target_arch: target_arch,
+      target_ptr_bits: target_ptr,
+    };
+    let lr: lst.BuildResult = lst.graph_from_files_with_options(files, opts);
     if !lr.ok {
       print("list failed: ".concat(lr.err).concat("\n"));
       return 1;
