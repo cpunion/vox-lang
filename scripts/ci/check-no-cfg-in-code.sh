@@ -8,16 +8,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # - production sources should use file-level @build(...) for platform partitioning
 # - @cfg(...) is still allowed in tests validating compiler behavior
 
-TMP="$(mktemp)"
-trap 'rm -f "$TMP"' EXIT
+output=$(find "$ROOT/src" -type f -name '*.vox' ! -name '*_test.vox' -print0 \
+  | xargs -0 grep -nH "@cfg(" || true)
 
-find "$ROOT/src" -type f -name '*.vox' ! -name '*_test.vox' -print0 \
-  | xargs -0 grep -nH "@cfg(" > "$TMP" || true
-
-if [[ -s "$TMP" ]]; then
+if [[ -n "$output" ]]; then
   echo "[build-style] @cfg(...) is disallowed in non-test source files." >&2
   echo "[build-style] use file-level @build(...) for platform partitioning." >&2
-  sed 's/^/  - /' "$TMP" >&2
+  echo "$output" | sed 's/^/  - /' >&2
   exit 1
 fi
 
