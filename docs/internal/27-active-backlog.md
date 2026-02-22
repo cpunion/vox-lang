@@ -333,6 +333,7 @@ Builtin end-state (agreed):
   - [x] A44-3 编译器与标准库边界收敛：新增/迁移后不引入新的 `vox_builtin_*` / `vox_rt_*` 功能面；同等能力优先通过 `@ffi_import + @build` 在 `std/*` 实现（`@cfg` 仅保留测试）。
     - Landed: runtime-alias gate + builtin-alias gate (`scripts/ci/check-no-vox-rt-in-src.sh`, `scripts/ci/check-no-vox-builtin-in-src.sh`) wired in `make test`.
     - Landed: `src/vox/codegen/c_runtime.vox` 移除未被源码使用的 `vox_builtin_* -> vox_host_*` 兼容别名导出。
+    - Landed: `src/vox/codegen/c_runtime.vox` 移除未被源码引用的 `vox_impl_print` 导出与内部 `vox_host_print` helper。
   - [x] A44-4 回归与文档：补齐 `std/sys` + `std/fs` + FFI 相关测试，文档明确“何时需要 NUL 适配缓冲、何时直接 `ptr+len`”。
     - Landed: `src/std/sys/sys_test.vox::test_sys_write_ptr_len_controls_written_bytes` + docs sync in `docs/internal/17-ffi-interop.md` and `docs/reference/language/attributes-ffi.md`.
   - [ ] A44-5 最终目标：移除对 `libc` 的运行时依赖（含默认 `libc` I/O/socket/path 兜底路径）；平台实现以系统调用/原生 OS API 为主，仅在无法避免处保留最小兼容垫片并单独标注。
