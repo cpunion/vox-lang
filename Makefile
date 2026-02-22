@@ -36,6 +36,7 @@ test-build-style:
 test-runtime-alias:
 	./scripts/ci/check-no-vox-rt-in-src.sh
 	./scripts/ci/check-no-vox-builtin-in-src.sh
+	./scripts/ci/check-no-vox-ffi-outside-runtime.sh
 
 # Guard reference syntax matrix/doc/test mapping.
 test-reference:
