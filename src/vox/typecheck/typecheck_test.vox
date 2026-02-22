@@ -457,6 +457,7 @@ fn test_typecheck_std_net_socket_addr_style_smoke() -> () {
     fn rt_tcp_connect_raw(host: String, port: i32) -> isize;
     pub fn connect(host: String, port: i32) -> isize { return rt_tcp_connect_raw(host, port); }
     pub fn listen(host: String, port: i32, backlog: i32) -> isize { host; port; backlog; return -1 as isize; }
+    pub fn accept(handle: isize) -> isize { handle; return -1 as isize; }
     pub fn send(handle: isize, text: String, n: usize) -> i32 { handle; text; n; return 0; }
     pub fn recv(handle: isize, max_n: i32) -> String { handle; max_n; return ""; }
     pub fn close_socket(handle: isize) -> () { handle; return; }
@@ -473,6 +474,7 @@ fn test_typecheck_std_net_socket_addr_style_smoke() -> () {
     pub struct NetStringResult { pub ok: bool, pub err: String, pub text: String }
     pub struct NetBoolResult { pub ok: bool, pub err: String, pub ready: bool }
     pub struct NetCloseResult { pub ok: bool, pub err: String, pub conn: NetConn, pub closed_now: bool }
+    pub struct TcpListener { handle: isize, closed: bool }
     pub struct UdpSocket { local: SocketAddr }
     pub struct HttpRequest { pub method: String, pub host: String, pub path: String, pub headers: Vec[String], pub body: String }
     pub struct Request { pub url: String, pub inner: HttpRequest }
@@ -497,7 +499,9 @@ fn test_typecheck_std_net_socket_addr_style_smoke() -> () {
       fn tcp_connect(a: &SocketAddr) -> NetConn {
         return NetConn { handle: sys.connect(a.host, a.port), closed: false };
       }
-      fn listen(a: &SocketAddr, backlog: i32) -> isize { return sys.listen(a.host, a.port, backlog); }
+      fn listen(a: &SocketAddr, backlog: i32) -> TcpListener {
+        return TcpListener { handle: sys.listen(a.host, a.port, backlog), closed: false };
+      }
       fn bind_udp(a: SocketAddr) -> UdpSocket { return UdpSocket { local: a }; }
     }
     impl NetConn {
@@ -531,6 +535,21 @@ fn test_typecheck_std_net_socket_addr_style_smoke() -> () {
         return NetCloseResult { ok: true, err: "", conn: c, closed_now: true };
       }
       fn close(c: NetConn) -> NetConn { return c.try_close().conn; }
+    }
+    impl TcpListener {
+      fn is_closed(l: &TcpListener) -> bool { return l.closed || l.handle < 0; }
+      fn close(l0: TcpListener) -> TcpListener {
+        let mut l: TcpListener = l0;
+        if l.is_closed() { l.handle = -1 as isize; l.closed = true; return l; }
+        sys.close_socket(l.handle);
+        l.handle = -1 as isize;
+        l.closed = true;
+        return l;
+      }
+      fn accept(l: &TcpListener) -> NetConn {
+        if l.is_closed() { return NetConn { handle: -1 as isize, closed: true }; }
+        return NetConn { handle: sys.accept(l.handle), closed: false };
+      }
     }
     pub fn parse_socket_uri(_raw: String) -> SocketAddrParseResult {
       return SocketAddrParseResult { ok: true, err: "", addr: tcp_addr("127.0.0.1", 9000) };
@@ -597,6 +616,12 @@ fn test_typecheck_std_net_socket_addr_style_smoke() -> () {
       let _b0: bool = a.is_tcp();
       let _b1: bool = a.is_udp();
       let _c = a.tcp_connect();
+      if false {
+        let mut l: net.TcpListener = a.listen(8);
+        let _a0: net.NetConn = l.accept();
+        l = l.close();
+        let _lb: bool = l.is_closed();
+      }
       let p: net.SocketAddrParseResult = net.parse_socket_uri("tcp://127.0.0.1:9000");
       if p.ok {
         let _u2: String = p.addr.uri();
