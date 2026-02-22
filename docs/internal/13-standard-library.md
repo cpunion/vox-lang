@@ -12,6 +12,7 @@
 - `std::sync`：并发原语（`Mutex[T]/Atomic[T]` 泛型 API）
 - `std::async`：pull 模型异步核心（`Poll[T]`、`Future`、`Context`、`Waker`、`Runtime`、`pending_wait_with`）
 - `std::runtime`：低层 intrinsic 适配边界（标准库内部使用）
+- `std::sys`：平台 C API 直连（当前最小集：`read/close/access/mkdir/system/calloc/free`），不引入项目私有 runtime 符号
 - `std::collections`：`Vec`、`Map` 等
 - `std::io`：输出 + 最小文件抽象 + 最小 TCP 抽象
 - `std::net`：URL/Query/HTTP 文本编解码 + 基于 TCP 的最小 HTTP roundtrip
@@ -90,6 +91,11 @@
   - 兼容探针：`intrinsic_abi() -> i32`、`has_intrinsic(name) -> bool`（保留兼容，当前返回 `false`）。
   - OOP 门面：`runtime() -> Runtime`，支持 `runtime().wake_wait(...)`、`runtime().wake_wait_any(...)`、`runtime().tcp_wait_read(...)` 等方法式调用（free function 仍保留兼容）。
   - 约定：`std` 其它模块不再直接调用 `__*`，统一经 `std::runtime` 转发。
+- `std::sys` 已提供最小平台 FFI 绑定：
+  - 文件/FD：`read/close/access/mkdir`
+  - 进程：`system`
+  - 内存：`calloc/free`
+  - 约定：`std::sys` 仅声明平台 API 差异与薄封装，不引入 `vox_builtin_*` / `vox_rt_*` 这类项目私有前缀符号。
 - `std::net` 已提供：
   - 请求对象化入口：
     - `Request/Response/Client` 方法式 API（`new_request/request`、`Request.with_header/with_body/render`、`client().try_send/send/try_get/get`）
