@@ -220,6 +220,7 @@ Drop（迁出）：
 - `std/runtime` 已去除 `args/exe/getenv/time/os/tcp/mutex` 入口，仅保留 intrinsic/wake/atomic。
 - `std/sync::Mutex` 底层改为复用 atomic 句柄；`std/os` 已移除 `mutex_i32/i64_*`；`c_runtime` 已删除 `vox_impl/vox_host_mutex_i32/i64_*` 实现与导出。
 - `c_runtime` 已删除 `vox_host_{args,exe_path,getenv,now_ns,yield_now,exec,walk_vox_files,read_file,tcp_*}` alias 导出（保留 wake/atomic host 兼容面）。
+- `c_runtime` 已移除未再使用的 `vox_impl_exec`；`std/process` 语义继续通过 `sys.system`。
 - `vox_*` FFI gate 更新为仅允许 `std/runtime`、`std/sys/sys_common`。
 
 关键落地文件：
