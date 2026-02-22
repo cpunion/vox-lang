@@ -325,7 +325,7 @@ Builtin end-state (agreed):
   - [ ] A44-2 平台抽象收敛：`std/sys` 以平台原生 API 为主（Linux syscall/Unix/POSIX、Darwin、Windows API），避免将 `libc` 作为默认统一抽象层。
   - [x] A44-2a `std/fs::write_string` 改为 `std/sys::creat + write + close` 路径（linux/darwin/windows/wasm 平台分流），`exists/mkdir_p` 已在前序改造走 `std/sys::access/mkdir`。
   - [x] A44-2b `std/io::File` 文件能力（`exists/read_all/write_all/mkdir_p`）统一委托给 `std/fs`，移除对 `std/runtime` 文件接口的直接调用。
-  - [x] A44-2c `std/sys` 增加 `open_read(path)` 接口：linux/darwin/wasm 走 `open(O_RDONLY)`；Windows 走 `CreateFileA + _open_osfhandle`（Win32 handle 桥接为 CRT fd）。
+  - [x] A44-2c `std/sys` 增加 `open_read(path)` 接口：linux/darwin/wasm 走 `open(O_RDONLY)`；Windows 走 CRT `_open(path, O_RDONLY)`（当前滚动自举兼容实现）。
   - [ ] A44-3 编译器与标准库边界收敛：新增/迁移后不引入新的 `vox_builtin_*` / `vox_rt_*` 功能面；同等能力优先通过 `@ffi_import + @build` 在 `std/*` 实现（`@cfg` 仅保留测试）。
   - [ ] A44-4 回归与文档：补齐 `std/sys` + `std/fs` + FFI 相关测试，文档明确“何时需要 NUL 适配缓冲、何时直接 `ptr+len`”。
   - [ ] A44-5 最终目标：移除对 `libc` 的运行时依赖（含默认 `libc` I/O/socket/path 兜底路径）；平台实现以系统调用/原生 OS API 为主，仅在无法避免处保留最小兼容垫片并单独标注。
