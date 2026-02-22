@@ -325,7 +325,8 @@ Builtin end-state (agreed):
   - [ ] A44-2 平台抽象收敛：`std/sys` 以平台原生 API 为主（Linux syscall/Unix/POSIX、Darwin、Windows API），避免将 `libc` 作为默认统一抽象层。
   - [x] A44-2a `std/fs::write_string` 改为 `std/sys::creat + write + close` 路径（linux/darwin/windows/wasm 平台分流），`exists/mkdir_p` 已在前序改造走 `std/sys::access/mkdir`。
   - [x] A44-2b `std/io::File` 文件能力（`exists/read_all/write_all/mkdir_p`）统一委托给 `std/fs`，移除对 `std/runtime` 文件接口的直接调用。
-  - [ ] A44-2c `std/sys` 增加 `open_read(path)` 接口：linux/darwin/wasm 已接通 `open(O_RDONLY)`；Windows 当前为占位失败返回（受 bootstrap 兼容 + varargs 原型冲突约束，待后续专项收敛）。
+  - [x] A44-2c `std/sys` 增加 `open_read(path)` 接口：linux/darwin/wasm 已接通 `open(O_RDONLY)`；Windows 已接通 CRT `_open(path, O_RDONLY, 0)`。
+    - Landed: `src/std/sys/sys_windows.vox` + unified open_read regressions in `src/std/sys/sys_test.vox`.
   - [x] A44-3 编译器与标准库边界收敛：新增/迁移后不引入新的 `vox_builtin_*` / `vox_rt_*` 功能面；同等能力优先通过 `@ffi_import + @build` 在 `std/*` 实现（`@cfg` 仅保留测试）。
     - Landed: runtime-alias gate + builtin-alias gate (`scripts/ci/check-no-vox-rt-in-src.sh`, `scripts/ci/check-no-vox-builtin-in-src.sh`) wired in `make test`.
   - [x] A44-4 回归与文档：补齐 `std/sys` + `std/fs` + FFI 相关测试，文档明确“何时需要 NUL 适配缓冲、何时直接 `ptr+len`”。
