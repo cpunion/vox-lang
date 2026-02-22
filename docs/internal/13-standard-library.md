@@ -14,8 +14,8 @@
 - `std::runtime`：低层 intrinsic 适配边界（标准库内部使用）
 - `std::sys`：平台 C API 直连（当前最小集：`read/close/access/mkdir/system/calloc/free`），不引入项目私有 runtime 符号
 - `std::collections`：`Vec`、`Map` 等
-- `std::io`：输出 + 最小文件抽象 + 最小 TCP 抽象
-- `std::net`：URL/Query/HTTP 文本编解码 + 基于 TCP 的最小 HTTP roundtrip
+- `std::io`：输出 + 文件抽象 + Reader/Writer 流 trait
+- `std::net`：TCP/UDP 基础封装 + URL/Query/HTTP 文本编解码
 - `std::dotenv`：`.env` 读取与键查找（供 CLI/agent 配置加载）
 - `std::testing`：测试断言入口（`t.assert*` 兼容层 + 模块化断言扩展）
 
@@ -74,23 +74,12 @@
   - `std::process` 仍保留 free-function 入口：`exec/args/exe_path/getenv`（`exec` 可直接执行 `Command.render()` 结果）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`。
-  - 文件 API：`File` + 方法 `exists/read_all/write_all/mkdir_p`。
-  - 网络 API：`NetAddr` + `NetConn`。
-    - panic 风格方法：`connect/send/recv/wait_read/wait_write/close`（`close` 返回已关闭的 `NetConn`，幂等）。
-    - checked 风格方法：`is_closed/try_send/try_recv/try_wait_read/try_wait_write/try_close`。
-    - checked 结果类型：`NetI32Result/NetStringResult/NetBoolResult/NetCloseResult`（字段公开）。
-    - 哨兵构造：`closed_conn()`（用于显式“已关闭连接”语义）。
-  - 兼容保留 free-function 入口：
-    - 文件：`file_read_all/file_write_all/file_exists/mkdir_p`
-    - 网络：`net_connect/net_is_closed/net_try_send/net_send/net_try_recv/net_recv/net_try_wait_read/net_wait_read/net_try_wait_write/net_wait_write/net_try_close/net_close`
-    - 其中 `net_close` 返回 `NetConn`（与方法 `close` 一致）。
-- `std::runtime` 已提供 intrinsic 能力边界：
-  - 运行时封装：`args/exe_path/getenv/now_ns/yield_now`、`wake_notify/wake_wait`、文件/进程/TCP/sync 原语。
-    - 批量唤醒等待：`wake_wait_any(tokens, timeout_ms) -> i32`（返回命中下标，未命中为 `-1`）。
-    - TCP 就绪等待：`tcp_wait_read(handle, timeout_ms) -> bool`、`tcp_wait_write(handle, timeout_ms) -> bool`。
-  - 兼容探针：`intrinsic_abi() -> i32`、`has_intrinsic(name) -> bool`（保留兼容，当前返回 `false`）。
-  - OOP 门面：`runtime() -> Runtime`，支持 `runtime().wake_wait(...)`、`runtime().wake_wait_any(...)`、`runtime().tcp_wait_read(...)` 等方法式调用（free function 仍保留兼容）。
-  - 约定：`std` 其它模块不再直接调用 `__*`，统一经 `std::runtime` 转发。
+  - 文件 API：`file(path)` + `File.exists/read_all/write_all/mkdir_p`。
+  - 流抽象：`Reader/Writer/Closer/ReadWriter` 与 `BufReader/BufWriter` 基线（后续补充完整 bufio 能力）。
+- `std::runtime` 已收缩为编译器基础能力边界：
+  - 保留：`intrinsic_abi/has_intrinsic`、`wake_notify/wake_wait/wake_wait_any`、`atomic_i32_*`、`atomic_i64_*`。
+  - 已迁出：进程/环境、时间、文件、TCP、mutex 等业务语义入口。
+  - 约定：`std` 其它模块不再直接调用 `__*`，统一经 `std::runtime` / `std::os` / `std::time` / `std::sys` 分层转发。
 - `std::sys` 已提供最小平台 FFI 绑定：
   - 文件/FD：`read/close/access/mkdir`
   - 进程：`system`
@@ -103,10 +92,12 @@
     - `Request/Response/Client` 方法式 API（`new_request/request`、`Request.with_header/with_body/render`、`client().try_send/send/try_get/get`）
     - `response_from_raw` 结构化响应构造与 `Response.status_code/reason/header`
     - 结构化错误入口：`new_request`、`http_roundtrip_checked`、`Client.try_*`（兼容 API 仍保留 panic 语义）
-  - 地址/传输抽象：`NetProto`（`Tcp/Udp`）、`SocketAddr`、`socket_uri/parse_socket_uri`、`tcp_addr/udp_addr`、`tcp_connect_addr`、`udp_bind`（UDP I/O 目前是占位语义，后续接入底层 runtime）。
-  - URL/Query：`Url`、`parse_url`、`url_to_string`、`query_escape`、`build_query`
+  - 地址/传输抽象：`NetProto`（`Tcp/Udp`）、`SocketAddr`、`parse_socket_uri`、`tcp_addr/udp_addr`。
+    - 方法式连接/监听：`SocketAddr.tcp_connect/listen/bind_udp/uri`。
+    - 连接生命周期：`NetConn.is_closed/try_send/send/try_recv/recv/try_wait_read/wait_read/try_wait_write/wait_write/try_close/close`。
+  - URL/Query：`Url`、`parse_url`、`Url.to_string`、`query_escape`、`build_query`
   - HTTP 文本：`HttpRequest` + `with_header`/`with_body`/`render`，`parse_status`/`parse_status_code`/`header_value`/`response_body`
-  - 最小 TCP HTTP：`http_roundtrip` 与 `http_get`（基于 `std::io` 的 `NetConn`）
+  - 最小 TCP HTTP：`http_roundtrip` 与 `http_get`（基于 `std::net` 的 `NetConn`）
 - `std::dotenv` 已提供：
   - `value(path, key)`：读取单个 `.env` 文件中的键值（支持 `KEY=...` 与 `export KEY=...`）
   - `value_from_paths(paths, key)`：按路径顺序查找首个非空值

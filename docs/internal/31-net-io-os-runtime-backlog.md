@@ -63,12 +63,11 @@ Types:
 
 Functions:
 
-- `[keep]` `socket_addr/tcp_addr/udp_addr/socket_uri/parse_socket_uri`
-- `[keep]` `tcp_connect_addr`
-- `[new]` `net_connect/net_listen`
+- `[keep]` `socket_addr/tcp_addr/udp_addr/parse_socket_uri`
 
 Methods:
 
+- `[keep/new]` `SocketAddr.uri/tcp_connect/listen/bind_udp`
 - `[keep/move]` `NetConn.send/recv/wait_read/wait_write/close` + `try_*`
 - `[new]` `TcpListener.accept/close`
 - `[keep]` `UdpSocket.send_to/recv_from`（先保留占位，后续补真实实现）
@@ -137,8 +136,8 @@ Drop（迁出）：
   - [ ] `std/sys` 测试补齐接口 smoke 与失败语义。
 
 - [x] NIO-02 `std/net` 承载连接生命周期
-  - [x] `NetConn`/连接方法迁入或在 `net` 中提供等价主入口。
-  - [x] `net_connect/net_listen` 接入 `sys.*`。
+  - [x] `NetConn`/连接方法迁入并在 `net` 作为主入口。
+  - [x] `SocketAddr.tcp_connect/listen` 接入 `sys.*`。
   - [x] `http_*` 与 `Client` 调用链不再依赖 `io.connect` 风格入口。
 
 ### P2 io 抽象化
@@ -212,7 +211,7 @@ Drop（迁出）：
 
 本轮已落地：
 
-- `std/net` 接管连接生命周期（`NetConn/Net*Result/TcpListener/net_connect/net_listen`）。
+- `std/net` 接管连接生命周期（`NetConn/Net*Result/TcpListener/SocketAddr.tcp_connect/listen/bind_udp`）。
 - `std/io` 移除网络连接职责，仅保留 IO 基础 + `Reader/Writer/Closer/ReadWriter` 与 `BufReader/BufWriter` 基线。
 - 已移除 `NetConn`/`File` 上冗余全局转发函数（优先方法风格调用，避免双入口 API）。
 - `std/process` 的 `args/exe_path/getenv` 已切到 `std/os`。
