@@ -81,6 +81,22 @@ pub fn add(a: i32, b: i32) -> i32 {
 - `String` 形参仅用于必须传递 C 风格路径/命令等接口，作为兼容映射保留。
 - 需要 NUL 终止时，由适配层显式构造终止缓冲；业务 API 不应隐式依赖“输入文本天然带 `\\0`”。
 
+### 3.2 当前 `String -> C` 边界盘点（A44-1）
+
+为推进 `ptr + len` 收敛，当前按“可先迁移”和“暂时保留”分层：
+
+- 优先迁移（字节载荷）：
+  - `std/runtime::tcp_send(handle, text)`：文本发送应优先演进为 `const rawptr + len` 形态。
+  - 其它新增跨边界 payload API：默认禁止直接使用 `String` 作为 C ABI 文本载荷。
+- 暂时保留（路径/命令/环境）：
+  - `std/sys::{open/access/mkdir/creat/system}` 及其平台分支。
+  - `std/runtime::{read_file/write_file/path_exists/mkdir_p/exec/walk_files/getenv}`。
+
+说明：
+
+- 以上“暂时保留”并不代表最终形态；仅用于在当前 bootstrap 约束下维持可发布链路。
+- 完成 A44-1 时，应逐项把“可先迁移”的载荷型接口切换到 `ptr + len`，并补齐回归测试。
+
 ## 4. 代码生成模型（C 后端）
 
 ### 4.1 `@ffi_import("c", symbol)`

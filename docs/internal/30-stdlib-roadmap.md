@@ -24,6 +24,10 @@ Status: active.
   - 补 `std/io` 行为测试 + `vox/typecheck` / `vox/compile` smoke 回归
 - [x] `std/fs` 路径拼接与规范化 helper（避免调用方重复字符串拼接）
   - `Path.clean/join/base_name/dir_name/ext/stem/is_abs` + free-function 同名入口
+- [ ] A44-1 `String -> C` 边界收敛（先迁 payload，后收敛路径类接口）
+  - [x] 文档盘点当前边界（见 `docs/internal/17-ffi-interop.md` 3.2）
+  - [ ] 先迁移 payload 类接口到 `ptr + len`（如 `tcp_send`）
+  - [ ] 路径/命令类接口保留阶段性适配，等待更完整文本/指针模型后继续收敛
 
 ## S2 中期（P1）
 
