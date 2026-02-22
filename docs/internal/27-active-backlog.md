@@ -323,7 +323,6 @@ Builtin end-state (agreed):
   - [ ] A44-1 约束收敛：标准库/FFI 设计不再依赖“字符串必须 `\\0` 结尾”；跨边界文本/字节接口统一采用 `(ptr,len)` 视图（必要时由适配层显式构造终止符缓冲）。
   - [x] A44-1a `std/sys` 新增跨平台 `write(fd, const rawptr, len)`，`std/prelude::print` 改为 `String -> const rawptr + len` 调用，不再依赖 `vox_builtin_print` 绑定。
   - [x] A44-1b `std/io::NetConn.try_send` 已改为 `std/sys::socket_send_text(handle, text, len)`，平台分支直接走 OS `send`（`@build`），避免向 `c_runtime` 扩增网络桥接符号。
-    - windows-amd64 `send` 绑定已收敛为 `const rawptr + len`。
     - 注：windows-x86 仍为占位分支（winsock `send` 在 x86 为 stdcall，当前 FFI 尚不支持按符号 calling convention）。
   - [x] A44-1c `std/runtime` 收敛：移除未被 `std/*` 使用的 legacy facade（`tcp_send/write_file/path_exists/mkdir_p`）并同步收缩 `c_runtime` 对应 alias 导出。
   - [ ] A44-2 平台抽象收敛：`std/sys` 以平台原生 API 为主（Linux syscall/Unix/POSIX、Darwin、Windows API），避免将 `libc` 作为默认统一抽象层。
