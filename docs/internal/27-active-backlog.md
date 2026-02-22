@@ -327,7 +327,8 @@ Builtin end-state (agreed):
   - [x] A44-2b `std/io::File` 文件能力（`exists/read_all/write_all/mkdir_p`）统一委托给 `std/fs`，移除对 `std/runtime` 文件接口的直接调用。
   - [ ] A44-2c `std/sys` 增加 `open_read(path)` 接口：linux/darwin/wasm 已接通 `open(O_RDONLY)`；Windows 当前为占位失败返回（受 bootstrap 兼容 + varargs 原型冲突约束，待后续专项收敛）。
   - [ ] A44-3 编译器与标准库边界收敛：新增/迁移后不引入新的 `vox_builtin_*` / `vox_rt_*` 功能面；同等能力优先通过 `@ffi_import + @build` 在 `std/*` 实现（`@cfg` 仅保留测试）。
-  - [ ] A44-4 回归与文档：补齐 `std/sys` + `std/fs` + FFI 相关测试，文档明确“何时需要 NUL 适配缓冲、何时直接 `ptr+len`”。
+  - [x] A44-4 回归与文档：补齐 `std/sys` + `std/fs` + FFI 相关测试，文档明确“何时需要 NUL 适配缓冲、何时直接 `ptr+len`”。
+    - Landed: `src/std/sys/sys_test.vox::test_sys_write_ptr_len_controls_written_bytes` + docs sync in `docs/internal/17-ffi-interop.md` and `docs/reference/language/attributes-ffi.md`.
   - [ ] A44-5 最终目标：移除对 `libc` 的运行时依赖（含默认 `libc` I/O/socket/path 兜底路径）；平台实现以系统调用/原生 OS API 为主，仅在无法避免处保留最小兼容垫片并单独标注。
   - Source: `docs/internal/17-ffi-interop.md`, `docs/internal/13-standard-library.md`, `docs/internal/16-platform-support.md`.
 
