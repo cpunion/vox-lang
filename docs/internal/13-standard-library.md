@@ -95,7 +95,9 @@
   - 文件/FD：`read/close/access/mkdir`
   - 进程：`system`
   - 内存：`calloc/free`
-  - 约定：`std::sys` 仅声明平台 API 差异与薄封装，不引入 `vox_builtin_*` / `vox_rt_*` 这类项目私有前缀符号。
+  - 约定：
+    - `std::sys` 仅声明平台 API 差异与薄封装，不引入 `vox_builtin_*` / `vox_rt_*` 这类项目私有前缀符号。
+    - 平台分流统一使用文件级 `@build(...)`，不在标准库生产代码中使用 `@cfg(...)`（`@cfg` 仅保留给编译器语义测试）。
 - `std::net` 已提供：
   - 请求对象化入口：
     - `Request/Response/Client` 方法式 API（`new_request/request`、`Request.with_header/with_body/render`、`client().try_send/send/try_get/get`）

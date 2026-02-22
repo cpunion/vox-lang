@@ -43,6 +43,12 @@
 
 说明：`list` / `fmt` / `lsp` 不接受 `--target`；`build/test/run` 通过 `--emit-c` 输出 C 代码。
 
+## 平台分流注解规范
+
+- 生产代码（`src/**/*.vox` 非测试文件）统一使用文件级 `@build(<expr>)` 做平台分流。
+- `@cfg(...)` 在语言/编译器层继续支持，但仅用于编译器语义测试（如 parser/typecheck 测试用例）。
+- CI 通过 `scripts/ci/check-no-cfg-in-code.sh` 约束：非测试源码中出现 `@cfg(` 将直接失败。
+
 ## Windows ABI
 
 Windows 目标支持两条工具链：
