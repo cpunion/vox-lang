@@ -1,6 +1,21 @@
 import "std/string" as s
 import "std/sys" as sys
 
+@ffi_import("c", "vox_impl_tcp_connect")
+fn c_tcp_connect(host: String, port: i32) -> isize;
+
+@ffi_import("c", "vox_impl_tcp_recv")
+fn c_tcp_recv(handle: isize, max_n: i32) -> String;
+
+@ffi_import("c", "vox_impl_tcp_close")
+fn c_tcp_close(handle: isize) -> ();
+
+@ffi_import("c", "vox_impl_tcp_wait_read")
+fn c_tcp_wait_read(handle: isize, timeout_ms: i32) -> bool;
+
+@ffi_import("c", "vox_impl_tcp_wait_write")
+fn c_tcp_wait_write(handle: isize, timeout_ms: i32) -> bool;
+
 fn is_ascii_alnum(ch: i32) -> bool {
   if ch >= 48 && ch <= 57 { return true; }
   if ch >= 65 && ch <= 90 { return true; }
@@ -299,7 +314,7 @@ impl SocketAddr {
 
   fn tcp_connect(a: &SocketAddr) -> NetConn {
     if !a.is_tcp() { panic("tcp_connect requires tcp:// address"); }
-    let h: isize = sys.connect(a.host, a.port);
+    let h: isize = c_tcp_connect(a.host, a.port);
     return net_conn_open(h);
   }
 
@@ -359,7 +374,10 @@ impl NetConn {
 
   fn try_send(c: &NetConn, text: String) -> NetI32Result {
     if c.is_closed() { return net_i32_err(net_conn_closed_err()); }
-    return net_i32_ok(sys.send(c.handle, text, text.len() as usize));
+    let sent: isize = sys.socket_send(c.handle, text as const rawptr, text.len() as usize);
+    if sent < 0 { return net_i32_err("net send failed"); }
+    if sent > 2147483647 as isize { return net_i32_err("net send count overflow"); }
+    return net_i32_ok(sent as i32);
   }
 
   fn send(c: &NetConn, text: String) -> i32 {
@@ -370,7 +388,7 @@ impl NetConn {
 
   fn try_recv(c: &NetConn, max_n: i32) -> NetStringResult {
     if c.is_closed() { return net_string_err(net_conn_closed_err()); }
-    return net_string_ok(sys.recv(c.handle, max_n));
+    return net_string_ok(c_tcp_recv(c.handle, max_n));
   }
 
   fn recv(c: &NetConn, max_n: i32) -> String {
@@ -381,7 +399,7 @@ impl NetConn {
 
   fn try_wait_read(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
     if c.is_closed() { return net_bool_err(net_conn_closed_err()); }
-    return net_bool_ok(sys.wait_read(c.handle, timeout_ms));
+    return net_bool_ok(c_tcp_wait_read(c.handle, timeout_ms));
   }
 
   fn wait_read(c: &NetConn, timeout_ms: i32) -> bool {
@@ -392,7 +410,7 @@ impl NetConn {
 
   fn try_wait_write(c: &NetConn, timeout_ms: i32) -> NetBoolResult {
     if c.is_closed() { return net_bool_err(net_conn_closed_err()); }
-    return net_bool_ok(sys.wait_write(c.handle, timeout_ms));
+    return net_bool_ok(c_tcp_wait_write(c.handle, timeout_ms));
   }
 
   fn wait_write(c: &NetConn, timeout_ms: i32) -> bool {
@@ -408,7 +426,7 @@ impl NetConn {
       c.closed = true;
       return net_close_ok(c, false);
     }
-    sys.close_socket(c.handle);
+    c_tcp_close(c.handle);
     c.handle = -1 as isize;
     c.closed = true;
     return net_close_ok(c, true);
@@ -431,7 +449,7 @@ impl TcpListener {
       l.closed = true;
       return l;
     }
-    sys.close_socket(l.handle);
+    c_tcp_close(l.handle);
     l.handle = -1 as isize;
     l.closed = true;
     return l;
