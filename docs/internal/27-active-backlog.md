@@ -565,6 +565,7 @@ Drop（迁出）：
 - [ ] NIO-01 `std/sys` 网络最薄接口统一
   - [ ] 统一 `connect/listen/accept/send/recv/close_socket/wait_read/wait_write` 入口。
   - [x] `send` 已先收敛为 `socket_send(handle, ptr, len) -> isize`（全平台分支同步）。
+  - [x] `connect/recv/close_socket/wait_read/wait_write` 已收敛到 `std/sys` 入口，`std/net` 不再直接绑定 `vox_impl_tcp_*`。
   - [ ] linux/darwin/windows/wasm 分支补齐，无法支持项明确 panic/stub 语义。
   - [ ] `std/sys` 测试补齐接口 smoke 与失败语义。
 
@@ -648,9 +649,10 @@ Drop（迁出）：
 - `std/io` 移除网络连接职责，仅保留 IO 基础 + `Reader/Writer/Closer/ReadWriter` 与 `BufReader/BufWriter` 基线。
 - 已移除 `NetConn`/`File` 上冗余全局转发函数（优先方法风格调用，避免双入口 API）。
 - `std/process` 的 `args/exe_path/getenv` 已切到 `std/os`。
-- `std/sys` 已去除 `args/exe_path/getenv/read_file/walk_files/now_ns/tcp_*` 高层桥接入口，仅保留薄层 syscall/API（含 `system/calloc/free/open_read/read/write/close/...`）。
+- `std/sys` 已去除 `args/exe_path/getenv/read_file/walk_files/now_ns` 高层桥接入口，仅保留薄层 syscall/API（含 `system/calloc/free/open_read/read/write/close/...`）。
 - `std/sys` 网络发送入口统一为 `socket_send(handle, const rawptr, len) -> isize`（linux/darwin/windows/wasm/x86 分支已同步）。
-- `std/net` 当前发送路径已走 `sys.socket_send(ptr+len)`；`connect/recv/close/wait_*` 仍在 `std/net` 通过 `vox_impl_tcp_*` 直接 FFI（待继续下沉到更薄平台接口）。
+- `std/sys` 已补齐 `connect/recv/close_socket/wait_read/wait_write` 网络薄入口（平台分支实现/占位语义）。
+- `std/net` 当前 `connect/send/recv/close/wait_*` 全部经 `std/sys` 路径，不再在 `std/net` 直接绑定 `vox_impl_tcp_*`。
 - `std/os` 当前仅承载 `args/exe_path/getenv`（通过 `vox_impl_*` FFI）；文件语义 `read_file/walk_files` 已下沉到 `std/fs` 内部；`std/time::now_ns` 当前通过 `vox_impl_now_ns`。
 - `std/time::yield_now` 已从 `c_runtime` 特殊实现下沉到各平台 `std/sys` 直接 FFI（linux/darwin/wasm: `sched_yield`，windows: `usleep(0)`），并删除 `c_runtime` 中 `vox_impl_yield_now`。
 - `std/runtime` 已去除 `args/exe/getenv/time/os/tcp/mutex` 入口，仅保留 intrinsic/wake/atomic。
@@ -660,10 +662,10 @@ Drop（迁出）：
 - `c_runtime` 已移除未被 std 调用链使用的 `vox_impl_write_file/vox_impl_path_exists/vox_impl_mkdir_p` 死代码段。
 - `std/runtime` 的 wake/atomic FFI 已从 `vox_host_*` 切到 `vox_impl_*`，并删除 `c_runtime` 中对应 `vox_host_wake_*`、`vox_host_atomic_*` 纯转发别名导出。
 - `c_runtime` 已删除未再使用的 `vox_impl_wake_wait_any` 及其扫描辅助函数，`std/runtime` 侧统一使用 `wake_wait` 组合实现 `wake_wait_any`。
-- `vox_*` FFI gate 已按当前分层更新为允许 `std/runtime`、`std/fs/file_common`、`std/os`、`std/time`、`std/net`（其余路径禁止）。
+- `vox_*` FFI gate 已按当前分层更新为允许 `std/runtime`、`std/fs/file_common`、`std/os`、`std/time` 与 `std/sys` 平台桥接（其余路径禁止）。
 - `vox/compile` 与 `vox/typecheck` 的 std override smoke 已去除遗留 `vox_host_*`（`tcp_send/path_exists/write_file/mkdir_p`），统一改为直接 `c` FFI（`send/access/creat/write/close/mkdir`）或薄封装。
 - `vox/compile` 与 `vox/typecheck` 的非核心 smoke 已进一步去除非必要 `vox_impl_*` 绑定（`read_file/walk_vox_files/args/exe_path/getenv/tcp_connect`），改为本地 stub，保留仅用于 runtime 能力覆盖的 `vox_impl_*` 用例。
-- `vox/compile/std_smoke_override_test.vox`、`vox/typecheck/typecheck_test.vox`、`vox/typecheck/ffi_attr_test.vox`、`vox/compile/module_visibility_test.vox` 已清空 `vox_impl_*` 绑定；当前剩余 `vox_impl_*` 主要在 `std/runtime/std/os/std/time/std/net` 与 runtime codegen 专项测试（`c_emit`）。
+- `vox/compile/std_smoke_override_test.vox`、`vox/typecheck/typecheck_test.vox`、`vox/typecheck/ffi_attr_test.vox`、`vox/compile/module_visibility_test.vox` 已清空 `vox_impl_*` 绑定；当前剩余 `vox_impl_*` 主要在 `std/runtime/std/os/std/time/std/fs` 与 `std/sys` 平台桥接，以及 runtime codegen 专项测试（`c_emit`）。
 
 关键落地文件：
 
@@ -680,7 +682,6 @@ Drop（迁出）：
 仍待完成（下一批）：
 
 - `NIO-01`：`sys.accept` 与各平台 listen/accept 语义补齐。
-- `NIO-01`（延伸）：`std/net` 的 `connect/recv/close/wait_*` 继续从 `vox_impl_tcp_*` 收敛到更薄平台接口，避免在 `std/net` 直接绑定 runtime bridge 符号。
 - `NIO-04`（延伸）：`walk_vox_files` 语义继续从标准库边界收敛到编译器内部实现（`vox/internal/*`），标准库仅保留通用文件遍历语义。
 - `NIO-03`：`io.copy/read_all/write_all`。
 - `NIO-LANG-01`：`time` 数值后缀糖（`3.seconds`）目前在 typecheck 报 `invalid member access`，需编译器新增“数值字面量成员单位糖”支持后才能启用。
