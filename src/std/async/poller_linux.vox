@@ -1,0 +1,51 @@
+// std/async/poller_linux: epoll-based poller for wake signaling.
+//
+// Uses eventfd registered with epoll for cross-thread wake notifications.
+
+@build(linux)
+import "std/sys" as sys
+
+pub struct Poller {
+  pub epfd: i32,
+  pub event_fd: i32,
+}
+
+pub fn new_poller() -> Poller {
+  let epfd: i32 = sys.epoll_create();
+  if epfd < 0 { panic("poller: epoll_create1() failed"); }
+  let efd: i32 = sys.eventfd_create();
+  if efd < 0 { panic("poller: eventfd() failed"); }
+  // Register eventfd with epoll for EPOLLIN.
+  let ev_buf: rawptr = sys.calloc(1, sys.EPOLL_EVENT_SIZE() as usize);
+  sys.epoll_event_set(ev_buf, 0, sys.EPOLLIN(), efd as u64);
+  let rc: i32 = sys.epoll_ctl(epfd, sys.EPOLL_CTL_ADD(), efd, ev_buf);
+  sys.free(ev_buf);
+  if rc < 0 { panic("poller: epoll_ctl register eventfd failed"); }
+  return Poller { epfd: epfd, event_fd: efd };
+}
+
+// Signal the poller to wake up from a blocking wait.
+pub fn poller_wake(p: Poller) -> () {
+  sys.eventfd_signal(p.event_fd);
+  return;
+}
+
+// Block until woken or timeout. Returns true if woken by event.
+pub fn poller_wait(p: Poller, timeout_ms: i32) -> bool {
+  let ev_buf: rawptr = sys.calloc(1, sys.EPOLL_EVENT_SIZE() as usize);
+  let n: i32 = sys.epoll_wait_events(p.epfd, ev_buf, 1, timeout_ms);
+  sys.free(ev_buf);
+  if n > 0 {
+    sys.eventfd_drain(p.event_fd);
+    return true;
+  }
+  return false;
+}
+
+pub fn poller_close(p: Poller) -> () {
+  let rc1: i32 = sys.close_fd(p.event_fd);
+  rc1;
+  let rc2: i32 = sys.close_fd(p.epfd);
+  rc2;
+  return;
+}

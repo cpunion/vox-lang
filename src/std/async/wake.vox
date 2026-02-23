@@ -1,0 +1,100 @@
+// std/async/wake: pure Vox wake table using atomic operations.
+//
+// 256-slot table with linear probing for token-to-slot mapping.
+// Each slot has an atomic i64 token and an atomic i32 pending counter.
+// Replaces the C runtime vox_wake_slots hash table.
+
+import "std/runtime" as rti
+
+pub struct WakeSlot {
+  pub token_handle: isize,
+  pub pending_handle: isize,
+}
+
+pub struct WakeTable {
+  pub slots: Vec[WakeSlot],
+  pub n_slots: i32,
+}
+
+pub fn new_wake_table() -> WakeTable {
+  let n: i32 = 256;
+  let mut slots: Vec[WakeSlot] = Vec();
+  let mut i: i32 = 0;
+  while i < n {
+    slots.push(WakeSlot {
+      token_handle: rti.atomic_i64_new(0),
+      pending_handle: rti.atomic_i32_new(0),
+    });
+    i = i + 1;
+  }
+  return WakeTable { slots: slots, n_slots: n };
+}
+
+// Find or allocate the slot index for a given token.
+// Uses linear probing starting from token % n_slots.
+// Returns -1 if the table is full.
+pub fn slot_index(table: WakeTable, token: i64) -> i32 {
+  let n: i32 = table.n_slots;
+  let mut probe: i32 = 0;
+  while probe < n {
+    let raw: i64 = (token + (probe as i64)) % (n as i64);
+    let idx: i32 = if raw < 0 { (raw + (n as i64)) as i32 } else { raw as i32 };
+    let slot: WakeSlot = table.slots.get(idx);
+    let seen: i64 = rti.atomic_i64_load(slot.token_handle);
+    if seen == token { return idx; }
+    if seen == 0 {
+      // Try to claim this empty slot via CAS.
+      if rti.atomic_i64_cas(slot.token_handle, 0, token) { return idx; }
+      // Another thread may have claimed it with our token.
+      let after: i64 = rti.atomic_i64_load(slot.token_handle);
+      if after == token { return idx; }
+    }
+    probe = probe + 1;
+  }
+  return -1;
+}
+
+// Increment the pending count for a token.
+// Returns true if the slot was found (notify succeeded).
+pub fn notify(table: WakeTable, token: i64) -> bool {
+  let idx: i32 = slot_index(table, token);
+  if idx < 0 { return false; }
+  let slot: WakeSlot = table.slots.get(idx);
+  let old: i32 = rti.atomic_i32_fetch_add(slot.pending_handle, 1);
+  old;
+  return true;
+}
+
+// Try to consume one pending notification for a token.
+// Returns true if a notification was consumed.
+pub fn try_consume(table: WakeTable, token: i64) -> bool {
+  let idx: i32 = slot_index(table, token);
+  if idx < 0 { return false; }
+  let slot: WakeSlot = table.slots.get(idx);
+  while true {
+    let cur: i32 = rti.atomic_i32_load(slot.pending_handle);
+    if cur <= 0 { return false; }
+    if rti.atomic_i32_cas(slot.pending_handle, cur, cur - 1) { return true; }
+  }
+  return false;
+}
+
+// Check if a token has any pending notifications without consuming.
+pub fn has_pending(table: WakeTable, token: i64) -> bool {
+  let idx: i32 = slot_index(table, token);
+  if idx < 0 { return false; }
+  let slot: WakeSlot = table.slots.get(idx);
+  return rti.atomic_i32_load(slot.pending_handle) > 0;
+}
+
+// Release all atomic handles owned by the table.
+pub fn drop_wake_table(table: WakeTable) -> () {
+  let mut i: i32 = 0;
+  while i < table.n_slots {
+    let slot: WakeSlot = table.slots.get(i);
+    rti.atomic_i64_drop(slot.token_handle);
+    rti.atomic_i32_drop(slot.pending_handle);
+    i = i + 1;
+  }
+  return;
+}

@@ -1,0 +1,49 @@
+// std/async/poller_darwin: kqueue-based poller for wake signaling.
+//
+// Uses EVFILT_USER on ident=1 for cross-thread wake notifications.
+
+@build(darwin)
+import "std/sys" as sys
+
+pub struct Poller {
+  pub kq: i32,
+}
+
+pub fn new_poller() -> Poller {
+  let kq: i32 = sys.kqueue_create();
+  if kq < 0 { panic("poller: kqueue() failed"); }
+  // Register EVFILT_USER with ident=1, EV_ADD|EV_CLEAR.
+  let buf: rawptr = sys.calloc(1, sys.KEVENT_SIZE() as usize);
+  sys.kevent_set(buf, 0, 1, sys.EVFILT_USER(), sys.EV_ADD() | sys.EV_CLEAR(), sys.NOTE_FFNOP(), 0 as isize, sys.null_rawptr());
+  let rc: i32 = sys.kevent_register(kq, buf, 1);
+  sys.free(buf);
+  if rc < 0 { panic("poller: kqueue register EVFILT_USER failed"); }
+  return Poller { kq: kq };
+}
+
+// Signal the poller to wake up from a blocking wait.
+pub fn poller_wake(p: Poller) -> () {
+  let buf: rawptr = sys.calloc(1, sys.KEVENT_SIZE() as usize);
+  sys.kevent_set(buf, 0, 1, sys.EVFILT_USER(), 0 as u16, sys.NOTE_TRIGGER(), 0 as isize, sys.null_rawptr());
+  let rc: i32 = sys.kevent_register(p.kq, buf, 1);
+  sys.free(buf);
+  rc;
+  return;
+}
+
+// Block until woken or timeout. Returns true if woken by event.
+pub fn poller_wait(p: Poller, timeout_ms: i32) -> bool {
+  let ts_buf: rawptr = sys.calloc(1, sys.TIMESPEC_SIZE() as usize);
+  sys.timespec_set_ms(ts_buf, timeout_ms);
+  let ev_buf: rawptr = sys.calloc(1, sys.KEVENT_SIZE() as usize);
+  let n: i32 = sys.kevent_poll(p.kq, ev_buf, 1, ts_buf);
+  sys.free(ts_buf);
+  sys.free(ev_buf);
+  return n > 0;
+}
+
+pub fn poller_close(p: Poller) -> () {
+  let rc: i32 = sys.close_fd(p.kq);
+  rc;
+  return;
+}

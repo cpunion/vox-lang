@@ -1,0 +1,75 @@
+@build(linux)
+
+// EpollEvent is 12 bytes on Linux x86_64 (packed).
+// It contains: events (u32, 4 bytes) + data (u64, 8 bytes).
+// We use rawptr buffers and @ptr_read/@ptr_write to access fields,
+// avoiding the need for @repr(C, packed) in bootstrap-compiled code.
+pub fn EPOLL_EVENT_SIZE() -> isize { return 12; }
+
+// epoll constants.
+pub fn EPOLL_CLOEXEC() -> i32 { return 524288; }  // 0x80000
+
+pub fn EPOLL_CTL_ADD() -> i32 { return 1; }
+pub fn EPOLL_CTL_DEL() -> i32 { return 2; }
+pub fn EPOLL_CTL_MOD() -> i32 { return 3; }
+
+pub fn EPOLLIN() -> u32 { return 1; }      // 0x001
+pub fn EPOLLOUT() -> u32 { return 4; }     // 0x004
+pub fn EPOLLERR() -> u32 { return 8; }     // 0x008
+pub fn EPOLLHUP() -> u32 { return 16; }    // 0x010
+pub fn EPOLLET() -> u32 { return 2147483648; }  // 0x80000000 (1 << 31)
+pub fn EPOLLONESHOT() -> u32 { return 1073741824; }  // 0x40000000 (1 << 30)
+
+pub fn EFD_NONBLOCK() -> i32 { return 2048; }  // 0x800
+pub fn EFD_CLOEXEC() -> i32 { return 524288; }  // 0x80000
+
+@ffi_import("c", "epoll_create1") fn c_epoll_create1(flags: i32) -> i32;
+@ffi_import("c", "vox_impl_epoll_ctl") fn c_epoll_ctl(epfd: i32, op: i32, fd: i32, event: rawptr) -> i32;
+@ffi_import("c", "vox_impl_epoll_wait") fn c_epoll_wait(epfd: i32, events: rawptr, max: i32, timeout: i32) -> i32;
+@ffi_import("c", "eventfd") fn c_eventfd(initval: u32, flags: i32) -> i32;
+@ffi_import("c", "close") fn c_close_fd(fd: i32) -> i32;
+
+pub fn epoll_create() -> i32 {
+  return c_epoll_create1(EPOLL_CLOEXEC());
+}
+
+pub fn epoll_ctl(epfd: i32, op: i32, fd: i32, event: rawptr) -> i32 {
+  return c_epoll_ctl(epfd, op, fd, event);
+}
+
+pub fn epoll_wait_events(epfd: i32, events_buf: rawptr, max: i32, timeout_ms: i32) -> i32 {
+  return c_epoll_wait(epfd, events_buf, max, timeout_ms);
+}
+
+pub fn eventfd_create() -> i32 {
+  return c_eventfd(0, EFD_NONBLOCK() | EFD_CLOEXEC());
+}
+
+pub fn close_fd(fd: i32) -> i32 {
+  return c_close_fd(fd);
+}
+
+// Struct manipulation helpers (bridged via C runtime for bootstrap compat).
+@ffi_import("c", "vox_impl_epoll_event_set")
+fn c_epoll_event_set(buf: rawptr, index: i32, events: u32, data: u64) -> ();
+
+@ffi_import("c", "vox_impl_eventfd_signal")
+fn c_eventfd_signal(fd: i32) -> ();
+
+@ffi_import("c", "vox_impl_eventfd_drain")
+fn c_eventfd_drain(fd: i32) -> ();
+
+pub fn epoll_event_set(buf: rawptr, index: i32, events: u32, data: u64) -> () {
+  c_epoll_event_set(buf, index, events, data);
+  return;
+}
+
+pub fn eventfd_signal(fd: i32) -> () {
+  c_eventfd_signal(fd);
+  return;
+}
+
+pub fn eventfd_drain(fd: i32) -> () {
+  c_eventfd_drain(fd);
+  return;
+}
