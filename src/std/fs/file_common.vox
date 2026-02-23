@@ -1,8 +1,5 @@
 import "std/sys" as sys
 
-@ffi_import("c", "vox_impl_read_file")
-fn fs_read_file_raw(path: String) -> String;
-
 @ffi_import("c", "vox_impl_walk_vox_files")
 fn fs_walk_vox_files_raw(root: String) -> Vec[String];
 
@@ -26,7 +23,27 @@ fn fs_err_io(msg: String) -> FsError {
 
 fn fs_default_file_perm() -> u16 { return 420 as u16; } // 0o644
 
-fn fs_read_to_string_sys(path: String) -> String { return fs_read_file_raw(path); }
+fn fs_read_to_string_sys(path: String) -> String {
+  let fd: i32 = sys.open_read(path);
+  if fd < 0 { panic("read_file open failed: ".concat(path)); }
+  let size64: i64 = sys.lseek(fd, 0 as i64, sys.seek_end());
+  if size64 < 0 {
+    let _: i32 = sys.close(fd);
+    panic("read_file lseek failed: ".concat(path));
+  }
+  let _: i64 = sys.lseek(fd, 0 as i64, sys.seek_set());
+  let size: i32 = size64 as i32;
+  let buf: rawptr = sys.alloc_buf(size);
+  // Single read: rawptr has no pointer arithmetic, so we cannot advance
+  // the buffer on partial reads. For regular files (compiler sources) a
+  // single read always returns the full content.
+  let got: isize = sys.read(fd, buf, size as usize);
+  let _: i32 = sys.close(fd);
+  if got < 0 {
+    panic("read_file read failed: ".concat(path));
+  }
+  return sys.buf_to_string(buf, got as i32);
+}
 
 fn fs_write_string_sys(path: String, text: String) -> () {
   let fd: i32 = sys.creat(path, fs_default_file_perm());
