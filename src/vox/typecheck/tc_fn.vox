@@ -81,6 +81,7 @@ fn remap_sig_for_body(ctx: Ctx, sig: FuncSig, src_method_tps: Vec[String]) -> Fu
     param_borrow_kinds: sig.param_borrow_kinds,
     ret: out_ret,
     has_variadic: sig.has_variadic,
+    is_ffi_variadic: sig.is_ffi_variadic,
     variadic_elem: out_variadic_elem,
     vis: sig.vis,
     is_pub: sig.is_pub,
@@ -327,7 +328,20 @@ fn tc_stmt_let(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
 
 fn tc_stmt_assign(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, name: String, rhs: i32) -> TcStmtResult {
   let vr: LookupVarResult = locals_lookup(l0, name);
-  if !vr.found { return TcStmtResult { ok: false, err: type_error_at(sp, "unknown var"), locals: l0 }; }
+  if !vr.found {
+    // Check if assigning to a static mut variable.
+    let ss: StaticSig = find_static(ctx, mod_path, name);
+    if ss.name != "" {
+      let pr0s: PrepAsyncInstResult = prep_async_inst_in_expr(ctx, w, mod_path, imps, exprs, l0, rhs);
+      if !pr0s.ok { return TcStmtResult { ok: false, err: pr0s.err, locals: l0 }; }
+      let ctx2s: Ctx = pr0s.ctx;
+      let ers: ExprTyResult = tc_expr(ctx2s, w, mod_path, imps, exprs, l0, rhs, ss.ty);
+      if !ers.ok { return TcStmtResult { ok: false, err: ers.err, locals: l0 }; }
+      if !assignable_to(ctx2s, ss.ty, ers.ty) { return TcStmtResult { ok: false, err: type_error_at(ast.expr_pool_span(exprs, rhs), "assign type mismatch"), locals: l0 }; }
+      return TcStmtResult { ok: true, err: TcError.None, locals: l0 };
+    }
+    return TcStmtResult { ok: false, err: type_error_at(sp, "unknown var"), locals: l0 };
+  }
   if !vr.mutable { return TcStmtResult { ok: false, err: type_error_at(sp, "assign to immutable var"), locals: l0 }; }
   let pr0: PrepAsyncInstResult = prep_async_inst_in_expr(ctx, w, mod_path, imps, exprs, l0, rhs);
   if !pr0.ok { return TcStmtResult { ok: false, err: pr0.err, locals: l0 }; }

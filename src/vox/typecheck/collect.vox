@@ -321,7 +321,7 @@ fn collect_structs(ctx: Ctx, w: World) -> TcCtxResult {
         fields.push(StructFieldSig { name: fd.name, ty: rr.idx, vis: fd.vis, is_pub: fd.is_pub });
         fi = fi + 1;
       }
-      c.structs.push(StructSig { mod_path: m.path, name: sd.name, base_name: sd.name, vis: sd.vis, is_pub: sd.is_pub, fields: fields });
+      c.structs.push(StructSig { mod_path: m.path, name: sd.name, base_name: sd.name, vis: sd.vis, is_pub: sd.is_pub, repr_c: sd.repr_c, packed_align: sd.packed_align, fields: fields });
       // Pre-intern nominal struct type so later passes (e.g. const collection)
       // can reference a stable ty index without relying on resolve_type side effects.
       let mut self_parts: Vec[String] = Vec();
@@ -1133,6 +1133,7 @@ fn builtin_func_sym_deprecated(
       param_borrow_kinds: Vec(),
       ret: ret,
       has_variadic: false,
+      is_ffi_variadic: false,
       variadic_elem: -1,
       vis: ast.vis_pub(),
       is_pub: true,
@@ -1357,9 +1358,6 @@ fn validate_ffi_attrs(c0: Ctx, mod_path: String, fd: ast.FuncDecl, cps: Vec[Cons
     if fd.type_params.len() != 0 || cps.len() != 0 {
       return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi import function cannot be generic"));
     }
-    if has_variadic {
-      return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi import variadic function is not supported yet"));
-    }
   }
 
   if has_ffi_export {
@@ -1404,12 +1402,21 @@ fn validate_ffi_attrs(c0: Ctx, mod_path: String, fd: ast.FuncDecl, cps: Vec[Cons
     if !ffi_ret_ty_allowed(c, ret_ty) {
       return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi return type not supported"));
     }
+    // For FFI variadic imports, validate only the fixed params (exclude the
+    // trailing Vec[T]) and separately check the variadic element type.
+    let ffi_param_count: i32 = if has_ffi_import && has_variadic { ps.len() - 1 } else { ps.len() };
     let mut i: i32 = 0;
-    while i < ps.len() {
+    while i < ffi_param_count {
       if !ffi_param_ty_allowed(c, ps.get(i)) {
         return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi parameter type not supported"));
       }
       i = i + 1;
+    }
+    if has_ffi_import && has_variadic {
+      let variadic_elem: i32 = vec_elem(c, ps.get(ps.len() - 1));
+      if !ffi_plain_ty_allowed(c, variadic_elem) {
+        return validate_ffi_attrs_err(c, type_error_at(fd.sp, "ffi variadic element type not supported"));
+      }
     }
   }
 
@@ -1689,11 +1696,13 @@ fn collect_funcs(ctx: Ctx, w: World) -> TcCtxResult {
       if !fvr.ok { return TcCtxResult { ok: false, err: fvr.err, ctx: fvr.ctx }; }
       c = fvr.ctx;
 
+      let is_ffi_var: bool = has_variadic && fd.ffi_imports.len() != 0;
       let sig: FuncSig = FuncSig {
         params: ps,
         param_borrow_kinds: pbks,
         ret: rr.idx,
         has_variadic: has_variadic,
+        is_ffi_variadic: is_ffi_var,
         variadic_elem: variadic_elem,
         vis: fd.vis,
         is_pub: fd.is_pub,

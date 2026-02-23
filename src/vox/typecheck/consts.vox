@@ -3259,3 +3259,78 @@ fn collect_consts(ctx: Ctx, w: World) -> TcCtxResult {
   c.consts = sigs;
   return TcCtxResult { ok: true, err: TcError.None, ctx: c };
 }
+
+fn collect_statics(ctx: Ctx, w: World) -> TcCtxResult {
+  let mut c: Ctx = ctx;
+
+  // Gather all static decls across modules.
+  let mut items: Vec[ConstItem] = Vec();
+  let mut seen: Vec[String] = Vec();
+  let mut mi: i32 = 0;
+  while mi < w.mods.len() {
+    let m: WorldModule = w.mods.get(mi);
+    let mut si: i32 = 0;
+    while si < m.prog.statics.len() {
+      let sd: ast.StaticDecl = m.prog.statics.get(si);
+      if is_reserved_intrinsic_name(sd.name) {
+        return TcCtxResult { ok: false, err: type_error_at(sd.sp, "reserved name: ".concat(sd.name)), ctx: c };
+      }
+      let qn: String = const_qname(m.path, sd.name);
+      if const_contains_str(seen, qn) {
+        return TcCtxResult { ok: false, err: type_error_at(sd.sp, "duplicate static: ".concat(sd.name)), ctx: c };
+      }
+      seen.push(qn);
+      // Reuse ConstItem/ConstDecl by creating a synthetic ConstDecl.
+      items.push(ConstItem { mod_path: m.path, decl: ast.ConstDecl { file: sd.file, sp: sd.sp, vis: sd.vis, is_pub: sd.is_pub, name: sd.name, ty: sd.ty, init: sd.init } });
+      si = si + 1;
+    }
+    mi = mi + 1;
+  }
+
+  if items.len() == 0 {
+    return TcCtxResult { ok: true, err: TcError.None, ctx: c };
+  }
+
+  // Pre-size sigs/states vectors.
+  let mut sigs: Vec[ConstSig] = Vec();
+  let mut states: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < items.len() {
+    sigs.push(const_placeholder());
+    states.push(0);
+    i = i + 1;
+  }
+
+  // Resolve all statics (value + type) using const evaluation.
+  i = 0;
+  while i < items.len() {
+    let rr: ResolveConstResult = resolve_const(c, w, items, sigs, states, i);
+    if !rr.ok { return TcCtxResult { ok: false, err: rr.err, ctx: rr.ctx }; }
+    c = rr.ctx;
+    sigs = rr.sigs;
+    states = rr.states;
+    i = i + 1;
+  }
+
+  // Convert ConstSig results to StaticSig.
+  let mut statics: Vec[StaticSig] = Vec();
+  i = 0;
+  while i < sigs.len() {
+    let cs: ConstSig = sigs.get(i);
+    statics.push(StaticSig {
+      mod_path: cs.mod_path,
+      name: cs.name,
+      vis: cs.vis,
+      is_pub: cs.is_pub,
+      ty: cs.ty,
+      init_kind: cs.kind,
+      init_iv: cs.iv,
+      init_bv: cs.bv,
+      init_sv: cs.sv,
+    });
+    i = i + 1;
+  }
+
+  c.statics = statics;
+  return TcCtxResult { ok: true, err: TcError.None, ctx: c };
+}

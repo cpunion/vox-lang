@@ -314,6 +314,7 @@ fn gen_await_poll_from_future(g0: Gen, recv: ir.Value, recv_slot: i32, recv_fiel
       param_borrow_kinds: im.m.sig.param_borrow_kinds,
       ret: poll_ret,
       has_variadic: false,
+      is_ffi_variadic: false,
       variadic_elem: -1,
       vis: im.m.sig.vis,
       is_pub: im.m.sig.is_pub,
@@ -489,6 +490,7 @@ fn try_resolve_err_conv(g0: Gen, src_err_ty: i32, dst_err_ty: i32) -> TryErrConv
     param_borrow_kinds: im.m.sig.param_borrow_kinds,
     ret: tc.strip_range_only(g0.ctx, via_ty),
     has_variadic: false,
+    is_ffi_variadic: false,
     variadic_elem: -1,
     vis: im.m.sig.vis,
     is_pub: im.m.sig.is_pub,
@@ -985,15 +987,28 @@ fn gen_expr_ident(g0: Gen, name: String, ty: i32) -> GenExprResult {
       g1 = gen_emit(g1, ir.Instr.Const(tid0, lcr.ty, ir.v_i64(lcr.iv)));
       return GenExprResult { ok: true, err: "", g: g1, val: ir.v_temp(tid0), ty: lcr.ty };
     }
-    // Const reference (inlined; no globals in v0).
+    // Const reference (inlined).
     let ni: tc.NamedConstImport = tc.find_named_const(g0.imps.named_consts, name);
     let want_mod: String = if ni.local != "" { ni.mod_path } else { g0.mod_path };
     let want_name: String = if ni.local != "" { ni.name } else { name };
     let cs: tc.ConstSig = tc.find_const(g0.ctx, want_mod, want_name);
-    if cs.name == "" { return GenExprResult { ok: false, err: "unknown var/const", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let inl: GenInlineConstResult = gen_inline_const_sig(g0, cs);
-    if !inl.ok { return GenExprResult { ok: false, err: inl.err, g: inl.g, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    return GenExprResult { ok: true, err: "", g: inl.g, val: inl.val, ty: inl.ty };
+    if cs.name != "" {
+      let inl: GenInlineConstResult = gen_inline_const_sig(g0, cs);
+      if !inl.ok { return GenExprResult { ok: false, err: inl.err, g: inl.g, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+      return GenExprResult { ok: true, err: "", g: inl.g, val: inl.val, ty: inl.ty };
+    }
+    // Static variable reference.
+    let ss: tc.StaticSig = tc.find_static(g0.ctx, want_mod, want_name);
+    if ss.name != "" {
+      let mut g1: Gen = g0;
+      let rt1: GenNewIdResult = gen_new_temp(g1);
+      g1 = rt1.g;
+      let tid1: i32 = rt1.id;
+      let static_qname: String = want_mod.concat("::").concat(want_name);
+      g1 = gen_emit(g1, ir.Instr.GlobalLoad(tid1, ss.ty, static_qname));
+      return GenExprResult { ok: true, err: "", g: g1, val: ir.v_temp(tid1), ty: ss.ty };
+    }
+    return GenExprResult { ok: false, err: "unknown var/const", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
   }
   let mut g: Gen = g0;
   let rt: GenNewIdResult = gen_new_temp(g);

@@ -35,6 +35,7 @@ pub struct Ctx {
   pub async_inst_reqs: Vec[AsyncInstReq],
   pub type_aliases: Vec[TypeAliasSig],
   pub consts: Vec[ConstSig],
+  pub statics: Vec[StaticSig],
   pub ffi_export_symbols: Vec[FfiExportSym],
 }
 
@@ -109,6 +110,18 @@ pub struct ConstSig {
   pub sv: String,
 }
 
+pub struct StaticSig {
+  pub mod_path: String,
+  pub name: String,
+  pub vis: i32,
+  pub is_pub: bool,
+  pub ty: i32,
+  pub init_kind: i32, // 1=int, 2=bool, 3=str, 4=float (same as ConstSig.kind)
+  pub init_iv: i64,
+  pub init_bv: bool,
+  pub init_sv: String,
+}
+
 pub struct FfiExportSym {
   pub target: String,
   pub symbol: String,
@@ -176,7 +189,7 @@ pub fn new_ctx_with_target(bits0: i32, target_os0: String, target_arch0: String)
     ty_i8: -1, ty_u8: -1, ty_i16: -1, ty_u16: -1, ty_i32: -1, ty_u32: -1, ty_i64: -1, ty_u64: -1, ty_isize: -1, ty_usize: -1, ty_rawptr: -1, ty_const_rawptr: -1,
     ty_f32: -1, ty_f64: -1,
     ty_string: -1,
-    funcs: Vec(), structs: Vec(), enums: Vec(), traits: Vec(), impls: Vec(), async_fns: Vec(), async_inst_reqs: Vec(), type_aliases: Vec(), consts: Vec(), ffi_export_symbols: Vec(),
+    funcs: Vec(), structs: Vec(), enums: Vec(), traits: Vec(), impls: Vec(), async_fns: Vec(), async_inst_reqs: Vec(), type_aliases: Vec(), consts: Vec(), statics: Vec(), ffi_export_symbols: Vec(),
   };
   let r0: InternResult = intern_ty(c, ir.ty_bad()); c = r0.ctx; c.ty_bad = r0.idx;
   let r1: InternResult = intern_ty(c, ir.ty_unit()); c = r1.ctx; c.ty_unit = r1.idx;
@@ -437,6 +450,8 @@ fn find_struct_decl_in_mod(m: WorldModule, name: String) -> FindStructDeclResult
       sp: ast.span0(),
       vis: ast.vis_private(),
       is_pub: false,
+      repr_c: false,
+      packed_align: 0,
       name: "",
       type_params: Vec(),
       type_param_bounds: Vec(),
@@ -657,7 +672,7 @@ fn set_struct_fields(ctx0: Ctx, mod_path: String, name: String, fields: Vec[Stru
   while i < c.structs.len() {
     let s: StructSig = c.structs.get(i);
     if s.mod_path == mod_path && s.name == name {
-      out.push(StructSig { mod_path: s.mod_path, name: s.name, base_name: s.base_name, vis: s.vis, is_pub: s.is_pub, fields: fields });
+      out.push(StructSig { mod_path: s.mod_path, name: s.name, base_name: s.base_name, vis: s.vis, is_pub: s.is_pub, repr_c: s.repr_c, packed_align: s.packed_align, fields: fields });
     } else {
       out.push(s);
     }
@@ -1045,7 +1060,7 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
     if fs.found { return nominal_intern_struct(c, mod_path, inst); }
 
     // Insert placeholder first so recursive references can resolve.
-    c.structs.push(StructSig { mod_path: mod_path, name: inst, base_name: sd.name, vis: sd.vis, is_pub: sd.is_pub, fields: Vec() });
+    c.structs.push(StructSig { mod_path: mod_path, name: inst, base_name: sd.name, vis: sd.vis, is_pub: sd.is_pub, repr_c: sd.repr_c, packed_align: sd.packed_align, fields: Vec() });
     let ir_self: ResolveTyResult = nominal_intern_struct(c, mod_path, inst);
     c = ir_self.ctx;
 
@@ -1180,4 +1195,14 @@ pub fn find_const(ctx: Ctx, mod_path: String, name: String) -> ConstSig {
     i = i + 1;
   }
   return ConstSig { mod_path: "", name: "", vis: ast.vis_private(), is_pub: false, ty: -1, kind: 0, iv: 0, bv: false, sv: "" };
+}
+
+pub fn find_static(ctx: Ctx, mod_path: String, name: String) -> StaticSig {
+  let mut i: i32 = 0;
+  while i < ctx.statics.len() {
+    let s: StaticSig = ctx.statics.get(i);
+    if s.mod_path == mod_path && s.name == name { return s; }
+    i = i + 1;
+  }
+  return StaticSig { mod_path: "", name: "", vis: ast.vis_private(), is_pub: false, ty: -1, init_kind: 0, init_iv: 0, init_bv: false, init_sv: "" };
 }
