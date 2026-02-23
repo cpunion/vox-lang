@@ -34,7 +34,5 @@ Core docs:
 Archive:
 
 - `docs/internal/archive/21-stage1-compiler.md`
-- `docs/internal/archive/22-backlog.md`
-- `docs/internal/archive/23-backlog-next.md`
 - `docs/internal/archive/25-p0p1-closure.md`
 - `docs/internal/archive/26-closure-1-4-7-9.md`
