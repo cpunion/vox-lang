@@ -30,12 +30,9 @@ Core docs:
 - `docs/internal/28-vox-libraries.md`
 - `docs/internal/29-async-expr-await.md`
 - `docs/internal/30-stdlib-roadmap.md`
-- `docs/internal/31-net-io-os-runtime-backlog.md`
 
 Archive:
 
 - `docs/internal/archive/21-stage1-compiler.md`
-- `docs/internal/archive/22-backlog.md`
-- `docs/internal/archive/23-backlog-next.md`
 - `docs/internal/archive/25-p0p1-closure.md`
 - `docs/internal/archive/26-closure-1-4-7-9.md`

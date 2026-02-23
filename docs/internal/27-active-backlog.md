@@ -419,3 +419,322 @@ Builtin end-state (agreed):
     - [x] D07-3h Multi-source release tracking: expressions containing multiple release paths now mark all consumed roots (including call-arg fanout and `assign field` RHS), so moved diagnostics are not silently dropped for later sources.
   - Extracted from A03 closure note.
   - Source: `docs/internal/20-bootstrap.md`.
+
+## Merged Backlog Sources (2026-02-23)
+
+To keep a single backlog file in repository, the following backlog files were merged into this document on 2026-02-23:
+
+- `docs/internal/31-net-io-os-runtime-backlog.md` (active domain backlog)
+- `docs/internal/archive/22-backlog.md` (archived)
+- `docs/internal/archive/23-backlog-next.md` (archived)
+
+### Source Snapshot: `docs/internal/31-net-io-os-runtime-backlog.md`
+
+# Net/IO/OS/Runtime 分层重构 Backlog（独立执行）
+
+Status: active.
+
+本清单是独立 backlog 文档，用于一次性推进标准库分层重构，不替代 `docs/internal/27-active-backlog.md` 的全局治理规则。
+
+## 1. 目标与边界
+
+目标约束（冻结）：
+
+- `std/sys` 是最薄平台层，主要是 syscall/CRT/Winsock 级 FFI 与最小适配。
+- `std/net` 承载 TCP/UDP 基础封装（client/server/peer），连接建立与收发在这里。
+- `std/io` 是流抽象层（trait + bufio 风格实现），不承载连接建立语义。
+- `std/os` 语义定位接近 Go `os`，承载进程/环境/系统语义封装。
+- `std/runtime` 收缩为编译器必须的最小基础能力；其余能力迁出。
+
+非目标（本批不做）：
+
+- 不在本批改造原子语义为 IR 指令（单独 deferred backlog）。
+- 不在本批引入全新网络协议栈（TLS/HTTP2/QUIC 等）。
+
+## 2. 包职责与依赖方向
+
+强约束依赖图（目标态）：
+
+- `std/sys` 不依赖 `std/net/std/io/std/os/std/runtime`。
+- `std/net` 依赖 `std/sys`（可选依赖 `std/io` 仅用于实现 trait，不反向依赖）。
+- `std/io` 核心抽象不依赖 `std/net/std/sys`。
+- `std/os` 依赖 `std/sys` 与必要基础包。
+- `std/runtime` 仅依赖编译期必须基础包；不再承载业务语义入口。
+
+禁止项（目标态）：
+
+- `std/io` 中禁止定义 `connect/listen/accept`。
+- `std/runtime` 中禁止保留 TCP/文件遍历/环境/进程执行/mutex 等业务能力入口。
+
+## 3. 目标 API 清单
+
+以下是目标态放置规划（`[keep]` 保留，`[move]` 迁移，`[new]` 新增，`[drop]` 删除）。
+
+### 3.1 std/sys
+
+Types:
+
+- `[keep]` 无高层对象类型，保持 handle/fd + 基本标量。
+
+Functions:
+
+- `[keep]` `open_read/read/write/close/creat/access/mkdir/system/calloc/free`
+- `[keep/new]` `connect/listen/accept/send/recv/close_socket/wait_read/wait_write`
+- `[drop]` 不保留高层连接对象与业务语义。
+
+### 3.2 std/net
+
+Types:
+
+- `[keep]` `NetProto`
+- `[keep]` `SocketAddr`
+- `[move]` `NetConn`（从 `std/io` 迁入）
+- `[new]` `TcpListener`
+- `[keep]` `UdpSocket`（占位到可执行）
+- `[keep/move]` 网络结果类型（`NetI32Result/NetStringResult/NetBoolResult/NetCloseResult`）
+
+Functions:
+
+- `[keep]` `socket_addr/tcp_addr/udp_addr/parse_socket_uri`
+
+Methods:
+
+- `[keep/new]` `SocketAddr.uri/tcp_connect/listen/bind_udp`
+- `[keep/move]` `NetConn.send/recv/wait_read/wait_write/close` + `try_*`
+- `[new]` `TcpListener.accept/close`
+- `[keep]` `UdpSocket.send_to/recv_from`（先保留占位，后续补真实实现）
+
+### 3.3 std/io
+
+Traits:
+
+- `[new]` `Reader`
+- `[new]` `Writer`
+- `[new]` `Closer`
+- `[new]` `ReadWriter`
+
+Types:
+
+- `[new]` `BufReader`
+- `[new]` `BufWriter`
+
+Functions:
+
+- `[new]` `copy/read_all/write_all`（按可实现性分批落地）
+- `[keep]` `out/out_ln/fail`（兼容期保留）
+- `[drop]` 移除或转发 `io` 层网络连接建立入口。
+
+### 3.4 std/os
+
+Types:
+
+- `[keep/new]` 进程/环境语义类型（按需求最小化）。
+
+Functions:
+
+- `[move]` `args/exe_path/getenv`
+- `[move/keep]` `exec`
+- `[keep or staged]` `read_file/walk_files`（若暂无法纯 `sys` 化则保留在 `os`）
+
+### 3.5 std/runtime
+
+Keep（最小基础）：
+
+- `[keep]` `intrinsic_abi/has_intrinsic`
+- `[keep]` `wake_notify/wake_wait/wake_wait_any`
+- `[keep]` `atomic_i32_*`、`atomic_i64_*`（暂留函数路径）
+
+Drop（迁出）：
+
+- `[drop]` `args/exe_path/getenv`
+- `[drop]` `now_ns/yield_now`
+- `[drop]` `exec/read_file/walk_files`
+- `[drop]` `tcp_*`
+- `[drop]` `mutex_i32_*`、`mutex_i64_*`
+
+## 4. 分批执行 Backlog（带稳定 ID）
+
+### P0 分层冻结与骨架
+
+- [ ] NIO-00 边界冻结
+  - [ ] 文档明确各包职责、允许依赖和禁止项。
+  - [ ] `docs/internal/13-standard-library.md` 同步分层说明。
+
+### P1 sys 与 net 归位
+
+- [ ] NIO-01 `std/sys` 网络最薄接口统一
+  - [ ] 统一 `connect/listen/accept/send/recv/close_socket/wait_read/wait_write` 入口。
+  - [ ] linux/darwin/windows/wasm 分支补齐，无法支持项明确 panic/stub 语义。
+  - [ ] `std/sys` 测试补齐接口 smoke 与失败语义。
+
+- [x] NIO-02 `std/net` 承载连接生命周期
+  - [x] `NetConn`/连接方法迁入并在 `net` 作为主入口。
+  - [x] `SocketAddr.tcp_connect/listen` 接入 `sys.*`。
+  - [x] `http_*` 与 `Client` 调用链不再依赖 `io.connect` 风格入口。
+
+### P2 io 抽象化
+
+- [ ] NIO-03 `std/io` 去网络职责
+  - [x] 删除或转发连接建立 API，保留仅兼容包装。
+  - [x] 新增 `Reader/Writer/Closer/ReadWriter` trait 基线。
+  - [ ] `BufReader/BufWriter` 与 `copy/read_all/write_all` 分批落地。
+
+### P3 os 与 runtime 收缩
+
+- [x] NIO-04 `std/os` 收拢进程/环境语义
+  - [x] `args/exe_path/getenv/exec` 从 `runtime` 迁入 `os`。
+  - [x] 文件语义（`read_file/walk_files`）按可实现性决定留 `os` 还是继续下沉 `sys`。
+
+- [x] NIO-05 `std/runtime` 缩减到最小基础
+  - [x] 移除 tcp/mutex/os 语义 API。
+  - [x] 仅保留 wake/atomic/intrinsic probe 等编译器基础能力。
+  - [x] `std/async` 路径持续可用（wake 相关不退化）。
+
+### P4 兼容层与门禁
+
+- [ ] NIO-06 兼容包装与淘汰计划
+  - [ ] 对外兼容入口保留一阶段并打上迁移注释。
+  - [ ] 下一阶段清理兼容层，避免长期双入口。
+
+- [ ] NIO-07 测试与 CI 门禁
+  - [x] `std/sys/std/net/std/io/std/os/std/runtime` 单测补齐。
+  - [x] `vox/typecheck` 与 `vox/compile` smoke 同步。
+  - [x] 如有 gate 规则（例如 `vox_*` FFI 使用范围）按新分层更新并补回归。
+
+## 5. 发布/Bootstrap 决策矩阵
+
+默认结论：本重构应优先走“无滚动发布”路径。
+
+不需要滚动发布（目标）：
+
+- 仅做 std 分层与调用迁移。
+- 不新增 intrinsic。
+- 不新增 bootstrap 旧编译器无法链接的必须符号。
+
+需要滚动发布（触发条件）：
+
+- 新增 intrinsic 或改变 intrinsic 语义。
+- 新增 bootstrap 编译链路必须的新 runtime 导出符号。
+
+若触发，执行两阶段：
+
+1. 先发布含新能力但 `src/std` 未启用的编译器版本。
+2. bump `bootstrap.lock` 并通过 rolling gate。
+3. 再启用 `src/std` 调用并移除旧路径。
+
+## 6. Atomic Deferred Backlog
+
+- [ ] NIO-AT1 Atomic 从函数调用迁移为 IR/指令语义（Deferred）
+  - [ ] 目标：`std/sync` 原子操作最终不依赖 `vox_host_atomic_*` 函数调用表面。
+  - [ ] 前提：IR 指令语义与跨平台 lowering 方案稳定。
+  - [ ] 风险：大概率触发编译器能力变更，需按发布两阶段执行。
+
+## 7. 完成标准
+
+每个 `NIO-*` 条目完成必须满足：
+
+1. 实现：对应包职责与 API 边界满足本清单。
+2. 测试：标准库行为测试 + typecheck/compile smoke 通过。
+3. 文档：`13/16/17` 等相关文档同步。
+4. CI：`make fmt`、`make test`、rolling gate 全绿。
+5. 记录：在该文档勾选完成项并附关键落地文件。
+
+## 8. 最新进展（2026-02-22）
+
+本轮已落地：
+
+- `std/net` 接管连接生命周期（`NetConn/Net*Result/TcpListener/SocketAddr.tcp_connect/listen/bind_udp`）。
+- `std/io` 移除网络连接职责，仅保留 IO 基础 + `Reader/Writer/Closer/ReadWriter` 与 `BufReader/BufWriter` 基线。
+- 已移除 `NetConn`/`File` 上冗余全局转发函数（优先方法风格调用，避免双入口 API）。
+- `std/process` 的 `args/exe_path/getenv` 已切到 `std/os`。
+- `std/os` 与 `std/time` 已去除 `vox_*` FFI，统一改为调用 `std/sys`。
+- `std/sys` 的 `args/exe_path/getenv/read_file/walk_files/now_ns/tcp_*` 已切到 `vox_impl_*` 薄桥。
+- `std/time::yield_now` 已从 `c_runtime` 特殊实现下沉到各平台 `std/sys` 直接 FFI（linux/darwin/wasm: `sched_yield`，windows: `usleep(0)`），并删除 `c_runtime` 中 `vox_impl_yield_now`。
+- `std/runtime` 已去除 `args/exe/getenv/time/os/tcp/mutex` 入口，仅保留 intrinsic/wake/atomic。
+- `std/sync::Mutex` 底层改为复用 atomic 句柄；`std/os` 已移除 `mutex_i32/i64_*`；`c_runtime` 已删除 `vox_impl/vox_host_mutex_i32/i64_*` 实现与导出。
+- `c_runtime` 已删除 `vox_host_{args,exe_path,getenv,now_ns,yield_now,exec,walk_vox_files,read_file,tcp_*}` alias 导出（保留 wake/atomic host 兼容面）。
+- `c_runtime` 已移除未再使用的 `vox_impl_exec`；`std/process` 语义继续通过 `sys.system`。
+- `c_runtime` 已移除未被 std 调用链使用的 `vox_impl_write_file/vox_impl_path_exists/vox_impl_mkdir_p` 死代码段。
+- `std/runtime` 的 wake/atomic FFI 已从 `vox_host_*` 切到 `vox_impl_*`，并删除 `c_runtime` 中对应 `vox_host_wake_*`、`vox_host_atomic_*` 纯转发别名导出。
+- `c_runtime` 已删除未再使用的 `vox_impl_wake_wait_any` 及其扫描辅助函数，`std/runtime` 侧统一使用 `wake_wait` 组合实现 `wake_wait_any`。
+- `vox_*` FFI gate 更新为仅允许 `std/runtime`、`std/sys/sys_common`。
+- `vox/compile` 与 `vox/typecheck` 的 std override smoke 已去除遗留 `vox_host_*`（`tcp_send/path_exists/write_file/mkdir_p`），统一改为直接 `c` FFI（`send/access/creat/write/close/mkdir`）或薄封装。
+- `vox/compile` 与 `vox/typecheck` 的非核心 smoke 已进一步去除非必要 `vox_impl_*` 绑定（`read_file/walk_vox_files/args/exe_path/getenv/tcp_connect`），改为本地 stub，保留仅用于 runtime 能力覆盖的 `vox_impl_*` 用例。
+- `vox/compile/std_smoke_override_test.vox`、`vox/typecheck/typecheck_test.vox`、`vox/typecheck/ffi_attr_test.vox`、`vox/compile/module_visibility_test.vox` 已清空 `vox_impl_*` 绑定；当前剩余 `vox_impl_*` 仅在 `std/sys`、`std/runtime` 与 runtime codegen 专项测试（`c_emit`）。
+
+关键落地文件：
+
+- `src/std/net/net.vox`
+- `src/std/net/net_test.vox`
+- `src/std/io/io.vox`
+- `src/std/io/io_test.vox`
+- `src/std/process/process.vox`
+- `src/std/runtime/runtime.vox`
+- `src/std/os/os.vox`
+- `src/std/sys/sys_common.vox`
+- `scripts/ci/check-no-vox-ffi-outside-runtime.sh`
+
+仍待完成（下一批）：
+
+- `NIO-01`：`sys.accept` 与各平台 listen/accept 语义补齐。
+- `NIO-03`：`io.copy/read_all/write_all`。
+- `NIO-LANG-01`：`time` 数值后缀糖（`3.seconds`）目前在 typecheck 报 `invalid member access`，需编译器新增“数值字面量成员单位糖”支持后才能启用。
+- `NIO-LANG-02`：支持 Go 风格 `3 * time.s -> time.Duration`（不依赖操作符重载）：单位常量为 `Duration`，并补齐常量/字面量到 `Duration` 的二元算术类型规则。
+- `NIO-LANG-03`：操作符重载能力（如 trait/协议驱动的 `+ - * / ==`）单独立项；当前 `time.Duration` 方案不依赖该能力。
+
+### Source Snapshot: `docs/internal/archive/22-backlog.md`
+
+# Stage2 Backlog (1-12)
+
+Status: **archived (closed)**.
+Canonical closure + gate: `docs/internal/archive/25-p0p1-closure.md`, `make test-p0p1`.
+
+This file was the active burn-down list for compiler.  
+Rule: complete one item end-to-end (code + tests + commit), then move to the next.
+
+## Items
+
+1. [x] Parser trailing comma completeness for generic call args (`f[T,](...)`, `f[3,](...)`, `m[T,]!(...)`).
+2. [x] Macroexpand diagnostics: surface inline-fallback reason (why template inline was rejected).
+3. [x] Macro execution v1: support function-like macro bodies returning expandable AST values (without `macro` keyword).
+4. [x] `quote` / unquote MVP: expression-level quote with `$x` interpolation.
+5. [x] Comptime execution expansion: broaden compile-time evaluable function shapes (pure subset).  
+   Done scope: const/comptime evaluator now executes pure member-call subset (`String.len/byte_at/slice/concat/escape_c/to_string`, primitive `to_string`) inside const fn paths.
+6. [x] Generic specialization diagnostics: deterministic conflict/ambiguity reports and ranking traces.  
+   Done scope: impl candidate text now stable-sorted; ambiguity diagnostics include `rank_trace` with pairwise specificity relation.
+7. [x] Generic packs/variadics design MVP (parser + typecheck skeleton, no codegen specialization yet).  
+   Done scope: parser now accepts `T...` type-parameter packs and `arg: T...` variadic params; typecheck emits explicit skeleton diagnostics (no IR/codegen yet).
+8. [x] Diagnostics upgrade: rune-aware column mapping and tighter span for type/const/macro errors.  
+   Done scope: const block stmt executor now reports stmt-anchored spans (`let/assign/assign field/if/while/break/continue`), and macroexpand max-round overflow now reports first macro callsite span instead of fallback `1:1`.
+9. [x] Testing framework upgrade: richer `--json` payload and stable rerun metadata pipeline.  
+   Done scope: `test-pkg --json` now emits `report_version` + rerun-cache metadata fields, failed result entries include `error/log_file`, and rerun cache is versioned JSON (`version/updated_unix_us/tests`) with backward-compatible read + normalized load.
+10. [x] Stdlib `std/sync`: generic `Mutex[T]` / `Atomic[T]` runtime-backed semantics on compiler.  
+    Done scope: `std/sync` provides `Mutex[T: SyncScalar]` / `Atomic[T: SyncScalar]` generic handles (with `i32/i64` impls), runtime-backed intrinsics for load/store/fetch_add/swap, plus concrete compatibility wrappers.
+11. [x] Stdlib `std/io`: file + network minimal abstractions aligned with current runtime APIs.  
+    Done scope: `std/io` includes `out/out_ln/fail`, file APIs (`file/file_exists/file_read_all/file_write_all/mkdir_p`) and minimal TCP APIs (`net_addr/net_connect/net_send/net_recv/net_close`) with interpreter/C backend parity.
+12. [x] Package management hardening: registry/git lock verification and clearer mismatch diagnostics.  
+    Done scope: manifest dep resolution covers path/git/registry, writes `vox.lock` with source/rev/digest metadata, verifies lock consistency before build/test, and reports explicit mismatch/missing dependency diagnostics.
+
+### Source Snapshot: `docs/internal/archive/23-backlog-next.md`
+
+# Stage2 Backlog Next (P0/P1, no async/effect)
+
+Status: **archived (closed)**.
+Canonical closure + gate: `docs/internal/archive/25-p0p1-closure.md`, `make test-p0p1`.
+
+Rule (historical): complete one item end-to-end (code + tests + docs + commit), then move to next item without leaving unresolved leftovers in the same scope.
+
+## Items
+
+1. [x] Generic variadic params end-to-end MVP: `xs: T...` typechecks/codegens as stable lowered form, with clear constraints and diagnostics.
+2. [x] Generic type-param pack declaration usable end-to-end (remove skeleton rejections; define current semantics explicitly).
+3. [x] Generic pack expansion design landing (call-site/type-site behavior and diagnostics consistency).
+4. [x] Macro system strengthening: quote/unquote coverage parity for expression shapes and clearer unsupported diagnostics.
+5. [x] Macro execution safety rails: deterministic expansion ordering and bounded recursion diagnostics hardening.
+6. [x] Comptime evaluator parity pass: close remaining unsupported constant-expression gaps in the documented subset.
+7. [x] IR semantic consistency pass: cast/compare edge behavior and verifier diagnostics alignment.
+8. [x] Diagnostics layering pass: tighter primary span coverage for typecheck/irgen/macro errors.
+9. [x] Testing framework UX pass: filtering/rerun/report fields consistency across engines.
+10. [x] Stdlib generic cleanup: remove repetitive non-generic wrappers where generic APIs already exist.
+11. [x] Package/dependency UX pass: lock mismatch diagnostics and remediation hints consistency.
+12. [x] Stage2 documentation convergence: update language/spec/tooling docs to match implemented behavior exactly.
