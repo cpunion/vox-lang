@@ -114,7 +114,32 @@ fn emit_ffi_import_decl(pool: ir.TyPool, f: ir.FfiImportDecl) -> String {
     s = s.concat(c_type(pool, pa.ty)).concat(" ").concat(c_param_name(i));
     i = i + 1;
   }
+  if f.has_variadic {
+    if f.params.len() != 0 { s = s.concat(", "); }
+    s = s.concat("...");
+  }
   return s.concat(");");
+}
+
+fn static_init_value(pool: ir.TyPool, sv: ir.StaticVarDecl) -> String {
+  // init_kind: 1=int, 2=bool, 3=str, 4=float
+  if sv.init_kind == 2 {
+    return if sv.init_bv { "true" } else { "false" };
+  }
+  if sv.init_kind == 3 {
+    return "\"".concat(sv.init_sv.escape_c()).concat("\"");
+  }
+  if sv.init_kind == 4 {
+    return sv.init_iv.to_string();
+  }
+  // Default: integer init (kind 1 or 0).
+  let t: ir.Ty = ir.ty_pool_get(pool, sv.ty);
+  let rk: ir.TyKind = t.kind;
+  let is_string: bool = match rk { ir.TyKind.String => true, _ => false };
+  if is_string { return "\"\""; }
+  let is_rawptr: bool = match rk { ir.TyKind.RawPtr => true, _ => false };
+  if is_rawptr { return "(void*)0"; }
+  return sv.init_iv.to_string();
 }
 
 struct FindFuncByNameResult { found: bool, f: ir.Func }
@@ -357,6 +382,20 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
       panic("c backend does not support ffi_export target: ".concat(tgt));
     }
     fe = fe + 1;
+  }
+
+  // Static variables.
+  if p.statics.len() != 0 {
+    let mut sti: i32 = 0;
+    while sti < p.statics.len() {
+      let sv: ir.StaticVarDecl = p.statics.get(sti);
+      let c_ty: String = c_type(pool, sv.ty);
+      let c_name: String = c_static_name(sv.name);
+      let init_str: String = static_init_value(pool, sv);
+      out.push("static ".concat(c_ty).concat(" ").concat(c_name).concat(" = ").concat(init_str).concat(";"));
+      sti = sti + 1;
+    }
+    out.push("");
   }
 
   // Forward decls (ffi imports first, then internal funcs).

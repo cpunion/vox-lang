@@ -118,6 +118,7 @@ fn find_mod(w: tc.World, path: String) -> FindModResult {
         imports: Vec(),
         types: Vec(),
         consts: Vec(),
+        statics: Vec(),
         structs: Vec(),
         enums: Vec(),
         traits: Vec(),
@@ -251,6 +252,7 @@ fn empty_irgen_func_sig(ret: i32) -> tc.FuncSig {
     param_borrow_kinds: Vec(),
     ret: ret,
     has_variadic: false,
+    is_ffi_variadic: false,
     variadic_elem: -1,
     vis: ast.vis_private(),
     is_pub: false,
@@ -316,7 +318,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       fields.push(ir.StructField { name: f.name, ty: f.ty });
       fi = fi + 1;
     }
-    p.structs.push(ir.StructDecl { name: qname(s.mod_path, s.name), fields: fields });
+    p.structs.push(ir.StructDecl { name: qname(s.mod_path, s.name), repr_c: s.repr_c, packed_align: s.packed_align, fields: fields });
     si = si + 1;
   }
 
@@ -351,9 +353,12 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
 
       if fd0.ffi_imports.len() != 0 {
         let ia: ast.FfiImportAttr = fd0.ffi_imports.get(0);
+        let ffi_variadic: bool = fr0.sig.is_ffi_variadic;
+        // For FFI variadic, exclude the trailing Vec param from the IR decl.
+        let ffi_param_count: i32 = if ffi_variadic { fd0.params.len() - 1 } else { fd0.params.len() };
         let mut pms: Vec[ir.Param] = Vec();
         let mut pi0: i32 = 0;
-        while pi0 < fd0.params.len() {
+        while pi0 < ffi_param_count {
           let pa0: ast.Param = fd0.params.get(pi0);
           pms.push(ir.Param { name: pa0.name, ty: tc.strip_range_only(ctx, fr0.sig.params.get(pi0)) });
           pi0 = pi0 + 1;
@@ -365,6 +370,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
           symbol: ia.symbol,
           params: pms,
           ret: tc.strip_range_only(ctx, fr0.sig.ret),
+          has_variadic: ffi_variadic,
         });
       }
 
@@ -378,6 +384,21 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       fi0 = fi0 + 1;
     }
     mi0 = mi0 + 1;
+  }
+
+  // Static variables.
+  let mut sti: i32 = 0;
+  while sti < ctx.statics.len() {
+    let ss: tc.StaticSig = ctx.statics.get(sti);
+    p.statics.push(ir.StaticVarDecl {
+      name: qname(ss.mod_path, ss.name),
+      ty: ss.ty,
+      init_kind: ss.init_kind,
+      init_iv: ss.init_iv,
+      init_bv: ss.init_bv,
+      init_sv: ss.init_sv,
+    });
+    sti = sti + 1;
   }
 
   // Function bodies: generate all non-generic functions, then monomorphize reachable generic instantiations.

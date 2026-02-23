@@ -15,6 +15,12 @@ output=$(find "$ROOT/src" -type f -name '*.vox' ! -name '*_test.vox' \
   ! -path "$ROOT/src/std/sys/sys_linux.vox" \
   ! -path "$ROOT/src/std/sys/sys_darwin.vox" \
   ! -path "$ROOT/src/std/sys/sys_windows.vox" \
+  ! -path "$ROOT/src/std/sys/poll_linux.vox" \
+  ! -path "$ROOT/src/std/sys/poll_darwin.vox" \
+  ! -path "$ROOT/src/std/sys/poll_windows.vox" \
+  ! -path "$ROOT/src/std/sys/sock_linux.vox" \
+  ! -path "$ROOT/src/std/sys/sock_darwin.vox" \
+  ! -path "$ROOT/src/std/sys/sock_windows.vox" \
   -print0 \
   | xargs -0 grep -nHE '@ffi_import[[:space:]]*\([[:space:]]*"c"[[:space:]]*,[[:space:]]*"vox_[[:alnum:]_]*"' || true)
 

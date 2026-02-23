@@ -4,7 +4,7 @@
 
 Defines currently supported built-in attributes and FFI annotation syntax.
 
-Coverage IDs: `S701`, `S702`, `S703`, `S704`.
+Coverage IDs: `S701`, `S702`, `S703`, `S704`, `S705`, `S706`, `S707`.
 
 ## Grammar (Simplified)
 
@@ -18,6 +18,7 @@ Attr
    | "@ffi_import(" StringLit "," StringLit "," StringLit ")"
    | "@ffi_export(" StringLit "," StringLit ")"
    | "@track_caller"
+   | "@repr(" "C" ")"
 
 AttributedFn
   := Attr* FnDecl
@@ -76,11 +77,17 @@ BuildAtom
 
 - `@track_caller` enables caller-site metadata propagation.
 
+### Representation
+
+- `@repr(C)` on a struct guarantees C ABI-compatible field layout (order, alignment, padding).
+- Currently Vox compiles to C so all structs already have C layout; the attribute serves as a semantic marker and will be enforced by future non-C backends.
+
 ## Placement Rules
 
 Current enforced rules:
 
 - `@cfg`, `@ffi_import`, `@ffi_export`, `@track_caller` are top-level function attributes.
+- `@repr(C)` is only allowed on struct declarations.
 - `@build` is only allowed at file scope (using it on function/impl/trait methods is rejected).
 - unsupported placement (for example impl methods) is rejected.
 

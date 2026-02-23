@@ -181,15 +181,19 @@ fn test_codegen_yield_now_intrinsic_uses_sys_ffi() -> () {
   t.assert(!contains(c, "vox_impl_yield_now("));
 }
 
-fn test_codegen_wake_intrinsics_use_runtime_helpers() -> () {
+fn test_codegen_event_loop_uses_runtime_helpers() -> () {
   let src: String = """
-    @ffi_import("c", "vox_impl_wake_notify")
-    fn rt_wake_notify_raw(token: i64) -> ();
-    @ffi_import("c", "vox_impl_wake_wait")
-    fn rt_wake_wait_raw(token: i64, timeout_ms: i32) -> bool;
-    fn f() -> bool {
-      rt_wake_notify_raw(1 as i64);
-      return rt_wake_wait_raw(1 as i64, 1);
+    @ffi_import("c", "vox_impl_el_init")
+    fn el_init() -> ();
+    @ffi_import("c", "vox_impl_el_poller_wake")
+    fn el_wake() -> ();
+    @ffi_import("c", "vox_impl_el_poller_wait")
+    fn el_wait(timeout_ms: i32) -> ();
+    fn f() -> () {
+      el_init();
+      el_wake();
+      el_wait(100);
+      return;
     }
   """;
   let r: p.ParseResult = p.parse_text(src);
@@ -204,36 +208,27 @@ fn test_codegen_wake_intrinsics_use_runtime_helpers() -> () {
     emit_test_main: false,
     test_funcs: Vec(),
   });
-  t.assert(contains(c, "void vox_impl_wake_notify(int64_t token) {"));
-  t.assert(contains(c, "bool vox_impl_wake_wait(int64_t token, int32_t timeout_ms) {"));
-  t.assert(contains(c, "static vox_wake_slot vox_wake_slots[VOX_WAKE_SLOTS];"));
-  t.assert(contains(c, "static void vox_wake_platform_notify(void) {"));
-  t.assert(contains(c, "static void vox_wake_platform_wait_once(int32_t timeout_ms) {"));
-  t.assert(contains(c, "int32_t idx = vox_wake_slot_index(token);"));
-  t.assert(contains(c, "atomic_fetch_add(&vox_wake_slots[idx].pending, 1);"));
-  t.assert(contains(c, "vox_wake_platform_notify();"));
-  t.assert(contains(c, "return vox_wake_try_consume(idx);"));
-  t.assert(!contains(c, "vox_impl_wake_wait_any("));
-  t.assert(!contains(c, "vox_wake_scan_tokens_once("));
-  // Platform wait branches must stay stable for regression safety.
-  t.assert(contains(c, "if (timeout_ms < 0) timeout_ms = 0;"));
+  // Event loop infrastructure must be present in generated C.
+  t.assert(contains(c, "#define VOX_EL_SLOTS 256"));
+  t.assert(contains(c, "static intptr_t vox_el_token_h[VOX_EL_SLOTS];"));
+  t.assert(contains(c, "static intptr_t vox_el_pending_h[VOX_EL_SLOTS];"));
+  t.assert(contains(c, "void vox_impl_el_init(void) {"));
+  t.assert(contains(c, "void vox_impl_el_poller_wake(void) {"));
+  t.assert(contains(c, "void vox_impl_el_poller_wait(int32_t timeout_ms) {"));
+  t.assert(contains(c, "int32_t vox_impl_el_n_slots(void)"));
+  t.assert(contains(c, "intptr_t vox_impl_el_token_handle(int32_t i)"));
+  t.assert(contains(c, "intptr_t vox_impl_el_pending_handle(int32_t i)"));
+  // Old wake infrastructure must not be present.
+  t.assert(!contains(c, "vox_wake_slots["));
+  t.assert(!contains(c, "vox_impl_wake_notify("));
+  t.assert(!contains(c, "vox_impl_wake_wait("));
+  // Platform init branches in event loop.
   t.assert(contains(c, "#if defined(__linux__)"));
-  t.assert(contains(c, "#include <sys/epoll.h>"));
-  t.assert(contains(c, "#include <sys/eventfd.h>"));
   t.assert(contains(c, "eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)"));
-  t.assert(contains(c, "epoll_wait(vox_wake_epoll_fd, &ev, 1, timeout_ms);"));
-  t.assert(contains(c, "#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)"));
   t.assert(contains(c, "EV_SET(&ev, 1, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);"));
-  t.assert(contains(c, "#if defined(_WIN32)"));
-  t.assert(contains(c, "CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);"));
-  t.assert(contains(c, "GetQueuedCompletionStatus(vox_wake_iocp"));
-  t.assert(contains(c, "#elif defined(__EMSCRIPTEN__)"));
-  t.assert(contains(c, "sched_yield();"));
-  t.assert(contains(c, "#else"));
-  t.assert(contains(c, "nanosleep(&ts, NULL);"));
-  t.assert(contains(c, "vox_impl_wake_notify("));
-  t.assert(contains(c, "vox_impl_wake_wait("));
-  t.assert(!contains(c, "extern int32_t vox_impl_wake_wait_any_str("));
+  t.assert(contains(c, "vox_impl_el_init("));
+  t.assert(contains(c, "vox_impl_el_poller_wake("));
+  t.assert(contains(c, "vox_impl_el_poller_wait("));
 }
 
 fn test_codegen_sync_drop_intrinsics_use_runtime_helpers() -> () {
