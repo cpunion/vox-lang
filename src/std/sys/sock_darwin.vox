@@ -1,0 +1,100 @@
+@build(darwin)
+
+// Socket constants.
+pub fn AF_INET() -> i32 { return 2; }
+pub fn AF_INET6() -> i32 { return 30; }
+pub fn SOCK_STREAM() -> i32 { return 1; }
+pub fn SOCK_DGRAM() -> i32 { return 2; }
+pub fn SOL_SOCKET() -> i32 { return 65535; }   // 0xffff
+pub fn SO_REUSEADDR() -> i32 { return 4; }
+pub fn SO_REUSEPORT() -> i32 { return 512; }   // 0x200
+pub fn IPPROTO_TCP() -> i32 { return 6; }
+pub fn TCP_NODELAY() -> i32 { return 1; }
+pub fn O_NONBLOCK() -> i32 { return 4; }
+pub fn F_GETFL() -> i32 { return 3; }
+pub fn F_SETFL() -> i32 { return 4; }
+pub fn EAGAIN() -> i32 { return 35; }
+pub fn EINPROGRESS() -> i32 { return 36; }
+
+// struct sockaddr_in layout (macOS, 16 bytes):
+//   sin_len:    u8  (1 byte, offset 0)
+//   sin_family: u8  (1 byte, offset 1)
+//   sin_port:   u16 (2 bytes, offset 2) - network byte order
+//   sin_addr:   u32 (4 bytes, offset 4) - network byte order
+//   sin_zero:   [u8; 8] (8 bytes, offset 8)
+pub fn SOCKADDR_IN_SIZE() -> u32 { return 16; }
+
+// struct addrinfo layout (macOS arm64/x86_64, 48 bytes):
+//   ai_flags:     i32 (4 bytes, offset 0)
+//   ai_family:    i32 (4 bytes, offset 4)
+//   ai_socktype:  i32 (4 bytes, offset 8)
+//   ai_protocol:  i32 (4 bytes, offset 12)
+//   ai_addrlen:   u32 (4 bytes, offset 16)
+//   <padding>     (4 bytes, offset 20)
+//   ai_canonname: rawptr (8 bytes, offset 24)  -- note: reversed vs Linux
+//   ai_addr:      rawptr (8 bytes, offset 32)
+//   ai_next:      rawptr (8 bytes, offset 40)
+pub fn ADDRINFO_SIZE() -> isize { return 48; }
+pub fn ADDRINFO_OFF_FLAGS() -> isize { return 0; }
+pub fn ADDRINFO_OFF_FAMILY() -> isize { return 4; }
+pub fn ADDRINFO_OFF_SOCKTYPE() -> isize { return 8; }
+pub fn ADDRINFO_OFF_PROTOCOL() -> isize { return 12; }
+pub fn ADDRINFO_OFF_ADDRLEN() -> isize { return 16; }
+pub fn ADDRINFO_OFF_ADDR() -> isize { return 32; }
+pub fn ADDRINFO_OFF_NEXT() -> isize { return 40; }
+
+@ffi_import("c", "socket") fn c_socket(domain: i32, ty: i32, proto: i32) -> i32;
+@ffi_import("c", "listen") fn c_listen(fd: i32, backlog: i32) -> i32;
+@ffi_import("c", "vox_impl_htons") fn c_htons(v: u16) -> u16;
+@ffi_import("c", "vox_impl_setsockopt") fn c_setsockopt(fd: i32, level: i32, name: i32, val: rawptr, len: u32) -> i32;
+
+// Wrapper FFI (avoid struct pointer extern conflicts).
+@ffi_import("c", "vox_impl_sock_connect") fn c_connect(fd: i32, addr: rawptr, len: u32) -> i32;
+@ffi_import("c", "vox_impl_sock_bind") fn c_bind(fd: i32, addr: rawptr, len: u32) -> i32;
+@ffi_import("c", "vox_impl_sock_accept") fn c_accept(fd: i32, addr: rawptr, len: rawptr) -> i32;
+@ffi_import("c", "vox_impl_getaddrinfo") fn c_getaddrinfo(node: String, service: String, hints: rawptr, res: rawptr) -> i32;
+@ffi_import("c", "vox_impl_freeaddrinfo") fn c_freeaddrinfo(res: rawptr) -> ();
+@ffi_import("c", "vox_impl_fcntl3") fn c_fcntl(fd: i32, cmd: i32, arg: i32) -> i32;
+
+pub fn sock_socket(domain: i32, ty: i32, proto: i32) -> i32 {
+  return c_socket(domain, ty, proto);
+}
+
+pub fn sock_connect(fd: i32, addr: rawptr, len: u32) -> i32 {
+  return c_connect(fd, addr, len);
+}
+
+pub fn sock_bind(fd: i32, addr: rawptr, len: u32) -> i32 {
+  return c_bind(fd, addr, len);
+}
+
+pub fn sock_listen(fd: i32, backlog: i32) -> i32 {
+  return c_listen(fd, backlog);
+}
+
+pub fn sock_accept(fd: i32, addr: rawptr, len: rawptr) -> i32 {
+  return c_accept(fd, addr, len);
+}
+
+pub fn sock_setsockopt_i32(fd: i32, level: i32, name: i32, val: rawptr) -> i32 {
+  return c_setsockopt(fd, level, name, val, 4);
+}
+
+pub fn sock_htons(v: u16) -> u16 {
+  return c_htons(v);
+}
+
+pub fn sock_set_nonblock(fd: i32) -> i32 {
+  let flags: i32 = c_fcntl(fd, F_GETFL(), 0);
+  if flags < 0 { return flags; }
+  return c_fcntl(fd, F_SETFL(), flags | O_NONBLOCK());
+}
+
+pub fn sock_getaddrinfo(node: String, service: String, hints: rawptr, res: rawptr) -> i32 {
+  return c_getaddrinfo(node, service, hints, res);
+}
+
+pub fn sock_freeaddrinfo(res: rawptr) -> () {
+  c_freeaddrinfo(res);
+  return;
+}
