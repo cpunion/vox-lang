@@ -30,7 +30,7 @@ pub fn NOTE_TRIGGER() -> u32 { return 16777216; }  // 0x01000000
 pub fn NOTE_FFNOP() -> u32 { return 0; }
 
 @ffi_import("c", "kqueue") fn c_kqueue() -> i32;
-@ffi_import("c", "kevent") fn c_kevent(kq: i32, changelist: rawptr, nchanges: i32, eventlist: rawptr, nevents: i32, timeout: rawptr) -> i32;
+@ffi_import("c", "vox_impl_kevent") fn c_kevent(kq: i32, changelist: rawptr, nchanges: i32, eventlist: rawptr, nevents: i32, timeout: rawptr) -> i32;
 @ffi_import("c", "close") fn c_close_fd(fd: i32) -> i32;
 
 pub fn kqueue_create() -> i32 {
@@ -49,22 +49,19 @@ pub fn close_fd(fd: i32) -> i32 {
   return c_close_fd(fd);
 }
 
-// Struct manipulation via @ptr_write at known byte offsets.
-// kevent layout (darwin arm64/x86_64): ident(8) filter(2) flags(2) fflags(4) data(8) udata(8) = 32 bytes.
+// Struct manipulation helpers (bridged via C runtime for bootstrap compat).
+@ffi_import("c", "vox_impl_kevent_set")
+fn c_kevent_set(buf: rawptr, index: i32, ident: usize, filter: i16, flags: u16, fflags: u32, data: isize, udata: rawptr) -> ();
+
+@ffi_import("c", "vox_impl_timespec_set_ms")
+fn c_timespec_set_ms(buf: rawptr, ms: i32) -> ();
+
 pub fn kevent_set(buf: rawptr, index: i32, ident: usize, filter: i16, flags: u16, fflags: u32, data: isize, udata: rawptr) -> () {
-  let base: rawptr = @ptr_offset(buf, (index as isize) * KEVENT_SIZE());
-  @ptr_write[usize](base, ident);
-  @ptr_write[i16](@ptr_offset(base, 8 as isize), filter);
-  @ptr_write[u16](@ptr_offset(base, 10 as isize), flags);
-  @ptr_write[u32](@ptr_offset(base, 12 as isize), fflags);
-  @ptr_write[isize](@ptr_offset(base, 16 as isize), data);
-  @ptr_write[rawptr](@ptr_offset(base, 24 as isize), udata);
+  c_kevent_set(buf, index, ident, filter, flags, fflags, data, udata);
   return;
 }
 
-// timespec layout: tv_sec(i64, offset 0) + tv_nsec(i64, offset 8) = 16 bytes.
 pub fn timespec_set_ms(buf: rawptr, ms: i32) -> () {
-  @ptr_write[i64](buf, (ms / 1000) as i64);
-  @ptr_write[i64](@ptr_offset(buf, 8 as isize), ((ms % 1000) as i64) * 1000000 as i64);
+  c_timespec_set_ms(buf, ms);
   return;
 }

@@ -13,6 +13,37 @@ fn emit_rt_sys_lines() -> Vec[String] {
   out.push("  return v;");
   out.push("}");
   out.push("");
+  out.push("vox_vec vox_impl_args(void) {");
+  out.push("  vox_vec v = vox_vec_new((int32_t)sizeof(const char*));");
+  out.push("  for (int i = 1; i < vox__argc; i++) {");
+  out.push("    const char* s = vox__argv[i];");
+  out.push("    vox_vec_push(&v, &s);");
+  out.push("  }");
+  out.push("  return v;");
+  out.push("}");
+  out.push("");
+  out.push("const char* vox_impl_exe_path(void) {");
+  out.push("  if (!vox__argv || vox__argc <= 0 || !vox__argv[0]) return \"\";");
+  out.push("  return vox__argv[0];");
+  out.push("}");
+  out.push("");
+  out.push("void* vox_impl_alloc_buf(int32_t size) {");
+  out.push("  if (size < 0) size = 0;");
+  out.push("  char* p = (char*)vox_impl_malloc((size_t)size + 1);");
+  out.push("  if (!p) { vox_host_panic(\"out of memory\"); }");
+  out.push("  p[size] = '\\0';");
+  out.push("  return (void*)p;");
+  out.push("}");
+  out.push("");
+  out.push("const char* vox_impl_buf_to_string(void* buf, int32_t len) {");
+  out.push("  if (!buf) return \"\";");
+  out.push("  if (len < 0) len = 0;");
+  out.push("  ((char*)buf)[len] = '\\0';");
+  out.push("  return (const char*)buf;");
+  out.push("}");
+  out.push("");
+  out.push("void* vox_impl_null_ptr(void) { return (void*)0; }");
+  out.push("");
   out.push("// === Event loop: Vox-driven wake table + platform poller ===");
   out.push("// Forward declarations for atomic functions used by el_init.");
   out.push("intptr_t vox_impl_atomic_i64_new(int64_t init);");
@@ -70,6 +101,7 @@ fn emit_rt_sys_lines() -> Vec[String] {
   out.push("  vox_el_inited = true;");
   out.push("}");
   out.push("");
+  out.push("int32_t vox_impl_el_n_slots(void) { return VOX_EL_SLOTS; }");
   out.push("intptr_t vox_impl_el_token_handle(int32_t i) { return vox_el_token_h[i]; }");
   out.push("intptr_t vox_impl_el_pending_handle(int32_t i) { return vox_el_pending_h[i]; }");
   out.push("");
@@ -112,29 +144,39 @@ fn emit_rt_sys_lines() -> Vec[String] {
   out.push("#endif");
   out.push("}");
   out.push("");
-  out.push("// Thin wrappers for Vox std/sys (avoid C type conflicts with system headers).");
-  out.push("#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)");
-  out.push("int32_t vox_impl_clock_gettime(int32_t clk_id, void* tp) {");
-  out.push("  return clock_gettime((clockid_t)clk_id, (struct timespec*)tp);");
-  out.push("}");
-  out.push("#endif");
+  out.push("int64_t vox_impl_now_ns(void) {");
   out.push("#if defined(_WIN32)");
-  out.push("uint64_t vox_impl_get_tick_count64(void) { return GetTickCount64(); }");
-  out.push("#endif");
-  out.push("#if defined(__EMSCRIPTEN__)");
-  out.push("int64_t vox_impl_wasm_clock(void) {");
+  out.push("  return (int64_t)GetTickCount64() * (int64_t)1000000;");
+  out.push("#elif defined(__EMSCRIPTEN__)");
   out.push("  clock_t c = clock();");
   out.push("  if (c == (clock_t)-1) return 0;");
   out.push("  return (int64_t)c * (int64_t)1000000000 / (int64_t)CLOCKS_PER_SEC;");
+  out.push("#else");
+  out.push("  struct timespec ts;");
+  out.push("  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {");
+  out.push("    if (timespec_get(&ts, TIME_UTC) == 0) return 0;");
+  out.push("  }");
+  out.push("  return (int64_t)ts.tv_sec * (int64_t)1000000000 + (int64_t)ts.tv_nsec;");
+  out.push("#endif");
+  out.push("}");
+  out.push("");
+  // Platform I/O wrappers (avoid C type conflicts with system headers).
+  // Forward declarations in c_rt_core use void* instead of struct pointers,
+  // so these wrappers just forward through.
+  out.push("// Platform I/O wrappers (avoid extern declaration conflicts with system headers).");
+  out.push("#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)");
+  out.push("int32_t vox_impl_kevent(int32_t kq, void* changelist, int32_t nchanges, void* eventlist, int32_t nevents, void* timeout) {");
+  out.push("  return kevent(kq, changelist, nchanges, eventlist, nevents, timeout);");
   out.push("}");
   out.push("#endif");
-  // vox_impl_get_argc / vox_impl_get_argv / vox_impl_argv_get removed:
-  // pure Vox code in sys_common.vox reads g_argc/g_argv directly via
-  // pointer arithmetic.
-  out.push("");
-  out.push("// vox_impl_kevent / vox_impl_epoll_ctl / vox_impl_epoll_wait removed:");
-  out.push("// headers replaced with forward declarations (void*), so Vox @ffi_import");
-  out.push("// can directly call epoll_ctl / epoll_wait / kevent without conflicts.");
+  out.push("#if defined(__linux__)");
+  out.push("int32_t vox_impl_epoll_ctl(int32_t epfd, int32_t op, int32_t fd, void* event) {");
+  out.push("  return epoll_ctl(epfd, op, fd, event);");
+  out.push("}");
+  out.push("int32_t vox_impl_epoll_wait(int32_t epfd, void* events, int32_t maxevents, int32_t timeout) {");
+  out.push("  return epoll_wait(epfd, events, maxevents, timeout);");
+  out.push("}");
+  out.push("#endif");
   out.push("");
   // Socket FFI wrappers use forward declarations instead of <sys/socket.h>
   // and <netdb.h> to avoid pulling in <sys/epoll.h> indirectly on Linux,
@@ -142,6 +184,7 @@ fn emit_rt_sys_lines() -> Vec[String] {
   out.push("#ifndef _WIN32");
   out.push("struct sockaddr;");
   out.push("struct addrinfo;");
+  out.push("extern int socket(int, int, int);");
   out.push("extern int connect(int, const struct sockaddr*, unsigned int);");
   out.push("extern int bind(int, const struct sockaddr*, unsigned int);");
   out.push("extern int accept(int, struct sockaddr*, unsigned int*);");
@@ -149,6 +192,7 @@ fn emit_rt_sys_lines() -> Vec[String] {
   out.push("extern void freeaddrinfo(struct addrinfo*);");
   out.push("extern int setsockopt(int, int, int, const void*, unsigned int);");
   out.push("extern int fcntl(int, int, ...);");
+  out.push("uint16_t vox_impl_htons(uint16_t v) { return (uint16_t)((v >> 8) | (v << 8)); }");
   out.push("int32_t vox_impl_sock_connect(int32_t fd, void* addr, uint32_t len) {");
   out.push("  return connect(fd, (const struct sockaddr*)addr, len);");
   out.push("}");
@@ -184,6 +228,7 @@ fn emit_rt_sys_lines() -> Vec[String] {
   out.push("extern int setsockopt(SOCKET, int, int, const char*, int);");
   out.push("extern SOCKET socket(int, int, int);");
   out.push("extern int listen(SOCKET, int);");
+  out.push("uint16_t vox_impl_htons(uint16_t v) { return (uint16_t)((v >> 8) | (v << 8)); }");
   out.push("int32_t vox_impl_sock_connect(int32_t fd, void* addr, uint32_t len) {");
   out.push("  return connect((SOCKET)(intptr_t)fd, (const struct sockaddr*)addr, (int)len);");
   out.push("}");
@@ -208,8 +253,42 @@ fn emit_rt_sys_lines() -> Vec[String] {
   out.push("}");
   out.push("#endif");
   out.push("");
-  out.push("// Struct manipulation (kevent_set, timespec_set_ms, epoll_event_set,");
-  out.push("// eventfd_signal, eventfd_drain) migrated to pure Vox in std/sys/poll_*.vox.");
+  // Struct manipulation helpers for pollers (bootstrap-compatible).
+  // Use raw pointer arithmetic since we don't include system struct headers.
+  out.push("// Struct manipulation helpers for pollers (bootstrap-compatible).");
+  out.push("#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)");
+  out.push("void vox_impl_kevent_set(void* buf, int32_t index, uintptr_t ident, int16_t filter, uint16_t flags, uint32_t fflags, intptr_t data, void* udata) {");
+  out.push("  char* kev = (char*)buf + index * VOX_KEVENT_SZ;");
+  out.push("  memset(kev, 0, VOX_KEVENT_SZ);");
+  out.push("  *(uintptr_t*)kev = ident;");
+  out.push("  *(int16_t*)(kev + 8) = filter;");
+  out.push("  *(uint16_t*)(kev + 10) = flags;");
+  out.push("  *(uint32_t*)(kev + 12) = fflags;");
+  out.push("  *(intptr_t*)(kev + 16) = data;");
+  out.push("  *(void**)(kev + 24) = udata;");
+  out.push("}");
+  out.push("void vox_impl_timespec_set_ms(void* buf, int32_t ms) {");
+  out.push("  struct timespec* ts = (struct timespec*)buf;");
+  out.push("  ts->tv_sec = ms / 1000;");
+  out.push("  ts->tv_nsec = (long)(ms % 1000) * 1000000L;");
+  out.push("}");
+  out.push("#endif");
+  out.push("#if defined(__linux__)");
+  out.push("void vox_impl_epoll_event_set(void* buf, int32_t index, uint32_t events, uint64_t data) {");
+  out.push("  char* ev = (char*)buf + index * 12;");
+  out.push("  *(uint32_t*)ev = events;");
+  out.push("  *(uint64_t*)(ev + 4) = data;");
+  out.push("}");
+  out.push("void vox_impl_eventfd_signal(int32_t fd) {");
+  out.push("  uint64_t one = 1;");
+  out.push("  ssize_t n = write(fd, &one, sizeof(one));");
+  out.push("  (void)n;");
+  out.push("}");
+  out.push("void vox_impl_eventfd_drain(int32_t fd) {");
+  out.push("  uint64_t v = 0;");
+  out.push("  while (read(fd, &v, sizeof(v)) > 0) {}");
+  out.push("}");
+  out.push("#endif");
   out.push("#if defined(_WIN32)");
   out.push("intptr_t vox_impl_create_iocp(intptr_t file, intptr_t existing, uintptr_t key, uint32_t threads) {");
   out.push("  return (intptr_t)CreateIoCompletionPort((HANDLE)file, (HANDLE)existing, (ULONG_PTR)key, (DWORD)threads);");
@@ -234,6 +313,204 @@ fn emit_rt_sys_lines() -> Vec[String] {
   out.push("}");
   out.push("int32_t vox_impl_win_listen(int32_t fd, int32_t backlog) {");
   out.push("  return listen((SOCKET)fd, backlog);");
+  out.push("}");
+  out.push("#endif");
+  out.push("");
+  // TCP wrappers: vox_impl_tcp_connect/recv/close/wait_read/wait_write.
+  // These use the socket forward declarations already emitted above.
+  // Windows TCP wait uses select (simpler than IOCP for single-fd poll).
+  out.push("#if defined(_WIN32)");
+  // Complete struct addrinfo definition (matches <ws2def.h> layout).
+  // The earlier forward declaration `struct addrinfo;` used only pointer types,
+  // so completing the type here is valid C.
+  out.push("struct addrinfo { int ai_flags; int ai_family; int ai_socktype; int ai_protocol; size_t ai_addrlen; char* ai_canonname; struct sockaddr* ai_addr; struct addrinfo* ai_next; };");
+  out.push("typedef struct { unsigned short wVersion; unsigned short wHighVersion; char szDescription[257]; char szSystemStatus[129]; unsigned short iMaxSockets; unsigned short iMaxUdpDg; char* lpVendorInfo; } VOX_WSADATA;");
+  out.push("extern int __stdcall WSAStartup(unsigned short, VOX_WSADATA*);");
+  out.push("extern int recv(SOCKET, char*, int, int);");
+  out.push("extern int closesocket(SOCKET);");
+  out.push("extern int select(int, void*, void*, void*, void*);");
+  out.push("static int vox_tcp_win_inited = 0;");
+  out.push("static void vox_tcp_win_ensure_init(void) {");
+  out.push("  if (vox_tcp_win_inited) return;");
+  out.push("  VOX_WSADATA wsa;");
+  out.push("  int rc = WSAStartup(0x0202, &wsa);");
+  out.push("  if (rc != 0) { vox_host_panic(\"tcp wsa startup failed\"); }");
+  out.push("  vox_tcp_win_inited = 1;");
+  out.push("}");
+  out.push("");
+  out.push("intptr_t vox_impl_tcp_connect(const char* host, int32_t port) {");
+  out.push("  vox_tcp_win_ensure_init();");
+  out.push("  if (!host) host = \"\";");
+  out.push("  if (port <= 0 || port > 65535) { vox_host_panic(\"invalid tcp port\"); }");
+  out.push("  char port_buf[16];");
+  out.push("  snprintf(port_buf, sizeof(port_buf), \"%\" PRId32, port);");
+  out.push("  struct addrinfo hints;");
+  out.push("  memset(&hints, 0, sizeof(hints));");
+  out.push("  hints.ai_family = 0;");   // AF_UNSPEC
+  out.push("  hints.ai_socktype = 1;"); // SOCK_STREAM
+  out.push("  hints.ai_protocol = 6;"); // IPPROTO_TCP
+  out.push("  struct addrinfo* res = NULL;");
+  out.push("  int rc = getaddrinfo(host, port_buf, &hints, &res);");
+  out.push("  if (rc != 0 || !res) { vox_host_panic(\"tcp connect resolve failed\"); }");
+  out.push("  SOCKET fd = (SOCKET)(~(uintptr_t)0);"); // INVALID_SOCKET
+  out.push("  for (struct addrinfo* p = res; p != NULL; p = p->ai_next) {");
+  out.push("    fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);");
+  out.push("    if (fd == (SOCKET)(~(uintptr_t)0)) continue;");
+  out.push("    if (connect(fd, p->ai_addr, (int)p->ai_addrlen) == 0) { break; }");
+  out.push("    closesocket(fd);");
+  out.push("    fd = (SOCKET)(~(uintptr_t)0);");
+  out.push("  }");
+  out.push("  freeaddrinfo(res);");
+  out.push("  if (fd == (SOCKET)(~(uintptr_t)0)) { vox_host_panic(\"tcp connect failed\"); }");
+  out.push("  return (intptr_t)(uintptr_t)fd;");
+  out.push("}");
+  out.push("");
+  out.push("const char* vox_impl_tcp_recv(intptr_t h, int32_t max_n) {");
+  out.push("  if (h < 0) { vox_host_panic(\"invalid tcp handle\"); }");
+  out.push("  SOCKET fd = (SOCKET)(uintptr_t)h;");
+  out.push("  if (max_n <= 0) return \"\";");
+  out.push("  char* buf = (char*)vox_impl_malloc((size_t)max_n + 1);");
+  out.push("  if (!buf) { vox_host_panic(\"out of memory\"); }");
+  out.push("  int n = recv(fd, buf, max_n, 0);");
+  out.push("  if (n < 0) { vox_host_panic(\"tcp recv failed\"); }");
+  out.push("  buf[n] = '\\0';");
+  out.push("  return buf;");
+  out.push("}");
+  out.push("");
+  out.push("void vox_impl_tcp_close(intptr_t h) {");
+  out.push("  if (h < 0) return;");
+  out.push("  closesocket((SOCKET)(uintptr_t)h);");
+  out.push("}");
+  out.push("");
+  // Windows TCP wait using select (fd_set layout: u32 count + 4-byte pad + SOCKET[64] = 520 bytes).
+  out.push("static bool vox_tcp_wait_select(SOCKET fd, bool want_write, int32_t timeout_ms) {");
+  out.push("  if (timeout_ms < 0) timeout_ms = 0;");
+  out.push("  char fds[520];");
+  out.push("  memset(fds, 0, 520);");
+  out.push("  *(uint32_t*)fds = 1;");
+  out.push("  *(SOCKET*)(fds + 8) = fd;");
+  out.push("  int32_t tv[2];"); // timeval: tv_sec(long=4 on Win), tv_usec(long=4 on Win)
+  out.push("  tv[0] = timeout_ms / 1000;");
+  out.push("  tv[1] = (timeout_ms % 1000) * 1000;");
+  out.push("  int n = select(0, want_write ? NULL : fds, want_write ? fds : NULL, NULL, tv);");
+  out.push("  return n > 0;");
+  out.push("}");
+  out.push("");
+  out.push("bool vox_impl_tcp_wait_read(intptr_t h, int32_t timeout_ms) {");
+  out.push("  if (h < 0) { vox_host_panic(\"invalid tcp handle\"); }");
+  out.push("  return vox_tcp_wait_select((SOCKET)(uintptr_t)h, false, timeout_ms);");
+  out.push("}");
+  out.push("");
+  out.push("bool vox_impl_tcp_wait_write(intptr_t h, int32_t timeout_ms) {");
+  out.push("  if (h < 0) { vox_host_panic(\"invalid tcp handle\"); }");
+  out.push("  return vox_tcp_wait_select((SOCKET)(uintptr_t)h, true, timeout_ms);");
+  out.push("}");
+  out.push("#else"); // Unix TCP wrappers
+  // Complete struct addrinfo definition for Unix.
+  // NOTE: macOS reverses ai_canonname and ai_addr vs Linux. The layout below
+  // matches the POSIX/Linux ordering. On macOS, ai_canonname and ai_addr are
+  // also adjacent but in reversed order; however, both getaddrinfo and
+  // freeaddrinfo are called through the system linker, so the struct layout
+  // MUST match the platform ABI. We use a platform-specific definition.
+  out.push("#if defined(__APPLE__)");
+  // macOS layout: flags, family, socktype, protocol, addrlen, canonname, addr, next
+  out.push("struct addrinfo { int ai_flags; int ai_family; int ai_socktype; int ai_protocol; unsigned int ai_addrlen; char* ai_canonname; struct sockaddr* ai_addr; struct addrinfo* ai_next; };");
+  out.push("#else");
+  // Linux layout: flags, family, socktype, protocol, addrlen, addr, canonname, next
+  out.push("struct addrinfo { int ai_flags; int ai_family; int ai_socktype; int ai_protocol; unsigned int ai_addrlen; struct sockaddr* ai_addr; char* ai_canonname; struct addrinfo* ai_next; };");
+  out.push("#endif");
+  out.push("extern ssize_t recv(int, void*, size_t, int);");
+  out.push("static bool vox_tcp_wait_unix_fd(int fd, bool want_write, int32_t timeout_ms) {");
+  out.push("  if (fd < 0) { vox_host_panic(\"invalid tcp handle\"); }");
+  out.push("  if (timeout_ms < 0) timeout_ms = 0;");
+  out.push("#if defined(__linux__)");
+  out.push("  int ep = epoll_create1(VOX_EPOLL_CLOEXEC);");
+  out.push("  if (ep < 0) { vox_host_panic(\"tcp epoll create failed\"); }");
+  out.push("  char ev[12];");
+  out.push("  memset(ev, 0, 12);");
+  out.push("  *(uint32_t*)ev = want_write ? (VOX_EPOLLOUT | 0x8 | 0x10) : (VOX_EPOLLIN | 0x8 | 0x10);");
+  out.push("  *(uint64_t*)(ev + 4) = 1;");
+  out.push("  if (epoll_ctl(ep, VOX_EPOLL_CTL_ADD, fd, ev) != 0) { close(ep); vox_host_panic(\"tcp epoll ctl failed\"); }");
+  out.push("  int n = epoll_wait(ep, ev, 1, timeout_ms);");
+  out.push("  close(ep);");
+  out.push("  return n > 0;");
+  out.push("#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)");
+  out.push("  int kq = kqueue();");
+  out.push("  if (kq < 0) { vox_host_panic(\"tcp kqueue create failed\"); }");
+  out.push("  char ch[VOX_KEVENT_SZ];");
+  out.push("  int16_t filt = want_write ? VOX_EVFILT_WRITE : VOX_EVFILT_READ;");
+  out.push("  vox_kev_set(ch, (uintptr_t)fd, filt, VOX_EV_ADD | VOX_EV_ENABLE | VOX_EV_ONESHOT, 0, 0, NULL);");
+  out.push("  if (kevent(kq, ch, 1, NULL, 0, NULL) != 0) { close(kq); vox_host_panic(\"tcp kqueue register failed\"); }");
+  out.push("  struct timespec ts;");
+  out.push("  ts.tv_sec = timeout_ms / 1000;");
+  out.push("  ts.tv_nsec = (long)(timeout_ms % 1000) * 1000000L;");
+  out.push("  char ev[VOX_KEVENT_SZ];");
+  out.push("  int n = kevent(kq, NULL, 0, ev, 1, &ts);");
+  out.push("  close(kq);");
+  out.push("  return n > 0;");
+  out.push("#else");
+  out.push("  fd_set rfds;");
+  out.push("  fd_set wfds;");
+  out.push("  FD_ZERO(&rfds);");
+  out.push("  FD_ZERO(&wfds);");
+  out.push("  if (want_write) { FD_SET(fd, &wfds); } else { FD_SET(fd, &rfds); }");
+  out.push("  struct timeval tv;");
+  out.push("  tv.tv_sec = timeout_ms / 1000;");
+  out.push("  tv.tv_usec = (timeout_ms % 1000) * 1000;");
+  out.push("  int n = select(fd + 1, want_write ? NULL : &rfds, want_write ? &wfds : NULL, NULL, &tv);");
+  out.push("  return n > 0;");
+  out.push("#endif");
+  out.push("}");
+  out.push("");
+  out.push("bool vox_impl_tcp_wait_read(intptr_t h, int32_t timeout_ms) {");
+  out.push("  return vox_tcp_wait_unix_fd((int)h, false, timeout_ms);");
+  out.push("}");
+  out.push("");
+  out.push("bool vox_impl_tcp_wait_write(intptr_t h, int32_t timeout_ms) {");
+  out.push("  return vox_tcp_wait_unix_fd((int)h, true, timeout_ms);");
+  out.push("}");
+  out.push("");
+  out.push("intptr_t vox_impl_tcp_connect(const char* host, int32_t port) {");
+  out.push("  if (!host) host = \"\";");
+  out.push("  if (port <= 0 || port > 65535) { vox_host_panic(\"invalid tcp port\"); }");
+  out.push("  char port_buf[16];");
+  out.push("  snprintf(port_buf, sizeof(port_buf), \"%\" PRId32, port);");
+  out.push("  struct addrinfo hints;");
+  out.push("  memset(&hints, 0, sizeof(hints));");
+  out.push("  hints.ai_family = 0;");   // AF_UNSPEC
+  out.push("  hints.ai_socktype = 1;"); // SOCK_STREAM
+  out.push("  struct addrinfo* res = NULL;");
+  out.push("  int rc = getaddrinfo(host, port_buf, &hints, &res);");
+  out.push("  if (rc != 0 || !res) { vox_host_panic(\"tcp connect resolve failed\"); }");
+  out.push("  int fd = -1;");
+  out.push("  for (struct addrinfo* p = res; p != NULL; p = p->ai_next) {");
+  out.push("    fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);");
+  out.push("    if (fd < 0) continue;");
+  out.push("    if (connect(fd, p->ai_addr, p->ai_addrlen) == 0) { break; }");
+  out.push("    close(fd);");
+  out.push("    fd = -1;");
+  out.push("  }");
+  out.push("  freeaddrinfo(res);");
+  out.push("  if (fd < 0) { vox_host_panic(\"tcp connect failed\"); }");
+  out.push("  return (intptr_t)fd;");
+  out.push("}");
+  out.push("");
+  out.push("const char* vox_impl_tcp_recv(intptr_t h, int32_t max_n) {");
+  out.push("  int fd = (int)h;");
+  out.push("  if (fd < 0) { vox_host_panic(\"invalid tcp handle\"); }");
+  out.push("  if (max_n <= 0) return \"\";");
+  out.push("  char* buf = (char*)vox_impl_malloc((size_t)max_n + 1);");
+  out.push("  if (!buf) { vox_host_panic(\"out of memory\"); }");
+  out.push("  ssize_t n = recv(fd, buf, (size_t)max_n, 0);");
+  out.push("  if (n < 0) { vox_host_panic(\"tcp recv failed\"); }");
+  out.push("  buf[n] = '\\0';");
+  out.push("  return buf;");
+  out.push("}");
+  out.push("");
+  out.push("void vox_impl_tcp_close(intptr_t h) {");
+  out.push("  int fd = (int)h;");
+  out.push("  if (fd < 0) return;");
+  out.push("  close(fd);");
   out.push("}");
   out.push("#endif");
   out.push("");

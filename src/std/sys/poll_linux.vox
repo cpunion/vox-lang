@@ -24,8 +24,8 @@ pub fn EFD_NONBLOCK() -> i32 { return 2048; }  // 0x800
 pub fn EFD_CLOEXEC() -> i32 { return 524288; }  // 0x80000
 
 @ffi_import("c", "epoll_create1") fn c_epoll_create1(flags: i32) -> i32;
-@ffi_import("c", "epoll_ctl") fn c_epoll_ctl(epfd: i32, op: i32, fd: i32, event: rawptr) -> i32;
-@ffi_import("c", "epoll_wait") fn c_epoll_wait(epfd: i32, events: rawptr, max: i32, timeout: i32) -> i32;
+@ffi_import("c", "vox_impl_epoll_ctl") fn c_epoll_ctl(epfd: i32, op: i32, fd: i32, event: rawptr) -> i32;
+@ffi_import("c", "vox_impl_epoll_wait") fn c_epoll_wait(epfd: i32, events: rawptr, max: i32, timeout: i32) -> i32;
 @ffi_import("c", "eventfd") fn c_eventfd(initval: u32, flags: i32) -> i32;
 @ffi_import("c", "close") fn c_close_fd(fd: i32) -> i32;
 
@@ -49,27 +49,27 @@ pub fn close_fd(fd: i32) -> i32 {
   return c_close_fd(fd);
 }
 
-// Struct manipulation via @ptr_write at known byte offsets.
-// epoll_event layout (linux x86_64, packed): events(u32, 4 bytes) + data(u64, 8 bytes) = 12 bytes.
+// Struct manipulation helpers (bridged via C runtime for bootstrap compat).
+@ffi_import("c", "vox_impl_epoll_event_set")
+fn c_epoll_event_set(buf: rawptr, index: i32, events: u32, data: u64) -> ();
+
+@ffi_import("c", "vox_impl_eventfd_signal")
+fn c_eventfd_signal(fd: i32) -> ();
+
+@ffi_import("c", "vox_impl_eventfd_drain")
+fn c_eventfd_drain(fd: i32) -> ();
+
 pub fn epoll_event_set(buf: rawptr, index: i32, events: u32, data: u64) -> () {
-  let base: rawptr = @ptr_offset(buf, (index as isize) * EPOLL_EVENT_SIZE());
-  @ptr_write[u32](base, events);
-  @ptr_write[u64](@ptr_offset(base, 4 as isize), data);
+  c_epoll_event_set(buf, index, events, data);
   return;
 }
 
 pub fn eventfd_signal(fd: i32) -> () {
-  let buf: rawptr = calloc(1 as usize, 8 as usize);
-  @ptr_write[u64](buf, 1 as u64);
-  let _n: isize = write(fd, buf as const rawptr, 8 as usize);
-  _n;
-  free(buf);
+  c_eventfd_signal(fd);
   return;
 }
 
 pub fn eventfd_drain(fd: i32) -> () {
-  let buf: rawptr = calloc(1 as usize, 8 as usize);
-  while read(fd, buf, 8 as usize) > 0 as isize {}
-  free(buf);
+  c_eventfd_drain(fd);
   return;
 }
