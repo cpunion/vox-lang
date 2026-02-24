@@ -821,7 +821,11 @@ fn gen_expr_as(g0: Gen, a: i32, _tn: ast.TypeName, out_ty: i32) -> GenExprResult
   let to_t0: ir.Ty = ir.ty_pool_get(g.ctx.pool, to_base);
   let ptr_bridge_noop: bool =
     (from_t0.kind == ir.TyKind.String && to_t0.kind == ir.TyKind.RawPtr && ir.ty_rawptr_is_const(to_t0))
+      || (from_t0.kind == ir.TyKind.RawPtr && to_t0.kind == ir.TyKind.String)
       || (from_t0.kind == ir.TyKind.RawPtr && to_t0.kind == ir.TyKind.RawPtr);
+  let ptr_int_cast: bool =
+    (from_t0.kind == ir.TyKind.RawPtr && (to_t0.kind == ir.TyKind.ISize || to_t0.kind == ir.TyKind.USize))
+      || ((from_t0.kind == ir.TyKind.ISize || from_t0.kind == ir.TyKind.USize) && to_t0.kind == ir.TyKind.RawPtr);
 
   // 1) Base cast (i32<->i64). Range types are represented as their base in IR.
   let mut v: ir.Value = ar.val;
@@ -830,17 +834,22 @@ fn gen_expr_as(g0: Gen, a: i32, _tn: ast.TypeName, out_ty: i32) -> GenExprResult
     g = rt.g;
     let tid: i32 = rt.id;
 
-    let from_float: bool = tc.is_float_ty(g.ctx, from_base);
-    let to_float: bool = tc.is_float_ty(g.ctx, to_base);
-    if to_float {
-      // int->float and float->float
-      g = gen_emit(g, ir.Instr.FloatCast(tid, to_base, from_base, ar.val));
-    } else if from_float {
-      // float->int (checked at runtime)
-      g = gen_emit(g, ir.Instr.IntCastChecked(tid, to_base, from_base, ar.val));
+    if ptr_int_cast {
+      // rawptr <-> isize/usize: unchecked, same width
+      g = gen_emit(g, ir.Instr.IntCast(tid, to_base, from_base, ar.val));
     } else {
-      // int->int
-      g = gen_emit(g, ir.Instr.IntCastChecked(tid, to_base, from_base, ar.val));
+      let from_float: bool = tc.is_float_ty(g.ctx, from_base);
+      let to_float: bool = tc.is_float_ty(g.ctx, to_base);
+      if to_float {
+        // int->float and float->float
+        g = gen_emit(g, ir.Instr.FloatCast(tid, to_base, from_base, ar.val));
+      } else if from_float {
+        // float->int (checked at runtime)
+        g = gen_emit(g, ir.Instr.IntCastChecked(tid, to_base, from_base, ar.val));
+      } else {
+        // int->int
+        g = gen_emit(g, ir.Instr.IntCastChecked(tid, to_base, from_base, ar.val));
+      }
     }
     v = ir.v_temp(tid);
   }
