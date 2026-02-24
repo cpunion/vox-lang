@@ -15,6 +15,7 @@ output=$(find "$ROOT/src" -type f -name '*.vox' ! -name '*_test.vox' \
   ! -path "$ROOT/src/std/sys/sys_linux.vox" \
   ! -path "$ROOT/src/std/sys/sys_darwin.vox" \
   ! -path "$ROOT/src/std/sys/sys_windows.vox" \
+  ! -path "$ROOT/src/std/sys/sys_wasm.vox" \
   ! -path "$ROOT/src/std/sys/poll_linux.vox" \
   ! -path "$ROOT/src/std/sys/poll_darwin.vox" \
   ! -path "$ROOT/src/std/sys/poll_windows.vox" \

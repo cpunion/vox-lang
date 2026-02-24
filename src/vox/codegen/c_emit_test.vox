@@ -111,51 +111,28 @@ fn test_codegen_intrinsic_abi_helpers_smoke() -> () {
   t.assert(!contains(c, "vox_host_has_intrinsic"));
 }
 
-fn test_codegen_windows_tcp_runtime_has_real_impl() -> () {
+fn test_codegen_platform_headers_present() -> () {
   let c: String = compile_to_c("fn main() -> i32 { return 0; }");
+  t.assert(contains(c, "#include <sched.h>"));
+  t.assert(contains(c, "#define WIN32_LEAN_AND_MEAN"));
+  t.assert(contains(c, "#include <windows.h>"));
+  // Socket headers moved from c_rt_core to c_rt_sys (co-located with wrappers).
   t.assert(contains(c, "#include <winsock2.h>"));
   t.assert(contains(c, "#include <ws2tcpip.h>"));
-  t.assert(contains(c, "#include <sched.h>"));
-  t.assert(contains(c, "WSAStartup(MAKEWORD(2, 2), &wsa);"));
-  t.assert(contains(c, "closesocket(fd);"));
-  t.assert(!contains(c, "tcp is not supported on windows in stage1 yet"));
-}
-
-fn test_codegen_tcp_wait_intrinsics_use_platform_helpers() -> () {
-  let src: String = """
-    @ffi_import("c", "vox_impl_tcp_wait_read")
-    fn rt_tcp_wait_read_raw(h: isize, timeout_ms: i32) -> bool;
-    @ffi_import("c", "vox_impl_tcp_wait_write")
-    fn rt_tcp_wait_write_raw(h: isize, timeout_ms: i32) -> bool;
-    fn f(h: isize) -> bool {
-      return rt_tcp_wait_read_raw(h, 1) || rt_tcp_wait_write_raw(h, 1);
-    }
-  """;
-  let r: p.ParseResult = p.parse_text(src);
-  t.assert(r.err == p.ParseError.None);
-  let mut w: tc.World = tc.world();
-  w = tc.world_add(w, "std/io", r.prog);
-  let gr: irgen.GenResult = irgen.generate_world(w);
-  t.assert_with(gr.ok, gr.err);
-  let c: String = cg.emit_c(gr.prog, cg.EmitOptions {
-    emit_driver_main: false,
-    driver_main_kind: cg.DriverMainKind.User,
-    emit_test_main: false,
-    test_funcs: Vec(),
-  });
-  t.assert(contains(c, "bool vox_impl_tcp_wait_read(intptr_t h, int32_t timeout_ms) {"));
-  t.assert(contains(c, "bool vox_impl_tcp_wait_write(intptr_t h, int32_t timeout_ms) {"));
-  t.assert(contains(c, "static bool vox_tcp_wait_iocp_once(SOCKET fd, bool want_write, int32_t timeout_ms) {"));
-  t.assert(contains(c, "CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);"));
-  t.assert(contains(c, "WSARecv(fd, &buf, 1, &recvd, &flags, &ov, NULL);"));
-  t.assert(contains(c, "WSASend(fd, &buf, 1, &sent, 0, &ov, NULL);"));
-  t.assert(contains(c, "CancelIoEx((HANDLE)fd, &ov);"));
-  t.assert(contains(c, "GetQueuedCompletionStatus(iocp, &bytes, &key, &pov, (DWORD)timeout_ms);"));
-  t.assert(contains(c, "epoll_create1(EPOLL_CLOEXEC)"));
-  t.assert(contains(c, "kqueue()"));
-  t.assert(contains(c, "select("));
-  t.assert(contains(c, "vox_impl_tcp_wait_read("));
-  t.assert(contains(c, "vox_impl_tcp_wait_write("));
+  t.assert(contains(c, "#include <sys/socket.h>"));
+  t.assert(contains(c, "#include <netdb.h>"));
+  // stdlib.h and stdio.h replaced by extern declarations.
+  t.assert(!contains(c, "#include <stdlib.h>"));
+  t.assert(!contains(c, "#include <stdio.h>"));
+  t.assert(contains(c, "extern void* malloc(size_t)"));
+  t.assert(contains(c, "extern void* realloc(void*, size_t)"));
+  t.assert(contains(c, "extern void free(void*)"));
+  t.assert(contains(c, "extern int atexit(void(*)(void))"));
+  t.assert(contains(c, "extern void exit(int)"));
+  t.assert(contains(c, "extern int printf(const char*, ...)"));
+  t.assert(contains(c, "extern int snprintf(char*, size_t, const char*, ...)"));
+  // vox_host_panic defined in c_rt_core (before Vec types).
+  t.assert(contains(c, "static VOX_NORETURN void vox_host_panic(const char* msg)"));
 }
 
 fn test_codegen_yield_now_intrinsic_uses_sys_ffi() -> () {

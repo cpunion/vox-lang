@@ -1,3 +1,6 @@
+static mut g_argc: i32 = 0;
+static mut g_argv: isize = 0;
+
 @ffi_import("c", "system")
 pub fn system(cmd: String) -> i32;
 
@@ -25,41 +28,47 @@ pub fn getenv(key: String) -> String {
   return c_getenv(key);
 }
 
-// Monotonic clock in nanoseconds. The c_runtime shim handles platform
-// differences (clock_gettime / GetTickCount64 / clock).
-@ffi_import("c", "vox_impl_now_ns")
-fn c_now_ns() -> i64;
-
-pub fn now_ns() -> i64 {
-  return c_now_ns();
+fn argv_get(i: i32) -> String {
+  if g_argv == 0 as isize || i < 0 { return ""; }
+  // g_argv is char** — each element is a pointer (8 bytes on 64-bit).
+  let p: rawptr = @ptr_offset(g_argv as rawptr, (i as isize) * (8 as isize));
+  let sp: rawptr = @ptr_read[rawptr](p);
+  if (sp as isize) == 0 as isize { return ""; }
+  return sp as String;
 }
 
-// Process args/exe_path rely on vox__argc/vox__argv set in main().
-@ffi_import("c", "vox_impl_args")
-fn c_args() -> Vec[String];
-
-@ffi_import("c", "vox_impl_exe_path")
-fn c_exe_path() -> String;
-
 pub fn args() -> Vec[String] {
-  return c_args();
+  let mut result: Vec[String] = Vec();
+  let mut i: i32 = 1;
+  while i < g_argc {
+    result.push(argv_get(i));
+    i = i + 1;
+  }
+  return result;
 }
 
 pub fn exe_path() -> String {
-  return c_exe_path();
+  if g_argc <= 0 { return ""; }
+  return argv_get(0);
 }
 
-@ffi_import("c", "vox_impl_alloc_buf")
-pub fn alloc_buf(size: i32) -> rawptr;
+pub fn alloc_buf(size: i32) -> rawptr {
+  let safe: i32 = if size < 0 { 0 } else { size };
+  let p: rawptr = calloc(1 as usize, (safe + 1) as usize);
+  return p;
+}
 
-@ffi_import("c", "vox_impl_buf_to_string")
-pub fn buf_to_string(buf: rawptr, len: i32) -> String;
+pub fn buf_to_string(buf: rawptr, len: i32) -> String {
+  if (buf as isize) == 0 as isize { return ""; }
+  let safe_len: i32 = if len < 0 { 0 } else { len };
+  @ptr_write[u8](@ptr_offset(buf, safe_len as isize), 0 as u8);
+  return buf as String;
+}
 
 pub fn seek_set() -> i32 { return 0; }
 pub fn seek_end() -> i32 { return 2; }
 
-@ffi_import("c", "vox_impl_null_ptr")
-pub fn null_rawptr() -> rawptr;
+pub fn null_rawptr() -> rawptr { return 0 as isize as rawptr; }
 
 @ffi_import("c", "calloc")
 pub fn calloc(nmemb: usize, size: usize) -> rawptr;

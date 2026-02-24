@@ -45,25 +45,61 @@ pub fn socket_send(handle: isize, buf: String, n: usize) -> isize {
   return c_send(fd, buf as const rawptr, n, 0);
 }
 
-@ffi_import("c", "vox_impl_tcp_connect")
-fn c_tcp_connect(host: String, port: i32) -> isize;
-
-@ffi_import("c", "vox_impl_tcp_recv")
-fn c_tcp_recv(handle: isize, max_n: i32) -> String;
-
-
-@ffi_import("c", "vox_impl_tcp_wait_read")
-fn c_tcp_wait_read(handle: isize, timeout_ms: i32) -> bool;
-
-@ffi_import("c", "vox_impl_tcp_wait_write")
-fn c_tcp_wait_write(handle: isize, timeout_ms: i32) -> bool;
+@ffi_import("c", "recv")
+fn c_recv_raw(fd: i32, buf: rawptr, n: usize, flags: i32) -> isize;
 
 pub fn connect(host: String, port: i32) -> isize {
-  return c_tcp_connect(host, port);
+  if port <= 0 || port > 65535 { panic("invalid tcp port"); }
+  let port_str: String = port.to_string();
+  // addrinfo hints: ai_family=AF_UNSPEC(0), ai_socktype=SOCK_STREAM
+  let hints: rawptr = calloc(1 as usize, ADDRINFO_SIZE() as usize);
+  @ptr_write[i32](@ptr_offset(hints, ADDRINFO_OFF_SOCKTYPE()), SOCK_STREAM());
+  // resolve
+  let res_buf: rawptr = calloc(1 as usize, 8 as usize);
+  let rc: i32 = sock_getaddrinfo(host, port_str, hints, res_buf);
+  free(hints);
+  if rc != 0 {
+    free(res_buf);
+    panic("tcp connect resolve failed");
+  }
+  let res: rawptr = @ptr_read[rawptr](res_buf);
+  // loop through results
+  let mut fd: i32 = -1;
+  let mut p: rawptr = res;
+  while (p as isize) != 0 as isize && fd < 0 {
+    let family: i32 = @ptr_read[i32](@ptr_offset(p, ADDRINFO_OFF_FAMILY()));
+    let socktype: i32 = @ptr_read[i32](@ptr_offset(p, ADDRINFO_OFF_SOCKTYPE()));
+    let protocol: i32 = @ptr_read[i32](@ptr_offset(p, ADDRINFO_OFF_PROTOCOL()));
+    let sfd: i32 = sock_socket(family, socktype, protocol);
+    if sfd >= 0 {
+      let addr: rawptr = @ptr_read[rawptr](@ptr_offset(p, ADDRINFO_OFF_ADDR()));
+      let addrlen: u32 = @ptr_read[u32](@ptr_offset(p, ADDRINFO_OFF_ADDRLEN()));
+      if sock_connect(sfd, addr, addrlen) == 0 {
+        fd = sfd;
+      } else {
+        let _cr: i32 = c_close(sfd);
+        _cr;
+      }
+    }
+    if fd < 0 {
+      p = @ptr_read[rawptr](@ptr_offset(p, ADDRINFO_OFF_NEXT()));
+    }
+  }
+  sock_freeaddrinfo(res);
+  free(res_buf);
+  if fd < 0 { panic("tcp connect failed"); }
+  return fd as isize;
 }
 
 pub fn recv(handle: isize, max_n: i32) -> String {
-  return c_tcp_recv(handle, max_n);
+  let fd: i32 = handle_to_fd(handle);
+  if fd < 0 { panic("invalid tcp handle"); }
+  if max_n <= 0 { return ""; }
+  let buf: rawptr = calloc(1 as usize, (max_n + 1) as usize);
+  let n: isize = c_recv_raw(fd, buf, max_n as usize, 0);
+  if n < 0 as isize { panic("tcp recv failed"); }
+  @ptr_write[u8](@ptr_offset(buf, n), 0 as u8);
+  return buf as String;
 }
 
 pub fn close_socket(handle: isize) -> () {
@@ -74,11 +110,37 @@ pub fn close_socket(handle: isize) -> () {
 }
 
 pub fn wait_read(handle: isize, timeout_ms: i32) -> bool {
-  return c_tcp_wait_read(handle, timeout_ms);
+  let fd: i32 = handle_to_fd(handle);
+  if fd < 0 { panic("invalid tcp handle"); }
+  return tcp_wait_kqueue(fd, false, if timeout_ms < 0 { 0 } else { timeout_ms });
 }
 
 pub fn wait_write(handle: isize, timeout_ms: i32) -> bool {
-  return c_tcp_wait_write(handle, timeout_ms);
+  let fd: i32 = handle_to_fd(handle);
+  if fd < 0 { panic("invalid tcp handle"); }
+  return tcp_wait_kqueue(fd, true, if timeout_ms < 0 { 0 } else { timeout_ms });
+}
+
+fn tcp_wait_kqueue(fd: i32, want_write: bool, timeout_ms: i32) -> bool {
+  let kq: i32 = kqueue_create();
+  if kq < 0 { panic("tcp kqueue create failed"); }
+  let filter: i16 = if want_write { EVFILT_WRITE() } else { EVFILT_READ() };
+  let change: rawptr = calloc(1 as usize, KEVENT_SIZE() as usize);
+  kevent_set(change, 0, fd as usize, filter, EV_ADD() | EV_ENABLE() | EV_ONESHOT(), 0, 0 as isize, null_rawptr());
+  if kevent_register(kq, change, 1) != 0 {
+    free(change);
+    close_fd(kq);
+    panic("tcp kqueue register failed");
+  }
+  let ts: rawptr = calloc(1 as usize, TIMESPEC_SIZE() as usize);
+  timespec_set_ms(ts, timeout_ms);
+  let ev: rawptr = calloc(1 as usize, KEVENT_SIZE() as usize);
+  let n: i32 = kevent_poll(kq, ev, 1, ts);
+  free(change);
+  free(ts);
+  free(ev);
+  close_fd(kq);
+  return n > 0;
 }
 
 @ffi_import("c", "close")
@@ -114,4 +176,22 @@ fn c_creat(path: String, mode: u16) -> i32;
 
 pub fn creat(path: String, mode: u16) -> i32 {
   return c_creat(path, mode);
+}
+
+// CLOCK_MONOTONIC = 6 on Darwin.
+// Thin wrapper avoids clock_gettime extern conflict with system headers.
+@ffi_import("c", "vox_impl_clock_gettime")
+fn c_clock_gettime(clk_id: i32, tp: rawptr) -> i32;
+
+pub fn now_ns() -> i64 {
+  let buf: rawptr = calloc(1 as usize, 16 as usize);
+  let rc: i32 = c_clock_gettime(6, buf);
+  if rc != 0 {
+    free(buf);
+    return 0 as i64;
+  }
+  let sec: i64 = @ptr_read[i64](buf);
+  let nsec: i64 = @ptr_read[i64](@ptr_offset(buf, 8 as isize));
+  free(buf);
+  return sec * 1000000000 as i64 + nsec;
 }
