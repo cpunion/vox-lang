@@ -49,27 +49,31 @@ pub fn close_fd(fd: i32) -> i32 {
   return c_close_fd(fd);
 }
 
-// Struct manipulation helpers (bridged via C runtime for bootstrap compat).
-@ffi_import("c", "vox_impl_epoll_event_set")
-fn c_epoll_event_set(buf: rawptr, index: i32, events: u32, data: u64) -> ();
-
-@ffi_import("c", "vox_impl_eventfd_signal")
-fn c_eventfd_signal(fd: i32) -> ();
-
-@ffi_import("c", "vox_impl_eventfd_drain")
-fn c_eventfd_drain(fd: i32) -> ();
+// Struct manipulation — pure Vox using @ptr_write (no C wrapper needed).
 
 pub fn epoll_event_set(buf: rawptr, index: i32, events: u32, data: u64) -> () {
-  c_epoll_event_set(buf, index, events, data);
+  let base: rawptr = @ptr_offset(buf, (index as isize) * EPOLL_EVENT_SIZE());
+  @ptr_write[u32](base, events);                               // offset 0
+  @ptr_write[u64](@ptr_offset(base, 4 as isize), data);        // offset 4
   return;
 }
 
+// eventfd helpers — pure Vox using existing read/write from sys_linux.vox.
+
 pub fn eventfd_signal(fd: i32) -> () {
-  c_eventfd_signal(fd);
+  let buf: rawptr = calloc(1 as usize, 8 as usize);
+  @ptr_write[u64](buf, 1 as u64);
+  let _n: isize = write(fd, buf, 8 as usize);
+  free(buf);
   return;
 }
 
 pub fn eventfd_drain(fd: i32) -> () {
-  c_eventfd_drain(fd);
+  let buf: rawptr = calloc(1 as usize, 8 as usize);
+  let mut n: isize = read(fd, buf, 8 as usize);
+  while n > (0 as isize) {
+    n = read(fd, buf, 8 as usize);
+  }
+  free(buf);
   return;
 }
