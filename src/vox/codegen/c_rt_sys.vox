@@ -154,9 +154,9 @@ fn emit_rt_sys_lines() -> Vec[String] {
   out.push("}");
   out.push("");
   // Platform I/O wrappers (avoid C type conflicts with system headers).
-  // Forward declarations in c_rt_core use void* instead of struct pointers,
-  // so these wrappers just forward through.
-  out.push("// Platform I/O wrappers (avoid extern declaration conflicts with system headers).");
+  // Direct @ffi_import to kevent/epoll_ctl/epoll_wait generates void* externs
+  // that conflict with struct pointer params in system headers included
+  // transitively by c_rt_core (e.g. <sys/event.h> on macOS, <sys/epoll.h> on Linux).
   out.push("#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)");
   out.push("int32_t vox_impl_kevent(int32_t kq, void* changelist, int32_t nchanges, void* eventlist, int32_t nevents, void* timeout) {");
   out.push("  return kevent(kq, changelist, nchanges, eventlist, nevents, timeout);");
@@ -246,42 +246,9 @@ fn emit_rt_sys_lines() -> Vec[String] {
   out.push("}");
   out.push("#endif");
   out.push("");
-  // Struct manipulation helpers for pollers (bootstrap-compatible).
-  // Use raw pointer arithmetic since we don't include system struct headers.
-  out.push("// Struct manipulation helpers for pollers (bootstrap-compatible).");
-  out.push("#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)");
-  out.push("void vox_impl_kevent_set(void* buf, int32_t index, uintptr_t ident, int16_t filter, uint16_t flags, uint32_t fflags, intptr_t data, void* udata) {");
-  out.push("  char* kev = (char*)buf + index * VOX_KEVENT_SZ;");
-  out.push("  memset(kev, 0, VOX_KEVENT_SZ);");
-  out.push("  *(uintptr_t*)kev = ident;");
-  out.push("  *(int16_t*)(kev + 8) = filter;");
-  out.push("  *(uint16_t*)(kev + 10) = flags;");
-  out.push("  *(uint32_t*)(kev + 12) = fflags;");
-  out.push("  *(intptr_t*)(kev + 16) = data;");
-  out.push("  *(void**)(kev + 24) = udata;");
-  out.push("}");
-  out.push("void vox_impl_timespec_set_ms(void* buf, int32_t ms) {");
-  out.push("  struct timespec* ts = (struct timespec*)buf;");
-  out.push("  ts->tv_sec = ms / 1000;");
-  out.push("  ts->tv_nsec = (long)(ms % 1000) * 1000000L;");
-  out.push("}");
-  out.push("#endif");
-  out.push("#if defined(__linux__)");
-  out.push("void vox_impl_epoll_event_set(void* buf, int32_t index, uint32_t events, uint64_t data) {");
-  out.push("  char* ev = (char*)buf + index * 12;");
-  out.push("  *(uint32_t*)ev = events;");
-  out.push("  *(uint64_t*)(ev + 4) = data;");
-  out.push("}");
-  out.push("void vox_impl_eventfd_signal(int32_t fd) {");
-  out.push("  uint64_t one = 1;");
-  out.push("  ssize_t n = write(fd, &one, sizeof(one));");
-  out.push("  (void)n;");
-  out.push("}");
-  out.push("void vox_impl_eventfd_drain(int32_t fd) {");
-  out.push("  uint64_t v = 0;");
-  out.push("  while (read(fd, &v, sizeof(v)) > 0) {}");
-  out.push("}");
-  out.push("#endif");
+  // vox_impl_kevent_set, vox_impl_timespec_set_ms, vox_impl_epoll_event_set,
+  // vox_impl_eventfd_signal, vox_impl_eventfd_drain removed —
+  // now pure Vox in std (poll_darwin.vox / poll_linux.vox).
   out.push("#if defined(_WIN32)");
   out.push("intptr_t vox_impl_create_iocp(intptr_t file, intptr_t existing, uintptr_t key, uint32_t threads) {");
   out.push("  return (intptr_t)CreateIoCompletionPort((HANDLE)file, (HANDLE)existing, (ULONG_PTR)key, (DWORD)threads);");
