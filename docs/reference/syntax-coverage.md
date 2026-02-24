@@ -88,6 +88,7 @@ Status:
 | S705 | repr(C) attribute on struct | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
 | S706 | repr(C) on fn parse failure | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
 | S707 | repr with bad argument parse failure | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
+| S708 | repr(C, packed) attribute on struct | Done | `tests/syntax/src/attributes_ffi_test.vox` |  |
 | S801 | arithmetic operators | Done | `tests/syntax/src/operators_test.vox` |  |
 | S802 | logical operators | Done | `tests/syntax/src/operators_test.vox` |  |
 | S803 | bitwise/shift operators | Done | `tests/syntax/src/operators_test.vox` | includes precedence form |
