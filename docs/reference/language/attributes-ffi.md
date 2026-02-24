@@ -4,7 +4,7 @@
 
 Defines currently supported built-in attributes and FFI annotation syntax.
 
-Coverage IDs: `S701`, `S702`, `S703`, `S704`, `S705`, `S706`, `S707`.
+Coverage IDs: `S701`, `S702`, `S703`, `S704`, `S705`, `S706`, `S707`, `S708`.
 
 ## Grammar (Simplified)
 
@@ -19,6 +19,8 @@ Attr
    | "@ffi_export(" StringLit "," StringLit ")"
    | "@track_caller"
    | "@repr(" "C" ")"
+   | "@repr(" "C" "," "packed" ")"
+   | "@repr(" "C" "," "packed(" IntLit ")" ")"
 
 AttributedFn
   := Attr* FnDecl
@@ -80,6 +82,9 @@ BuildAtom
 ### Representation
 
 - `@repr(C)` on a struct guarantees C ABI-compatible field layout (order, alignment, padding).
+- `@repr(C, packed)` removes all padding (equivalent to `packed(1)`).
+- `@repr(C, packed(N))` sets maximum field alignment to N bytes.
+- Packed structs are emitted with `#pragma pack(push, N)` / `#pragma pack(pop)` for cross-platform compatibility (GCC/Clang/MSVC).
 - Currently Vox compiles to C so all structs already have C layout; the attribute serves as a semantic marker and will be enforced by future non-C backends.
 
 ## Placement Rules
