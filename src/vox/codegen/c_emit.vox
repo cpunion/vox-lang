@@ -18,20 +18,20 @@ fn emit_header_lines() -> Vec[String] {
   out.push("#include <stdint.h>");
   out.push("#include <stdbool.h>");
   out.push("#include <inttypes.h>");
-  out.push("#include <stdio.h>");
-  out.push("#include <stdlib.h>");
-  out.push("");
-  out.push("#include <string.h>");
-  out.push("");
-  out.push("#include <limits.h>");
-  out.push("");
-  out.push("#include <math.h>");
-  out.push("");
   out.push("#include <stddef.h>");
-  out.push("");
+  out.push("#include <string.h>");
+  out.push("#include <limits.h>");
+  out.push("#include <math.h>");
   out.push("#include <stdatomic.h>");
-  out.push("");
   out.push("#include <time.h>");
+  out.push("");
+  out.push("extern void* malloc(size_t);");
+  out.push("extern void* realloc(void*, size_t);");
+  out.push("extern void free(void*);");
+  out.push("extern int atexit(void(*)(void));");
+  out.push("extern void exit(int);");
+  out.push("extern int printf(const char*, ...);");
+  out.push("extern int snprintf(char*, size_t, const char*, ...);");
   out.push("");
   return out;
 }
@@ -199,11 +199,23 @@ fn main_ret_kind(pool: ir.TyPool, ty0: i32) -> ir.TyKind {
   return ir.TyKind.Bad;
 }
 
-fn emit_driver_main(pool: ir.TyPool, main_fn: ir.Func, kind: DriverMainKind) -> Vec[String] {
+fn emit_driver_main(pool: ir.TyPool, main_fn: ir.Func, kind: DriverMainKind, statics: Vec[ir.StaticVarDecl]) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("int main(int argc, char** argv) {");
   out.push("  vox__argc = argc;");
   out.push("  vox__argv = argv;");
+  // Propagate argc/argv to Vox statics if std/sys declares them.
+  let mut si: i32 = 0;
+  while si < statics.len() {
+    let sv: ir.StaticVarDecl = statics.get(si);
+    if sv.name == "std/sys::g_argc" {
+      out.push("  ".concat(c_static_name(sv.name)).concat(" = (int32_t)argc;"));
+    }
+    if sv.name == "std/sys::g_argv" {
+      out.push("  ".concat(c_static_name(sv.name)).concat(" = (intptr_t)argv;"));
+    }
+    si = si + 1;
+  }
   let rk: ir.TyKind = main_ret_kind(pool, main_fn.ret);
   if kind == DriverMainKind.User {
     if rk == ir.TyKind.Unit {
@@ -314,10 +326,7 @@ fn emit_test_main(test_funcs: Vec[String]) -> Vec[String] {
   out.push("int main(int argc, char** argv) {");
   out.push("  vox__argc = argc;");
   out.push("  vox__argv = argv;");
-  out.push("  if (argc < 2 || !argv[1]) {");
-  out.push("    fprintf(stderr, \"missing test name\\n\");");
-  out.push("    return 1;");
-  out.push("  }");
+  out.push("  if (argc < 2 || !argv[1]) { vox_host_panic(\"missing test name\"); }");
   out.push("  const char* name = argv[1];");
   let mut i: i32 = 0;
   while i < test_funcs.len() {
@@ -325,8 +334,7 @@ fn emit_test_main(test_funcs: Vec[String]) -> Vec[String] {
     out.push("  if (strcmp(name, \"".concat(n).concat("\") == 0) { ").concat(c_fn_name(n)).concat("(); return 0; }"));
     i = i + 1;
   }
-  out.push("  fprintf(stderr, \"unknown test: %s\\n\", name);");
-  out.push("  return 1;");
+  out.push("  { char buf[256]; snprintf(buf, sizeof(buf), \"unknown test: %s\", name); vox_host_panic(buf); }");
   out.push("}");
   return out;
 }
@@ -407,7 +415,7 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
   if opts.emit_driver_main {
     let mr: MainResult = find_main(p);
     if !mr.found { panic("missing function main"); }
-    out = append_lines(out, emit_driver_main(pool, mr.f, opts.driver_main_kind));
+    out = append_lines(out, emit_driver_main(pool, mr.f, opts.driver_main_kind, p.statics));
   }
   if opts.emit_test_main {
     out = append_lines(out, emit_test_main(opts.test_funcs));
