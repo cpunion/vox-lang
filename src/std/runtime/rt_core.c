@@ -11,9 +11,10 @@
 #include <unistd.h>
 #include <sched.h>
 #if defined(__linux__)
+struct epoll_event;
 int epoll_create1(int);
-int epoll_ctl(int, int, int, void*);
-int epoll_wait(int, void*, int, int);
+int epoll_ctl(int, int, int, struct epoll_event*);
+int epoll_wait(int, struct epoll_event*, int, int);
 int eventfd(unsigned int, int);
 #define VOX_EPOLLIN       0x001
 #define VOX_EPOLLOUT      0x004
@@ -25,8 +26,9 @@ int eventfd(unsigned int, int);
 #define VOX_EFD_CLOEXEC   0x80000
 #endif
 #if defined(__APPLE__)
+struct kevent;
 int kqueue(void);
-int kevent(int, void*, int, void*, int, void*);
+int kevent(int, const struct kevent*, int, struct kevent*, int, const struct timespec*);
 #define VOX_EVFILT_READ   (-1)
 #define VOX_EVFILT_WRITE  (-2)
 #define VOX_EVFILT_USER   (-10)
