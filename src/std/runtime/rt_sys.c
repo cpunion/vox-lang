@@ -1,14 +1,6 @@
 static int vox__argc = 0;
 static char** vox__argv = NULL;
 
-extern char* getenv(const char*);
-const char* vox_impl_getenv(const char* key) {
-  if (!key) key = "";
-  const char* v = getenv(key);
-  if (!v) return "";
-  return v;
-}
-
 vox_vec vox_impl_args(void) {
   vox_vec v = vox_vec_new((int32_t)sizeof(const char*));
   for (int i = 1; i < vox__argc; i++) {
@@ -22,15 +14,6 @@ const char* vox_impl_exe_path(void) {
   if (!vox__argv || vox__argc <= 0 || !vox__argv[0]) return "";
   return vox__argv[0];
 }
-
-void* vox_impl_alloc_buf(int32_t size) {
-  if (size < 0) size = 0;
-  char* p = (char*)vox_impl_malloc((size_t)size + 1);
-  if (!p) { vox_host_panic("out of memory"); }
-  p[size] = '\0';
-  return (void*)p;
-}
-
 
 // Platform I/O wrappers (avoid C type conflicts with system headers).
 // Direct @ffi_import to kevent/epoll_ctl/epoll_wait generates void* externs

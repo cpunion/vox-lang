@@ -1,10 +1,61 @@
 import "std/sys" as sys
 
-@ffi_import("c", "vox_impl_walk_vox_files")
-fn fs_walk_vox_files_raw(root: String) -> Vec[String];
+// Insertion sort for small string vectors (file lists are typically < 100).
+fn fs_sort_strings(v: Vec[String]) -> () {
+  let mut arr: Vec[String] = v;
+  let n: i32 = arr.len();
+  let mut i: i32 = 1;
+  while i < n {
+    let key: String = arr.get(i);
+    let mut j: i32 = i - 1;
+    while j >= 0 && arr.get(j) > key {
+      arr.set(j + 1, arr.get(j));
+      j = j - 1;
+    }
+    arr.set(j + 1, key);
+    i = i + 1;
+  }
+}
 
-@ffi_import("c", "vox_impl_walk_c_files")
-fn fs_walk_c_files_raw(root: String) -> Vec[String];
+// Recursive directory walk collecting files with a given suffix.
+// Returns the updated Vec with discovered relative paths appended.
+fn fs_walk_dir_suffix(root: String, rel: String, suffix: String, out: Vec[String]) -> Vec[String] {
+  let full: String = if rel == "" { root } else { root.concat("/").concat(rel) };
+  let dir: rawptr = c_opendir(full);
+  if (dir as isize) == (0 as isize) { return out; }
+  let mut result: Vec[String] = out;
+  while true {
+    let ent: rawptr = c_readdir(dir);
+    if (ent as isize) == (0 as isize) { break; }
+    let name: String = dirent_name(ent);
+    if name == "." || name == ".." { continue; }
+    let child_rel: String = if rel == "" { name } else { rel.concat("/").concat(name) };
+    if dirent_is_dir(ent) {
+      result = fs_walk_dir_suffix(root, child_rel, suffix, result);
+    } else if child_rel.ends_with(suffix) {
+      result.push(child_rel);
+    }
+  }
+  let _: i32 = c_closedir(dir);
+  return result;
+}
+
+fn fs_walk_vox_files_impl(root: String) -> Vec[String] {
+  let r: String = if root == "" { "." } else { root };
+  let mut out: Vec[String] = Vec();
+  out = fs_walk_dir_suffix(r, "src", ".vox", out);
+  out = fs_walk_dir_suffix(r, "tests", ".vox", out);
+  fs_sort_strings(out);
+  return out;
+}
+
+fn fs_walk_c_files_impl(root: String) -> Vec[String] {
+  let r: String = if root == "" { "." } else { root };
+  let mut out: Vec[String] = Vec();
+  out = fs_walk_dir_suffix(r, "src", ".c", out);
+  fs_sort_strings(out);
+  return out;
+}
 
 pub enum FsError {
   NotFound(String),
@@ -103,7 +154,7 @@ impl Path {
   }
 
   fn walk_files(p: &Path) -> Vec[String] {
-    return fs_walk_vox_files_raw(p.raw);
+    return fs_walk_vox_files_impl(p.raw);
   }
 
   fn try_read_to_string(p: &Path) -> Result[String, FsError] {
@@ -158,7 +209,7 @@ pub fn walk_files(root: String) -> Vec[String] {
 }
 
 pub fn walk_c_files(root: String) -> Vec[String] {
-  return fs_walk_c_files_raw(root);
+  return fs_walk_c_files_impl(root);
 }
 
 pub fn try_read_to_string(raw: String) -> Result[String, FsError] {
