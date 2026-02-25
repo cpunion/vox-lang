@@ -23,12 +23,9 @@ const char* vox_impl_argv_get(intptr_t argv, int32_t i) {
 }
 
 // === Event loop: Vox-driven wake table + platform poller ===
-// Forward declarations for atomic functions used by el_init.
-intptr_t vox_impl_atomic_i64_new(int64_t init);
-intptr_t vox_impl_atomic_i32_new(int32_t init);
 #define VOX_EL_SLOTS 256
-static intptr_t vox_el_token_h[VOX_EL_SLOTS];
-static intptr_t vox_el_pending_h[VOX_EL_SLOTS];
+static _Atomic int64_t vox_el_tokens[VOX_EL_SLOTS];
+static _Atomic int32_t vox_el_pendings[VOX_EL_SLOTS];
 static bool vox_el_inited = false;
 
 #if defined(__linux__)
@@ -72,16 +69,16 @@ static void vox_el_init_poller(void) {
 void vox_impl_el_init(void) {
   if (vox_el_inited) return;
   for (int i = 0; i < VOX_EL_SLOTS; i++) {
-    vox_el_token_h[i] = vox_impl_atomic_i64_new(0);
-    vox_el_pending_h[i] = vox_impl_atomic_i32_new(0);
+    atomic_init(&vox_el_tokens[i], (int64_t)0);
+    atomic_init(&vox_el_pendings[i], (int32_t)0);
   }
   vox_el_init_poller();
   vox_el_inited = true;
 }
 
 int32_t vox_impl_el_n_slots(void) { return VOX_EL_SLOTS; }
-intptr_t vox_impl_el_token_handle(int32_t i) { return vox_el_token_h[i]; }
-intptr_t vox_impl_el_pending_handle(int32_t i) { return vox_el_pending_h[i]; }
+intptr_t vox_impl_el_token_handle(int32_t i) { return (intptr_t)&vox_el_tokens[i]; }
+intptr_t vox_impl_el_pending_handle(int32_t i) { return (intptr_t)&vox_el_pendings[i]; }
 
 void vox_impl_el_poller_wake(void) {
 #if defined(__linux__)
@@ -121,23 +118,6 @@ void vox_impl_el_poller_wait(int32_t timeout_ms) {
   nanosleep(&ts, NULL);
 #endif
 }
-
-int64_t vox_impl_now_ns(void) {
-#if defined(_WIN32)
-  return (int64_t)GetTickCount64() * (int64_t)1000000;
-#elif defined(__EMSCRIPTEN__)
-  clock_t c = clock();
-  if (c == (clock_t)-1) return 0;
-  return (int64_t)c * (int64_t)1000000000 / (int64_t)CLOCKS_PER_SEC;
-#else
-  struct timespec ts;
-  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-    if (timespec_get(&ts, TIME_UTC) == 0) return 0;
-  }
-  return (int64_t)ts.tv_sec * (int64_t)1000000000 + (int64_t)ts.tv_nsec;
-#endif
-}
-
 
 #ifndef _WIN32
 // fcntl is variadic in system headers; keep a thin wrapper to avoid

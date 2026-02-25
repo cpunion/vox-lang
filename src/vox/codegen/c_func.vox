@@ -80,6 +80,46 @@ fn atomic_type_suffix(pool: ir.TyPool, elem_ty: i32) -> String {
   };
 }
 
+fn c_atomic_c_type(pool: ir.TyPool, elem_ty: i32) -> String {
+  let t: ir.Ty = ir.ty_pool_get(pool, elem_ty);
+  return match t.kind {
+    ir.TyKind.I32 => "_Atomic int32_t",
+    ir.TyKind.I64 => "_Atomic int64_t",
+    ir.TyKind.ISize => "_Atomic intptr_t",
+    _ => "_Atomic int64_t",
+  };
+}
+
+fn c_atomic_val_c_type(pool: ir.TyPool, elem_ty: i32) -> String {
+  let t: ir.Ty = ir.ty_pool_get(pool, elem_ty);
+  return match t.kind {
+    ir.TyKind.I32 => "int32_t",
+    ir.TyKind.I64 => "int64_t",
+    ir.TyKind.ISize => "intptr_t",
+    _ => "int64_t",
+  };
+}
+
+fn emit_instr_atomic_new(pool: ir.TyPool, tid: i32, elem_ty: i32, val: ir.Value) -> Vec[String] {
+  let at: String = c_atomic_c_type(pool, elem_ty);
+  let tmp: String = "_at_".concat(tid.to_string());
+  let mut out: Vec[String] = Vec();
+  out.push("  ".concat(at).concat("* ").concat(tmp).concat(" = (").concat(at).concat("*)vox_impl_malloc(sizeof(").concat(at).concat("));"));
+  out.push("  atomic_init(".concat(tmp).concat(", ").concat(c_value(val)).concat(");"));
+  out.push("  ".concat(c_temp_name(tid)).concat(" = (intptr_t)").concat(tmp).concat(";"));
+  return out;
+}
+
+fn emit_instr_atomic_cas(pool: ir.TyPool, tid: i32, elem_ty: i32, h: ir.Value, expected: ir.Value, desired: ir.Value) -> Vec[String] {
+  let at: String = c_atomic_c_type(pool, elem_ty);
+  let vt: String = c_atomic_val_c_type(pool, elem_ty);
+  let tmp: String = "_cas_".concat(tid.to_string());
+  let mut out: Vec[String] = Vec();
+  out.push("  ".concat(vt).concat(" ").concat(tmp).concat(" = ").concat(c_value(expected)).concat(";"));
+  out.push("  ".concat(c_temp_name(tid)).concat(" = atomic_compare_exchange_strong_explicit((").concat(at).concat("*)").concat(c_value(h)).concat(", &").concat(tmp).concat(", ").concat(c_value(desired)).concat(", memory_order_seq_cst, memory_order_seq_cst);"));
+  return out;
+}
+
 fn is_int_scalar_kind(k: ir.TyKind) -> bool {
   return match k {
     ir.TyKind.I8 => true,
@@ -689,13 +729,13 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr) -> Vec[String] {
     ir.Instr.VecGet(tid, _elem, recv_slot, idx) => vec1("  vox_vec_get(&".concat(c_slot_name(recv_slot)).concat(", ").concat(c_value(idx)).concat(", &").concat(c_temp_name(tid)).concat(");")),
     ir.Instr.VecStrJoin(tid, recv_slot, sep) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_vec_str_join(&").concat(c_slot_name(recv_slot)).concat(", ").concat(c_value(sep)).concat(");")),
 
-    ir.Instr.AtomicNew(tid, elem_ty, val) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_impl_atomic_").concat(atomic_type_suffix(pool, elem_ty)).concat("_new(").concat(c_value(val)).concat(");")),
-    ir.Instr.AtomicLoad(tid, elem_ty, h) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_impl_atomic_").concat(atomic_type_suffix(pool, elem_ty)).concat("_load(").concat(c_value(h)).concat(");")),
-    ir.Instr.AtomicStore(elem_ty, h, val) => vec1("  vox_impl_atomic_".concat(atomic_type_suffix(pool, elem_ty)).concat("_store(").concat(c_value(h)).concat(", ").concat(c_value(val)).concat(");")),
-    ir.Instr.AtomicFetchAdd(tid, elem_ty, h, delta) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_impl_atomic_").concat(atomic_type_suffix(pool, elem_ty)).concat("_fetch_add(").concat(c_value(h)).concat(", ").concat(c_value(delta)).concat(");")),
-    ir.Instr.AtomicSwap(tid, elem_ty, h, val) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_impl_atomic_").concat(atomic_type_suffix(pool, elem_ty)).concat("_swap(").concat(c_value(h)).concat(", ").concat(c_value(val)).concat(");")),
-    ir.Instr.AtomicCAS(tid, elem_ty, h, expected, desired) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_impl_atomic_").concat(atomic_type_suffix(pool, elem_ty)).concat("_cas(").concat(c_value(h)).concat(", ").concat(c_value(expected)).concat(", ").concat(c_value(desired)).concat(");")),
-    ir.Instr.AtomicDrop(elem_ty, h) => vec1("  vox_impl_atomic_".concat(atomic_type_suffix(pool, elem_ty)).concat("_drop(").concat(c_value(h)).concat(");")),
+    ir.Instr.AtomicNew(tid, elem_ty, val) => emit_instr_atomic_new(pool, tid, elem_ty, val),
+    ir.Instr.AtomicLoad(tid, elem_ty, h) => vec1("  ".concat(c_temp_name(tid)).concat(" = atomic_load_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value(h)).concat(", memory_order_seq_cst);")),
+    ir.Instr.AtomicStore(elem_ty, h, val) => vec1("  atomic_store_explicit((".concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value(h)).concat(", ").concat(c_value(val)).concat(", memory_order_seq_cst);")),
+    ir.Instr.AtomicFetchAdd(tid, elem_ty, h, delta) => vec1("  ".concat(c_temp_name(tid)).concat(" = atomic_fetch_add_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value(h)).concat(", ").concat(c_value(delta)).concat(", memory_order_seq_cst);")),
+    ir.Instr.AtomicSwap(tid, elem_ty, h, val) => vec1("  ".concat(c_temp_name(tid)).concat(" = atomic_exchange_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value(h)).concat(", ").concat(c_value(val)).concat(", memory_order_seq_cst);")),
+    ir.Instr.AtomicCAS(tid, elem_ty, h, expected, desired) => emit_instr_atomic_cas(pool, tid, elem_ty, h, expected, desired),
+    ir.Instr.AtomicDrop(_elem_ty, h) => vec1("  vox_impl_free((void*)".concat(c_value(h)).concat(");")),
 
     ir.Instr.StrLen(tid, recv) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_str_len(").concat(c_value(recv)).concat(");")),
     ir.Instr.StrByteAt(tid, recv, idx) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_str_byte_at(").concat(c_value(recv)).concat(", ").concat(c_value(idx)).concat(");")),
