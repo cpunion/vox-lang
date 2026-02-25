@@ -1,0 +1,37 @@
+// std/runtime/el_linux: epoll-based poller for event loop wake signaling.
+
+@build(linux)
+import "std/sys" as sys
+
+static mut el_epfd: i32 = -1;
+static mut el_efd: i32 = -1;
+
+fn el_init_poller() -> () {
+  if el_epfd >= 0 { return; }
+  el_efd = sys.eventfd_create();
+  if el_efd < 0 { panic("el: eventfd() failed"); }
+  el_epfd = sys.epoll_create();
+  if el_epfd < 0 { panic("el: epoll_create1() failed"); }
+  // Register eventfd with epoll for EPOLLIN.
+  let ev_buf: rawptr = sys.calloc(1, sys.EPOLL_EVENT_SIZE() as usize);
+  sys.epoll_event_set(ev_buf, 0, sys.EPOLLIN(), el_efd as u64);
+  let rc: i32 = sys.epoll_ctl(el_epfd, sys.EPOLL_CTL_ADD(), el_efd, ev_buf);
+  sys.free(ev_buf);
+  if rc < 0 { panic("el: epoll_ctl register eventfd failed"); }
+  return;
+}
+
+fn el_wake_poller() -> () {
+  sys.eventfd_signal(el_efd);
+  return;
+}
+
+fn el_wait_poller(timeout_ms: i32) -> () {
+  let ev_buf: rawptr = sys.calloc(1, sys.EPOLL_EVENT_SIZE() as usize);
+  let n: i32 = sys.epoll_wait_events(el_epfd, ev_buf, 1, timeout_ms);
+  sys.free(ev_buf);
+  if n > 0 {
+    sys.eventfd_drain(el_efd);
+  }
+  return;
+}
