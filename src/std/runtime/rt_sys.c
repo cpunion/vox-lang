@@ -1,3 +1,11 @@
+// Thin wrapper: @ffi_import generates void* return which conflicts with
+// char* getenv() in stdlib.h (included transitively via windows.h on MinGW).
+extern char* getenv(const char*);
+const char* vox_impl_getenv(const char* key) {
+  const char* v = getenv(key);
+  return v ? v : "";
+}
+
 static int vox__argc = 0;
 static char** vox__argv = NULL;
 
