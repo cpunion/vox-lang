@@ -17,6 +17,7 @@
 extern void* malloc(size_t);
 extern void* realloc(void*, size_t);
 extern void free(void*);
+extern void qsort(void*, size_t, size_t, int(*)(const void*, const void*));
 extern int atexit(void(*)(void));
 extern void exit(int);
 extern int printf(const char*, ...);
