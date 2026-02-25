@@ -6,21 +6,20 @@ const char* vox_impl_getenv(const char* key) {
   return v ? v : "";
 }
 
+// Legacy stubs: the bootstrap compiler's generated main() still assigns
+// vox__argc and vox__argv. Keep these so generated C compiles until
+// bootstrap is bumped to a version that no longer emits them.
 static int vox__argc = 0;
 static char** vox__argv = NULL;
 
-vox_vec vox_impl_args(void) {
-  vox_vec v = vox_vec_new((int32_t)sizeof(const char*));
-  for (int i = 1; i < vox__argc; i++) {
-    const char* s = vox__argv[i];
-    vox_vec_push(&v, &s);
-  }
-  return v;
-}
-
-const char* vox_impl_exe_path(void) {
-  if (!vox__argv || vox__argc <= 0 || !vox__argv[0]) return "";
-  return vox__argv[0];
+// Minimal argv helper: dereferences argv[i] from an intptr_t argv handle.
+// State (argc/argv) is now stored in Vox static mut variables; this only
+// does the pointer dereference that @ptr_read[rawptr] would do once the
+// bootstrap compiler supports that intrinsic.
+const char* vox_impl_argv_get(intptr_t argv, int32_t i) {
+  char** p = (char**)argv;
+  if (!p || i < 0) return "";
+  return p[i] ? p[i] : "";
 }
 
 // Platform I/O wrappers (avoid C type conflicts with system headers).

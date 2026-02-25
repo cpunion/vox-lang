@@ -42,11 +42,16 @@ fn emit_forward_decl(pool: ir.TyPool, f: ir.Func) -> String {
 
 fn emit_ffi_import_params(pool: ir.TyPool, f: ir.FfiImportDecl) -> String {
   let mut s: String = "(";
+  let has_overrides: bool = f.c_param_types.len() != 0;
   let mut i: i32 = 0;
   while i < f.params.len() {
     if i != 0 { s = s.concat(", "); }
     let pa: ir.Param = f.params.get(i);
-    s = s.concat(c_type(pool, pa.ty)).concat(" ").concat(c_param_name(i));
+    let mut ty_str: String = c_type(pool, pa.ty);
+    if has_overrides && i < f.c_param_types.len() && f.c_param_types.get(i) != "" {
+      ty_str = f.c_param_types.get(i);
+    }
+    s = s.concat(ty_str).concat(" ").concat(c_param_name(i));
     i = i + 1;
   }
   if f.has_variadic {
@@ -201,8 +206,6 @@ fn main_ret_kind(pool: ir.TyPool, ty0: i32) -> ir.TyKind {
 fn emit_driver_main(pool: ir.TyPool, main_fn: ir.Func, kind: DriverMainKind, statics: Vec[ir.StaticVarDecl]) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("int main(int argc, char** argv) {");
-  out.push("  vox__argc = argc;");
-  out.push("  vox__argv = argv;");
   // Propagate argc/argv to Vox statics if std/sys declares them.
   let mut si: i32 = 0;
   while si < statics.len() {
@@ -320,11 +323,21 @@ fn emit_driver_main(pool: ir.TyPool, main_fn: ir.Func, kind: DriverMainKind, sta
   return out;
 }
 
-fn emit_test_main(test_funcs: Vec[String]) -> Vec[String] {
+fn emit_test_main(test_funcs: Vec[String], statics: Vec[ir.StaticVarDecl]) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("int main(int argc, char** argv) {");
-  out.push("  vox__argc = argc;");
-  out.push("  vox__argv = argv;");
+  // Propagate argc/argv to Vox statics if std/sys declares them.
+  let mut si: i32 = 0;
+  while si < statics.len() {
+    let sv: ir.StaticVarDecl = statics.get(si);
+    if sv.name == "std/sys::g_argc" {
+      out.push("  ".concat(c_static_name(sv.name)).concat(" = (int32_t)argc;"));
+    }
+    if sv.name == "std/sys::g_argv" {
+      out.push("  ".concat(c_static_name(sv.name)).concat(" = (intptr_t)argv;"));
+    }
+    si = si + 1;
+  }
   out.push("  if (argc < 2 || !argv[1]) { vox_host_panic(\"missing test name\"); }");
   out.push("  const char* name = argv[1];");
   let mut i: i32 = 0;
@@ -416,7 +429,7 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
     out = append_lines(out, emit_driver_main(pool, mr.f, opts.driver_main_kind, p.statics));
   }
   if opts.emit_test_main {
-    out = append_lines(out, emit_test_main(opts.test_funcs));
+    out = append_lines(out, emit_test_main(opts.test_funcs, p.statics));
   }
 
   return out.join("\n").concat("\n");
