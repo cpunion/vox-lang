@@ -1,4 +1,4 @@
-// std/sync: Mutex[T] backed by C atomic FFI (no std/runtime import).
+// std/sync: Mutex[T] and Atomic[T] backed by C atomic FFI (no std/runtime import).
 
 @ffi_import("c", "vox_impl_atomic_i32_new")
 fn rt_atomic_i32_new(v: i32) -> isize;
@@ -8,6 +8,12 @@ fn rt_atomic_i32_load(handle: isize) -> i32;
 
 @ffi_import("c", "vox_impl_atomic_i32_store")
 fn rt_atomic_i32_store(handle: isize, v: i32) -> ();
+
+@ffi_import("c", "vox_impl_atomic_i32_fetch_add")
+fn rt_atomic_i32_fetch_add(handle: isize, delta: i32) -> i32;
+
+@ffi_import("c", "vox_impl_atomic_i32_swap")
+fn rt_atomic_i32_swap(handle: isize, v: i32) -> i32;
 
 @ffi_import("c", "vox_impl_atomic_i32_drop")
 fn rt_atomic_i32_drop(handle: isize) -> ();
@@ -21,6 +27,12 @@ fn rt_atomic_i64_load(handle: isize) -> i64;
 @ffi_import("c", "vox_impl_atomic_i64_store")
 fn rt_atomic_i64_store(handle: isize, v: i64) -> ();
 
+@ffi_import("c", "vox_impl_atomic_i64_fetch_add")
+fn rt_atomic_i64_fetch_add(handle: isize, delta: i64) -> i64;
+
+@ffi_import("c", "vox_impl_atomic_i64_swap")
+fn rt_atomic_i64_swap(handle: isize, v: i64) -> i64;
+
 @ffi_import("c", "vox_impl_atomic_i64_drop")
 fn rt_atomic_i64_drop(handle: isize) -> ();
 
@@ -29,6 +41,13 @@ pub trait SyncScalar {
   fn mutex_load(sample: Self, handle: isize) -> Self;
   fn mutex_store(v: Self, handle: isize) -> ();
   fn mutex_drop(sample: Self, handle: isize) -> ();
+
+  fn atomic_new(v: Self) -> isize;
+  fn atomic_load(sample: Self, handle: isize) -> Self;
+  fn atomic_store(v: Self, handle: isize) -> ();
+  fn atomic_fetch_add(delta: Self, handle: isize) -> Self;
+  fn atomic_swap(v: Self, handle: isize) -> Self;
+  fn atomic_drop(sample: Self, handle: isize) -> ();
 }
 
 impl SyncScalar for i32 {
@@ -39,6 +58,16 @@ impl SyncScalar for i32 {
     sample;
     rt_atomic_i32_drop(handle);
   }
+
+  fn atomic_new(v: i32) -> isize { return rt_atomic_i32_new(v); }
+  fn atomic_load(sample: i32, handle: isize) -> i32 { return rt_atomic_i32_load(handle); }
+  fn atomic_store(v: i32, handle: isize) -> () { rt_atomic_i32_store(handle, v); }
+  fn atomic_fetch_add(delta: i32, handle: isize) -> i32 { return rt_atomic_i32_fetch_add(handle, delta); }
+  fn atomic_swap(v: i32, handle: isize) -> i32 { return rt_atomic_i32_swap(handle, v); }
+  fn atomic_drop(sample: i32, handle: isize) -> () {
+    sample;
+    rt_atomic_i32_drop(handle);
+  }
 }
 
 impl SyncScalar for i64 {
@@ -46,6 +75,16 @@ impl SyncScalar for i64 {
   fn mutex_load(sample: i64, handle: isize) -> i64 { return rt_atomic_i64_load(handle); }
   fn mutex_store(v: i64, handle: isize) -> () { rt_atomic_i64_store(handle, v); }
   fn mutex_drop(sample: i64, handle: isize) -> () {
+    sample;
+    rt_atomic_i64_drop(handle);
+  }
+
+  fn atomic_new(v: i64) -> isize { return rt_atomic_i64_new(v); }
+  fn atomic_load(sample: i64, handle: isize) -> i64 { return rt_atomic_i64_load(handle); }
+  fn atomic_store(v: i64, handle: isize) -> () { rt_atomic_i64_store(handle, v); }
+  fn atomic_fetch_add(delta: i64, handle: isize) -> i64 { return rt_atomic_i64_fetch_add(handle, delta); }
+  fn atomic_swap(v: i64, handle: isize) -> i64 { return rt_atomic_i64_swap(handle, v); }
+  fn atomic_drop(sample: i64, handle: isize) -> () {
     sample;
     rt_atomic_i64_drop(handle);
   }
@@ -75,4 +114,44 @@ pub fn mutex_into_inner[T: SyncScalar](m: Mutex[T]) -> T {
 
 pub fn mutex_drop[T: SyncScalar](m: Mutex[T]) -> () {
   SyncScalar.mutex_drop(m.sample, m.handle);
+}
+
+pub struct Atomic[T: SyncScalar] {
+  handle: isize,
+  sample: T,
+}
+
+pub fn atomic[T: SyncScalar](v: T) -> Atomic[T] {
+  return Atomic { handle: SyncScalar.atomic_new(v), sample: v };
+}
+
+pub fn atomic_load[T: SyncScalar](a: Atomic[T]) -> T {
+  return SyncScalar.atomic_load(a.sample, a.handle);
+}
+
+pub fn atomic_store[T: SyncScalar](a: Atomic[T], v: T) -> Atomic[T] {
+  SyncScalar.atomic_store(v, a.handle);
+  return Atomic { handle: a.handle, sample: v };
+}
+
+pub fn atomic_fetch_add[T: SyncScalar](a: Atomic[T], delta: T) -> Atomic[T] {
+  let next: T = SyncScalar.atomic_fetch_add(delta, a.handle);
+  return Atomic { handle: a.handle, sample: next };
+}
+
+pub fn atomic_swap[T: SyncScalar](a: Atomic[T], v: T) -> Atomic[T] {
+  SyncScalar.atomic_swap(v, a.handle);
+  return Atomic { handle: a.handle, sample: v };
+}
+
+pub fn atomic_fetch_add_prev[T: SyncScalar](a: Atomic[T], delta: T) -> T {
+  return SyncScalar.atomic_fetch_add(delta, a.handle);
+}
+
+pub fn atomic_swap_prev[T: SyncScalar](a: Atomic[T], v: T) -> T {
+  return SyncScalar.atomic_swap(v, a.handle);
+}
+
+pub fn atomic_drop[T: SyncScalar](a: Atomic[T]) -> () {
+  SyncScalar.atomic_drop(a.sample, a.handle);
 }
