@@ -11,6 +11,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 output=$(find "$ROOT/src" -type f -name '*.vox' ! -name '*_test.vox' \
   ! -path "$ROOT/src/std/runtime/runtime.vox" \
   ! -path "$ROOT/src/std/fs/file_common.vox" \
+  ! -path "$ROOT/src/std/sync/sync.vox" \
+  ! -path "$ROOT/src/std/async/wake.vox" \
   ! -path "$ROOT/src/std/sys/sys_common.vox" \
   ! -path "$ROOT/src/std/sys/sys_linux.vox" \
   ! -path "$ROOT/src/std/sys/sys_darwin.vox" \

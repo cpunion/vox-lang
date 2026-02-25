@@ -4,7 +4,32 @@
 // Each slot has an atomic i64 token and an atomic i32 pending counter.
 // Replaces the C runtime vox_wake_slots hash table.
 
-import "std/runtime" as rti
+@ffi_import("c", "vox_impl_atomic_i64_new")
+fn wake_i64_new(v: i64) -> isize;
+
+@ffi_import("c", "vox_impl_atomic_i64_load")
+fn wake_i64_load(handle: isize) -> i64;
+
+@ffi_import("c", "vox_impl_atomic_i64_cas")
+fn wake_i64_cas(handle: isize, expected: i64, desired: i64) -> bool;
+
+@ffi_import("c", "vox_impl_atomic_i64_drop")
+fn wake_i64_drop(handle: isize) -> ();
+
+@ffi_import("c", "vox_impl_atomic_i32_new")
+fn wake_i32_new(v: i32) -> isize;
+
+@ffi_import("c", "vox_impl_atomic_i32_load")
+fn wake_i32_load(handle: isize) -> i32;
+
+@ffi_import("c", "vox_impl_atomic_i32_fetch_add")
+fn wake_i32_fetch_add(handle: isize, delta: i32) -> i32;
+
+@ffi_import("c", "vox_impl_atomic_i32_cas")
+fn wake_i32_cas(handle: isize, expected: i32, desired: i32) -> bool;
+
+@ffi_import("c", "vox_impl_atomic_i32_drop")
+fn wake_i32_drop(handle: isize) -> ();
 
 pub struct WakeSlot {
   pub token_handle: isize,
@@ -22,8 +47,8 @@ pub fn new_wake_table() -> WakeTable {
   let mut i: i32 = 0;
   while i < n {
     slots.push(WakeSlot {
-      token_handle: rti.atomic_i64_new(0),
-      pending_handle: rti.atomic_i32_new(0),
+      token_handle: wake_i64_new(0 as i64),
+      pending_handle: wake_i32_new(0),
     });
     i = i + 1;
   }
@@ -40,13 +65,13 @@ pub fn slot_index(table: WakeTable, token: i64) -> i32 {
     let raw: i64 = (token + (probe as i64)) % (n as i64);
     let idx: i32 = if raw < 0 { (raw + (n as i64)) as i32 } else { raw as i32 };
     let slot: WakeSlot = table.slots.get(idx);
-    let seen: i64 = rti.atomic_i64_load(slot.token_handle);
+    let seen: i64 = wake_i64_load(slot.token_handle);
     if seen == token { return idx; }
     if seen == 0 {
       // Try to claim this empty slot via CAS.
-      if rti.atomic_i64_cas(slot.token_handle, 0, token) { return idx; }
+      if wake_i64_cas(slot.token_handle, 0, token) { return idx; }
       // Another thread may have claimed it with our token.
-      let after: i64 = rti.atomic_i64_load(slot.token_handle);
+      let after: i64 = wake_i64_load(slot.token_handle);
       if after == token { return idx; }
     }
     probe = probe + 1;
@@ -60,8 +85,7 @@ pub fn notify(table: WakeTable, token: i64) -> bool {
   let idx: i32 = slot_index(table, token);
   if idx < 0 { return false; }
   let slot: WakeSlot = table.slots.get(idx);
-  let old: i32 = rti.atomic_i32_fetch_add(slot.pending_handle, 1);
-  old;
+  let _: i32 = wake_i32_fetch_add(slot.pending_handle, 1);
   return true;
 }
 
@@ -72,9 +96,9 @@ pub fn try_consume(table: WakeTable, token: i64) -> bool {
   if idx < 0 { return false; }
   let slot: WakeSlot = table.slots.get(idx);
   while true {
-    let cur: i32 = rti.atomic_i32_load(slot.pending_handle);
+    let cur: i32 = wake_i32_load(slot.pending_handle);
     if cur <= 0 { return false; }
-    if rti.atomic_i32_cas(slot.pending_handle, cur, cur - 1) { return true; }
+    if wake_i32_cas(slot.pending_handle, cur, cur - 1) { return true; }
   }
   return false;
 }
@@ -84,7 +108,7 @@ pub fn has_pending(table: WakeTable, token: i64) -> bool {
   let idx: i32 = slot_index(table, token);
   if idx < 0 { return false; }
   let slot: WakeSlot = table.slots.get(idx);
-  return rti.atomic_i32_load(slot.pending_handle) > 0;
+  return wake_i32_load(slot.pending_handle) > 0;
 }
 
 // Release all atomic handles owned by the table.
@@ -92,8 +116,8 @@ pub fn drop_wake_table(table: WakeTable) -> () {
   let mut i: i32 = 0;
   while i < table.n_slots {
     let slot: WakeSlot = table.slots.get(i);
-    rti.atomic_i64_drop(slot.token_handle);
-    rti.atomic_i32_drop(slot.pending_handle);
+    wake_i64_drop(slot.token_handle);
+    wake_i32_drop(slot.pending_handle);
     i = i + 1;
   }
   return;
