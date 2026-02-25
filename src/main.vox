@@ -2251,6 +2251,53 @@ fn load_stage1_vox() -> Vec[ld.SourceFile] {
   return Vec();
 }
 
+fn find_std_root_from_repo_root(root: String) -> String {
+  let std_path: String = path_join(root, "src/std");
+  if fs.exists(path_join(std_path, "runtime/rt_core.c")) {
+    return std_path;
+  }
+  return "";
+}
+
+fn find_std_root_from_root(root0: String) -> String {
+  let root: String = normalize_std_search_root(root0);
+  return find_std_root_from_repo_root(root);
+}
+
+fn find_std_root() -> String {
+  let env_vox_root: String = txt.trim_space(proc.getenv("VOX_ROOT"));
+  if env_vox_root != "" {
+    let r: String = find_std_root_from_root(env_vox_root);
+    if r != "" { return r; }
+  }
+
+  let env_root: String = txt.trim_space(proc.getenv("VOX_STDLIB"));
+  if env_root != "" {
+    let r: String = find_std_root_from_root(env_root);
+    if r != "" { return r; }
+  }
+
+  let exe: String = normalize_host_fs_path(proc.exe_path());
+  let bin_dir: String = dir_name(exe);
+  let r_bin: String = find_std_root_from_root(path_join(bin_dir, "../src/std"));
+  if r_bin != "" { return r_bin; }
+
+  let embed_root: String = txt.trim_space(path_with_forward_slashes(bi.build_source_root()));
+  if embed_root != "" {
+    let r_embed: String = find_std_root_from_root(embed_root);
+    if r_embed != "" { return r_embed; }
+  }
+
+  let root: String = stage1_root();
+  let r_root: String = find_std_root_from_root(root);
+  if r_root != "" { return r_root; }
+  let r_src: String = find_std_root_from_root(path_join(root, "src"));
+  if r_src != "" { return r_src; }
+  let r_lib: String = find_std_root_from_root(path_join(root, "lib"));
+  if r_lib != "" { return r_lib; }
+  return "";
+}
+
 fn slice_vec(xs: Vec[String], start: i32) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   let mut i: i32 = start;
@@ -3092,7 +3139,9 @@ fn main() -> i32 {
       paths_for_vox.push(paths_for_std.get(psv));
       psv = psv + 1;
     }
-    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths_for_std) { Vec() } else { load_stage1_std() };
+    let is_self_std: bool = has_std_under_src(paths_for_std);
+    let mut files: Vec[ld.SourceFile] = if is_self_std { Vec() } else { load_stage1_std() };
+    let std_root: String = if is_self_std { "src/std" } else { find_std_root() };
     if !has_vox_under_src(paths_for_vox) {
       let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
       let mut pvi: i32 = 0;
@@ -3132,7 +3181,7 @@ fn main() -> i32 {
       let cp: c.CompileProfileResult =
         c.compile_files_to_c_profile_for_target(
           files,
-          cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec() },
+          cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec(), std_root: std_root },
           target_ptr,
           target_os,
           target_arch,
@@ -3361,7 +3410,9 @@ fn main() -> i32 {
       return 0;
     }
 
-    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths_for_std_test) { Vec() } else { load_stage1_std() };
+    let is_self_std_test: bool = has_std_under_src(paths_for_std_test);
+    let mut files: Vec[ld.SourceFile] = if is_self_std_test { Vec() } else { load_stage1_std() };
+    let std_root_test: String = if is_self_std_test { "src/std" } else { find_std_root() };
     if !has_vox_under_src(paths_for_vox_test) {
       let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
       let mut pvi: i32 = 0;
@@ -3420,7 +3471,7 @@ fn main() -> i32 {
     let cp: c.CompileProfileResult =
       c.compile_files_to_c_profile_for_target(
         files,
-        cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile },
+        cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile, std_root: std_root_test },
         target_ptr,
         target_os,
         target_arch,
