@@ -32,6 +32,24 @@ void* vox_impl_alloc_buf(int32_t size) {
 }
 
 
+// Platform I/O wrappers (avoid C type conflicts with system headers).
+// Direct @ffi_import to kevent/epoll_ctl/epoll_wait generates void* externs
+// that conflict with struct pointer params in system headers included
+// transitively by c_rt_core (e.g. <sys/event.h> on macOS, <sys/epoll.h> on Linux).
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+int32_t vox_impl_kevent(int32_t kq, void* changelist, int32_t nchanges, void* eventlist, int32_t nevents, void* timeout) {
+  return kevent(kq, changelist, nchanges, eventlist, nevents, timeout);
+}
+#endif
+#if defined(__linux__)
+int32_t vox_impl_epoll_ctl(int32_t epfd, int32_t op, int32_t fd, void* event) {
+  return epoll_ctl(epfd, op, fd, event);
+}
+int32_t vox_impl_epoll_wait(int32_t epfd, void* events, int32_t maxevents, int32_t timeout) {
+  return epoll_wait(epfd, events, maxevents, timeout);
+}
+#endif
+
 // === Event loop: Vox-driven wake table + platform poller ===
 // Forward declarations for atomic functions used by el_init.
 intptr_t vox_impl_atomic_i64_new(int64_t init);
