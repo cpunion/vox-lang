@@ -1,0 +1,39 @@
+// std/runtime/el_darwin: kqueue-based poller for event loop wake signaling.
+
+@build(darwin)
+import "std/sys" as sys
+
+static mut el_kq: i32 = -1;
+
+fn el_init_poller() -> () {
+  if el_kq >= 0 { return; }
+  el_kq = sys.kqueue_create();
+  if el_kq < 0 { panic("el: kqueue() failed"); }
+  // Register EVFILT_USER with ident=1, EV_ADD|EV_CLEAR.
+  let buf: rawptr = sys.calloc(1, sys.KEVENT_SIZE() as usize);
+  sys.kevent_set(buf, 0, 1, sys.EVFILT_USER(), sys.EV_ADD() | sys.EV_CLEAR(), sys.NOTE_FFNOP(), 0 as isize, sys.null_rawptr());
+  let rc: i32 = sys.kevent_register(el_kq, buf, 1);
+  sys.free(buf);
+  if rc < 0 { panic("el: kqueue register failed"); }
+  return;
+}
+
+fn el_wake_poller() -> () {
+  let buf: rawptr = sys.calloc(1, sys.KEVENT_SIZE() as usize);
+  sys.kevent_set(buf, 0, 1, sys.EVFILT_USER(), 0 as u16, sys.NOTE_TRIGGER(), 0 as isize, sys.null_rawptr());
+  let rc: i32 = sys.kevent_register(el_kq, buf, 1);
+  sys.free(buf);
+  rc;
+  return;
+}
+
+fn el_wait_poller(timeout_ms: i32) -> () {
+  let ts_buf: rawptr = sys.calloc(1, sys.TIMESPEC_SIZE() as usize);
+  sys.timespec_set_ms(ts_buf, timeout_ms);
+  let ev_buf: rawptr = sys.calloc(1, sys.KEVENT_SIZE() as usize);
+  let n: i32 = sys.kevent_poll(el_kq, ev_buf, 1, ts_buf);
+  sys.free(ts_buf);
+  sys.free(ev_buf);
+  n;
+  return;
+}

@@ -3,70 +3,27 @@
 // Public std modules should call this layer instead of touching low-level FFI
 // symbols directly. This keeps std API stable when runtime mappings evolve.
 
+import "std/sys" as sys
 import "std/time" as tm
 
 pub fn intrinsic_abi() -> i32 { return 1; }
 
-// Event loop: Vox-driven wake table with C-stored handles + platform poller.
-@ffi_import("c", "vox_impl_el_init")
-fn el_init_raw() -> ();
-
-@ffi_import("c", "vox_impl_el_n_slots")
-fn el_n_slots() -> i32;
-
-@ffi_import("c", "vox_impl_el_token_handle")
-fn el_token_handle(idx: i32) -> isize;
-
-@ffi_import("c", "vox_impl_el_pending_handle")
-fn el_pending_handle(idx: i32) -> isize;
-
-@ffi_import("c", "vox_impl_el_poller_wake")
-fn el_poller_wake() -> ();
-
-@ffi_import("c", "vox_impl_el_poller_wait")
-fn el_poller_wait(timeout_ms: i32) -> ();
-
-@ffi_import("c", "vox_impl_atomic_i32_new")
-fn rt_atomic_i32_new_raw(v: i32) -> isize;
-
+// Atomic FFI — still needed because isize handles can't be cast to built-in
+// Atomic[T]. These call rt_sync.c (also used by the bootstrap compiler).
 @ffi_import("c", "vox_impl_atomic_i32_load")
 fn rt_atomic_i32_load_raw(handle: isize) -> i32;
-
-@ffi_import("c", "vox_impl_atomic_i32_store")
-fn rt_atomic_i32_store_raw(handle: isize, v: i32) -> ();
 
 @ffi_import("c", "vox_impl_atomic_i32_fetch_add")
 fn rt_atomic_i32_fetch_add_raw(handle: isize, delta: i32) -> i32;
 
-@ffi_import("c", "vox_impl_atomic_i32_swap")
-fn rt_atomic_i32_swap_raw(handle: isize, v: i32) -> i32;
-
 @ffi_import("c", "vox_impl_atomic_i32_cas")
 fn rt_atomic_i32_cas_raw(handle: isize, expected: i32, desired: i32) -> bool;
-
-@ffi_import("c", "vox_impl_atomic_i32_drop")
-fn rt_atomic_i32_drop_raw(handle: isize) -> ();
-
-@ffi_import("c", "vox_impl_atomic_i64_new")
-fn rt_atomic_i64_new_raw(v: i64) -> isize;
 
 @ffi_import("c", "vox_impl_atomic_i64_load")
 fn rt_atomic_i64_load_raw(handle: isize) -> i64;
 
-@ffi_import("c", "vox_impl_atomic_i64_store")
-fn rt_atomic_i64_store_raw(handle: isize, v: i64) -> ();
-
-@ffi_import("c", "vox_impl_atomic_i64_fetch_add")
-fn rt_atomic_i64_fetch_add_raw(handle: isize, delta: i64) -> i64;
-
-@ffi_import("c", "vox_impl_atomic_i64_swap")
-fn rt_atomic_i64_swap_raw(handle: isize, v: i64) -> i64;
-
 @ffi_import("c", "vox_impl_atomic_i64_cas")
 fn rt_atomic_i64_cas_raw(handle: isize, expected: i64, desired: i64) -> bool;
-
-@ffi_import("c", "vox_impl_atomic_i64_drop")
-fn rt_atomic_i64_drop_raw(handle: isize) -> ();
 
 // Compatibility probe kept for older std code.
 // Runtime capabilities are no longer exposed as reserved `__*` intrinsics.
@@ -75,9 +32,41 @@ pub fn has_intrinsic(name: String) -> bool {
   return false;
 }
 
-// Pure Vox wake table algorithm using C-stored atomic handles.
+// === Event loop: pure Vox wake table + platform poller ===
+//
+// Wake table is a 256-slot open-addressing hash map of tokens → pending counts.
+// Slot arrays are heap-allocated contiguous _Atomic int64_t / _Atomic int32_t.
+// Platform-specific poller (el_darwin/linux/windows/wasm.vox) provides
+// el_init_poller(), el_wake_poller(), el_wait_poller(timeout_ms).
+
+fn EL_SLOTS() -> i32 { return 256; }
+
+static mut el_inited: bool = false;
+static mut el_token_buf: isize = 0;
+static mut el_pending_buf: isize = 0;
+
+fn el_init() -> () {
+  if el_inited { return; }
+  // Allocate contiguous _Atomic arrays. calloc zeros memory which is a valid
+  // atomic initial value for integer types on all supported platforms.
+  el_token_buf = sys.calloc(EL_SLOTS() as usize, 8 as usize) as isize;
+  el_pending_buf = sys.calloc(EL_SLOTS() as usize, 4 as usize) as isize;
+  el_init_poller();
+  el_inited = true;
+  return;
+}
+
+fn el_token_handle(idx: i32) -> isize {
+  return el_token_buf + (idx as isize) * (8 as isize);
+}
+
+fn el_pending_handle(idx: i32) -> isize {
+  return el_pending_buf + (idx as isize) * (4 as isize);
+}
+
+// Pure Vox wake table algorithm using heap-allocated atomic arrays.
 fn el_slot_index(token: i64) -> i32 {
-  let n: i32 = el_n_slots();
+  let n: i32 = EL_SLOTS();
   let mut probe: i32 = 0;
   while probe < n {
     let raw: i64 = (token + (probe as i64)) % (n as i64);
@@ -108,17 +97,17 @@ fn el_try_consume(token: i64) -> bool {
 }
 
 pub fn wake_notify(token: i64) -> () {
-  el_init_raw();
+  el_init();
   let idx: i32 = el_slot_index(token);
   if idx < 0 { return; }
   let old: i32 = rt_atomic_i32_fetch_add_raw(el_pending_handle(idx), 1);
   old;
-  el_poller_wake();
+  el_wake_poller();
   return;
 }
 
 pub fn wake_wait(token: i64, timeout_ms: i32) -> bool {
-  el_init_raw();
+  el_init();
   if el_try_consume(token) { return true; }
   if timeout_ms <= 0 { return el_try_consume(token); }
   let deadline: i64 = tm.now_ns() + ((timeout_ms as i64) * (1000 as i64) * (1000 as i64));
@@ -128,13 +117,13 @@ pub fn wake_wait(token: i64, timeout_ms: i32) -> bool {
     if rem_ns <= 0 { return el_try_consume(token); }
     let mut rem_ms: i32 = (rem_ns / ((1000 as i64) * (1000 as i64))) as i32;
     if rem_ms <= 0 { rem_ms = 1; }
-    el_poller_wait(rem_ms);
+    el_wait_poller(rem_ms);
   }
   return el_try_consume(token);
 }
 
 pub fn wake_wait_any(tokens: Vec[i64], timeout_ms: i32) -> i32 {
-  el_init_raw();
+  el_init();
   let n: i32 = tokens.len();
   if n == 0 { return -1; }
 
@@ -152,7 +141,7 @@ pub fn wake_wait_any(tokens: Vec[i64], timeout_ms: i32) -> i32 {
     if rem_ns <= 0 { return -1; }
     let mut rem_ms: i32 = (rem_ns / ((1000 as i64) * (1000 as i64))) as i32;
     if rem_ms <= 0 { rem_ms = 1; }
-    el_poller_wait(rem_ms);
+    el_wait_poller(rem_ms);
 
     // Re-scan all tokens after blocking wait.
     let mut j: i32 = 0;
@@ -163,4 +152,3 @@ pub fn wake_wait_any(tokens: Vec[i64], timeout_ms: i32) -> i32 {
   }
   return -1;
 }
-
