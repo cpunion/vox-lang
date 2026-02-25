@@ -24,7 +24,12 @@ fn append_lines(out0: Vec[String], lines: Vec[String]) -> Vec[String] {
 }
 
 fn emit_forward_decl(pool: ir.TyPool, f: ir.Func) -> String {
+  let is_main: bool = f.name == "main";
   let mut s: String = "static ".concat(c_ret_type(pool, f.ret)).concat(" ").concat(c_fn_name(f.name)).concat("(");
+  if is_main {
+    s = s.concat("int32_t vox_p_argc, intptr_t vox_p_argv");
+    if f.params.len() != 0 { s = s.concat(", "); }
+  }
   let mut i: i32 = 0;
   while i < f.params.len() {
     if i != 0 { s = s.concat(", "); }
@@ -35,7 +40,23 @@ fn emit_forward_decl(pool: ir.TyPool, f: ir.Func) -> String {
   return s.concat(");");
 }
 
-fn emit_ffi_import_decl(pool: ir.TyPool, f: ir.FfiImportDecl) -> String {
+fn emit_ffi_import_params(pool: ir.TyPool, f: ir.FfiImportDecl) -> String {
+  let mut s: String = "(";
+  let mut i: i32 = 0;
+  while i < f.params.len() {
+    if i != 0 { s = s.concat(", "); }
+    let pa: ir.Param = f.params.get(i);
+    s = s.concat(c_type(pool, pa.ty)).concat(" ").concat(c_param_name(i));
+    i = i + 1;
+  }
+  if f.has_variadic {
+    if f.params.len() != 0 { s = s.concat(", "); }
+    s = s.concat("...");
+  }
+  return s.concat(");");
+}
+
+fn emit_ffi_import_decl(pool: ir.TyPool, f: ir.FfiImportDecl) -> Vec[String] {
   if f.target != "c" && f.target != "wasm" { panic("c backend does not support ffi_import target: ".concat(f.target)); }
   let mut pre: String = "extern ";
   let mut cname: String = f.symbol;
@@ -54,19 +75,20 @@ fn emit_ffi_import_decl(pool: ir.TyPool, f: ir.FfiImportDecl) -> String {
     cname = c_ffi_import_name(f.func);
   }
 
-  let mut s: String = pre.concat(c_ret_type(pool, f.ret)).concat(" ").concat(cname).concat("(");
-  let mut i: i32 = 0;
-  while i < f.params.len() {
-    if i != 0 { s = s.concat(", "); }
-    let pa: ir.Param = f.params.get(i);
-    s = s.concat(c_type(pool, pa.ty)).concat(" ").concat(c_param_name(i));
-    i = i + 1;
+  let params: String = emit_ffi_import_params(pool, f);
+  let ret: String = c_ret_type(pool, f.ret);
+  let mut out: Vec[String] = Vec();
+
+  if f.calling_convention == "system" {
+    out.push("#ifdef _WIN32");
+    out.push(pre.concat(ret).concat(" __stdcall ").concat(cname).concat(params));
+    out.push("#else");
+    out.push(pre.concat(ret).concat(" ").concat(cname).concat(params));
+    out.push("#endif");
+  } else {
+    out.push(pre.concat(ret).concat(" ").concat(cname).concat(params));
   }
-  if f.has_variadic {
-    if f.params.len() != 0 { s = s.concat(", "); }
-    s = s.concat("...");
-  }
-  return s.concat(");");
+  return out;
 }
 
 fn static_init_value(pool: ir.TyPool, sv: ir.StaticVarDecl) -> String {
@@ -196,48 +218,48 @@ fn emit_driver_main(pool: ir.TyPool, main_fn: ir.Func, kind: DriverMainKind, sta
   let rk: ir.TyKind = main_ret_kind(pool, main_fn.ret);
   if kind == DriverMainKind.User {
     if rk == ir.TyKind.Unit {
-      out.push("  ".concat(c_fn_name("main")).concat("();"));
+      out.push("  ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
     } else if rk == ir.TyKind.Bool {
-      out.push("  bool v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  bool v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%s\\n\", v ? \"true\" : \"false\");");
     } else if rk == ir.TyKind.I8 {
-      out.push("  int8_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  int8_t v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%\" PRId8 \"\\n\", v);");
     } else if rk == ir.TyKind.U8 {
-      out.push("  uint8_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  uint8_t v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%\" PRIu8 \"\\n\", v);");
     } else if rk == ir.TyKind.I16 {
-      out.push("  int16_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  int16_t v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%\" PRId16 \"\\n\", v);");
     } else if rk == ir.TyKind.U16 {
-      out.push("  uint16_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  uint16_t v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%\" PRIu16 \"\\n\", v);");
     } else if rk == ir.TyKind.I32 {
-      out.push("  int32_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  int32_t v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%\" PRId32 \"\\n\", v);");
     } else if rk == ir.TyKind.U32 {
-      out.push("  uint32_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  uint32_t v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%\" PRIu32 \"\\n\", v);");
     } else if rk == ir.TyKind.I64 {
-      out.push("  int64_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  int64_t v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%\" PRId64 \"\\n\", v);");
     } else if rk == ir.TyKind.ISize {
-      out.push("  intptr_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  intptr_t v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%\" PRIdPTR \"\\n\", v);");
     } else if rk == ir.TyKind.U64 {
-      out.push("  uint64_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  uint64_t v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%\" PRIu64 \"\\n\", v);");
     } else if rk == ir.TyKind.USize {
-      out.push("  uintptr_t v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  uintptr_t v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%\" PRIuPTR \"\\n\", v);");
     } else if rk == ir.TyKind.F32 {
-      out.push("  float v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  float v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%.9g\\n\", (double)v);");
     } else if rk == ir.TyKind.F64 {
-      out.push("  double v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  double v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%.17g\\n\", v);");
     } else if rk == ir.TyKind.String {
-      out.push("  const char* v = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  const char* v = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%s\\n\", v ? v : \"\");");
     } else {
       panic("unsupported main return type in driver");
@@ -245,49 +267,49 @@ fn emit_driver_main(pool: ir.TyPool, main_fn: ir.Func, kind: DriverMainKind, sta
     out.push("  return 0;");
   } else {
     if rk == ir.TyKind.Unit {
-      out.push("  ".concat(c_fn_name("main")).concat("();"));
+      out.push("  ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return 0;");
     } else if rk == ir.TyKind.Bool {
-      out.push("  bool rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  bool rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return rc ? 0 : 1;");
     } else if rk == ir.TyKind.I8 {
-      out.push("  int8_t rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  int8_t rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.U8 {
-      out.push("  uint8_t rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  uint8_t rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.I16 {
-      out.push("  int16_t rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  int16_t rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.U16 {
-      out.push("  uint16_t rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  uint16_t rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.I32 {
-      out.push("  int32_t rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  int32_t rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.U32 {
-      out.push("  uint32_t rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  uint32_t rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.I64 {
-      out.push("  int64_t rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  int64_t rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.ISize {
-      out.push("  intptr_t rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  intptr_t rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.U64 {
-      out.push("  uint64_t rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  uint64_t rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.USize {
-      out.push("  uintptr_t rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  uintptr_t rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.F32 {
-      out.push("  float rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  float rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.F64 {
-      out.push("  double rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  double rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  return (int)rc;");
     } else if rk == ir.TyKind.String {
-      out.push("  const char* rc = ".concat(c_fn_name("main")).concat("();"));
+      out.push("  const char* rc = ".concat(c_fn_name("main")).concat("((int32_t)argc, (intptr_t)argv);"));
       out.push("  printf(\"%s\\n\", rc ? rc : \"\");");
       out.push("  return 0;");
     } else {
@@ -356,7 +378,7 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
   // Forward decls (ffi imports first, then internal funcs).
   let mut ii: i32 = 0;
   while ii < p.ffi_imports.len() {
-    out.push(emit_ffi_import_decl(pool, p.ffi_imports.get(ii)));
+    out = append_lines(out, emit_ffi_import_decl(pool, p.ffi_imports.get(ii)));
     ii = ii + 1;
   }
   if p.ffi_imports.len() != 0 { out.push(""); }

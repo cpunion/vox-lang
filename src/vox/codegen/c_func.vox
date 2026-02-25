@@ -70,6 +70,16 @@ fn c_str_lit(s: String) -> String {
   return "\"".concat(s.escape_c()).concat("\"");
 }
 
+fn atomic_type_suffix(pool: ir.TyPool, elem_ty: i32) -> String {
+  let t: ir.Ty = ir.ty_pool_get(pool, elem_ty);
+  return match t.kind {
+    ir.TyKind.I32 => "i32",
+    ir.TyKind.I64 => "i64",
+    ir.TyKind.ISize => "i64",
+    _ => "i64",
+  };
+}
+
 fn is_int_scalar_kind(k: ir.TyKind) -> bool {
   return match k {
     ir.TyKind.I8 => true,
@@ -240,6 +250,13 @@ fn locals_add_instr(pool: ir.TyPool, l0: LocalsResult, ins: ir.Instr) -> LocalsR
     ir.Instr.VecLen(tid, _sid) => locals_add_temp(l0, tid, "int32_t"),
     ir.Instr.VecGet(tid, ty, _sid, _idx) => locals_add_temp(l0, tid, c_type(pool, ty)),
     ir.Instr.VecStrJoin(tid, _sid, _sep) => locals_add_temp(l0, tid, "const char*"),
+    ir.Instr.AtomicNew(tid, _elem_ty, _val) => locals_add_temp(l0, tid, "intptr_t"),
+    ir.Instr.AtomicLoad(tid, elem_ty, _h) => locals_add_temp(l0, tid, c_type(pool, elem_ty)),
+    ir.Instr.AtomicStore(_elem_ty, _h, _val) => l0,
+    ir.Instr.AtomicFetchAdd(tid, elem_ty, _h, _delta) => locals_add_temp(l0, tid, c_type(pool, elem_ty)),
+    ir.Instr.AtomicSwap(tid, elem_ty, _h, _val) => locals_add_temp(l0, tid, c_type(pool, elem_ty)),
+    ir.Instr.AtomicCAS(tid, _ety, _h, _expected, _desired) => locals_add_temp(l0, tid, "bool"),
+    ir.Instr.AtomicDrop(_ety, _h) => l0,
     ir.Instr.StrLen(tid, _r) => locals_add_temp(l0, tid, "int32_t"),
     ir.Instr.StrByteAt(tid, _r, _idx) => locals_add_temp(l0, tid, "int32_t"),
     ir.Instr.StrSlice(tid, _r, _s, _e) => locals_add_temp(l0, tid, "const char*"),
@@ -672,6 +689,14 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr) -> Vec[String] {
     ir.Instr.VecGet(tid, _elem, recv_slot, idx) => vec1("  vox_vec_get(&".concat(c_slot_name(recv_slot)).concat(", ").concat(c_value(idx)).concat(", &").concat(c_temp_name(tid)).concat(");")),
     ir.Instr.VecStrJoin(tid, recv_slot, sep) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_vec_str_join(&").concat(c_slot_name(recv_slot)).concat(", ").concat(c_value(sep)).concat(");")),
 
+    ir.Instr.AtomicNew(tid, elem_ty, val) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_impl_atomic_").concat(atomic_type_suffix(pool, elem_ty)).concat("_new(").concat(c_value(val)).concat(");")),
+    ir.Instr.AtomicLoad(tid, elem_ty, h) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_impl_atomic_").concat(atomic_type_suffix(pool, elem_ty)).concat("_load(").concat(c_value(h)).concat(");")),
+    ir.Instr.AtomicStore(elem_ty, h, val) => vec1("  vox_impl_atomic_".concat(atomic_type_suffix(pool, elem_ty)).concat("_store(").concat(c_value(h)).concat(", ").concat(c_value(val)).concat(");")),
+    ir.Instr.AtomicFetchAdd(tid, elem_ty, h, delta) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_impl_atomic_").concat(atomic_type_suffix(pool, elem_ty)).concat("_fetch_add(").concat(c_value(h)).concat(", ").concat(c_value(delta)).concat(");")),
+    ir.Instr.AtomicSwap(tid, elem_ty, h, val) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_impl_atomic_").concat(atomic_type_suffix(pool, elem_ty)).concat("_swap(").concat(c_value(h)).concat(", ").concat(c_value(val)).concat(");")),
+    ir.Instr.AtomicCAS(tid, elem_ty, h, expected, desired) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_impl_atomic_").concat(atomic_type_suffix(pool, elem_ty)).concat("_cas(").concat(c_value(h)).concat(", ").concat(c_value(expected)).concat(", ").concat(c_value(desired)).concat(");")),
+    ir.Instr.AtomicDrop(elem_ty, h) => vec1("  vox_impl_atomic_".concat(atomic_type_suffix(pool, elem_ty)).concat("_drop(").concat(c_value(h)).concat(");")),
+
     ir.Instr.StrLen(tid, recv) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_str_len(").concat(c_value(recv)).concat(");")),
     ir.Instr.StrByteAt(tid, recv, idx) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_str_byte_at(").concat(c_value(recv)).concat(", ").concat(c_value(idx)).concat(");")),
     ir.Instr.StrSlice(tid, recv, start, end) => vec1("  ".concat(c_temp_name(tid)).concat(" = vox_str_slice(").concat(c_value(recv)).concat(", ").concat(c_value(start)).concat(", ").concat(c_value(end)).concat(");")),
@@ -736,7 +761,12 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
   let mut out: Vec[String] = Vec();
 
   // Signature
+  let is_main: bool = f.name == "main";
   let mut sig: String = "static ".concat(c_ret_type(pool, f.ret)).concat(" ").concat(c_fn_name(f.name)).concat("(");
+  if is_main {
+    sig = sig.concat("int32_t vox_p_argc, intptr_t vox_p_argv");
+    if f.params.len() != 0 { sig = sig.concat(", "); }
+  }
   let mut i: i32 = 0;
   while i < f.params.len() {
     if i != 0 { sig = sig.concat(", "); }

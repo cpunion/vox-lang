@@ -242,7 +242,7 @@ fn type_name_is_pack_member(name: String, pack: String) -> bool {
 fn ty_contains_pack_param(ctx: Ctx, ty: i32, pack: String) -> bool {
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
   if t.kind == ir.TyKind.Param { return type_name_is_pack_member(t.name, pack); }
-  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified { return ty_contains_pack_param(ctx, t.elem, pack); }
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Atomic || t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified { return ty_contains_pack_param(ctx, t.elem, pack); }
   return false;
 }
 
@@ -279,7 +279,7 @@ fn ty_contains_pack_projection(ctx: Ctx, ty: i32, pack: String) -> bool {
     if !dr.ok { return false; }
     return dr.matched && !dr.is_all;
   }
-  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified {
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Atomic || t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified {
     return ty_contains_pack_projection(ctx, t.elem, pack);
   }
   return false;
@@ -537,7 +537,7 @@ fn pack_materialization_scan_ty(ctx: Ctx, ty: i32, pack: String, occ0: i32) -> P
     }
     return PackMaterializationScanResult { ok: true, err: "", max_idx: dr.idx, next_occ: occ0 };
   }
-  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified {
+  if t.kind == ir.TyKind.Vec || t.kind == ir.TyKind.Atomic || t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified {
     return pack_materialization_scan_ty(ctx, t.elem, pack, occ0);
   }
   return PackMaterializationScanResult { ok: true, err: "", max_idx: -1, next_occ: occ0 };
@@ -1053,6 +1053,10 @@ fn is_vec_builtin_method(name: String) -> bool {
   return name == "push" || name == "insert" || name == "set" || name == "clear" || name == "extend" || name == "pop" || name == "remove" || name == "len" || name == "is_empty" || name == "get" || name == "join";
 }
 
+fn is_atomic_builtin_method(name: String) -> bool {
+  return name == "load" || name == "store" || name == "fetch_add" || name == "swap" || name == "cas" || name == "drop";
+}
+
 fn is_string_builtin_method(name: String) -> bool {
   return name == "len" ||
     name == "is_empty" ||
@@ -1235,6 +1239,11 @@ fn vec_builtin_recv_borrow_kind(name: String) -> i32 {
   return param_borrow_ref();
 }
 
+fn atomic_builtin_recv_borrow_kind(name: String) -> i32 {
+  // All atomic operations take by value (intptr_t handle), not by reference.
+  return param_borrow_ref();
+}
+
 fn is_map_builtin_method(name: String) -> bool {
   return name == "len" ||
     name == "is_empty" ||
@@ -1335,6 +1344,16 @@ pub fn resolve_call_move_slots(
       }
       return call_move_slots_ok(out);
     }
+    if is_atomic_ty(ctx, rr.ty) && is_atomic_builtin_method(mname) {
+      let mut out: Vec[CallMoveSlot] = Vec();
+      out = call_move_slots_push(out, recv_id, atomic_builtin_recv_borrow_kind(mname));
+      let mut ai: i32 = 0;
+      while ai < args.len() {
+        out = call_move_slots_push(out, args.get(ai), param_borrow_none());
+        ai = ai + 1;
+      }
+      return call_move_slots_ok(out);
+    }
     if rr.ty == ctx.ty_string && is_string_builtin_method(mname) {
       let mut out: Vec[CallMoveSlot] = Vec();
       out = call_move_slots_push(out, recv_id, param_borrow_ref());
@@ -1418,6 +1437,9 @@ pub fn resolve_call_move_slots(
     if parts.get(0) == "Vec" {
       if args.len() == 0 { return call_move_slots_ok(Vec()); }
       return call_move_slots_fail();
+    }
+    if parts.get(0) == "Atomic" {
+      return call_move_slots_ok(Vec());
     }
     return call_move_slots_for_unqualified_fn(ctx, mod_path, imps, parts.get(0), args);
   }
@@ -1695,6 +1717,9 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
     if rr.ok && is_vec_ty(ctx, rr.ty) && is_vec_builtin_method(mname) {
       return tc_call_vec_method(ctx, w, mod_path, imps, exprs, l0, call_sp, recv_id, rr.ty, mname, args, expected);
     }
+    if rr.ok && is_atomic_ty(ctx, rr.ty) && is_atomic_builtin_method(mname) {
+      return tc_call_atomic_method(ctx, w, mod_path, imps, exprs, l0, call_sp, recv_id, rr.ty, mname, args, expected);
+    }
     // Allow `&str` to use String builtin methods (transition model: `&str` lowers
     // to `Ref(String, ...)`).
     if rr.ok && strip_range(ctx, rr.ty) == ctx.ty_string && is_string_builtin_method(mname) {
@@ -1828,6 +1853,19 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
     if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     if expected == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec() requires expected type Vec[T]") }; }
     if !is_vec_ty(ctx, expected) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Vec() requires expected type Vec[T]") }; }
+    return ExprTyResult { ok: true, ty: expected, err: TcError.None };
+  }
+
+  // Special: `Atomic(val)` constructor requires expected type `Atomic[T]`.
+  if parts.len() == 1 && parts.get(0) == "Atomic" {
+    if path_targs.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if type_args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Atomic() takes exactly 1 argument") }; }
+    if expected == -1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Atomic() requires expected type Atomic[T]") }; }
+    if !is_atomic_ty(ctx, expected) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "Atomic() requires expected type Atomic[T]") }; }
+    let elem: i32 = atomic_elem(ctx, expected);
+    let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), elem);
+    if !ar.ok { return ar; }
     return ExprTyResult { ok: true, ty: expected, err: TcError.None };
   }
 
@@ -2073,6 +2111,58 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs
     if !sepr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
+  }
+
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+}
+
+fn tc_call_atomic_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, call_sp: ast.Span, recv_id: i32, recv_ty: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
+  let elem: i32 = atomic_elem(ctx, recv_ty);
+
+  if mname == "load" {
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != elem { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: elem, err: TcError.None };
+  }
+
+  if mname == "store" {
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), elem);
+    if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: ar.err }; }
+    if expected != -1 && expected != ctx.ty_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_unit, err: TcError.None };
+  }
+
+  if mname == "fetch_add" {
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), elem);
+    if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: ar.err }; }
+    if expected != -1 && expected != elem { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: elem, err: TcError.None };
+  }
+
+  if mname == "swap" {
+    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), elem);
+    if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: ar.err }; }
+    if expected != -1 && expected != elem { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: elem, err: TcError.None };
+  }
+
+  if mname == "cas" {
+    if args.len() != 2 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let ar0: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), elem);
+    if !ar0.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: ar0.err }; }
+    let ar1: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(1), elem);
+    if !ar1.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: ar1.err }; }
+    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
+  }
+
+  if mname == "drop" {
+    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    if expected != -1 && expected != ctx.ty_unit { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    return ExprTyResult { ok: true, ty: ctx.ty_unit, err: TcError.None };
   }
 
   return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
