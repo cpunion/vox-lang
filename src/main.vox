@@ -1877,6 +1877,17 @@ fn load_dep_sources(dep_name: String, dep_root: String) -> Vec[ld.SourceFile] {
     }
     j = j + 1;
   }
+  let c_rels: Vec[String] = srcw.walk_c_files(dep_root);
+  let mut ci: i32 = 0;
+  while ci < c_rels.len() {
+    let c_rel: String = c_rels.get(ci);
+    if has_prefix(c_rel, "src/") {
+      let c_full: String = path_join(dep_root, c_rel);
+      let c_virt: String = dep_name.concat("/").concat(c_rel);
+      out.push(ld.SourceFile { path: c_virt, text: fs.read_to_string(c_full) });
+    }
+    ci = ci + 1;
+  }
   return out;
 }
 
@@ -2166,6 +2177,16 @@ fn load_stage1_std_from_repo_root(root: String) -> Vec[ld.SourceFile] {
     }
     i = i + 1;
   }
+  let c_rels: Vec[String] = srcw.walk_c_files(root);
+  let mut ci: i32 = 0;
+  while ci < c_rels.len() {
+    let c_rel: String = c_rels.get(ci);
+    if has_prefix(c_rel, "src/std/") {
+      let c_full: String = path_join(root, c_rel);
+      out.push(ld.SourceFile { path: c_rel, text: fs.read_to_string(c_full) });
+    }
+    ci = ci + 1;
+  }
   return out;
 }
 
@@ -2249,53 +2270,6 @@ fn load_stage1_vox() -> Vec[ld.SourceFile] {
     if from_env_root.len() > 0 { return from_env_root; }
   }
   return Vec();
-}
-
-fn find_std_root_from_repo_root(root: String) -> String {
-  let std_path: String = path_join(root, "src/std");
-  if fs.exists(path_join(std_path, "runtime/rt_core.c")) {
-    return std_path;
-  }
-  return "";
-}
-
-fn find_std_root_from_root(root0: String) -> String {
-  let root: String = normalize_std_search_root(root0);
-  return find_std_root_from_repo_root(root);
-}
-
-fn find_std_root() -> String {
-  let env_vox_root: String = txt.trim_space(proc.getenv("VOX_ROOT"));
-  if env_vox_root != "" {
-    let r: String = find_std_root_from_root(env_vox_root);
-    if r != "" { return r; }
-  }
-
-  let env_root: String = txt.trim_space(proc.getenv("VOX_STDLIB"));
-  if env_root != "" {
-    let r: String = find_std_root_from_root(env_root);
-    if r != "" { return r; }
-  }
-
-  let exe: String = normalize_host_fs_path(proc.exe_path());
-  let bin_dir: String = dir_name(exe);
-  let r_bin: String = find_std_root_from_root(path_join(bin_dir, "../src/std"));
-  if r_bin != "" { return r_bin; }
-
-  let embed_root: String = txt.trim_space(path_with_forward_slashes(bi.build_source_root()));
-  if embed_root != "" {
-    let r_embed: String = find_std_root_from_root(embed_root);
-    if r_embed != "" { return r_embed; }
-  }
-
-  let root: String = stage1_root();
-  let r_root: String = find_std_root_from_root(root);
-  if r_root != "" { return r_root; }
-  let r_src: String = find_std_root_from_root(path_join(root, "src"));
-  if r_src != "" { return r_src; }
-  let r_lib: String = find_std_root_from_root(path_join(root, "lib"));
-  if r_lib != "" { return r_lib; }
-  return "";
 }
 
 fn slice_vec(xs: Vec[String], start: i32) -> Vec[String] {
@@ -3104,6 +3078,10 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
+    let c_all: Vec[String] = srcw.walk_c_files(".");
+    let c_user: Vec[ld.SourceFile] = load_files(c_all);
+    let mut cui: i32 = 0;
+    while cui < c_user.len() { files.push(c_user.get(cui)); cui = cui + 1; }
 
     let opts: lst.GraphOptions = lst.GraphOptions {
       include_tests: list_include_tests,
@@ -3141,7 +3119,6 @@ fn main() -> i32 {
     }
     let is_self_std: bool = has_std_under_src(paths_for_std);
     let mut files: Vec[ld.SourceFile] = if is_self_std { Vec() } else { load_stage1_std() };
-    let std_root: String = if is_self_std { "src/std" } else { find_std_root() };
     if !has_vox_under_src(paths_for_vox) {
       let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
       let mut pvi: i32 = 0;
@@ -3166,6 +3143,10 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
+    let c_all_build: Vec[String] = srcw.walk_c_files(".");
+    let c_user_build: Vec[ld.SourceFile] = load_files(c_all_build);
+    let mut cubi: i32 = 0;
+    while cubi < c_user_build.len() { files.push(c_user_build.get(cubi)); cubi = cubi + 1; }
     let cpath: String = out.concat(".c");
     let mut files_for_cache: Vec[ld.SourceFile] = Vec();
     let mut fci: i32 = 0;
@@ -3181,7 +3162,7 @@ fn main() -> i32 {
       let cp: c.CompileProfileResult =
         c.compile_files_to_c_profile_for_target(
           files,
-          cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec(), std_root: std_root },
+          cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() },
           target_ptr,
           target_os,
           target_arch,
@@ -3412,7 +3393,6 @@ fn main() -> i32 {
 
     let is_self_std_test: bool = has_std_under_src(paths_for_std_test);
     let mut files: Vec[ld.SourceFile] = if is_self_std_test { Vec() } else { load_stage1_std() };
-    let std_root_test: String = if is_self_std_test { "src/std" } else { find_std_root() };
     if !has_vox_under_src(paths_for_vox_test) {
       let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
       let mut pvi: i32 = 0;
@@ -3437,6 +3417,10 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
+    let c_all_test: Vec[String] = srcw.walk_c_files(".");
+    let c_user_test: Vec[ld.SourceFile] = load_files(c_all_test);
+    let mut cuti: i32 = 0;
+    while cuti < c_user_test.len() { files.push(c_user_test.get(cuti)); cuti = cuti + 1; }
 
     let test_invocation_ns: i64 = tm.now_ns();
     let mut test_invocation_hash: u64 = 1469598103934665603 as u64;
@@ -3471,7 +3455,7 @@ fn main() -> i32 {
     let cp: c.CompileProfileResult =
       c.compile_files_to_c_profile_for_target(
         files,
-        cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile, std_root: std_root_test },
+        cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile, c_sources: Vec() },
         target_ptr,
         target_os,
         target_arch,

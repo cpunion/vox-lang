@@ -29,7 +29,7 @@ fn compile_to_c(src: String) -> String {
   w = tc.world_add(w, "main", r.prog);
   let gr: irgen.GenResult = irgen.generate_world(w);
   t.assert_with(gr.ok, gr.err);
-  return cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec(), std_root: "src/std" });
+  return cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() });
 }
 
 fn test_codegen_smoke_main_i32() -> () {
@@ -106,36 +106,18 @@ fn test_codegen_intrinsic_abi_helpers_smoke() -> () {
     driver_main_kind: cg.DriverMainKind.User,
     emit_test_main: false,
     test_funcs: Vec(),
-    std_root: "src/std",
+    c_sources: Vec(),
   });
   t.assert(!contains(c, "vox_host_intrinsic_abi"));
   t.assert(!contains(c, "vox_host_has_intrinsic"));
 }
 
-fn test_codegen_platform_headers_present() -> () {
+fn test_codegen_no_hardcoded_headers() -> () {
+  // Headers and runtime declarations are provided by .c files (e.g. _preamble.c),
+  // not hardcoded in the codegen. Verify codegen itself emits no #include directives.
   let c: String = compile_to_c("fn main() -> i32 { return 0; }");
-  t.assert(contains(c, "#include <sched.h>"));
-  t.assert(contains(c, "#define WIN32_LEAN_AND_MEAN"));
-  t.assert(contains(c, "#include <windows.h>"));
-  // Socket wrappers use forward declarations on all platforms (no sys headers).
-  t.assert(!contains(c, "#include <winsock2.h>"));
-  t.assert(!contains(c, "#include <ws2tcpip.h>"));
-  t.assert(!contains(c, "#include <sys/socket.h>"));
-  t.assert(!contains(c, "#include <netdb.h>"));
-  t.assert(contains(c, "struct sockaddr;"));
-  t.assert(contains(c, "struct addrinfo;"));
-  // stdlib.h and stdio.h replaced by extern declarations.
   t.assert(!contains(c, "#include <stdlib.h>"));
   t.assert(!contains(c, "#include <stdio.h>"));
-  t.assert(contains(c, "extern void* malloc(size_t)"));
-  t.assert(contains(c, "extern void* realloc(void*, size_t)"));
-  t.assert(contains(c, "extern void free(void*)"));
-  t.assert(contains(c, "extern int atexit(void(*)(void))"));
-  t.assert(contains(c, "extern void exit(int)"));
-  t.assert(contains(c, "extern int printf(const char*, ...)"));
-  t.assert(contains(c, "extern int snprintf(char*, size_t, const char*, ...)"));
-  // vox_host_panic defined in c_rt_core (before Vec types).
-  t.assert(contains(c, "static VOX_NORETURN void vox_host_panic(const char* msg)"));
 }
 
 fn test_codegen_yield_now_intrinsic_uses_sys_ffi() -> () {
@@ -155,7 +137,7 @@ fn test_codegen_yield_now_intrinsic_uses_sys_ffi() -> () {
     driver_main_kind: cg.DriverMainKind.User,
     emit_test_main: false,
     test_funcs: Vec(),
-    std_root: "src/std",
+    c_sources: Vec(),
   });
   t.assert(contains(c, "extern int32_t sched_yield("));
   t.assert(contains(c, "sched_yield();"));
@@ -188,7 +170,7 @@ fn test_codegen_event_loop_uses_runtime_helpers() -> () {
     driver_main_kind: cg.DriverMainKind.User,
     emit_test_main: false,
     test_funcs: Vec(),
-    std_root: "src/std",
+    c_sources: Vec(),
   });
   // Event loop infrastructure must be present in generated C.
   t.assert(contains(c, "#define VOX_EL_SLOTS 256"));
@@ -252,7 +234,7 @@ fn test_codegen_sync_drop_intrinsics_use_runtime_helpers() -> () {
   let gr: irgen.GenResult = irgen.generate_world(w);
   t.assert_with(gr.ok, gr.err);
   t.assert(gr.ok);
-  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec(), std_root: "src/std" });
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() });
   t.assert(contains(c, "static void vox_sync_handle_add(intptr_t h)"));
   t.assert(contains(c, "static bool vox_sync_handle_live(intptr_t h)"));
   t.assert(contains(c, "static bool vox_sync_handle_remove(intptr_t h)"));
@@ -461,7 +443,7 @@ fn test_codegen_tool_driver_main_i32_exits() -> () {
   w = tc.world_add(w, "main", pr.prog);
   let gr: irgen.GenResult = irgen.generate_world(w);
   t.assert(gr.ok);
-  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), std_root: "src/std" });
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() });
   t.assert(contains(c, "int32_t rc = vox_fn_mmain();"));
   t.assert(contains(c, "return (int)rc;"));
 }
@@ -473,7 +455,7 @@ fn test_codegen_tool_driver_main_u32_exits() -> () {
   w = tc.world_add(w, "main", pr.prog);
   let gr: irgen.GenResult = irgen.generate_world(w);
   t.assert(gr.ok);
-  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), std_root: "src/std" });
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() });
   t.assert(contains(c, "uint32_t rc = vox_fn_mmain();"));
   t.assert(contains(c, "return (int)rc;"));
 }
@@ -485,7 +467,7 @@ fn test_codegen_tool_driver_main_isize_exits() -> () {
   w = tc.world_add(w, "main", pr.prog);
   let gr: irgen.GenResult = irgen.generate_world(w);
   t.assert(gr.ok);
-  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), std_root: "src/std" });
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() });
   t.assert(contains(c, "intptr_t rc = vox_fn_mmain();"));
   t.assert(contains(c, "return (int)rc;"));
 }
@@ -497,7 +479,7 @@ fn test_codegen_tool_driver_main_f64_exits() -> () {
   w = tc.world_add(w, "main", pr.prog);
   let gr: irgen.GenResult = irgen.generate_world(w);
   t.assert(gr.ok);
-  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), std_root: "src/std" });
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() });
   t.assert(contains(c, "double rc = vox_fn_mmain();"));
   t.assert(contains(c, "return (int)rc;"));
 }
@@ -509,7 +491,7 @@ fn test_codegen_tool_driver_main_bool_exits() -> () {
   w = tc.world_add(w, "main", pr.prog);
   let gr: irgen.GenResult = irgen.generate_world(w);
   t.assert(gr.ok);
-  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), std_root: "src/std" });
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() });
   t.assert(contains(c, "bool rc = vox_fn_mmain();"));
   t.assert(contains(c, "return rc ? 0 : 1;"));
 }
@@ -521,7 +503,7 @@ fn test_codegen_tool_driver_main_string_exits() -> () {
   w = tc.world_add(w, "main", pr.prog);
   let gr: irgen.GenResult = irgen.generate_world(w);
   t.assert(gr.ok);
-  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), std_root: "src/std" });
+  let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.Tool, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() });
   t.assert(contains(c, "const char* rc = vox_fn_mmain();"));
   t.assert(contains(c, "printf(\"%s\\n\", rc ? rc : \"\");"));
   t.assert(contains(c, "return 0;"));
@@ -622,7 +604,6 @@ fn test_codegen_int_mod_emits_div0_check_unsigned() -> () {
 fn test_codegen_int_add_avoids_signed_overflow_ub() -> () {
   let c: String = compile_to_c("fn main() -> i32 { let a: i32 = 1; let b: i32 = 2; return a + b; }");
   // Signed overflow is UB in C; backend must not rely on it.
-  t.assert(contains(c, "#include <string.h>"));
   t.assert(contains(c, "memcpy(&"));
 }
 
