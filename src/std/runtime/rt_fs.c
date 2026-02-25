@@ -23,7 +23,7 @@ static char* vox_path_join2(const char* a, const char* b) {
   return out;
 }
 
-static void vox_walk_dir(vox_vec* out, const char* root, const char* rel) {
+static void vox_walk_dir_suffix(vox_vec* out, const char* root, const char* rel, const char* suffix) {
   char* full = rel && rel[0] ? vox_path_join2(root, rel) : vox_path_join2(root, "");
   DIR* d = opendir(full);
   if (!d) { vox_impl_free(full); return; }
@@ -36,12 +36,12 @@ static void vox_walk_dir(vox_vec* out, const char* root, const char* rel) {
     char* child_full = vox_path_join2(root, child_rel);
     struct stat st;
     if (stat(child_full, &st) == 0 && S_ISDIR(st.st_mode)) {
-      vox_walk_dir(out, root, child_rel);
+      vox_walk_dir_suffix(out, root, child_rel, suffix);
       vox_impl_free(child_full);
       vox_impl_free(child_rel);
       continue;
     }
-    if (vox_str_has_suffix(child_rel, ".vox")) {
+    if (vox_str_has_suffix(child_rel, suffix)) {
       const char* s = child_rel;
       vox_vec_push(out, &s);
       vox_impl_free(child_full);
@@ -54,11 +54,31 @@ static void vox_walk_dir(vox_vec* out, const char* root, const char* rel) {
   vox_impl_free(full);
 }
 
+static int vox_cmp_str_ptr(const void* a, const void* b) {
+  const char* sa = *(const char**)a;
+  const char* sb = *(const char**)b;
+  return strcmp(sa, sb);
+}
+
+static void vox_vec_sort_strings(vox_vec* v) {
+  if (v->len <= 1) return;
+  qsort(v->h->data, (size_t)v->len, (size_t)v->h->elem_size, vox_cmp_str_ptr);
+}
+
 vox_vec vox_impl_walk_vox_files(const char* root) {
   if (!root || root[0] == '\0') root = ".";
   vox_vec out = vox_vec_new((int32_t)sizeof(const char*));
-  vox_walk_dir(&out, root, "src");
-  vox_walk_dir(&out, root, "tests");
+  vox_walk_dir_suffix(&out, root, "src", ".vox");
+  vox_walk_dir_suffix(&out, root, "tests", ".vox");
+  vox_vec_sort_strings(&out);
+  return out;
+}
+
+vox_vec vox_impl_walk_c_files(const char* root) {
+  if (!root || root[0] == '\0') root = ".";
+  vox_vec out = vox_vec_new((int32_t)sizeof(const char*));
+  vox_walk_dir_suffix(&out, root, "src", ".c");
+  vox_vec_sort_strings(&out);
   return out;
 }
 
