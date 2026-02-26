@@ -40,6 +40,7 @@ pub fn yield_now() -> () {
   return;
 }
 
+@calling_convention("system")
 @ffi_import("c", "send")
 fn c_send(sock: usize, buf: String, n: i32, flags: i32) -> i32;
 
@@ -53,13 +54,51 @@ pub fn socket_send(handle: isize, buf: String, n: usize) -> isize {
   return c_send(handle as usize, buf, count_to_i32(n), 0) as isize;
 }
 
-@ffi_import("c", "vox_impl_wsa_init") fn c_wsa_init() -> ();
-@ffi_import("c", "vox_impl_win_recv") fn c_win_recv(fd: i32, buf: rawptr, max_n: i32, flags: i32) -> i32;
-@ffi_import("c", "vox_impl_win_closesocket") fn c_win_closesocket(fd: i32) -> i32;
-@ffi_import("c", "vox_impl_win_sock_poll") fn c_win_sock_poll(fd: i32, want_write: bool, timeout_ms: i32) -> bool;
+@calling_convention("system")
+@ffi_import("c", "WSAStartup") fn win_WSAStartup(ver: u16, data: rawptr) -> i32;
+@calling_convention("system")
+@ffi_import("c", "recv") fn win_recv(fd: usize, buf: rawptr, len: i32, flags: i32) -> i32;
+@calling_convention("system")
+@ffi_import("c", "closesocket") fn win_closesocket(fd: usize) -> i32;
+@calling_convention("system")
+@ffi_import("c", "select") fn win_select(nfds: i32, readfds: rawptr, writefds: rawptr, exceptfds: rawptr, timeout: rawptr) -> i32;
+
+static mut wsa_inited: bool = false;
+fn wsa_init() -> () {
+  if wsa_inited { return; }
+  let wsa: rawptr = calloc(1 as usize, 408 as usize);
+  let rc: i32 = win_WSAStartup(514 as u16, wsa);
+  free(wsa);
+  if rc != 0 { panic("wsa startup failed"); }
+  wsa_inited = true;
+  return;
+}
+
+fn win_sock_poll(fd: i32, want_write: bool, timeout_ms: i32) -> bool {
+  let mut tms: i32 = timeout_ms;
+  if tms < 0 { tms = 0; }
+  // fd_set: 520 bytes (count u32 at offset 0, SOCKET at offset 8)
+  let fds: rawptr = calloc(1 as usize, 520 as usize);
+  @ptr_write[u32](fds, 1 as u32);
+  @ptr_write[usize](@ptr_offset(fds, 8 as isize), fd as usize);
+  // timeval: tv_sec (i32) + tv_usec (i32) = 8 bytes
+  let tv: rawptr = calloc(1 as usize, 8 as usize);
+  @ptr_write[i32](tv, tms / 1000);
+  @ptr_write[i32](@ptr_offset(tv, 4 as isize), (tms % 1000) * 1000);
+  let mut rfds: rawptr = fds;
+  let mut wfds: rawptr = null_rawptr();
+  if want_write {
+    rfds = null_rawptr();
+    wfds = fds;
+  }
+  let n: i32 = win_select(0, rfds, wfds, null_rawptr(), tv);
+  free(fds);
+  free(tv);
+  return n > 0;
+}
 
 pub fn connect(host: String, port: i32) -> isize {
-  c_wsa_init();
+  wsa_init();
   if port <= 0 || port > 65535 { panic("invalid tcp port"); }
   let port_str: String = port.to_string();
   let hints: rawptr = calloc(1 as usize, ADDRINFO_SIZE() as usize);
@@ -90,7 +129,7 @@ pub fn connect(host: String, port: i32) -> isize {
         sock_freeaddrinfo(res as rawptr);
         return fd as isize;
       }
-      let _r: i32 = c_win_closesocket(fd);
+      let _r: i32 = win_closesocket(fd as usize);
       _r;
       fd = -1;
     }
@@ -105,26 +144,26 @@ pub fn recv(handle: isize, max_n: i32) -> String {
   if handle < 0 { panic("invalid tcp handle"); }
   if max_n <= 0 { return ""; }
   let buf: rawptr = calloc(1 as usize, (max_n as usize) + (1 as usize));
-  let n: i32 = c_win_recv(handle as i32, buf, max_n, 0);
+  let n: i32 = win_recv(handle as usize, buf, max_n, 0);
   if n < 0 { panic("tcp recv failed"); }
   return buf_to_string(buf, n);
 }
 
 pub fn close_socket(handle: isize) -> () {
   if handle < 0 { return; }
-  let _rc: i32 = c_win_closesocket(handle as i32);
+  let _rc: i32 = win_closesocket(handle as usize);
   _rc;
   return;
 }
 
 pub fn wait_read(handle: isize, timeout_ms: i32) -> bool {
   if handle < 0 { panic("invalid tcp handle"); }
-  return c_win_sock_poll(handle as i32, false, timeout_ms);
+  return win_sock_poll(handle as i32, false, timeout_ms);
 }
 
 pub fn wait_write(handle: isize, timeout_ms: i32) -> bool {
   if handle < 0 { panic("invalid tcp handle"); }
-  return c_win_sock_poll(handle as i32, true, timeout_ms);
+  return win_sock_poll(handle as i32, true, timeout_ms);
 }
 
 @ffi_import("c", "_lseeki64")
