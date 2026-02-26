@@ -1,11 +1,3 @@
-// Thin wrapper: @ffi_import generates void* return which conflicts with
-// char* getenv() in stdlib.h (included transitively via windows.h on MinGW).
-extern char* getenv(const char*);
-const char* vox_impl_getenv(const char* key) {
-  const char* v = getenv(key);
-  return v ? v : "";
-}
-
 // Legacy stubs: the bootstrap compiler's generated main() still assigns
 // vox__argc and vox__argv. Keep these so generated C compiles until
 // bootstrap is bumped to a version that no longer emits them.
@@ -25,6 +17,20 @@ struct sockaddr;
 struct addrinfo;
 
 #ifdef _WIN32
+// Windows ABI types — forward declarations to avoid including <windows.h>
+// which transitively pulls in <stdlib.h> and conflicts with FFI declarations.
+typedef void* HANDLE;
+typedef unsigned long DWORD;
+typedef DWORD* LPDWORD;
+typedef uintptr_t ULONG_PTR;
+typedef ULONG_PTR* PULONG_PTR;
+typedef struct _OVERLAPPED OVERLAPPED;
+typedef OVERLAPPED* LPOVERLAPPED;
+extern HANDLE __stdcall CreateIoCompletionPort(HANDLE, HANDLE, ULONG_PTR, DWORD);
+extern int __stdcall PostQueuedCompletionStatus(HANDLE, DWORD, ULONG_PTR, LPOVERLAPPED);
+extern int __stdcall GetQueuedCompletionStatus(HANDLE, LPDWORD, PULONG_PTR, LPOVERLAPPED*, DWORD);
+extern int __stdcall CloseHandle(HANDLE);
+
 typedef uintptr_t SOCKET;
 extern int __stdcall connect(SOCKET, const struct sockaddr*, int);
 extern int __stdcall bind(SOCKET, const struct sockaddr*, int);
@@ -117,4 +123,3 @@ bool vox_impl_win_sock_poll(int32_t fd, bool want_write, int32_t timeout_ms) {
   return n > 0;
 }
 #endif
-
