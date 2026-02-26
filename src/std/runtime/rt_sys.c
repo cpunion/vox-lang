@@ -30,10 +30,12 @@ int32_t vox_impl_fcntl3(int32_t fd, int32_t cmd, int32_t arg) {
   return fcntl(fd, cmd, arg);
 }
 #endif
-#ifdef _WIN32
-typedef uintptr_t SOCKET;
+// Forward declarations needed by Vox-generated FFI extern declarations.
 struct sockaddr;
 struct addrinfo;
+
+#ifdef _WIN32
+typedef uintptr_t SOCKET;
 extern int __stdcall connect(SOCKET, const struct sockaddr*, int);
 extern int __stdcall bind(SOCKET, const struct sockaddr*, int);
 extern SOCKET __stdcall accept(SOCKET, struct sockaddr*, int*);
@@ -94,183 +96,42 @@ int32_t vox_impl_win_listen(int32_t fd, int32_t backlog) {
 }
 #endif
 
+// Windows-only thin wrappers for Winsock functions that need SOCKET type
+// casting or __stdcall calling convention.
 #if defined(_WIN32)
-struct addrinfo { int ai_flags; int ai_family; int ai_socktype; int ai_protocol; size_t ai_addrlen; char* ai_canonname; struct sockaddr* ai_addr; struct addrinfo* ai_next; };
 typedef struct { unsigned short wVersion; unsigned short wHighVersion; char szDescription[257]; char szSystemStatus[129]; unsigned short iMaxSockets; unsigned short iMaxUdpDg; char* lpVendorInfo; } VOX_WSADATA;
 extern int __stdcall WSAStartup(unsigned short, VOX_WSADATA*);
 extern int __stdcall recv(SOCKET, char*, int, int);
 extern int __stdcall closesocket(SOCKET);
 extern int __stdcall select(int, void*, void*, void*, void*);
-static int vox_tcp_win_inited = 0;
-static void vox_tcp_win_ensure_init(void) {
-  if (vox_tcp_win_inited) return;
+
+void vox_impl_wsa_init(void) {
+  static int inited = 0;
+  if (inited) return;
   VOX_WSADATA wsa;
-  int rc = WSAStartup(0x0202, &wsa);
-  if (rc != 0) { vox_host_panic("tcp wsa startup failed"); }
-  vox_tcp_win_inited = 1;
+  if (WSAStartup(0x0202, &wsa) != 0) { vox_host_panic("wsa startup failed"); }
+  inited = 1;
 }
 
-intptr_t vox_impl_tcp_connect(const char* host, int32_t port) {
-  vox_tcp_win_ensure_init();
-  if (!host) host = "";
-  if (port <= 0 || port > 65535) { vox_host_panic("invalid tcp port"); }
-  char port_buf[16];
-  snprintf(port_buf, sizeof(port_buf), "%" PRId32, port);
-  struct addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = 0;
-  hints.ai_socktype = 1;
-  hints.ai_protocol = 6;
-  struct addrinfo* res = NULL;
-  int rc = getaddrinfo(host, port_buf, &hints, &res);
-  if (rc != 0 || !res) { vox_host_panic("tcp connect resolve failed"); }
-  SOCKET fd = (SOCKET)(~(uintptr_t)0);
-  for (struct addrinfo* p = res; p != NULL; p = p->ai_next) {
-    fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-    if (fd == (SOCKET)(~(uintptr_t)0)) continue;
-    if (connect(fd, p->ai_addr, (int)p->ai_addrlen) == 0) { break; }
-    closesocket(fd);
-    fd = (SOCKET)(~(uintptr_t)0);
-  }
-  freeaddrinfo(res);
-  if (fd == (SOCKET)(~(uintptr_t)0)) { vox_host_panic("tcp connect failed"); }
-  return (intptr_t)(uintptr_t)fd;
+int32_t vox_impl_win_recv(int32_t fd, void* buf, int32_t max_n, int32_t flags) {
+  return recv((SOCKET)(intptr_t)fd, (char*)buf, max_n, flags);
 }
 
-const char* vox_impl_tcp_recv(intptr_t h, int32_t max_n) {
-  if (h < 0) { vox_host_panic("invalid tcp handle"); }
-  SOCKET fd = (SOCKET)(uintptr_t)h;
-  if (max_n <= 0) return "";
-  char* buf = (char*)vox_impl_malloc((size_t)max_n + 1);
-  if (!buf) { vox_host_panic("out of memory"); }
-  int n = recv(fd, buf, max_n, 0);
-  if (n < 0) { vox_host_panic("tcp recv failed"); }
-  buf[n] = '\0';
-  return buf;
+int32_t vox_impl_win_closesocket(int32_t fd) {
+  return closesocket((SOCKET)(intptr_t)fd);
 }
 
-void vox_impl_tcp_close(intptr_t h) {
-  if (h < 0) return;
-  closesocket((SOCKET)(uintptr_t)h);
-}
-
-static bool vox_tcp_wait_select(SOCKET fd, bool want_write, int32_t timeout_ms) {
+bool vox_impl_win_sock_poll(int32_t fd, bool want_write, int32_t timeout_ms) {
   if (timeout_ms < 0) timeout_ms = 0;
   char fds[520];
   memset(fds, 0, 520);
   *(uint32_t*)fds = 1;
-  *(SOCKET*)(fds + 8) = fd;
+  *(SOCKET*)(fds + 8) = (SOCKET)(intptr_t)fd;
   int32_t tv[2];
   tv[0] = timeout_ms / 1000;
   tv[1] = (timeout_ms % 1000) * 1000;
   int n = select(0, want_write ? NULL : fds, want_write ? fds : NULL, NULL, tv);
   return n > 0;
-}
-
-bool vox_impl_tcp_wait_read(intptr_t h, int32_t timeout_ms) {
-  if (h < 0) { vox_host_panic("invalid tcp handle"); }
-  return vox_tcp_wait_select((SOCKET)(uintptr_t)h, false, timeout_ms);
-}
-
-bool vox_impl_tcp_wait_write(intptr_t h, int32_t timeout_ms) {
-  if (h < 0) { vox_host_panic("invalid tcp handle"); }
-  return vox_tcp_wait_select((SOCKET)(uintptr_t)h, true, timeout_ms);
-}
-#else
-#if defined(__APPLE__)
-struct addrinfo { int ai_flags; int ai_family; int ai_socktype; int ai_protocol; unsigned int ai_addrlen; char* ai_canonname; struct sockaddr* ai_addr; struct addrinfo* ai_next; };
-#else
-struct addrinfo { int ai_flags; int ai_family; int ai_socktype; int ai_protocol; unsigned int ai_addrlen; struct sockaddr* ai_addr; char* ai_canonname; struct addrinfo* ai_next; };
-#endif
-extern int socket(int, int, int);
-extern int connect(int, const struct sockaddr*, unsigned int);
-extern int getaddrinfo(const char*, const char*, const struct addrinfo*, struct addrinfo**);
-extern void freeaddrinfo(struct addrinfo*);
-extern ssize_t recv(int, void*, size_t, int);
-static bool vox_tcp_wait_unix_fd(int fd, bool want_write, int32_t timeout_ms) {
-  if (fd < 0) { vox_host_panic("invalid tcp handle"); }
-  if (timeout_ms < 0) timeout_ms = 0;
-#if defined(__linux__)
-  int ep = epoll_create1(VOX_EPOLL_CLOEXEC);
-  if (ep < 0) { vox_host_panic("tcp epoll create failed"); }
-  char ev[12];
-  memset(ev, 0, 12);
-  *(uint32_t*)ev = want_write ? (VOX_EPOLLOUT | 0x8 | 0x10) : (VOX_EPOLLIN | 0x8 | 0x10);
-  *(uint64_t*)(ev + 4) = 1;
-  if (epoll_ctl(ep, VOX_EPOLL_CTL_ADD, fd, (struct epoll_event*)ev) != 0) { close(ep); vox_host_panic("tcp epoll ctl failed"); }
-  int n = epoll_wait(ep, (struct epoll_event*)ev, 1, timeout_ms);
-  close(ep);
-  return n > 0;
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-  int kq = kqueue();
-  if (kq < 0) { vox_host_panic("tcp kqueue create failed"); }
-  char ch[VOX_KEVENT_SZ];
-  int16_t filt = want_write ? VOX_EVFILT_WRITE : VOX_EVFILT_READ;
-  vox_kev_set(ch, (uintptr_t)fd, filt, VOX_EV_ADD | VOX_EV_ENABLE | VOX_EV_ONESHOT, 0, 0, NULL);
-  if (kevent(kq, (const struct kevent*)ch, 1, NULL, 0, NULL) != 0) { close(kq); vox_host_panic("tcp kqueue register failed"); }
-  struct timespec ts;
-  ts.tv_sec = timeout_ms / 1000;
-  ts.tv_nsec = (long)(timeout_ms % 1000) * 1000000L;
-  char ev[VOX_KEVENT_SZ];
-  int n = kevent(kq, NULL, 0, (struct kevent*)ev, 1, &ts);
-  close(kq);
-  return n > 0;
-#else
-  (void)fd; (void)want_write; (void)timeout_ms;
-  sched_yield();
-  return true;
-#endif
-}
-
-bool vox_impl_tcp_wait_read(intptr_t h, int32_t timeout_ms) {
-  return vox_tcp_wait_unix_fd((int)h, false, timeout_ms);
-}
-
-bool vox_impl_tcp_wait_write(intptr_t h, int32_t timeout_ms) {
-  return vox_tcp_wait_unix_fd((int)h, true, timeout_ms);
-}
-
-intptr_t vox_impl_tcp_connect(const char* host, int32_t port) {
-  if (!host) host = "";
-  if (port <= 0 || port > 65535) { vox_host_panic("invalid tcp port"); }
-  char port_buf[16];
-  snprintf(port_buf, sizeof(port_buf), "%" PRId32, port);
-  struct addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = 0;
-  hints.ai_socktype = 1;
-  struct addrinfo* res = NULL;
-  int rc = getaddrinfo(host, port_buf, &hints, &res);
-  if (rc != 0 || !res) { vox_host_panic("tcp connect resolve failed"); }
-  int fd = -1;
-  for (struct addrinfo* p = res; p != NULL; p = p->ai_next) {
-    fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-    if (fd < 0) continue;
-    if (connect(fd, p->ai_addr, p->ai_addrlen) == 0) { break; }
-    close(fd);
-    fd = -1;
-  }
-  freeaddrinfo(res);
-  if (fd < 0) { vox_host_panic("tcp connect failed"); }
-  return (intptr_t)fd;
-}
-
-const char* vox_impl_tcp_recv(intptr_t h, int32_t max_n) {
-  int fd = (int)h;
-  if (fd < 0) { vox_host_panic("invalid tcp handle"); }
-  if (max_n <= 0) return "";
-  char* buf = (char*)vox_impl_malloc((size_t)max_n + 1);
-  if (!buf) { vox_host_panic("out of memory"); }
-  ssize_t n = recv(fd, buf, (size_t)max_n, 0);
-  if (n < 0) { vox_host_panic("tcp recv failed"); }
-  buf[n] = '\0';
-  return buf;
-}
-
-void vox_impl_tcp_close(intptr_t h) {
-  int fd = (int)h;
-  if (fd < 0) return;
-  close(fd);
 }
 #endif
 
