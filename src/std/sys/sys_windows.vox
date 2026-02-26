@@ -53,40 +53,78 @@ pub fn socket_send(handle: isize, buf: String, n: usize) -> isize {
   return c_send(handle as usize, buf, count_to_i32(n), 0) as isize;
 }
 
-@ffi_import("c", "vox_impl_tcp_connect")
-fn c_tcp_connect(host: String, port: i32) -> isize;
-
-@ffi_import("c", "vox_impl_tcp_recv")
-fn c_tcp_recv(handle: isize, max_n: i32) -> String;
-
-@ffi_import("c", "vox_impl_tcp_close")
-fn c_tcp_close(handle: isize) -> ();
-
-@ffi_import("c", "vox_impl_tcp_wait_read")
-fn c_tcp_wait_read(handle: isize, timeout_ms: i32) -> bool;
-
-@ffi_import("c", "vox_impl_tcp_wait_write")
-fn c_tcp_wait_write(handle: isize, timeout_ms: i32) -> bool;
+@ffi_import("c", "vox_impl_wsa_init") fn c_wsa_init() -> ();
+@ffi_import("c", "vox_impl_win_recv") fn c_win_recv(fd: i32, buf: rawptr, max_n: i32, flags: i32) -> i32;
+@ffi_import("c", "vox_impl_win_closesocket") fn c_win_closesocket(fd: i32) -> i32;
+@ffi_import("c", "vox_impl_win_sock_poll") fn c_win_sock_poll(fd: i32, want_write: bool, timeout_ms: i32) -> bool;
 
 pub fn connect(host: String, port: i32) -> isize {
-  return c_tcp_connect(host, port);
+  c_wsa_init();
+  if port <= 0 || port > 65535 { panic("invalid tcp port"); }
+  let port_str: String = port.to_string();
+  let hints: rawptr = calloc(1 as usize, ADDRINFO_SIZE() as usize);
+  @ptr_write[i32](@ptr_offset(hints, ADDRINFO_OFF_SOCKTYPE()), SOCK_STREAM());
+  @ptr_write[i32](@ptr_offset(hints, ADDRINFO_OFF_PROTOCOL()), IPPROTO_TCP());
+  let res_buf: rawptr = calloc(1 as usize, 8 as usize);
+  let rc: i32 = sock_getaddrinfo(host, port_str, hints, res_buf);
+  free(hints);
+  if rc != 0 {
+    free(res_buf);
+    panic("tcp connect resolve failed");
+  }
+  let res: isize = @ptr_read[isize](res_buf);
+  free(res_buf);
+  if res == (0 as isize) { panic("tcp connect resolve failed"); }
+  let mut fd: i32 = -1;
+  let mut p: isize = res;
+  while p != (0 as isize) {
+    let pp: rawptr = p as rawptr;
+    let family: i32 = @ptr_read[i32](@ptr_offset(pp, ADDRINFO_OFF_FAMILY()));
+    let socktype: i32 = @ptr_read[i32](@ptr_offset(pp, ADDRINFO_OFF_SOCKTYPE()));
+    let protocol: i32 = @ptr_read[i32](@ptr_offset(pp, ADDRINFO_OFF_PROTOCOL()));
+    let addrlen: u32 = @ptr_read[u32](@ptr_offset(pp, ADDRINFO_OFF_ADDRLEN()));
+    let addr: rawptr = (@ptr_read[isize](@ptr_offset(pp, ADDRINFO_OFF_ADDR()))) as rawptr;
+    fd = sock_socket(family, socktype, protocol);
+    if fd >= 0 {
+      if sock_connect(fd, addr, addrlen) == 0 {
+        sock_freeaddrinfo(res as rawptr);
+        return fd as isize;
+      }
+      let _r: i32 = c_win_closesocket(fd);
+      _r;
+      fd = -1;
+    }
+    p = @ptr_read[isize](@ptr_offset(pp, ADDRINFO_OFF_NEXT()));
+  }
+  sock_freeaddrinfo(res as rawptr);
+  panic("tcp connect failed");
+  return -1 as isize;
 }
 
 pub fn recv(handle: isize, max_n: i32) -> String {
-  return c_tcp_recv(handle, max_n);
+  if handle < 0 { panic("invalid tcp handle"); }
+  if max_n <= 0 { return ""; }
+  let buf: rawptr = calloc(1 as usize, (max_n as usize) + (1 as usize));
+  let n: i32 = c_win_recv(handle as i32, buf, max_n, 0);
+  if n < 0 { panic("tcp recv failed"); }
+  return buf_to_string(buf, n);
 }
 
 pub fn close_socket(handle: isize) -> () {
-  c_tcp_close(handle);
+  if handle < 0 { return; }
+  let _rc: i32 = c_win_closesocket(handle as i32);
+  _rc;
   return;
 }
 
 pub fn wait_read(handle: isize, timeout_ms: i32) -> bool {
-  return c_tcp_wait_read(handle, timeout_ms);
+  if handle < 0 { panic("invalid tcp handle"); }
+  return c_win_sock_poll(handle as i32, false, timeout_ms);
 }
 
 pub fn wait_write(handle: isize, timeout_ms: i32) -> bool {
-  return c_tcp_wait_write(handle, timeout_ms);
+  if handle < 0 { panic("invalid tcp handle"); }
+  return c_win_sock_poll(handle as i32, true, timeout_ms);
 }
 
 @ffi_import("c", "_lseeki64")
