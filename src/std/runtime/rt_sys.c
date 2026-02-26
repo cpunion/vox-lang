@@ -12,16 +12,6 @@ const char* vox_impl_getenv(const char* key) {
 static int vox__argc = 0;
 static char** vox__argv = NULL;
 
-// Minimal argv helper: dereferences argv[i] from an intptr_t argv handle.
-// State (argc/argv) is now stored in Vox static mut variables; this only
-// does the pointer dereference that @ptr_read[rawptr] would do once the
-// bootstrap compiler supports that intrinsic.
-const char* vox_impl_argv_get(intptr_t argv, int32_t i) {
-  char** p = (char**)argv;
-  if (!p || i < 0) return "";
-  return p[i] ? p[i] : "";
-}
-
 #ifndef _WIN32
 // fcntl is variadic in system headers; keep a thin wrapper to avoid
 // conflicting extern declarations between non-variadic FFI and variadic header.
@@ -67,9 +57,6 @@ int32_t vox_impl_fcntl3(int32_t fd, int32_t cmd, int32_t arg) {
 int32_t vox_impl_setsockopt(int32_t fd, int32_t level, int32_t name, void* val, uint32_t len) {
   return setsockopt((SOCKET)(intptr_t)fd, level, name, (const char*)val, (int)len);
 }
-#endif
-
-#if defined(_WIN32)
 intptr_t vox_impl_create_iocp(intptr_t file, intptr_t existing, uintptr_t key, uint32_t threads) {
   return (intptr_t)CreateIoCompletionPort((HANDLE)file, (HANDLE)existing, (ULONG_PTR)key, (DWORD)threads);
 }
@@ -94,11 +81,7 @@ int32_t vox_impl_win_socket(int32_t domain, int32_t ty, int32_t proto) {
 int32_t vox_impl_win_listen(int32_t fd, int32_t backlog) {
   return listen((SOCKET)fd, backlog);
 }
-#endif
-
-// Windows-only thin wrappers for Winsock functions that need SOCKET type
-// casting or __stdcall calling convention.
-#if defined(_WIN32)
+// Winsock functions that need SOCKET type casting or __stdcall convention.
 typedef struct { unsigned short wVersion; unsigned short wHighVersion; char szDescription[257]; char szSystemStatus[129]; unsigned short iMaxSockets; unsigned short iMaxUdpDg; char* lpVendorInfo; } VOX_WSADATA;
 extern int __stdcall WSAStartup(unsigned short, VOX_WSADATA*);
 extern int __stdcall recv(SOCKET, char*, int, int);

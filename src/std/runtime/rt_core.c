@@ -10,46 +10,6 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sched.h>
-#if defined(__linux__)
-struct epoll_event;
-int epoll_create1(int);
-int epoll_ctl(int, int, int, struct epoll_event*);
-int epoll_wait(int, struct epoll_event*, int, int);
-int eventfd(unsigned int, int);
-#define VOX_EPOLLIN       0x001
-#define VOX_EPOLLOUT      0x004
-#define VOX_EPOLLERR      0x008
-#define VOX_EPOLLHUP      0x010
-#define VOX_EPOLL_CTL_ADD 1
-#define VOX_EPOLL_CLOEXEC 0x80000
-#define VOX_EFD_NONBLOCK  0x800
-#define VOX_EFD_CLOEXEC   0x80000
-#endif
-#if defined(__APPLE__)
-struct kevent;
-int kqueue(void);
-int kevent(int, const struct kevent*, int, struct kevent*, int, const struct timespec*);
-#define VOX_EVFILT_READ   (-1)
-#define VOX_EVFILT_WRITE  (-2)
-#define VOX_EVFILT_USER   (-10)
-#define VOX_EV_ADD        0x0001
-#define VOX_EV_ENABLE     0x0004
-#define VOX_EV_ONESHOT    0x0010
-#define VOX_EV_CLEAR      0x0020
-#define VOX_NOTE_TRIGGER  0x01000000
-#define VOX_KEVENT_SZ 32
-static void vox_kev_set(void* buf, uintptr_t ident, int16_t filter, uint16_t flags, uint32_t fflags, intptr_t data, void* udata) {
-  memset(buf, 0, VOX_KEVENT_SZ);
-  *(uintptr_t*)buf = ident;
-  *(int16_t*)((char*)buf+8) = filter;
-  *(uint16_t*)((char*)buf+10) = flags;
-  *(uint32_t*)((char*)buf+12) = fflags;
-  *(intptr_t*)((char*)buf+16) = data;
-  *(void**)((char*)buf+24) = udata;
-}
-#elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-#include <sys/event.h>
-#endif
 #endif
 
 #if defined(_MSC_VER)
