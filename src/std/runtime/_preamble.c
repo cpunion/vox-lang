@@ -12,7 +12,6 @@
 #include <limits.h>
 #include <math.h>
 #include <stdatomic.h>
-#include <time.h>
 
 extern void* malloc(size_t);
 extern void* realloc(void*, size_t);

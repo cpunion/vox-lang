@@ -1,3 +1,5 @@
+#ifndef VOX_RUNTIME_CORE
+#define VOX_RUNTIME_CORE
 #if defined(_WIN32)
 extern int _write(int, const void*, unsigned int);
 #if defined(_MSC_VER)
@@ -442,3 +444,4 @@ static const char* vox_vec_str_join(const vox_vec* v, const char* sep) {
   return out;
 }
 
+#endif /* VOX_RUNTIME_CORE */

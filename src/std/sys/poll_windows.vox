@@ -1,32 +1,42 @@
 @build(windows)
 
-@ffi_import("c", "vox_impl_create_iocp") fn c_create_iocp(file: isize, existing: isize, key: usize, threads: u32) -> isize;
-@ffi_import("c", "vox_impl_post_iocp") fn c_post_iocp(iocp: isize, bytes: u32, key: usize, overlapped: rawptr) -> i32;
-@ffi_import("c", "vox_impl_get_iocp") fn c_get_iocp(iocp: isize, bytes: rawptr, key: rawptr, overlapped: rawptr, timeout: u32) -> i32;
-@ffi_import("c", "vox_impl_close_handle") fn c_close_handle(h: isize) -> i32;
+@calling_convention("system")
+@ffi_import("c", "CreateIoCompletionPort") fn win_CreateIoCompletionPort(file: rawptr, existing: rawptr, key: usize, threads: u32) -> rawptr;
+@calling_convention("system")
+@ffi_import("c", "PostQueuedCompletionStatus") fn win_PostQCS(iocp: rawptr, bytes: u32, key: usize, ov: rawptr) -> i32;
+@calling_convention("system")
+@ffi_import("c", "GetQueuedCompletionStatus") fn win_GetQCS(iocp: rawptr, bytes: rawptr, key: rawptr, ov: rawptr, timeout: u32) -> i32;
+@calling_convention("system")
+@ffi_import("c", "CloseHandle") fn win_CloseHandle(h: rawptr) -> i32;
 
 pub fn INVALID_HANDLE() -> isize { return -1 as isize; }
 
 pub fn iocp_create() -> isize {
-  return c_create_iocp(INVALID_HANDLE(), 0 as isize, 0, 0);
+  return win_CreateIoCompletionPort(INVALID_HANDLE() as rawptr, (0 as isize) as rawptr, 0, 0) as isize;
 }
 
 pub fn iocp_post(iocp: isize, key: usize) -> i32 {
-  return c_post_iocp(iocp, 0, key, null_rawptr());
+  let rc: i32 = win_PostQCS(iocp as rawptr, 0, key, null_rawptr());
+  return if rc != 0 { 1 } else { 0 };
 }
 
 pub fn iocp_get(iocp: isize, bytes_out: rawptr, key_out: rawptr, overlapped_out: rawptr, timeout_ms: u32) -> i32 {
-  return c_get_iocp(iocp, bytes_out, key_out, overlapped_out, timeout_ms);
+  let rc: i32 = win_GetQCS(iocp as rawptr, bytes_out, key_out, overlapped_out, timeout_ms);
+  return if rc != 0 { 1 } else { 0 };
 }
 
 pub fn close_handle(h: isize) -> i32 {
-  return c_close_handle(h);
+  let rc: i32 = win_CloseHandle(h as rawptr);
+  return if rc != 0 { 1 } else { 0 };
 }
 
-// IOCP wait helper (bridged via C runtime for bootstrap compat).
-@ffi_import("c", "vox_impl_iocp_wait_ms")
-fn c_iocp_wait_ms(iocp: isize, timeout_ms: i32) -> bool;
-
 pub fn iocp_wait_ms(iocp: isize, timeout_ms: i32) -> bool {
-  return c_iocp_wait_ms(iocp, timeout_ms);
+  let bytes: rawptr = calloc(1 as usize, 4 as usize);
+  let key: rawptr = calloc(1 as usize, 8 as usize);
+  let ov: rawptr = calloc(1 as usize, 8 as usize);
+  let rc: i32 = win_GetQCS(iocp as rawptr, bytes, key, ov, timeout_ms as u32);
+  free(bytes);
+  free(key);
+  free(ov);
+  return rc != 0;
 }
