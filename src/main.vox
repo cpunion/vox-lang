@@ -483,6 +483,90 @@ fn cc_cmdline_non_static_gnu(cc: String, tflags: String, target_os: String, targ
   return cmd;
 }
 
+fn cc_object_ext(use_msvc: bool) -> String {
+  if use_msvc { return ".obj"; }
+  return ".o";
+}
+
+fn cc_compile_obj_cmdline_msvc(cc: String, cpath: String, obj: String) -> String {
+  let mut cmd: String = cc;
+  cmd = cmd.concat(" /nologo /TC /std:c11 /Od");
+  cmd = cmd.concat(cc_debug_flags(true));
+  cmd = cmd.concat(" /c ");
+  cmd = cmd.concat(cpath);
+  cmd = cmd.concat(" /Fo:");
+  cmd = cmd.concat(obj);
+  return cmd;
+}
+
+fn cc_compile_obj_cmdline_gnu(cc: String, tflags: String, target_os: String, cpath: String, obj: String) -> String {
+  let mut cmd: String = cc;
+  cmd = cmd.concat(tflags);
+  cmd = cmd.concat(" -std=c11 -O0");
+  cmd = cmd.concat(cc_debug_flags(false));
+  cmd = cmd.concat(cc_common_flags_for_target(target_os, false));
+  cmd = cmd.concat(" -c ");
+  cmd = cmd.concat(cpath);
+  cmd = cmd.concat(" -o ");
+  cmd = cmd.concat(obj);
+  return cmd;
+}
+
+fn cc_link_obj_cmdline_static_msvc(ar: String, obj: String, out: String) -> String {
+  return ar.concat(" /nologo /OUT:").concat(out).concat(" ").concat(obj);
+}
+
+fn cc_link_obj_cmdline_static_gnu(ar: String, obj: String, out: String) -> String {
+  return ar.concat(" rcs ").concat(out).concat(" ").concat(obj);
+}
+
+fn cc_link_obj_cmdline_non_static_msvc(cc: String, target_os: String, target_abi: String, artifact: String, obj: String, out: String) -> String {
+  let shared_flag: String = if artifact == "shared" { cc_shared_flag_for_target(target_os, true) } else { "" };
+  let mut cmd: String = cc;
+  cmd = cmd.concat(" /nologo");
+  cmd = cmd.concat(shared_flag);
+  cmd = cmd.concat(" ");
+  cmd = cmd.concat(obj);
+  cmd = cmd.concat(" /Fe:");
+  cmd = cmd.concat(out);
+  cmd = cmd.concat(cc_link_flags_for_target(target_os, target_abi, true, artifact));
+  return cmd;
+}
+
+fn cc_link_obj_cmdline_non_static_gnu(cc: String, tflags: String, target_os: String, target_abi: String, artifact: String, obj: String, out: String) -> String {
+  let shared_flag: String = if artifact == "shared" { cc_shared_flag_for_target(target_os, false) } else { "" };
+  let mut cmd: String = cc;
+  cmd = cmd.concat(tflags);
+  cmd = cmd.concat(shared_flag);
+  cmd = cmd.concat(" ");
+  cmd = cmd.concat(obj);
+  cmd = cmd.concat(" -o ");
+  cmd = cmd.concat(out);
+  cmd = cmd.concat(cc_link_flags_for_target(target_os, target_abi, false, artifact));
+  return cmd;
+}
+
+fn cc_compile_obj_cmdline_for_target_artifact(host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, cpath: String, obj: String) -> String {
+  let cc: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
+  let use_msvc: bool = cc_is_msvc_cmd(cc);
+  let tflags: String = cc_target_flags_for_target(cc, host_os, host_arch, target_os, target_arch, target_triple);
+  if use_msvc { return cc_compile_obj_cmdline_msvc(cc, cpath, obj); }
+  return cc_compile_obj_cmdline_gnu(cc, tflags, target_os, cpath, obj);
+}
+
+fn cc_link_obj_cmdline_for_target_artifact(host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, artifact: String, obj: String, out: String) -> String {
+  let cc: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
+  let use_msvc: bool = cc_is_msvc_cmd(cc);
+  let tflags: String = cc_target_flags_for_target(cc, host_os, host_arch, target_os, target_arch, target_triple);
+  if artifact == "static" {
+    let ar: String = ar_cmd_for_target(host_os, target_os, target_arch, target_triple, target_abi);
+    if use_msvc { return cc_link_obj_cmdline_static_msvc(ar, obj, out); }
+    return cc_link_obj_cmdline_static_gnu(ar, obj, out);
+  }
+  if use_msvc { return cc_link_obj_cmdline_non_static_msvc(cc, target_os, target_abi, artifact, obj, out); }
+  return cc_link_obj_cmdline_non_static_gnu(cc, tflags, target_os, target_abi, artifact, obj, out);
+}
+
 fn append_build_mode_line(out0: String, key: String, value: String) -> String {
   let mut out: String = out0;
   out = out.concat(key);
@@ -3231,18 +3315,24 @@ fn main() -> i32 {
     let driver_key: String = if driver == cg.DriverMainKind.Tool { "tool" } else { "user" };
     let emit_driver_key: String = if artifact == "exe" { "1" } else { "0" };
     let build_mode: String = build_mode_text("build", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi, artifact);
+    let cc_target_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
+    let obj_ext: String = cc_object_ext(cc_is_msvc_cmd(cc_target_cmd));
     let cache_enabled: bool = build_cache_enabled();
     let mut build_key: String = "";
     let mut cache_cpath: String = out_cpath;
+    let mut cache_obj: String = out.concat(obj_ext);
     let mut cache_bin: String = out;
-    let mut cache_hit: bool = false;
+    let mut compile_cache_hit: bool = false;
+    let mut link_cache_hit: bool = false;
     if cache_enabled {
       build_key = build_cache_key(files_for_cache, build_mode);
       cache_cpath = build_cache_cpath_for_key(build_key);
+      cache_obj = build_cache_obj_path_for_key(build_key, obj_ext);
       cache_bin = build_cache_bin_for_key(build_key, target_os);
-      cache_hit = build_cache_hit(build_key, cache_cpath, cache_bin);
+      compile_cache_hit = build_cache_obj_hit(build_key, cache_cpath, cache_obj);
+      link_cache_hit = build_cache_hit(build_key, cache_cpath, cache_bin);
     }
-    if !cache_hit {
+    if !compile_cache_hit {
       let cp: c.CompileProfileResult =
         c.compile_files_to_c_profile_for_target(
           files,
@@ -3261,15 +3351,31 @@ fn main() -> i32 {
       fs.mkdir_p(dir_name(cache_cpath));
       fs.write_string(cache_cpath, r.c);
       write_emit_c_text(emit_c_enabled, emit_c_path, out_cpath, r.c);
-      fs.mkdir_p(dir_name(cache_bin));
-      let cmdline: String = cc_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), artifact, cache_cpath, cache_bin);
-      let cc_t0: i64 = tm.now_ns();
-      let code: i32 = exec_cmd(cmdline, trace_exec);
-      let cc_ns: i64 = dur_nonneg_ns(cc_t0, tm.now_ns());
-      if profile_on { print("[profile] cc: ".concat(format_duration_ns(cc_ns)).concat("\n")); }
+      fs.mkdir_p(dir_name(cache_obj));
+      let cc_obj_cmdline: String = cc_compile_obj_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cache_cpath, cache_obj);
+      let cc_obj_t0: i64 = tm.now_ns();
+      let code: i32 = exec_cmd(cc_obj_cmdline, trace_exec);
+      let cc_obj_ns: i64 = dur_nonneg_ns(cc_obj_t0, tm.now_ns());
+      if profile_on { print("[profile] cc-obj: ".concat(format_duration_ns(cc_obj_ns)).concat("\n")); }
       if code != 0 {
-        print("cc failed: ".concat(cmdline).concat("\n"));
+        print("cc failed: ".concat(cc_obj_cmdline).concat("\n"));
         print("cc exit: ".concat(code.to_string()).concat("\n"));
+        return 1;
+      }
+      if cache_enabled {
+        write_build_cache(build_key);
+      }
+    }
+    if !link_cache_hit {
+      fs.mkdir_p(dir_name(cache_bin));
+      let link_cmdline: String = cc_link_obj_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), artifact, cache_obj, cache_bin);
+      let link_t0: i64 = tm.now_ns();
+      let link_code: i32 = exec_cmd(link_cmdline, trace_exec);
+      let link_ns: i64 = dur_nonneg_ns(link_t0, tm.now_ns());
+      if profile_on { print("[profile] link: ".concat(format_duration_ns(link_ns)).concat("\n")); }
+      if link_code != 0 {
+        print("link failed: ".concat(link_cmdline).concat("\n"));
+        print("link exit: ".concat(link_code.to_string()).concat("\n"));
         return 1;
       }
       if cache_enabled {
@@ -3289,7 +3395,7 @@ fn main() -> i32 {
         fs.write_string(out_cpath, fs.read_to_string(cache_cpath));
       }
     }
-    if cache_hit {
+    if compile_cache_hit {
       copy_emit_c_from_file(emit_c_enabled, emit_c_path, out_cpath);
     }
     return 0;
