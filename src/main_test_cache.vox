@@ -213,6 +213,11 @@ struct BuildCachePkgKey {
   key: String,
 }
 
+struct BuildCacheKeyPair {
+  compile_key: String,
+  link_key: String,
+}
+
 fn build_cache_pkg_from_source_path(path: String) -> String {
   let mp: String = ld.mod_path_from_file_path(path);
   if !txt.has_prefix(mp, "pkg/") { return "main"; }
@@ -280,21 +285,33 @@ fn build_cache_pkg_source_keys(files0: Vec[ld.SourceFile]) -> Vec[BuildCachePkgK
   return out;
 }
 
+fn build_cache_hash_for_mode_prefix(mode: String) -> u64 {
+  let mut h: u64 = 1469598103934665603 as u64;
+  h = lock_hash_text(h, "build-cache-v3\n");
+  h = lock_hash_text(h, if host_is_windows() { "windows\n" } else { "posix\n" });
+  h = lock_hash_text(h, mode);
+  h = lock_hash_text(h, "\n");
+  return h;
+}
+
+fn build_cache_pkg_key_from_source_mode(sk: BuildCachePkgKey, mode: String) -> BuildCachePkgKey {
+  let mut h: u64 = 1469598103934665603 as u64;
+  h = lock_hash_text(h, "build-cache-pkg-v2\n");
+  h = lock_hash_text(h, if host_is_windows() { "windows\n" } else { "posix\n" });
+  h = lock_hash_text(h, mode);
+  h = lock_hash_text(h, "\n");
+  h = lock_hash_text(h, sk.pkg);
+  h = lock_hash_text(h, "\n");
+  h = lock_hash_text(h, sk.key);
+  h = lock_hash_text(h, "\n");
+  return BuildCachePkgKey { pkg: sk.pkg, key: h.to_string() };
+}
+
 fn build_cache_pkg_keys_from_source(pkg_source_keys0: Vec[BuildCachePkgKey], mode: String) -> Vec[BuildCachePkgKey] {
   let mut out: Vec[BuildCachePkgKey] = Vec();
   let mut i: i32 = 0;
   while i < pkg_source_keys0.len() {
-    let sk: BuildCachePkgKey = pkg_source_keys0.get(i);
-    let mut h: u64 = 1469598103934665603 as u64;
-    h = lock_hash_text(h, "build-cache-pkg-v2\n");
-    h = lock_hash_text(h, if host_is_windows() { "windows\n" } else { "posix\n" });
-    h = lock_hash_text(h, mode);
-    h = lock_hash_text(h, "\n");
-    h = lock_hash_text(h, sk.pkg);
-    h = lock_hash_text(h, "\n");
-    h = lock_hash_text(h, sk.key);
-    h = lock_hash_text(h, "\n");
-    out.push(BuildCachePkgKey { pkg: sk.pkg, key: h.to_string() });
+    out.push(build_cache_pkg_key_from_source_mode(pkg_source_keys0.get(i), mode));
     i = i + 1;
   }
   return out;
@@ -305,12 +322,7 @@ fn build_cache_pkg_keys(files0: Vec[ld.SourceFile], mode: String) -> Vec[BuildCa
 }
 
 fn build_cache_key_from_pkg_source_keys(pkg_source_keys0: Vec[BuildCachePkgKey], mode: String) -> String {
-  let mut h: u64 = 1469598103934665603 as u64;
-  h = lock_hash_text(h, "build-cache-v3\n");
-  h = lock_hash_text(h, if host_is_windows() { "windows\n" } else { "posix\n" });
-  h = lock_hash_text(h, mode);
-  h = lock_hash_text(h, "\n");
-
+  let mut h: u64 = build_cache_hash_for_mode_prefix(mode);
   let pkg_keys: Vec[BuildCachePkgKey] = build_cache_pkg_keys_from_source(pkg_source_keys0, mode);
   let mut i: i32 = 0;
   while i < pkg_keys.len() {
@@ -323,6 +335,31 @@ fn build_cache_key_from_pkg_source_keys(pkg_source_keys0: Vec[BuildCachePkgKey],
     i = i + 1;
   }
   return h.to_string();
+}
+
+fn build_cache_key_pair_from_pkg_source_keys(pkg_source_keys0: Vec[BuildCachePkgKey], compile_mode: String, link_mode: String) -> BuildCacheKeyPair {
+  let mut compile_h: u64 = build_cache_hash_for_mode_prefix(compile_mode);
+  let mut link_h: u64 = build_cache_hash_for_mode_prefix(link_mode);
+
+  let mut i: i32 = 0;
+  while i < pkg_source_keys0.len() {
+    let cpk: BuildCachePkgKey = build_cache_pkg_key_from_source_mode(pkg_source_keys0.get(i), compile_mode);
+    compile_h = lock_hash_text(compile_h, "P\n");
+    compile_h = lock_hash_text(compile_h, cpk.pkg);
+    compile_h = lock_hash_text(compile_h, "\n");
+    compile_h = lock_hash_text(compile_h, cpk.key);
+    compile_h = lock_hash_text(compile_h, "\n");
+
+    let lpk: BuildCachePkgKey = build_cache_pkg_key_from_source_mode(pkg_source_keys0.get(i), link_mode);
+    link_h = lock_hash_text(link_h, "P\n");
+    link_h = lock_hash_text(link_h, lpk.pkg);
+    link_h = lock_hash_text(link_h, "\n");
+    link_h = lock_hash_text(link_h, lpk.key);
+    link_h = lock_hash_text(link_h, "\n");
+    i = i + 1;
+  }
+
+  return BuildCacheKeyPair { compile_key: compile_h.to_string(), link_key: link_h.to_string() };
 }
 
 fn build_cache_key(files0: Vec[ld.SourceFile], mode: String) -> String {
