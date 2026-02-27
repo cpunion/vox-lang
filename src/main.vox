@@ -595,6 +595,33 @@ fn build_toolchain_fingerprint(host_os: String, host_arch: String, target_os: St
   return out;
 }
 
+fn build_compile_toolchain_fingerprint(host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String) -> String {
+  let cc: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
+  let use_msvc: bool = cc_is_msvc_cmd(cc);
+  let tflags: String = cc_target_flags_for_target(cc, host_os, host_arch, target_os, target_arch, target_triple);
+  let cflags: String = cc_common_flags_for_target(target_os, use_msvc);
+  let dflags: String = cc_debug_flags(use_msvc);
+  let mut out: String = "";
+  out = append_build_mode_line(out, "cc=", cc);
+  out = append_build_mode_line(out, "cc_target_flags=", tflags);
+  out = append_build_mode_line(out, "cc_common_flags=", cflags);
+  out = append_build_mode_line(out, "cc_debug_flags=", dflags);
+  return out;
+}
+
+fn build_compile_mode_text(cmd0: String, driver_key: String, emit_driver_key: String, host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String) -> String {
+  let mut out: String = "";
+  out = append_build_mode_line(out, "cmd=", cmd0);
+  out = append_build_mode_line(out, "driver=", driver_key);
+  out = append_build_mode_line(out, "emit_driver_main=", emit_driver_key);
+  out = append_build_mode_line(out, "host=", host_os.concat("-").concat(host_arch));
+  out = append_build_mode_line(out, "target=", target_os.concat("-").concat(target_arch));
+  out = append_build_mode_line(out, "triple=", target_triple);
+  out = append_build_mode_line(out, "abi=", target_abi);
+  out = append_build_mode_line(out, "toolchain=", build_compile_toolchain_fingerprint(host_os, host_arch, target_os, target_arch, target_triple, target_abi));
+  return out;
+}
+
 fn build_mode_text(cmd0: String, driver_key: String, emit_driver_key: String, host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, artifact: String) -> String {
   let mut out: String = "";
   out = append_build_mode_line(out, "cmd=", cmd0);
@@ -3314,23 +3341,38 @@ fn main() -> i32 {
     }
     let driver_key: String = if driver == cg.DriverMainKind.Tool { "tool" } else { "user" };
     let emit_driver_key: String = if artifact == "exe" { "1" } else { "0" };
-    let build_mode: String = build_mode_text("build", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi, artifact);
+    let compile_mode: String = build_compile_mode_text("build", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi);
+    let link_mode: String = build_mode_text("build", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi, artifact);
     let cc_target_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
     let obj_ext: String = cc_object_ext(cc_is_msvc_cmd(cc_target_cmd));
     let cache_enabled: bool = build_cache_enabled();
-    let mut build_key: String = "";
+    let mut compile_key: String = "";
+    let mut link_key: String = "";
     let mut cache_cpath: String = out_cpath;
     let mut cache_obj: String = out.concat(obj_ext);
     let mut cache_bin: String = out;
     let mut compile_cache_hit: bool = false;
     let mut link_cache_hit: bool = false;
     if cache_enabled {
-      build_key = build_cache_key(files_for_cache, build_mode);
-      cache_cpath = build_cache_cpath_for_key(build_key);
-      cache_obj = build_cache_obj_path_for_key(build_key, obj_ext);
-      cache_bin = build_cache_bin_for_key(build_key, target_os);
-      compile_cache_hit = build_cache_obj_hit(build_key, cache_cpath, cache_obj);
-      link_cache_hit = build_cache_hit(build_key, cache_cpath, cache_bin);
+      let mut files_for_compile_key: Vec[ld.SourceFile] = Vec();
+      let mut fkc: i32 = 0;
+      while fkc < files_for_cache.len() {
+        files_for_compile_key.push(files_for_cache.get(fkc));
+        fkc = fkc + 1;
+      }
+      let mut files_for_link_key: Vec[ld.SourceFile] = Vec();
+      let mut fkl: i32 = 0;
+      while fkl < files_for_cache.len() {
+        files_for_link_key.push(files_for_cache.get(fkl));
+        fkl = fkl + 1;
+      }
+      compile_key = build_cache_key(files_for_compile_key, compile_mode);
+      link_key = build_cache_key(files_for_link_key, link_mode);
+      cache_cpath = build_cache_cpath_for_key(compile_key);
+      cache_obj = build_cache_obj_path_for_key(compile_key, obj_ext);
+      cache_bin = build_cache_bin_for_key(link_key, target_os);
+      compile_cache_hit = build_cache_obj_hit(compile_key, cache_cpath, cache_obj);
+      link_cache_hit = build_cache_hit(link_key, cache_cpath, cache_bin);
     }
     if !compile_cache_hit {
       let cp: c.CompileProfileResult =
@@ -3363,7 +3405,7 @@ fn main() -> i32 {
         return 1;
       }
       if cache_enabled {
-        write_build_cache(build_key);
+        write_build_obj_cache(compile_key);
       }
     }
     if !link_cache_hit {
@@ -3379,7 +3421,7 @@ fn main() -> i32 {
         return 1;
       }
       if cache_enabled {
-        write_build_cache(build_key);
+        write_build_cache(link_key);
       }
     }
     if cache_enabled {
