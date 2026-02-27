@@ -1050,26 +1050,11 @@ fn bounds_text(l0: Locals, type_param: String) -> String {
 }
 
 fn is_vec_builtin_method(name: String) -> bool {
-  return name == "push" || name == "insert" || name == "set" || name == "clear" || name == "extend" || name == "pop" || name == "remove" || name == "len" || name == "is_empty" || name == "get" || name == "join";
+  return name == "push" || name == "insert" || name == "set" || name == "clear" || name == "extend" || name == "pop" || name == "remove" || name == "len" || name == "is_empty" || name == "get";
 }
 
 fn is_atomic_builtin_method(name: String) -> bool {
   return name == "load" || name == "store" || name == "fetch_add" || name == "swap" || name == "cas" || name == "drop";
-}
-
-fn is_string_builtin_method(name: String) -> bool {
-  return name == "len" ||
-    name == "is_empty" ||
-    name == "byte_at" ||
-    name == "slice" ||
-    name == "concat" ||
-    name == "escape_c" ||
-    name == "to_string" ||
-    name == "starts_with" ||
-    name == "ends_with" ||
-    name == "contains" ||
-    name == "index_of" ||
-    name == "last_index_of";
 }
 
 struct MutPlaceResult { ok: bool, mutable: bool }
@@ -1354,20 +1339,6 @@ pub fn resolve_call_move_slots(
       }
       return call_move_slots_ok(out);
     }
-    if rr.ty == ctx.ty_string && is_string_builtin_method(mname) {
-      let mut out: Vec[CallMoveSlot] = Vec();
-      out = call_move_slots_push(out, recv_id, param_borrow_ref());
-      let mut ai: i32 = 0;
-      while ai < args.len() {
-        out = call_move_slots_push(out, args.get(ai), param_borrow_ref());
-        ai = ai + 1;
-      }
-      return call_move_slots_ok(out);
-    }
-    if mname == "to_string" && (rr.ty == ctx.ty_bool || rr.ty == ctx.ty_string || is_int_like_ty(ctx, rr.ty) || is_float_ty(ctx, rr.ty)) {
-      return call_move_slots_ok(call_move_slots_push(Vec(), recv_id, param_borrow_ref()));
-    }
-
     let rty: i32 = strip_range(ctx, rr.ty);
     let rt: ir.Ty = ir.ty_pool_get(ctx.pool, rty);
     if rt.kind == ir.TyKind.Struct && rt.mod_path == "std/collections" && rt.name.len() >= 3 && rt.name.slice(0, 3) == "Map" && is_map_builtin_method(mname) {
@@ -1719,17 +1690,6 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
     }
     if rr.ok && is_atomic_ty(ctx, rr.ty) && is_atomic_builtin_method(mname) {
       return tc_call_atomic_method(ctx, w, mod_path, imps, exprs, l0, call_sp, recv_id, rr.ty, mname, args, expected);
-    }
-    // Allow `&str` to use String builtin methods (transition model: `&str` lowers
-    // to `Ref(String, ...)`).
-    if rr.ok && strip_range(ctx, rr.ty) == ctx.ty_string && is_string_builtin_method(mname) {
-      return tc_call_string_method(ctx, w, mod_path, imps, exprs, l0, recv_id, mname, args, expected);
-    }
-    if rr.ok && mname == "to_string" {
-      let rb: i32 = strip_range(ctx, rr.ty);
-      if rb == ctx.ty_bool || rb == ctx.ty_string || is_int_like_ty(ctx, rb) || is_float_ty(ctx, rb) {
-        return tc_call_prim_method(ctx, w, mod_path, imps, exprs, l0, recv_id, rb, mname, args, expected);
-      }
     }
     if rr.ok {
       let rty: i32 = strip_range(ctx, rr.ty);
@@ -2103,16 +2063,6 @@ fn tc_call_vec_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs
     return ExprTyResult { ok: true, ty: elem, err: TcError.None };
   }
 
-  if mname == "join" {
-    // Stage0 parity: only Vec[String].join(String) -> String.
-    if elem != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let sepr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_string);
-    if !sepr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
-  }
-
   return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
 }
 
@@ -2204,87 +2154,6 @@ fn collect_string_concat_chain(exprs: ast.ExprPool, recv_id0: i32, args0: Vec[i3
     i = i - 1;
   }
   return StringConcatChain { base_recv_id: cur_recv, parts: parts };
-}
-
-fn tc_call_string_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv_id: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
-  if mname == "concat" {
-    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let ch: StringConcatChain = collect_string_concat_chain(exprs, recv_id, args);
-    let base_rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, ch.base_recv_id, ctx.ty_string);
-    if !base_rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let mut i: i32 = 0;
-    while i < ch.parts.len() {
-      let ar: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, ch.parts.get(i), ctx.ty_string);
-      if !ar.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-      i = i + 1;
-    }
-    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
-  }
-
-  let _rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv_id, ctx.ty_string);
-
-  if mname == "len" {
-    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if expected != -1 && expected != ctx.ty_i32 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
-  }
-  if mname == "is_empty" {
-    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
-  }
-  if mname == "byte_at" {
-    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let idxr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_i32);
-    if !idxr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if expected != -1 && expected != ctx.ty_i32 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
-  }
-  if mname == "slice" {
-    if args.len() != 2 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let sr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_i32);
-    if !sr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let er: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(1), ctx.ty_i32);
-    if !er.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
-  }
-  if mname == "escape_c" {
-    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
-  }
-  if mname == "to_string" {
-    if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
-  }
-  if mname == "starts_with" || mname == "ends_with" || mname == "contains" {
-    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let or2: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_string);
-    if !or2.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
-  }
-  if mname == "index_of" || mname == "last_index_of" {
-    if args.len() != 1 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    let or3: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, args.get(0), ctx.ty_string);
-    if !or3.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    if expected != -1 && expected != ctx.ty_i32 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-    return ExprTyResult { ok: true, ty: ctx.ty_i32, err: TcError.None };
-  }
-
-  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
-}
-
-fn tc_call_prim_method(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, recv_id: i32, recv_ty: i32, mname: String, args: Vec[i32], expected: i32) -> ExprTyResult {
-  if mname != "to_string" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  if args.len() != 0 { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv_id, recv_ty);
-  if !rr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  if expected != -1 && expected != ctx.ty_string { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
-  return ExprTyResult { ok: true, ty: ctx.ty_string, err: TcError.None };
 }
 
 fn tc_call_func_unqualified(

@@ -235,6 +235,7 @@ jobs:
             choco install mingw -y --no-progress
           }
           $cand = @(
+            'C:\mingw64\bin',
             'C:\ProgramData\mingw64\mingw64\bin',
             'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin'
           )
@@ -248,10 +249,15 @@ jobs:
           gcc --version | Select-Object -First 1
 
       - name: Use MinGW compiler on Windows
-        shell: bash
+        shell: powershell
         run: |
-          set -euo pipefail
-          echo "CC=gcc" >> "$GITHUB_ENV"
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc) { throw "gcc not found in PATH" }
+          $ccPath = $gcc.Path
+          $ccCmd = "$ccPath -Wl,--stack,67108864"
+          Add-Content -Path $env:GITHUB_ENV -Value "CC=$ccCmd"
+          Write-Host "[ci] using CC=$ccCmd"
+          gcc --version | Select-Object -First 1
 
       - name: Compute build metadata
         shell: bash
@@ -296,6 +302,36 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/release/build-release-bundle.sh "${BUILD_VERSION}" "${VOX_PLATFORM}"
+
+      - name: Raise stack reserve (Windows compiler)
+        shell: powershell
+        run: |
+          $exe = "target\release\vox.exe"
+          if (-not (Test-Path $exe)) { throw "compiler not found: $exe" }
+          [byte[]]$b = [System.IO.File]::ReadAllBytes($exe)
+          if ($b.Length -lt 512) { throw "compiler too small: $exe" }
+          $peOff = [BitConverter]::ToInt32($b, 0x3C)
+          if ($peOff -lt 0 -or ($peOff + 0x100) -ge $b.Length) { throw "invalid PE header offset: $peOff" }
+          if ($b[$peOff] -ne 0x50 -or $b[$peOff+1] -ne 0x45 -or $b[$peOff+2] -ne 0x00 -or $b[$peOff+3] -ne 0x00) {
+            throw "invalid PE signature"
+          }
+          $opt = $peOff + 24
+          $magic = [BitConverter]::ToUInt16($b, $opt)
+          $off = $opt + 0x48
+          if ($magic -eq 0x20b) {
+            $old = [BitConverter]::ToUInt64($b, $off)
+            [BitConverter]::GetBytes([UInt64]67108864).CopyTo($b, $off)
+            $new = [BitConverter]::ToUInt64($b, $off)
+            Write-Host "[ci] stack reserve (PE32+): $old -> $new"
+          } elseif ($magic -eq 0x10b) {
+            $old = [BitConverter]::ToUInt32($b, $off)
+            [BitConverter]::GetBytes([UInt32]67108864).CopyTo($b, $off)
+            $new = [BitConverter]::ToUInt32($b, $off)
+            Write-Host "[ci] stack reserve (PE32): $old -> $new"
+          } else {
+            throw "unsupported PE optional header magic: 0x$($magic.ToString('x'))"
+          }
+          [System.IO.File]::WriteAllBytes($exe, $b)
 
       - name: Run smoke tests (rolling bootstrap)
         shell: bash
@@ -347,6 +383,7 @@ jobs:
             choco install mingw -y --no-progress
           }
           $cand = @(
+            'C:\mingw64\bin',
             'C:\ProgramData\mingw64\mingw64\bin',
             'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin'
           )
@@ -360,10 +397,15 @@ jobs:
           gcc --version | Select-Object -First 1
 
       - name: Use MinGW compiler on Windows
-        shell: bash
+        shell: powershell
         run: |
-          set -euo pipefail
-          echo "CC=gcc" >> "$GITHUB_ENV"
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc) { throw "gcc not found in PATH" }
+          $ccPath = $gcc.Path
+          $ccCmd = "$ccPath -Wl,--stack,67108864"
+          Add-Content -Path $env:GITHUB_ENV -Value "CC=$ccCmd"
+          Write-Host "[ci] using CC=$ccCmd"
+          gcc --version | Select-Object -First 1
 
       - name: Download compiler artifact
         uses: actions/download-artifact@v4
@@ -372,18 +414,18 @@ jobs:
           path: target/release
 
       - name: Validate --target host build/test
-        shell: bash
+        shell: powershell
         run: |
-          set -euo pipefail
-          mkdir -p target/debug
-          COMPILER_BIN="target/release/vox.exe"
-          if [[ ! -f "$COMPILER_BIN" ]]; then
-            echo "compiler not found: $COMPILER_BIN"
-            exit 1
-          fi
-          target="${VOX_PLATFORM}"
-          "$COMPILER_BIN" build "--target=${target}" target/debug/vox.target_host
-          "$COMPILER_BIN" test "--target=${target}" "--run=*std_sync_runtime_generic_api_smoke" target/debug/vox.target_host.test
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path target\debug | Out-Null
+          $compiler = "target\release\vox.exe"
+          if (-not (Test-Path $compiler)) { throw "compiler not found: $compiler" }
+          & $compiler version
+          & where.exe gcc
+          & $compiler build "--target=$env:VOX_PLATFORM" "target\debug\vox.target_host"
+          if ($LASTEXITCODE -ne 0) { throw "host build failed with rc=$LASTEXITCODE" }
+          & $compiler test "--target=$env:VOX_PLATFORM" '--run=*std_sync_runtime_generic_api_smoke' "target\debug\vox.target_host.test"
+          if ($LASTEXITCODE -ne 0) { throw "host test failed with rc=$LASTEXITCODE" }
 
   windows-regression-gate:
     name: windows-target-regression-gate
@@ -395,6 +437,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install C compiler (Windows)
+        shell: powershell
+        run: |
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if ($gcc) {
+            Write-Host "[ci] gcc already present: $($gcc.Path)"
+          } else {
+            Write-Host "[ci] gcc not found; installing MinGW via chocolatey"
+            choco install mingw -y --no-progress
+          }
+          $cand = @(
+            'C:\mingw64\bin',
+            'C:\ProgramData\mingw64\mingw64\bin',
+            'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin'
+          )
+          foreach ($p in $cand) {
+            if (Test-Path $p) {
+              Add-Content -Path $env:GITHUB_PATH -Value $p
+            }
+          }
+          $gcc2 = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc2) { throw "gcc not found after setup" }
+          Write-Host "[ci] gcc ready: $($gcc2.Path)"
+          gcc --version | Select-Object -First 1
+
       - name: Download compiler artifact
         uses: actions/download-artifact@v4
         with:
@@ -402,18 +469,16 @@ jobs:
           path: target/release
 
       - name: Validate --target regression
-        shell: bash
-        env:
-          CC: ""
+        shell: powershell
         run: |
-          set -euo pipefail
-          mkdir -p target/debug
-          COMPILER_BIN="target/release/vox.exe"
-          if [[ ! -f "$COMPILER_BIN" ]]; then
-            echo "compiler not found: $COMPILER_BIN"
-            exit 1
-          fi
-          "$COMPILER_BIN" test "--run=*target_matrix_*" target/debug/vox.target_matrix.test
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path target\debug | Out-Null
+          $compiler = "target\release\vox.exe"
+          if (-not (Test-Path $compiler)) { throw "compiler not found: $compiler" }
+          & $compiler version
+          & where.exe gcc
+          & $compiler test '--run=*target_matrix_*' "target\debug\vox.target_matrix.test"
+          if ($LASTEXITCODE -ne 0) { throw "target regression failed with rc=$LASTEXITCODE" }
 
   build-cross-x86:
     name: build-cross-x86

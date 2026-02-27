@@ -54,7 +54,7 @@ fn shell_exec_path(p0: String) -> String {
 }
 
 fn cc_link_flags() -> String {
-  if host_is_windows() { return " -lws2_32 -static -Wl,--stack,8388608"; }
+  if host_is_windows() { return " -lws2_32 -static -Wl,--stack,67108864"; }
   return "";
 }
 
@@ -364,10 +364,10 @@ fn cc_link_flags_for_target(target_os: String, target_abi: String, use_msvc: boo
   if target_os != "windows" { return ""; }
   if use_msvc {
     if artifact == "shared" { return " /link ws2_32.lib"; }
-    return " /link ws2_32.lib /STACK:8388608";
+    return " /link ws2_32.lib /STACK:67108864";
   }
   if artifact == "shared" { return " -lws2_32"; }
-  return " -lws2_32 -static -Wl,--stack,8388608";
+  return " -lws2_32 -static -Wl,--stack,67108864";
 }
 
 fn cc_common_flags_for_target(target_os: String, use_msvc: bool) -> String {
@@ -673,12 +673,30 @@ fn is_hidden_source_path(p: String) -> bool {
   return false;
 }
 
+fn legacy_runtime_c_enabled() -> bool {
+  let v: String = txt.trim_space(proc.getenv("VOX_LEGACY_C_RUNTIME"));
+  if v == "1" || v == "true" || v == "yes" { return true; }
+  return false;
+}
+
+fn is_legacy_runtime_c_path(p: String) -> bool {
+  return
+    p == "src/vox/bootstrap/legacy_runtime/_preamble.c" ||
+    p == "src/vox/bootstrap/legacy_runtime/rt_core.c" ||
+    p == "src/vox/bootstrap/legacy_runtime/rt_atomic.c";
+}
+
 fn filter_pkg_c_sources(paths: Vec[String]) -> Vec[String] {
   let mut out: Vec[String] = Vec();
+  let include_legacy_runtime_c: bool = legacy_runtime_c_enabled();
   let mut i: i32 = 0;
   while i < paths.len() {
     let p: String = paths.get(i);
     if has_prefix(p, "src/") && !is_hidden_source_path(p) {
+      if is_legacy_runtime_c_path(p) && !include_legacy_runtime_c {
+        i = i + 1;
+        continue;
+      }
       out.push(p);
     }
     i = i + 1;
@@ -1921,10 +1939,15 @@ fn load_dep_sources(dep_name: String, dep_root: String) -> Vec[ld.SourceFile] {
     j = j + 1;
   }
   let c_rels: Vec[String] = srcw.walk_c_files(dep_root);
+  let include_legacy_runtime_c: bool = legacy_runtime_c_enabled();
   let mut ci: i32 = 0;
   while ci < c_rels.len() {
     let c_rel: String = c_rels.get(ci);
     if has_prefix(c_rel, "src/") && !is_hidden_source_path(c_rel) {
+      if is_legacy_runtime_c_path(c_rel) && !include_legacy_runtime_c {
+        ci = ci + 1;
+        continue;
+      }
       let c_full: String = path_join(dep_root, c_rel);
       let c_virt: String = dep_name.concat("/").concat(c_rel);
       out.push(ld.SourceFile { path: c_virt, text: fs.read_to_string(c_full) });
