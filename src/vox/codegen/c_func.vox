@@ -201,6 +201,17 @@ fn int_cast_needs_runtime_check(dst: ir.TyKind, src: ir.TyKind) -> bool {
   return dmin < smax; // same signedness: destination must hold full source range
 }
 
+fn int_cast_signed_to_unsigned_needs_upper_check(dst: ir.TyKind, src: ir.TyKind) -> bool {
+  if !is_unsigned_int_kind(dst) || !is_signed_int_kind(src) { return true; }
+  // isize -> usize is width-equal by definition on every target.
+  if src == ir.TyKind.ISize && dst == ir.TyKind.USize { return false; }
+  let dmin: i32 = int_bits_min(dst);
+  let smax: i32 = int_bits_max(src);
+  if dmin == 0 || smax == 0 { return true; }
+  // Signed src max is 2^(s-1)-1; any unsigned destination with at least s bits always fits it.
+  return dmin < smax;
+}
+
 fn unsigned_peer_c_type(k: ir.TyKind) -> String {
   return match k {
     ir.TyKind.I8 => "uint8_t",
@@ -476,7 +487,11 @@ fn emit_instr_int_cast_checked(pool: ir.TyPool, tid: i32, dst_ty: i32, src_ty: i
       if src_is_unsigned {
         out.push("  if ((uint64_t)".concat(c_value(v)).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
       } else {
-        out.push("  if (".concat(c_value(v)).concat(" < 0 || (uint64_t)").concat(c_value(v)).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+        if int_cast_signed_to_unsigned_needs_upper_check(dst.kind, src.kind) {
+          out.push("  if (".concat(c_value(v)).concat(" < 0 || (uint64_t)").concat(c_value(v)).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+        } else {
+          out.push("  if (".concat(c_value(v)).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+        }
       }
     } else {
       if src_is_unsigned {
