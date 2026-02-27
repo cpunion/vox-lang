@@ -33,6 +33,64 @@ fn fs_shell_quote(s: String) -> String {
   return out.concat("'");
 }
 
+fn fs_cmd_quote(s: String) -> String {
+  let mut out: String = "\"";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    if ch == 34 {
+      out = out.concat("\"\"");
+    } else {
+      out = out.concat(s.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  return out.concat("\"");
+}
+
+fn fs_to_forward_slashes(s0: String) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < s0.len() {
+    if s0.byte_at(i) == 92 {
+      out = out.concat("/");
+    } else {
+      out = out.concat(s0.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn fs_to_windows_slashes(s0: String) -> String {
+  let mut out: String = "";
+  let mut i: i32 = 0;
+  while i < s0.len() {
+    if s0.byte_at(i) == 47 {
+      out = out.concat("\\");
+    } else {
+      out = out.concat(s0.slice(i, i + 1));
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn fs_normalize_walk_line(line0: String) -> String {
+  let mut line: String = fs_to_forward_slashes(line0);
+  if line.starts_with("./") { line = line.slice(2, line.len()); }
+  if line.starts_with("src/") || line.starts_with("tests/") { return line; }
+  let i_src: i32 = line.index_of("/src/");
+  if i_src >= 0 {
+    return line.slice(i_src + 1, line.len());
+  }
+  let i_tests: i32 = line.index_of("/tests/");
+  if i_tests >= 0 {
+    return line.slice(i_tests + 1, line.len());
+  }
+  return line;
+}
+
 fn fs_walk_from_find_output(text: String) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   let n: i32 = text.len();
@@ -43,7 +101,7 @@ fn fs_walk_from_find_output(text: String) -> Vec[String] {
       let mut line: String = text.slice(start, i);
       if line.ends_with("\r") { line = line.slice(0, line.len() - 1); }
       if line != "" {
-        if line.starts_with("./") { line = line.slice(2, line.len()); }
+        line = fs_normalize_walk_line(line);
         out.push(line);
       }
       start = i + 1;
@@ -60,19 +118,46 @@ fn fs_walk_find(root: String, find_cmd: String) -> Vec[String] {
   let tmp_full: String = r.concat("/").concat(tmp_rel);
   let _mk_target: bool = fs_mkdir_sys(r.concat("/target"));
   let _mk_tmp: bool = fs_mkdir_sys(r.concat("/target/tmp"));
-  let cmd: String = "(cd "
-    .concat(fs_shell_quote(r))
-    .concat(" && ")
-    .concat(find_cmd)
-    .concat(" > ")
-    .concat(fs_shell_quote(tmp_rel))
-    .concat(" 2>/dev/null)");
+  let mut cmd: String = "";
+  if @target_os() == "windows" {
+    let r_win: String = fs_to_windows_slashes(r);
+    let tmp_rel_win: String = fs_to_windows_slashes(tmp_rel);
+    let find_cmd_win: String = if find_cmd == "find src tests -type f -name '*.vox'" {
+      "(for /r src %f in (*.vox) do @echo %f & for /r tests %f in (*.vox) do @echo %f)"
+    } else if find_cmd == "find src -type f -name '*.c'" {
+      "(for /r src %f in (*.c) do @echo %f)"
+    } else {
+      ""
+    };
+    if find_cmd_win == "" {
+      return Vec();
+    }
+    cmd = "(cd /d "
+      .concat(fs_cmd_quote(r_win))
+      .concat(" && ")
+      .concat(find_cmd_win)
+      .concat(" > ")
+      .concat(fs_cmd_quote(tmp_rel_win))
+      .concat(" 2>nul)");
+  } else {
+    cmd = "(cd "
+      .concat(fs_shell_quote(r))
+      .concat(" && ")
+      .concat(find_cmd)
+      .concat(" > ")
+      .concat(fs_shell_quote(tmp_rel))
+      .concat(" 2>/dev/null)");
+  }
   let _rc: i32 = sys.system(cmd);
   // `find` may return non-zero when one of multiple roots is missing.
   // As long as output was produced, keep parsing the collected paths.
   if !fs_exists_sys(tmp_full) { return Vec(); }
   let text: String = fs_read_to_string_sys(tmp_full);
-  let _: i32 = sys.system("rm -f ".concat(fs_shell_quote(tmp_full)));
+  if @target_os() == "windows" {
+    let _: i32 = sys.system("del /f /q ".concat(fs_cmd_quote(fs_to_windows_slashes(tmp_full))).concat(" >nul 2>nul"));
+  } else {
+    let _: i32 = sys.system("rm -f ".concat(fs_shell_quote(tmp_full)));
+  }
   return fs_walk_from_find_output(text);
 }
 
