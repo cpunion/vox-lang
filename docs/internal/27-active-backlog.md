@@ -340,6 +340,12 @@ Builtin end-state (agreed):
   - [ ] A44-5 最终目标：移除对 `libc` 的运行时依赖（含默认 `libc` I/O/socket/path 兜底路径）；平台实现以系统调用/原生 OS API 为主，仅在无法避免处保留最小兼容垫片并单独标注。
   - Source: `docs/internal/17-ffi-interop.md`, `docs/internal/13-standard-library.md`, `docs/internal/16-platform-support.md`.
 
+- [x] A45 生成 C 代码低效点基线分析 + 按包编译/编译缓存规划
+  - [x] A45-1 新增设计文档：记录当前 C 产物体量、冗余模式与优化优先级（cast/bitcast/wrapper/CFG）。
+  - [x] A45-2 明确按包增量构建三层缓存设计：`pkg-sem`、`pkg-obj`、`link`，并给出 key/invalidation 规则。
+  - [x] A45-3 给出分阶段落地顺序与门禁要求，作为后续实现 PR 的单一基线。
+  - Source: `docs/internal/31-codegen-c-efficiency-and-package-cache-plan.md`.
+
 ## Deferred Scope
 
 - [x] D01 `--target` CLI, target triples, linker config, cross-compilation matrix.
