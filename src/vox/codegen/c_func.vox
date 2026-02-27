@@ -217,6 +217,17 @@ fn unsigned_peer_c_type(k: ir.TyKind) -> String {
   };
 }
 
+fn signed_from_unsigned_bitcast_fn(k: ir.TyKind) -> String {
+  return match k {
+    ir.TyKind.I8 => "vox_bitcast_u8_i8",
+    ir.TyKind.I16 => "vox_bitcast_u16_i16",
+    ir.TyKind.I32 => "vox_bitcast_u32_i32",
+    ir.TyKind.I64 => "vox_bitcast_u64_i64",
+    ir.TyKind.ISize => "vox_bitcast_uptr_iptr",
+    _ => "",
+  };
+}
+
 fn signed_min_macro(k: ir.TyKind) -> String {
   return match k {
     ir.TyKind.I8 => "INT8_MIN",
@@ -531,16 +542,12 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
       return vec1("  ".concat(c_temp_name(tid)).concat(" = (").concat(dst_cty).concat(")").concat(u64expr).concat(";"));
     }
     let uty: String = unsigned_peer_c_type(t.kind);
-    let tmp_name: String = "vox_tmp_".concat(c_temp_name(tid));
-    let mut out: Vec[String] = Vec();
-    out.push("  {");
-    out.push("    ".concat(uty).concat(" ua = (").concat(uty).concat(")").concat(c_value(a)).concat(";"));
-    out.push("    ".concat(uty).concat(" ub = (").concat(uty).concat(")").concat(c_value(b)).concat(";"));
-    out.push("    ".concat(uty).concat(" ur = (").concat(uty).concat(")(ua ").concat(c_binop(op)).concat(" ub);"));
-    out.push("    ".concat(dst_cty).concat(" ").concat(tmp_name).concat("; memcpy(&").concat(tmp_name).concat(", &ur, sizeof(").concat(tmp_name).concat("));"));
-    out.push("    ".concat(c_temp_name(tid)).concat(" = ").concat(tmp_name).concat(";"));
-    out.push("  }");
-    return out;
+    let bitcast_fn: String = signed_from_unsigned_bitcast_fn(t.kind);
+    if bitcast_fn == "" { panic("missing signed bitcast helper"); }
+    let expr: String = bitcast_fn
+      .concat("((").concat(uty).concat(")((((").concat(uty).concat(")").concat(c_value(a)).concat(") ")
+      .concat(c_binop(op)).concat(" ((").concat(uty).concat(")").concat(c_value(b)).concat("))))");
+    return vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(expr).concat(";"));
   }
 
   // << >> panics on invalid shift counts; right shift on signed types is arithmetic.
@@ -549,7 +556,7 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
   if is_shl || is_shr {
     let bits_expr: String = int_bits_expr(t.kind);
     let uty: String = unsigned_peer_c_type(t.kind);
-    let tmp_name: String = "vox_tmp_".concat(c_temp_name(tid));
+    let bitcast_fn: String = signed_from_unsigned_bitcast_fn(t.kind);
     let mut out3: Vec[String] = Vec();
     out3.push("  {");
     out3.push("    ".concat(uty).concat(" ua = (").concat(uty).concat(")").concat(c_value(a)).concat(";"));
@@ -579,8 +586,12 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
     } else {
       out3.push("    ".concat(uty).concat(" ur = (").concat(uty).concat(")(ua >> n);"));
     }
-    out3.push("    ".concat(dst_cty).concat(" ").concat(tmp_name).concat("; memcpy(&").concat(tmp_name).concat(", &ur, sizeof(").concat(tmp_name).concat("));"));
-    out3.push("    ".concat(c_temp_name(tid)).concat(" = ").concat(tmp_name).concat(";"));
+    if is_signed_int_kind(t.kind) {
+      if bitcast_fn == "" { panic("missing signed bitcast helper"); }
+      out3.push("    ".concat(c_temp_name(tid)).concat(" = ").concat(bitcast_fn).concat("(ur);"));
+    } else {
+      out3.push("    ".concat(c_temp_name(tid)).concat(" = (").concat(dst_cty).concat(")ur;"));
+    }
     out3.push("  }");
     return out3;
   }
