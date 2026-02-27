@@ -249,23 +249,14 @@ jobs:
           gcc --version | Select-Object -First 1
 
       - name: Use MinGW compiler on Windows
-        shell: bash
+        shell: powershell
         run: |
-          set -euo pipefail
-          cc_path="$(command -v gcc)"
-          if [[ -z "$cc_path" ]]; then
-            echo "gcc not found in PATH" >&2
-            exit 1
-          fi
-          if command -v cygpath >/dev/null 2>&1; then
-            cc_path_win="$(cygpath -w "$cc_path" 2>/dev/null || true)"
-            if [[ -n "$cc_path_win" ]]; then
-              cc_path="$cc_path_win"
-            fi
-          fi
-          echo "CC=$cc_path" >> "$GITHUB_ENV"
-          echo "[ci] using CC=$cc_path"
-          gcc --version | head -n 1
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc) { throw "gcc not found in PATH" }
+          $ccPath = $gcc.Path
+          Add-Content -Path $env:GITHUB_ENV -Value "CC=$ccPath"
+          Write-Host "[ci] using CC=$ccPath"
+          gcc --version | Select-Object -First 1
 
       - name: Compute build metadata
         shell: bash
@@ -400,31 +391,18 @@ jobs:
           path: target/release
 
       - name: Validate --target host build/test
-        shell: bash
+        shell: powershell
         run: |
-          set -uo pipefail
-          mkdir -p target/debug
-          COMPILER_BIN="target/release/vox.exe"
-          if [[ ! -f "$COMPILER_BIN" ]]; then
-            echo "compiler not found: $COMPILER_BIN"
-            exit 1
-          fi
-          target="${VOX_PLATFORM}"
-          set +e
-          "$COMPILER_BIN" build "--target=${target}" target/debug/vox.target_host > target/debug/vox.target_host.build.log 2>&1
-          build_rc=$?
-          cat target/debug/vox.target_host.build.log
-          if [[ "$build_rc" -ne 0 ]]; then
-            echo "[ci] host build failed with rc=$build_rc"
-            exit "$build_rc"
-          fi
-          "$COMPILER_BIN" test "--target=${target}" "--run=*std_sync_runtime_generic_api_smoke" target/debug/vox.target_host.test > target/debug/vox.target_host.test.log 2>&1
-          test_rc=$?
-          cat target/debug/vox.target_host.test.log
-          if [[ "$test_rc" -ne 0 ]]; then
-            echo "[ci] host test failed with rc=$test_rc"
-          fi
-          exit "$test_rc"
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path target\debug | Out-Null
+          $compiler = "target\release\vox.exe"
+          if (-not (Test-Path $compiler)) { throw "compiler not found: $compiler" }
+          & $compiler version
+          & where.exe gcc
+          & $compiler build "--target=$env:VOX_PLATFORM" "target\debug\vox.target_host"
+          if ($LASTEXITCODE -ne 0) { throw "host build failed with rc=$LASTEXITCODE" }
+          & $compiler test "--target=$env:VOX_PLATFORM" '--run=*std_sync_runtime_generic_api_smoke' "target\debug\vox.target_host.test"
+          if ($LASTEXITCODE -ne 0) { throw "host test failed with rc=$LASTEXITCODE" }
 
   windows-regression-gate:
     name: windows-target-regression-gate
@@ -436,6 +414,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install C compiler (Windows)
+        shell: powershell
+        run: |
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if ($gcc) {
+            Write-Host "[ci] gcc already present: $($gcc.Path)"
+          } else {
+            Write-Host "[ci] gcc not found; installing MinGW via chocolatey"
+            choco install mingw -y --no-progress
+          }
+          $cand = @(
+            'C:\mingw64\bin',
+            'C:\ProgramData\mingw64\mingw64\bin',
+            'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin'
+          )
+          foreach ($p in $cand) {
+            if (Test-Path $p) {
+              Add-Content -Path $env:GITHUB_PATH -Value $p
+            }
+          }
+          $gcc2 = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc2) { throw "gcc not found after setup" }
+          Add-Content -Path $env:GITHUB_ENV -Value "CC=$($gcc2.Path)"
+          Write-Host "[ci] using CC=$($gcc2.Path)"
+          gcc --version | Select-Object -First 1
+
       - name: Download compiler artifact
         uses: actions/download-artifact@v4
         with:
@@ -443,18 +447,16 @@ jobs:
           path: target/release
 
       - name: Validate --target regression
-        shell: bash
-        env:
-          CC: ""
+        shell: powershell
         run: |
-          set -euo pipefail
-          mkdir -p target/debug
-          COMPILER_BIN="target/release/vox.exe"
-          if [[ ! -f "$COMPILER_BIN" ]]; then
-            echo "compiler not found: $COMPILER_BIN"
-            exit 1
-          fi
-          "$COMPILER_BIN" test "--run=*target_matrix_*" target/debug/vox.target_matrix.test
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path target\debug | Out-Null
+          $compiler = "target\release\vox.exe"
+          if (-not (Test-Path $compiler)) { throw "compiler not found: $compiler" }
+          & $compiler version
+          & where.exe gcc
+          & $compiler test '--run=*target_matrix_*' "target\debug\vox.target_matrix.test"
+          if ($LASTEXITCODE -ne 0) { throw "target regression failed with rc=$LASTEXITCODE" }
 
   build-cross-x86:
     name: build-cross-x86
