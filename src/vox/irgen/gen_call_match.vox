@@ -72,26 +72,11 @@ fn find_named_type_import(named: Vec[tc.NamedTypeImport], local: String) -> tc.N
 }
 
 fn is_vec_builtin_method(name: String) -> bool {
-  return name == "push" || name == "insert" || name == "set" || name == "clear" || name == "extend" || name == "pop" || name == "remove" || name == "len" || name == "is_empty" || name == "get" || name == "join";
+  return name == "push" || name == "insert" || name == "set" || name == "clear" || name == "extend" || name == "pop" || name == "remove" || name == "len" || name == "is_empty" || name == "get";
 }
 
 fn is_atomic_builtin_method(name: String) -> bool {
   return name == "load" || name == "store" || name == "fetch_add" || name == "swap" || name == "cas" || name == "drop";
-}
-
-fn is_string_builtin_method(name: String) -> bool {
-  return name == "len" ||
-    name == "is_empty" ||
-    name == "byte_at" ||
-    name == "slice" ||
-    name == "concat" ||
-    name == "escape_c" ||
-    name == "to_string" ||
-    name == "starts_with" ||
-    name == "ends_with" ||
-    name == "contains" ||
-    name == "index_of" ||
-    name == "last_index_of";
 }
 
 fn rev_strings(xs: Vec[String]) -> Vec[String] {
@@ -1577,17 +1562,6 @@ fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i
     if rr.ok && tc.is_atomic_ty(g0.ctx, rr.ty) && is_atomic_builtin_method(mname) {
       return gen_call_atomic_method(g0, recv_id, rr.ty, mname, args, out_ty);
     }
-    // Allow `&str` to use String builtin methods (transition model: `&str` lowers
-    // to `Ref(String, ...)`).
-    if rr.ok && tc.strip_range(g0.ctx, rr.ty) == g0.ctx.ty_string && is_string_builtin_method(mname) {
-      return gen_call_string_method(g0, recv_id, mname, args, out_ty);
-    }
-    if rr.ok && mname == "to_string" {
-      let rb: i32 = tc.strip_range(g0.ctx, rr.ty);
-      if rb == g0.ctx.ty_bool || rb == g0.ctx.ty_string || tc.is_int_like_ty(g0.ctx, rb) || tc.is_float_ty(g0.ctx, rb) {
-        return gen_call_prim_method(g0, recv_id, rb, mname, out_ty);
-      }
-    }
     if rr.ok {
       let inh: tc.FindInherentDispatchMethodResult = tc.find_inherent_dispatch_method(g0.ctx, tc.strip_range(g0.ctx, rr.ty), mname);
       if inh.ambiguous {
@@ -2676,21 +2650,6 @@ fn gen_call_vec_method(g0: Gen, recv_id: i32, recv_ty: i32, mname: String, args:
     return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
   }
 
-  if mname == "join" {
-    if args.len() != 1 { return GenExprResult { ok: false, err: "Vec.join arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let rr: VecRecvSlotResult = vec_recv_slot(g0, recv_id, recv_ty);
-    if !rr.ok { return GenExprResult { ok: false, err: rr.err, g: rr.g, val: ir.v_int(0), ty: rr.g.ctx.ty_bad }; }
-    let mut g: Gen = rr.g;
-    let sepr: GenExprResult = gen_expr(g, args.get(0), g.ctx.ty_string);
-    if !sepr.ok { return sepr; }
-    g = sepr.g;
-    let nt: GenNewIdResult = gen_new_temp(g);
-    g = nt.g;
-    let tid: i32 = nt.id;
-    g = gen_emit(g, ir.Instr.VecStrJoin(tid, rr.slot, sepr.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-
   return GenExprResult { ok: false, err: "unsupported Vec method", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
 }
 
@@ -2767,215 +2726,6 @@ fn gen_call_atomic_method(g0: Gen, recv_id: i32, recv_ty: i32, mname: String, ar
   }
 
   return GenExprResult { ok: false, err: "unsupported Atomic method", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
-}
-
-struct GenStringConcatChain { base_recv_id: i32, parts: Vec[i32] }
-
-fn gen_collect_string_concat_chain(exprs: ast.ExprPool, recv_id0: i32, args0: Vec[i32]) -> GenStringConcatChain {
-  let mut rev_parts: Vec[i32] = Vec();
-  if args0.len() == 1 {
-    rev_parts.push(args0.get(0));
-  }
-
-  let mut cur_recv: i32 = recv_id0;
-  while true {
-    let n: ast.ExprNode = ast.expr_pool_get(exprs, cur_recv);
-    let is_call: bool = match n { ast.ExprNode.Call(_callee, _type_args, _args) => true, _ => false };
-    if !is_call { break; }
-    let callee: i32 = match n { ast.ExprNode.Call(callee0, _type_args, _args) => callee0, _ => -1 };
-    let type_args: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_callee, type_args0, _args) => type_args0, _ => Vec() };
-    let args: Vec[i32] = match n { ast.ExprNode.Call(_callee, _type_args, args1) => args1, _ => Vec() };
-    if type_args.len() != 0 || args.len() != 1 { break; }
-
-    let cn: ast.ExprNode = ast.expr_pool_get(exprs, callee);
-    let is_member: bool = match cn { ast.ExprNode.Member(_recv, _name) => true, _ => false };
-    if !is_member { break; }
-    let mname: String = match cn { ast.ExprNode.Member(_recv, name0) => name0, _ => "" };
-    if mname != "concat" { break; }
-    let inner_recv: i32 = match cn { ast.ExprNode.Member(recv1, _name) => recv1, _ => -1 };
-
-    rev_parts.push(args.get(0));
-    cur_recv = inner_recv;
-  }
-
-  let mut parts: Vec[i32] = Vec();
-  let mut i: i32 = rev_parts.len() - 1;
-  while i >= 0 {
-    parts.push(rev_parts.get(i));
-    i = i - 1;
-  }
-  return GenStringConcatChain { base_recv_id: cur_recv, parts: parts };
-}
-
-fn gen_call_string_method(g0: Gen, recv_id: i32, mname: String, args: Vec[i32], out_ty: i32) -> GenExprResult {
-  if mname == "concat" {
-    if args.len() != 1 { return GenExprResult { ok: false, err: "String.concat arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let ch: GenStringConcatChain = gen_collect_string_concat_chain(g0.exprs, recv_id, args);
-    let base: GenExprResult = gen_expr(g0, ch.base_recv_id, g0.ctx.ty_string);
-    if !base.ok { return base; }
-
-    let mut g: Gen = base.g;
-    let mut cur: ir.Value = base.val;
-    let mut i: i32 = 0;
-    while i < ch.parts.len() {
-      let ar: GenExprResult = gen_expr(g, ch.parts.get(i), g.ctx.ty_string);
-      if !ar.ok { return ar; }
-      g = ar.g;
-      let nt: GenNewIdResult = gen_new_temp(g);
-      g = nt.g;
-      let tid: i32 = nt.id;
-      g = gen_emit(g, ir.Instr.StrConcat(tid, cur, ar.val));
-      cur = ir.v_temp(tid);
-      i = i + 1;
-    }
-    return GenExprResult { ok: true, err: "", g: g, val: cur, ty: out_ty };
-  }
-
-  let mut g: Gen = g0;
-  let rr: GenExprResult = gen_expr(g, recv_id, g.ctx.ty_string);
-  if !rr.ok { return rr; }
-  g = rr.g;
-
-  if mname == "len" {
-    let nt: GenNewIdResult = gen_new_temp(g);
-    g = nt.g;
-    let tid: i32 = nt.id;
-    g = gen_emit(g, ir.Instr.StrLen(tid, rr.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-  if mname == "is_empty" {
-    if args.len() != 0 { return GenExprResult { ok: false, err: "String.is_empty arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let nt0: GenNewIdResult = gen_new_temp(g);
-    g = nt0.g;
-    let len_tid: i32 = nt0.id;
-    g = gen_emit(g, ir.Instr.StrLen(len_tid, rr.val));
-    let nt1: GenNewIdResult = gen_new_temp(g);
-    g = nt1.g;
-    let cmp_tid: i32 = nt1.id;
-    g = gen_emit(g, ir.Instr.Cmp(cmp_tid, ir.CmpKind.Eq, g.ctx.ty_i32, ir.v_temp(len_tid), ir.v_int(0)));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(cmp_tid), ty: out_ty };
-  }
-  if mname == "byte_at" {
-    if args.len() != 1 { return GenExprResult { ok: false, err: "String.byte_at arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let idxr: GenExprResult = gen_expr(g, args.get(0), g.ctx.ty_i32);
-    if !idxr.ok { return idxr; }
-    g = idxr.g;
-    let nt: GenNewIdResult = gen_new_temp(g);
-    g = nt.g;
-    let tid: i32 = nt.id;
-    g = gen_emit(g, ir.Instr.StrByteAt(tid, rr.val, idxr.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-  if mname == "slice" {
-    if args.len() != 2 { return GenExprResult { ok: false, err: "String.slice arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let sr: GenExprResult = gen_expr(g, args.get(0), g.ctx.ty_i32);
-    if !sr.ok { return sr; }
-    g = sr.g;
-    let er: GenExprResult = gen_expr(g, args.get(1), g.ctx.ty_i32);
-    if !er.ok { return er; }
-    g = er.g;
-    let nt: GenNewIdResult = gen_new_temp(g);
-    g = nt.g;
-    let tid: i32 = nt.id;
-    g = gen_emit(g, ir.Instr.StrSlice(tid, rr.val, sr.val, er.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-  if mname == "escape_c" {
-    if args.len() != 0 { return GenExprResult { ok: false, err: "String.escape_c arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let nt: GenNewIdResult = gen_new_temp(g);
-    g = nt.g;
-    let tid: i32 = nt.id;
-    g = gen_emit(g, ir.Instr.StrEscapeC(tid, rr.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-  if mname == "starts_with" {
-    if args.len() != 1 { return GenExprResult { ok: false, err: "String.starts_with arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let pr: GenExprResult = gen_expr(g, args.get(0), g.ctx.ty_string);
-    if !pr.ok { return pr; }
-    g = pr.g;
-    let nt: GenNewIdResult = gen_new_temp(g);
-    g = nt.g;
-    let tid: i32 = nt.id;
-    g = gen_emit(g, ir.Instr.StrStartsWith(tid, rr.val, pr.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-  if mname == "ends_with" {
-    if args.len() != 1 { return GenExprResult { ok: false, err: "String.ends_with arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let sr: GenExprResult = gen_expr(g, args.get(0), g.ctx.ty_string);
-    if !sr.ok { return sr; }
-    g = sr.g;
-    let nt: GenNewIdResult = gen_new_temp(g);
-    g = nt.g;
-    let tid: i32 = nt.id;
-    g = gen_emit(g, ir.Instr.StrEndsWith(tid, rr.val, sr.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-  if mname == "contains" {
-    if args.len() != 1 { return GenExprResult { ok: false, err: "String.contains arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let nr: GenExprResult = gen_expr(g, args.get(0), g.ctx.ty_string);
-    if !nr.ok { return nr; }
-    g = nr.g;
-    let nt: GenNewIdResult = gen_new_temp(g);
-    g = nt.g;
-    let tid: i32 = nt.id;
-    g = gen_emit(g, ir.Instr.StrContains(tid, rr.val, nr.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-  if mname == "index_of" {
-    if args.len() != 1 { return GenExprResult { ok: false, err: "String.index_of arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let nr0: GenExprResult = gen_expr(g, args.get(0), g.ctx.ty_string);
-    if !nr0.ok { return nr0; }
-    g = nr0.g;
-    let nt: GenNewIdResult = gen_new_temp(g);
-    g = nt.g;
-    let tid: i32 = nt.id;
-    g = gen_emit(g, ir.Instr.StrIndexOf(tid, rr.val, nr0.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-  if mname == "last_index_of" {
-    if args.len() != 1 { return GenExprResult { ok: false, err: "String.last_index_of arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    let nr1: GenExprResult = gen_expr(g, args.get(0), g.ctx.ty_string);
-    if !nr1.ok { return nr1; }
-    g = nr1.g;
-    let nt: GenNewIdResult = gen_new_temp(g);
-    g = nt.g;
-    let tid: i32 = nt.id;
-    g = gen_emit(g, ir.Instr.StrLastIndexOf(tid, rr.val, nr1.val));
-    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
-  }
-  if mname == "to_string" {
-    if args.len() != 0 { return GenExprResult { ok: false, err: "String.to_string arity", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-    return GenExprResult { ok: true, err: "", g: g, val: rr.val, ty: out_ty };
-  }
-  return GenExprResult { ok: false, err: "unsupported String method", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
-}
-
-fn gen_call_prim_method(g0: Gen, recv_id: i32, recv_ty: i32, mname: String, out_ty: i32) -> GenExprResult {
-  if mname != "to_string" { return GenExprResult { ok: false, err: "unsupported prim method", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
-  let mut g: Gen = g0;
-  let rr: GenExprResult = gen_expr(g, recv_id, recv_ty);
-  if !rr.ok { return rr; }
-  g = rr.g;
-  let nt: GenNewIdResult = gen_new_temp(g);
-  g = nt.g;
-  let tid: i32 = nt.id;
-  let base: i32 = tc.strip_range(g.ctx, recv_ty);
-  let bt: ir.Ty = ir.ty_pool_get(g.ctx.pool, base);
-  if bt.kind == ir.TyKind.Bool { g = gen_emit(g, ir.Instr.BoolToStr(tid, rr.val)); }
-  else if bt.kind == ir.TyKind.ISize { g = gen_emit(g, ir.Instr.ISizeToStr(tid, rr.val)); }
-  else if bt.kind == ir.TyKind.I64 { g = gen_emit(g, ir.Instr.I64ToStr(tid, rr.val)); }
-  else if bt.kind == ir.TyKind.I8 || bt.kind == ir.TyKind.I16 || bt.kind == ir.TyKind.I32 { g = gen_emit(g, ir.Instr.I32ToStr(tid, rr.val)); }
-  else if bt.kind == ir.TyKind.USize { g = gen_emit(g, ir.Instr.USizeToStr(tid, rr.val)); }
-  else if bt.kind == ir.TyKind.U8 || bt.kind == ir.TyKind.U16 || bt.kind == ir.TyKind.U32 || bt.kind == ir.TyKind.U64 {
-    g = gen_emit(g, ir.Instr.U64ToStr(tid, rr.val));
-  } else if bt.kind == ir.TyKind.F32 {
-    g = gen_emit(g, ir.Instr.F32ToStr(tid, rr.val));
-  } else if bt.kind == ir.TyKind.F64 {
-    g = gen_emit(g, ir.Instr.F64ToStr(tid, rr.val));
-  } else {
-    return GenExprResult { ok: false, err: "unsupported prim method recv type", g: g, val: ir.v_int(0), ty: g0.ctx.ty_bad };
-  }
-  return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid), ty: out_ty };
 }
 
 fn gen_pat_test(g0: Gen, pat: ast.Pat, v: ir.Value, ty: i32, ok_blk: String, fail_blk: String) -> GenPatResult {

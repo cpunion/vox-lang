@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-syntax test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-frozen-builtins test-intrinsics test-reference test-build-style test-runtime-alias \
+.PHONY: fmt fmt-check test test-syntax test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-frozen-builtins test-intrinsics test-reference test-build-style test-runtime-alias test-no-legacy-runtime-bridge \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run \
 	release-source-bundle release-source-verify
 
@@ -51,10 +51,13 @@ test-syntax:
 	echo "[time] syntax acceptance: $$((end-start))s"
 
 # Rolling bootstrap gate (previous compiler -> new compiler).
-test-rolling: test-selfhost-build test-selfhost-gate
+test-rolling: test-selfhost-build test-no-legacy-runtime-bridge test-selfhost-gate
 
 test-selfhost-build:
 	./scripts/ci/rolling-selfhost.sh build
+
+test-no-legacy-runtime-bridge:
+	./scripts/ci/check-no-legacy-runtime-bridge.sh
 
 test-selfhost-gate:
 	VOX_TEST_RUN='*api*' ./scripts/ci/rolling-selfhost.sh test

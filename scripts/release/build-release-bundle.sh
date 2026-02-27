@@ -263,7 +263,22 @@ set +e
 "$BOOTSTRAP_BIN" >/dev/null 2>&1
 bootstrap_probe_rc=$?
 set -e
+bootstrap_help_text="$("$BOOTSTRAP_BIN" 2>&1 || true)"
+BOOTSTRAP_IS_LEGACY="0"
+if [[ "$bootstrap_help_text" == *"build-pkg <out.bin>"* ]]; then
+  BOOTSTRAP_IS_LEGACY="1"
+fi
+BOOTSTRAP_BASE="$(basename "$BOOTSTRAP_BIN")"
+LEGACY_RUNTIME_C="${VOX_LEGACY_C_RUNTIME:-}"
+if [[ -z "$LEGACY_RUNTIME_C" ]]; then
+  if [[ "$BOOTSTRAP_BASE" == "vox_prev" || "$BOOTSTRAP_BASE" == "vox_prev.exe" ]]; then
+    LEGACY_RUNTIME_C="1"
+  else
+    LEGACY_RUNTIME_C="0"
+  fi
+fi
 echo "[release] bootstrap probe exit: $bootstrap_probe_rc"
+echo "[release] legacy C runtime bridge: $LEGACY_RUNTIME_C"
 echo "[release] host platform: ${HOST_OS}-${HOST_ARCH}"
 echo "[release] target platform: $PLATFORM"
 
@@ -279,16 +294,16 @@ set +e
 (
   cd "$ROOT"
   if [[ -n "$TARGET_ARG" ]]; then
-    if "$BOOTSTRAP_BIN" build --driver=tool "$TARGET_ARG" target/release/vox; then
+    if VOX_LEGACY_C_RUNTIME="$LEGACY_RUNTIME_C" "$BOOTSTRAP_BIN" build --driver=tool "$TARGET_ARG" target/release/vox; then
       :
     else
-      "$BOOTSTRAP_BIN" build-pkg --driver=tool "$TARGET_ARG" target/release/vox
+      VOX_LEGACY_C_RUNTIME="$LEGACY_RUNTIME_C" "$BOOTSTRAP_BIN" build-pkg --driver=tool "$TARGET_ARG" target/release/vox
     fi
   else
-    if "$BOOTSTRAP_BIN" build --driver=tool target/release/vox; then
+    if VOX_LEGACY_C_RUNTIME="$LEGACY_RUNTIME_C" "$BOOTSTRAP_BIN" build --driver=tool target/release/vox; then
       :
     else
-      "$BOOTSTRAP_BIN" build-pkg --driver=tool target/release/vox
+      VOX_LEGACY_C_RUNTIME="$LEGACY_RUNTIME_C" "$BOOTSTRAP_BIN" build-pkg --driver=tool target/release/vox
     fi
   fi
 ) >"$TOOL_BUILD_LOG" 2>&1

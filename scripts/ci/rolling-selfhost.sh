@@ -6,6 +6,12 @@ WORK_DIR="$ROOT"
 OUT_REL="${VOX_SELFHOST_OUT:-target/debug/vox_rolling}"
 FORCE_REBUILD="${VOX_SELFHOST_FORCE_REBUILD:-0}"
 
+# Some generated stage binaries can exceed default thread stack limits on
+# macOS during rolling bootstrap. Best-effort raise stack limit.
+if ! ulimit -s unlimited >/dev/null 2>&1; then
+  ulimit -s 65520 >/dev/null 2>&1 || true
+fi
+
 usage() {
   cat >&2 <<USAGE
 usage: $(basename "$0") <build|test|print-bin>
@@ -150,21 +156,50 @@ pick_bootstrap() {
 
 build_from_bootstrap() {
   local bootstrap_bin="$1"
+  local bootstrap_base=""
+  bootstrap_base="$(basename "$bootstrap_bin")"
   local help_text=""
   help_text="$("$bootstrap_bin" 2>&1 || true)"
+  local is_legacy_bootstrap=0
+  if [[ "$help_text" == *"build-pkg <out.bin>"* ]]; then
+    is_legacy_bootstrap=1
+  fi
+  local legacy_runtime_c="${VOX_LEGACY_C_RUNTIME:-}"
+  if [[ -z "$legacy_runtime_c" ]]; then
+    # Locked bootstrap binaries named vox_prev still require runtime C bridge.
+    if [[ "$bootstrap_base" == "vox_prev" || "$bootstrap_base" == "vox_prev.exe" ]]; then
+      legacy_runtime_c=1
+    else
+      legacy_runtime_c=0
+    fi
+  fi
+  local bootstrap_cc="${CC:-}"
   (
     cd "$WORK_DIR"
+    if ! ulimit -s unlimited >/dev/null 2>&1; then
+      ulimit -s 65520 >/dev/null 2>&1 || true
+    fi
     # Bootstrap compatibility:
     # - old CLI: build-pkg <out.bin>
     # - new CLI: build [out.bin]
-    if [[ "$help_text" == *"build-pkg <out.bin>"* ]]; then
-      if "$bootstrap_bin" build-pkg --driver=tool "$OUT_REL"; then
+    if [[ "$is_legacy_bootstrap" == "1" ]]; then
+      if [[ -n "$bootstrap_cc" ]]; then
+        if VOX_LEGACY_C_RUNTIME="$legacy_runtime_c" CC="$bootstrap_cc" "$bootstrap_bin" build-pkg --driver=tool "$OUT_REL"; then
+          :
+        else
+          VOX_LEGACY_C_RUNTIME="$legacy_runtime_c" CC="$bootstrap_cc" "$bootstrap_bin" build-pkg "$OUT_REL"
+        fi
+      elif VOX_LEGACY_C_RUNTIME="$legacy_runtime_c" "$bootstrap_bin" build-pkg --driver=tool "$OUT_REL"; then
         :
       else
-        "$bootstrap_bin" build-pkg "$OUT_REL"
+        VOX_LEGACY_C_RUNTIME="$legacy_runtime_c" "$bootstrap_bin" build-pkg "$OUT_REL"
       fi
     else
-      "$bootstrap_bin" build --driver=tool "$OUT_REL"
+      if [[ -n "$bootstrap_cc" ]]; then
+        VOX_LEGACY_C_RUNTIME="$legacy_runtime_c" CC="$bootstrap_cc" "$bootstrap_bin" build --driver=tool "$OUT_REL"
+      else
+        VOX_LEGACY_C_RUNTIME="$legacy_runtime_c" "$bootstrap_bin" build --driver=tool "$OUT_REL"
+      fi
     fi
   )
 }
@@ -219,6 +254,9 @@ fi
 echo "[selfhost] test: run=$RUN_GLOB jobs=$JOBS"
 (
   cd "$WORK_DIR"
+  if ! ulimit -s unlimited >/dev/null 2>&1; then
+    ulimit -s 65520 >/dev/null 2>&1 || true
+  fi
   "$SELF_BIN" test "--jobs=$JOBS" "--run=$RUN_GLOB" "$TEST_OUT_REL"
 )
 

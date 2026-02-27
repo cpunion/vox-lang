@@ -1,19 +1,5 @@
 import "std/sys" as sys
-
-@ffi_import("c", "rt_fs_opendir")
-fn c_opendir(path: String) -> rawptr;
-
-@ffi_import("c", "rt_fs_readdir")
-fn c_readdir(dir: rawptr) -> rawptr;
-
-@ffi_import("c", "rt_fs_closedir")
-fn c_closedir(dir: rawptr) -> i32;
-
-@ffi_import("c", "rt_fs_dirent_name")
-fn c_dirent_name(ent: rawptr) -> String;
-
-@ffi_import("c", "rt_fs_dirent_is_dir")
-fn c_dirent_is_dir(full_path: String) -> i32;
+import "std/time" as tm
 
 // Insertion sort for small string vectors (file lists are typically < 100).
 fn fs_sort_strings(v: Vec[String]) -> () {
@@ -32,45 +18,70 @@ fn fs_sort_strings(v: Vec[String]) -> () {
   }
 }
 
-// Recursive directory walk collecting files with a given suffix.
-// Returns the updated Vec with discovered relative paths appended.
-fn fs_walk_dir_suffix(root: String, rel: String, suffix: String, out: Vec[String]) -> Vec[String] {
-  let full: String = if rel == "" { root } else { root.concat("/").concat(rel) };
-  let dir: rawptr = c_opendir(full);
-  if (dir as isize) == (0 as isize) { return out; }
-  let mut result: Vec[String] = out;
-  while true {
-    let ent: rawptr = c_readdir(dir);
-    if (ent as isize) == (0 as isize) { break; }
-    let name: String = c_dirent_name(ent);
-    if name == "." || name == ".." { continue; }
-    let child_rel: String = if rel == "" { name } else { rel.concat("/").concat(name) };
-    let child_full: String = root.concat("/").concat(child_rel);
-    if c_dirent_is_dir(child_full) == 1 {
-      result = fs_walk_dir_suffix(root, child_rel, suffix, result);
-    } else if child_rel.ends_with(suffix) {
-      result.push(child_rel);
+fn fs_shell_quote(s: String) -> String {
+  let mut out: String = "'";
+  let mut i: i32 = 0;
+  while i < s.len() {
+    let ch: i32 = s.byte_at(i);
+    if ch == 39 {
+      out = out.concat("'\"'\"'");
+    } else {
+      out = out.concat(s.slice(i, i + 1));
     }
+    i = i + 1;
   }
-  let _: i32 = c_closedir(dir);
-  return result;
+  return out.concat("'");
+}
+
+fn fs_walk_from_find_output(text: String) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let n: i32 = text.len();
+  let mut start: i32 = 0;
+  let mut i: i32 = 0;
+  while i <= n {
+    if i == n || text.byte_at(i) == 10 {
+      let mut line: String = text.slice(start, i);
+      if line.ends_with("\r") { line = line.slice(0, line.len() - 1); }
+      if line != "" {
+        if line.starts_with("./") { line = line.slice(2, line.len()); }
+        out.push(line);
+      }
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  fs_sort_strings(out);
+  return out;
+}
+
+fn fs_walk_find(root: String, find_cmd: String) -> Vec[String] {
+  let r: String = if root == "" { "." } else { root };
+  let tmp_rel: String = "target/tmp/fs_walk_".concat(tm.now_ns().to_string()).concat(".txt");
+  let tmp_full: String = r.concat("/").concat(tmp_rel);
+  let _mk_target: bool = fs_mkdir_sys(r.concat("/target"));
+  let _mk_tmp: bool = fs_mkdir_sys(r.concat("/target/tmp"));
+  let cmd: String = "(cd "
+    .concat(fs_shell_quote(r))
+    .concat(" && ")
+    .concat(find_cmd)
+    .concat(" > ")
+    .concat(fs_shell_quote(tmp_rel))
+    .concat(" 2>/dev/null)");
+  let _rc: i32 = sys.system(cmd);
+  // `find` may return non-zero when one of multiple roots is missing.
+  // As long as output was produced, keep parsing the collected paths.
+  if !fs_exists_sys(tmp_full) { return Vec(); }
+  let text: String = fs_read_to_string_sys(tmp_full);
+  let _: i32 = sys.system("rm -f ".concat(fs_shell_quote(tmp_full)));
+  return fs_walk_from_find_output(text);
 }
 
 fn fs_walk_vox_files_impl(root: String) -> Vec[String] {
-  let r: String = if root == "" { "." } else { root };
-  let mut out: Vec[String] = Vec();
-  out = fs_walk_dir_suffix(r, "src", ".vox", out);
-  out = fs_walk_dir_suffix(r, "tests", ".vox", out);
-  fs_sort_strings(out);
-  return out;
+  return fs_walk_find(root, "find src tests -type f -name '*.vox'");
 }
 
 fn fs_walk_c_files_impl(root: String) -> Vec[String] {
-  let r: String = if root == "" { "." } else { root };
-  let mut out: Vec[String] = Vec();
-  out = fs_walk_dir_suffix(r, "src", ".c", out);
-  fs_sort_strings(out);
-  return out;
+  return fs_walk_find(root, "find src -type f -name '*.c'");
 }
 
 pub enum FsError {

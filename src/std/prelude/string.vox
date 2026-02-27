@@ -1,0 +1,275 @@
+import "std/sys" as sys
+
+// Helper: convert String to rawptr (String is const char*; cast through const rawptr -> isize -> rawptr).
+fn str_as_ptr(s: String) -> rawptr {
+  let cp: const rawptr = s as const rawptr;
+  let ip: isize = cp as isize;
+  return ip as rawptr;
+}
+
+impl String {
+  fn len(s: String) -> i32 {
+    let n: usize = sys.strlen(s);
+    return n as i32;
+  }
+
+  fn is_empty(s: String) -> bool {
+    return @ptr_read[u8](str_as_ptr(s)) == (0 as u8);
+  }
+
+  fn byte_at(s: String, idx: i32) -> i32 {
+    let n: i32 = s.len();
+    if idx < 0 || idx >= n { panic("string index out of bounds"); }
+    let p: rawptr = @ptr_offset(str_as_ptr(s), idx as isize);
+    let b: i32 = @ptr_read[u8](p) as i32;
+    return b;
+  }
+
+  fn slice(s: String, start: i32, end: i32) -> String {
+    let n: i32 = s.len();
+    if start < 0 || end < start || end > n { panic("string slice out of bounds"); }
+    let m: i32 = end - start;
+    let out: rawptr = sys.malloc((m as usize) + (1 as usize));
+    if (out as isize) == (0 as isize) { panic("out of memory"); }
+    let src: rawptr = @ptr_offset(str_as_ptr(s), start as isize);
+    let _: rawptr = sys.memcpy(out, src as const rawptr, m as usize);
+    @ptr_write[u8](@ptr_offset(out, m as isize), 0 as u8);
+    return out as String;
+  }
+
+  fn concat(s: String, other: String) -> String {
+    let la: i32 = s.len();
+    let lb: i32 = other.len();
+    let out: rawptr = sys.malloc(((la + lb) as usize) + (1 as usize));
+    if (out as isize) == (0 as isize) { panic("out of memory"); }
+    let _: rawptr = sys.memcpy(out, str_as_ptr(s) as const rawptr, la as usize);
+    let _: rawptr = sys.memcpy(@ptr_offset(out, la as isize), str_as_ptr(other) as const rawptr, lb as usize);
+    @ptr_write[u8](@ptr_offset(out, (la + lb) as isize), 0 as u8);
+    return out as String;
+  }
+
+  fn starts_with(s: String, pre: String) -> bool {
+    let pn: i32 = pre.len();
+    let sn: i32 = s.len();
+    if pn > sn { return false; }
+    let sp: rawptr = str_as_ptr(s);
+    let pp: rawptr = str_as_ptr(pre);
+    let mut i: i32 = 0;
+    while i < pn {
+      let sb: u8 = @ptr_read[u8](@ptr_offset(sp, i as isize));
+      let pb: u8 = @ptr_read[u8](@ptr_offset(pp, i as isize));
+      if sb != pb { return false; }
+      i = i + 1;
+    }
+    return true;
+  }
+
+  fn ends_with(s: String, suf: String) -> bool {
+    let sn: i32 = suf.len();
+    let n: i32 = s.len();
+    if sn > n { return false; }
+    let sp: rawptr = str_as_ptr(s);
+    let pp: rawptr = str_as_ptr(suf);
+    let mut i: i32 = 0;
+    while i < sn {
+      let sb: u8 = @ptr_read[u8](@ptr_offset(sp, (n - sn + i) as isize));
+      let pb: u8 = @ptr_read[u8](@ptr_offset(pp, i as isize));
+      if sb != pb { return false; }
+      i = i + 1;
+    }
+    return true;
+  }
+
+  fn contains(s: String, needle: String) -> bool {
+    return s.index_of(needle) >= 0;
+  }
+
+  fn index_of(s: String, needle: String) -> i32 {
+    let nn: i32 = needle.len();
+    let sn: i32 = s.len();
+    if nn == 0 { return 0; }
+    if nn > sn { return -1; }
+    let sp: rawptr = str_as_ptr(s);
+    let np: rawptr = str_as_ptr(needle);
+    let mut i: i32 = 0;
+    while i <= sn - nn {
+      let mut ok: bool = true;
+      let mut j: i32 = 0;
+      while j < nn {
+        let sb: u8 = @ptr_read[u8](@ptr_offset(sp, (i + j) as isize));
+        let nb: u8 = @ptr_read[u8](@ptr_offset(np, j as isize));
+        if sb != nb { ok = false; j = nn; }
+        else { j = j + 1; }
+      }
+      if ok { return i; }
+      i = i + 1;
+    }
+    return -1;
+  }
+
+  fn last_index_of(s: String, needle: String) -> i32 {
+    let nn: i32 = needle.len();
+    let sn: i32 = s.len();
+    if nn == 0 { return sn; }
+    if nn > sn { return -1; }
+    let sp: rawptr = str_as_ptr(s);
+    let np: rawptr = str_as_ptr(needle);
+    let mut i: i32 = sn - nn;
+    while i >= 0 {
+      let mut ok: bool = true;
+      let mut j: i32 = 0;
+      while j < nn {
+        let sb: u8 = @ptr_read[u8](@ptr_offset(sp, (i + j) as isize));
+        let nb: u8 = @ptr_read[u8](@ptr_offset(np, j as isize));
+        if sb != nb { ok = false; j = nn; }
+        else { j = j + 1; }
+      }
+      if ok { return i; }
+      i = i - 1;
+    }
+    return -1;
+  }
+
+  fn escape_c(s: String) -> String {
+    let n: i32 = s.len();
+    let sp: rawptr = str_as_ptr(s);
+    // Pass 1: count output size.
+    let mut out_n: i32 = 0;
+    let mut i: i32 = 0;
+    while i < n {
+      let ch: i32 = @ptr_read[u8](@ptr_offset(sp, i as isize)) as i32;
+      if ch == 92 || ch == 34 || ch == 10 || ch == 13 || ch == 9 {
+        out_n = out_n + 2;
+      } else if ch >= 32 && ch <= 126 {
+        out_n = out_n + 1;
+      } else {
+        out_n = out_n + 4;
+      }
+      i = i + 1;
+    }
+    // Pass 2: allocate and fill.
+    let out: rawptr = sys.malloc((out_n as usize) + (1 as usize));
+    if (out as isize) == (0 as isize) { panic("out of memory"); }
+    let mut j: i32 = 0;
+    i = 0;
+    while i < n {
+      let ch: i32 = @ptr_read[u8](@ptr_offset(sp, i as isize)) as i32;
+      if ch == 92 {
+        @ptr_write[u8](@ptr_offset(out, j as isize), 92 as u8); j = j + 1;
+        @ptr_write[u8](@ptr_offset(out, j as isize), 92 as u8); j = j + 1;
+      } else if ch == 34 {
+        @ptr_write[u8](@ptr_offset(out, j as isize), 92 as u8); j = j + 1;
+        @ptr_write[u8](@ptr_offset(out, j as isize), 34 as u8); j = j + 1;
+      } else if ch == 10 {
+        @ptr_write[u8](@ptr_offset(out, j as isize), 92 as u8); j = j + 1;
+        @ptr_write[u8](@ptr_offset(out, j as isize), 110 as u8); j = j + 1;
+      } else if ch == 13 {
+        @ptr_write[u8](@ptr_offset(out, j as isize), 92 as u8); j = j + 1;
+        @ptr_write[u8](@ptr_offset(out, j as isize), 114 as u8); j = j + 1;
+      } else if ch == 9 {
+        @ptr_write[u8](@ptr_offset(out, j as isize), 92 as u8); j = j + 1;
+        @ptr_write[u8](@ptr_offset(out, j as isize), 116 as u8); j = j + 1;
+      } else if ch >= 32 && ch <= 126 {
+        @ptr_write[u8](@ptr_offset(out, j as isize), ch as u8); j = j + 1;
+      } else {
+        // \xHH encoding
+        @ptr_write[u8](@ptr_offset(out, j as isize), 92 as u8); j = j + 1;
+        @ptr_write[u8](@ptr_offset(out, j as isize), 120 as u8); j = j + 1;
+        let hi: i32 = (ch / 16) % 16;
+        let lo: i32 = ch % 16;
+        @ptr_write[u8](@ptr_offset(out, j as isize), (if hi < 10 { hi + 48 } else { hi - 10 + 97 }) as u8); j = j + 1;
+        @ptr_write[u8](@ptr_offset(out, j as isize), (if lo < 10 { lo + 48 } else { lo - 10 + 97 }) as u8); j = j + 1;
+      }
+      i = i + 1;
+    }
+    @ptr_write[u8](@ptr_offset(out, j as isize), 0 as u8);
+    return out as String;
+  }
+
+  fn to_string(s: String) -> String { return s; }
+}
+
+fn fmt_u64(v0: u64) -> String {
+  let rev: rawptr = sys.malloc((32 as usize) + (1 as usize));
+  if (rev as isize) == (0 as isize) { panic("out of memory"); }
+  let mut v: u64 = v0;
+  let mut n: i32 = 0;
+  while true {
+    let d: i32 = (v % (10 as u64)) as i32;
+    @ptr_write[u8](@ptr_offset(rev, n as isize), (48 + d) as u8);
+    n = n + 1;
+    v = v / (10 as u64);
+    if v == (0 as u64) { break; }
+  }
+  let out: rawptr = sys.malloc((n as usize) + (1 as usize));
+  if (out as isize) == (0 as isize) { panic("out of memory"); }
+  let mut i: i32 = 0;
+  while i < n {
+    let b: u8 = @ptr_read[u8](@ptr_offset(rev, (n - 1 - i) as isize));
+    @ptr_write[u8](@ptr_offset(out, i as isize), b);
+    i = i + 1;
+  }
+  @ptr_write[u8](@ptr_offset(out, n as isize), 0 as u8);
+  return out as String;
+}
+
+fn fmt_i64(v: i64) -> String {
+  if v >= (0 as i64) { return fmt_u64(v as u64); }
+  let mag: u64 = ((-(v + (1 as i64))) as u64) + (1 as u64);
+  return "-".concat(fmt_u64(mag));
+}
+
+impl bool {
+  fn to_string(v: bool) -> String {
+    if v { return "true"; }
+    return "false";
+  }
+}
+
+impl i8 {
+  fn to_string(v: i8) -> String { return fmt_i64(v as i64); }
+}
+
+impl u8 {
+  fn to_string(v: u8) -> String { return fmt_u64(v as u64); }
+}
+
+impl i16 {
+  fn to_string(v: i16) -> String { return fmt_i64(v as i64); }
+}
+
+impl u16 {
+  fn to_string(v: u16) -> String { return fmt_u64(v as u64); }
+}
+
+impl i32 {
+  fn to_string(v: i32) -> String { return fmt_i64(v as i64); }
+}
+
+impl u32 {
+  fn to_string(v: u32) -> String { return fmt_u64(v as u64); }
+}
+
+impl i64 {
+  fn to_string(v: i64) -> String { return fmt_i64(v); }
+}
+
+impl u64 {
+  fn to_string(v: u64) -> String { return fmt_u64(v); }
+}
+
+impl isize {
+  fn to_string(v: isize) -> String { return fmt_i64(v as i64); }
+}
+
+impl usize {
+  fn to_string(v: usize) -> String { return fmt_u64(v as u64); }
+}
+
+impl f32 {
+  fn to_string(v: f32) -> String { return fmt_i64(v as i64); }
+}
+
+impl f64 {
+  fn to_string(v: f64) -> String { return fmt_i64(v as i64); }
+}
