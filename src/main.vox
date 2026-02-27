@@ -575,6 +575,7 @@ fn usage() -> () {
   print("env:\n");
   print("  VOX_CC_DEBUG=1      enable C compiler debug symbols (-g / /Zi)\n");
   print("  VOX_PROFILE=1       print compile/cc phase timings for build commands\n");
+  print("  VOX_BUILD_CACHE_DISABLE=1  disable build cache key/hash and always rebuild\n");
   print("  VOX_ROOT=<path>     source root override for loading src/std and src/vox\n");
   print("  VOX_STDLIB=<path>   stdlib root override (highest priority; supports root, root/src, root/src/std)\n");
   print("  VOX_NODE=<path>     node executable for `vox lsp` (default: node)\n");
@@ -644,6 +645,23 @@ fn filter_pkg_test_sources(paths: Vec[String]) -> Vec[String] {
   while i < paths.len() {
     let p: String = paths.get(i);
     if has_prefix(p, "src/") || has_prefix(p, "tests/") {
+      out.push(p);
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn is_hidden_source_path(p: String) -> bool {
+  return has_prefix(p, ".") || text_contains(p, "/.");
+}
+
+fn filter_pkg_c_sources(paths: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < paths.len() {
+    let p: String = paths.get(i);
+    if has_prefix(p, "src/") && !is_hidden_source_path(p) {
       out.push(p);
     }
     i = i + 1;
@@ -1030,6 +1048,14 @@ fn env_truthy(raw0: String) -> bool {
 
 fn compile_profile_enabled() -> bool {
   return env_truthy(proc.getenv("VOX_PROFILE"));
+}
+
+fn build_cache_enabled_from_env(raw: String) -> bool {
+  return !env_truthy(raw);
+}
+
+fn build_cache_enabled() -> bool {
+  return build_cache_enabled_from_env(proc.getenv("VOX_BUILD_CACHE_DISABLE"));
 }
 
 fn print_compile_profile(label: String, p: c.CompilePhaseProfile) -> () {
@@ -1881,7 +1907,7 @@ fn load_dep_sources(dep_name: String, dep_root: String) -> Vec[ld.SourceFile] {
   let mut ci: i32 = 0;
   while ci < c_rels.len() {
     let c_rel: String = c_rels.get(ci);
-    if has_prefix(c_rel, "src/") {
+    if has_prefix(c_rel, "src/") && !is_hidden_source_path(c_rel) {
       let c_full: String = path_join(dep_root, c_rel);
       let c_virt: String = dep_name.concat("/").concat(c_rel);
       out.push(ld.SourceFile { path: c_virt, text: fs.read_to_string(c_full) });
@@ -2181,7 +2207,7 @@ fn load_stage1_std_from_repo_root(root: String) -> Vec[ld.SourceFile] {
   let mut ci: i32 = 0;
   while ci < c_rels.len() {
     let c_rel: String = c_rels.get(ci);
-    if has_prefix(c_rel, "src/std/") {
+    if has_prefix(c_rel, "src/std/") && !is_hidden_source_path(c_rel) {
       let c_full: String = path_join(root, c_rel);
       out.push(ld.SourceFile { path: c_rel, text: fs.read_to_string(c_full) });
     }
@@ -3078,7 +3104,7 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let c_all: Vec[String] = srcw.walk_c_files(".");
+    let c_all: Vec[String] = filter_pkg_c_sources(srcw.walk_c_files("."));
     let c_user: Vec[ld.SourceFile] = load_files(c_all);
     let mut cui: i32 = 0;
     while cui < c_user.len() { files.push(c_user.get(cui)); cui = cui + 1; }
@@ -3143,7 +3169,7 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let c_all_build: Vec[String] = srcw.walk_c_files(".");
+    let c_all_build: Vec[String] = filter_pkg_c_sources(srcw.walk_c_files("."));
     let c_user_build: Vec[ld.SourceFile] = load_files(c_all_build);
     let mut cubi: i32 = 0;
     while cubi < c_user_build.len() { files.push(c_user_build.get(cubi)); cubi = cubi + 1; }
@@ -3157,8 +3183,14 @@ fn main() -> i32 {
     let driver_key: String = if driver == cg.DriverMainKind.Tool { "tool" } else { "user" };
     let emit_driver_key: String = if artifact == "exe" { "1" } else { "0" };
     let build_mode: String = build_mode_text("build", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi, artifact);
-    let build_key: String = build_cache_key(files_for_cache, build_mode);
-    if !build_cache_hit(out, build_key, cpath, out) {
+    let cache_enabled: bool = build_cache_enabled();
+    let mut build_key: String = "";
+    let mut cache_hit: bool = false;
+    if cache_enabled {
+      build_key = build_cache_key(files_for_cache, build_mode);
+      cache_hit = build_cache_hit(out, build_key, cpath, out);
+    }
+    if !cache_hit {
       let cp: c.CompileProfileResult =
         c.compile_files_to_c_profile_for_target(
           files,
@@ -3186,7 +3218,9 @@ fn main() -> i32 {
         print("cc exit: ".concat(code.to_string()).concat("\n"));
         return 1;
       }
-      write_build_cache(out, build_key);
+      if cache_enabled {
+        write_build_cache(out, build_key);
+      }
     } else {
       copy_emit_c_from_file(emit_c_enabled, emit_c_path, cpath);
     }
@@ -3417,7 +3451,7 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let c_all_test: Vec[String] = srcw.walk_c_files(".");
+    let c_all_test: Vec[String] = filter_pkg_c_sources(srcw.walk_c_files("."));
     let c_user_test: Vec[ld.SourceFile] = load_files(c_all_test);
     let mut cuti: i32 = 0;
     while cuti < c_user_test.len() { files.push(c_user_test.get(cuti)); cuti = cuti + 1; }
