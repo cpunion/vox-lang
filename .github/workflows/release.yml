@@ -303,6 +303,36 @@ jobs:
           set -euo pipefail
           ./scripts/release/build-release-bundle.sh "${BUILD_VERSION}" "${VOX_PLATFORM}"
 
+      - name: Raise stack reserve (Windows compiler)
+        shell: powershell
+        run: |
+          $exe = "target\release\vox.exe"
+          if (-not (Test-Path $exe)) { throw "compiler not found: $exe" }
+          [byte[]]$b = [System.IO.File]::ReadAllBytes($exe)
+          if ($b.Length -lt 512) { throw "compiler too small: $exe" }
+          $peOff = [BitConverter]::ToInt32($b, 0x3C)
+          if ($peOff -lt 0 -or ($peOff + 0x100) -ge $b.Length) { throw "invalid PE header offset: $peOff" }
+          if ($b[$peOff] -ne 0x50 -or $b[$peOff+1] -ne 0x45 -or $b[$peOff+2] -ne 0x00 -or $b[$peOff+3] -ne 0x00) {
+            throw "invalid PE signature"
+          }
+          $opt = $peOff + 24
+          $magic = [BitConverter]::ToUInt16($b, $opt)
+          $off = $opt + 0x48
+          if ($magic -eq 0x20b) {
+            $old = [BitConverter]::ToUInt64($b, $off)
+            [BitConverter]::GetBytes([UInt64]67108864).CopyTo($b, $off)
+            $new = [BitConverter]::ToUInt64($b, $off)
+            Write-Host "[ci] stack reserve (PE32+): $old -> $new"
+          } elseif ($magic -eq 0x10b) {
+            $old = [BitConverter]::ToUInt32($b, $off)
+            [BitConverter]::GetBytes([UInt32]67108864).CopyTo($b, $off)
+            $new = [BitConverter]::ToUInt32($b, $off)
+            Write-Host "[ci] stack reserve (PE32): $old -> $new"
+          } else {
+            throw "unsupported PE optional header magic: 0x$($magic.ToString('x'))"
+          }
+          [System.IO.File]::WriteAllBytes($exe, $b)
+
       - name: Run smoke tests (rolling bootstrap)
         shell: bash
         run: |
