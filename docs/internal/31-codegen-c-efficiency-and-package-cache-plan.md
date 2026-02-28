@@ -109,6 +109,7 @@ Invalidate unit on any of:
 - 2026-02-28: link-cache hit check was decoupled from package C path existence.
 - Current link hit condition is: `link` meta key match + linked binary artifact exists.
 - Package object cache (`pkg-obj`) still requires C path + object + obj meta, unchanged.
+- 2026-02-28: `std/prelude/string` pointer loops were rewritten to pointer-walk style (less inline `i32 -> isize` casts), reducing forced selfhost build warnings from 164 to 100 on macOS arm64.
 
 ## 5. Validation Gates
 
