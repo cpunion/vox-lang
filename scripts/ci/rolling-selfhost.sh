@@ -128,9 +128,9 @@ pick_bootstrap() {
   fi
 
   local candidates=(
-    "$WORK_DIR/target/bootstrap/vox_prev"
-    "$WORK_DIR/target/debug/vox_tool"
     "$WORK_DIR/target/debug/vox_rolling"
+    "$WORK_DIR/target/debug/vox_tool"
+    "$WORK_DIR/target/bootstrap/vox_prev"
     "$WORK_DIR/target/debug/vox"
     "$WORK_DIR/target/release/vox"
   )
@@ -151,6 +151,15 @@ pick_bootstrap() {
     fi
   done
 
+  return 1
+}
+
+pick_legacy_bootstrap() {
+  local p
+  if p="$(resolve_bin "$WORK_DIR/target/bootstrap/vox_prev" 2>/dev/null)"; then
+    printf '%s\n' "$p"
+    return 0
+  fi
   return 1
 }
 
@@ -224,7 +233,16 @@ fi
 echo "[selfhost] bootstrap: $BOOTSTRAP_BIN"
 if should_rebuild_selfhost "$BOOTSTRAP_BIN"; then
   echo "[selfhost] rebuild: yes"
-  build_from_bootstrap "$BOOTSTRAP_BIN"
+  if ! build_from_bootstrap "$BOOTSTRAP_BIN"; then
+    LEGACY_BOOTSTRAP=""
+    if LEGACY_BOOTSTRAP="$(pick_legacy_bootstrap)" && [[ "$LEGACY_BOOTSTRAP" != "$BOOTSTRAP_BIN" ]]; then
+      echo "[selfhost] retry with legacy bootstrap: $LEGACY_BOOTSTRAP"
+      build_from_bootstrap "$LEGACY_BOOTSTRAP"
+      BOOTSTRAP_BIN="$LEGACY_BOOTSTRAP"
+    else
+      exit 1
+    fi
+  fi
 else
   echo "[selfhost] rebuild: no (cache hit)"
 fi
