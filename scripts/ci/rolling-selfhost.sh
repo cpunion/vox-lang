@@ -144,18 +144,27 @@ should_rebuild_selfhost() {
   fi
 
   if [[ "$FORCE_REBUILD" == "1" ]]; then
-    echo "$new_key" > "$cache_key_file"
     return 0
   fi
   if [[ ! -f "$out_path" && ! -f "${out_path}.exe" ]]; then
-    echo "$new_key" > "$cache_key_file"
     return 0
   fi
   if [[ "$new_key" != "$old_key" ]]; then
-    echo "$new_key" > "$cache_key_file"
     return 0
   fi
   return 1
+}
+
+write_selfhost_cache_key() {
+  local bootstrap_bin="$1"
+  local out_path="$WORK_DIR/$OUT_REL"
+  local cache_key_file="${out_path}.cache.key"
+  local tmp_file="${cache_key_file}.tmp.$$"
+  local new_key
+  mkdir -p "$(dirname "$cache_key_file")"
+  new_key="$(selfhost_cache_key "$bootstrap_bin")"
+  printf '%s\n' "$new_key" > "$tmp_file"
+  mv "$tmp_file" "$cache_key_file"
 }
 
 pick_bootstrap() {
@@ -280,6 +289,7 @@ if should_rebuild_selfhost "$BOOTSTRAP_BIN"; then
       exit 1
     fi
   fi
+  write_selfhost_cache_key "$BOOTSTRAP_BIN"
 else
   echo "[selfhost] rebuild: no (cache hit)"
 fi
