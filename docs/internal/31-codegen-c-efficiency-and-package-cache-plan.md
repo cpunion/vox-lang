@@ -111,6 +111,7 @@ Invalidate unit on any of:
 - Package object cache (`pkg-obj`) still requires C path + object + obj meta, unchanged.
 - 2026-02-28: `std/prelude/string` pointer loops were rewritten to pointer-walk style (less inline `i32 -> isize` casts), reducing forced selfhost build warnings from 164 to 100 on macOS arm64.
 - 2026-02-28: `rolling-selfhost` now prefers `target/debug/vox_rolling` as bootstrap when available, with automatic retry fallback to `target/bootstrap/vox_prev` on bootstrap build failure; this keeps daily builds on latest compiler while preserving recovery path.
+- 2026-02-28: self-bootstrap cache key was stabilized for `target/debug/vox_rolling`; no-source-change runs now hit rolling selfhost cache (`rebuild: no`) instead of rebuilding on every run due to bootstrap mtime churn.
 
 ## 5. Validation Gates
 
