@@ -213,6 +213,11 @@ struct BuildCachePkgKey {
   key: String,
 }
 
+struct BuildCachePkgDigest {
+  pkg: String,
+  h: u64,
+}
+
 struct BuildCacheKeyPair {
   compile_key: String,
   link_key: String,
@@ -249,38 +254,76 @@ fn build_cache_add_pkg_sorted(pkgs0: Vec[String], pkg: String) -> Vec[String] {
   return out;
 }
 
+fn build_cache_pkg_digest_init(pkg: String) -> BuildCachePkgDigest {
+  let mut h: u64 = 1469598103934665603 as u64;
+  h = lock_hash_text(h, "build-cache-pkg-src-v1\n");
+  h = lock_hash_text(h, pkg);
+  h = lock_hash_text(h, "\n");
+  return BuildCachePkgDigest { pkg: pkg, h: h };
+}
+
+fn build_cache_pkg_digest_insert_sorted(ds0: Vec[BuildCachePkgDigest], d: BuildCachePkgDigest) -> Vec[BuildCachePkgDigest] {
+  let mut out: Vec[BuildCachePkgDigest] = Vec();
+  let mut inserted: bool = false;
+  let mut i: i32 = 0;
+  while i < ds0.len() {
+    let cur: BuildCachePkgDigest = ds0.get(i);
+    if !inserted && d.pkg < cur.pkg {
+      out.push(d);
+      inserted = true;
+    }
+    out.push(cur);
+    i = i + 1;
+  }
+  if !inserted { out.push(d); }
+  return out;
+}
+
 fn build_cache_pkg_source_keys(files0: Vec[ld.SourceFile]) -> Vec[BuildCachePkgKey] {
   let files: Vec[ld.SourceFile] = sort_source_files(files0);
-  let mut pkgs: Vec[String] = Vec();
+  let mut ds: Vec[BuildCachePkgDigest] = Vec();
   let mut i: i32 = 0;
   while i < files.len() {
-    pkgs = build_cache_add_pkg_sorted(pkgs, build_cache_pkg_from_source_path(files.get(i).path));
+    let f: ld.SourceFile = files.get(i);
+    let pkg: String = build_cache_pkg_from_source_path(f.path);
+    let mut di: i32 = -1;
+    let mut dj: i32 = 0;
+    while dj < ds.len() {
+      if ds.get(dj).pkg == pkg {
+        di = dj;
+        dj = ds.len();
+      } else {
+        dj = dj + 1;
+      }
+    }
+    if di < 0 {
+      ds = build_cache_pkg_digest_insert_sorted(ds, build_cache_pkg_digest_init(pkg.slice(0, pkg.len())));
+      let mut dk: i32 = 0;
+      while dk < ds.len() {
+        if ds.get(dk).pkg == pkg {
+          di = dk;
+          dk = ds.len();
+        } else {
+          dk = dk + 1;
+        }
+      }
+    }
+    let mut d: BuildCachePkgDigest = ds.get(di);
+    d.h = lock_hash_text(d.h, "F\n");
+    d.h = lock_hash_text(d.h, f.path);
+    d.h = lock_hash_text(d.h, "\n");
+    d.h = lock_hash_text(d.h, f.text);
+    d.h = lock_hash_text(d.h, "\n");
+    ds.set(di, d);
     i = i + 1;
   }
 
   let mut out: Vec[BuildCachePkgKey] = Vec();
-  let mut pi: i32 = 0;
-  while pi < pkgs.len() {
-    let pkg: String = pkgs.get(pi);
-    let mut h: u64 = 1469598103934665603 as u64;
-    h = lock_hash_text(h, "build-cache-pkg-src-v1\n");
-    h = lock_hash_text(h, pkg);
-    h = lock_hash_text(h, "\n");
-
-    let mut fi: i32 = 0;
-    while fi < files.len() {
-      let f: ld.SourceFile = files.get(fi);
-      if build_cache_pkg_from_source_path(f.path) == pkg {
-        h = lock_hash_text(h, "F\n");
-        h = lock_hash_text(h, f.path);
-        h = lock_hash_text(h, "\n");
-        h = lock_hash_text(h, f.text);
-        h = lock_hash_text(h, "\n");
-      }
-      fi = fi + 1;
-    }
-    out.push(BuildCachePkgKey { pkg: pkg, key: h.to_string() });
-    pi = pi + 1;
+  let mut di: i32 = 0;
+  while di < ds.len() {
+    let d: BuildCachePkgDigest = ds.get(di);
+    out.push(BuildCachePkgKey { pkg: d.pkg, key: d.h.to_string() });
+    di = di + 1;
   }
   return out;
 }
