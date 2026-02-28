@@ -133,22 +133,12 @@ should_rebuild_selfhost() {
   local bootstrap_bin="$1"
   local out_path="$WORK_DIR/$OUT_REL"
   local cache_key_file="${out_path}.cache.key"
+  if [[ "$FORCE_REBUILD" == "1" ]]; then return 0; fi
+  if [[ ! -f "$out_path" && ! -f "${out_path}.exe" ]]; then return 0; fi
   local new_key
   local old_key=""
-
-  mkdir -p "$(dirname "$cache_key_file")"
   new_key="$(selfhost_cache_key "$bootstrap_bin")"
-
-  if [[ -f "$cache_key_file" ]]; then
-    old_key="$(cat "$cache_key_file")"
-  fi
-
-  if [[ "$FORCE_REBUILD" == "1" ]]; then
-    return 0
-  fi
-  if [[ ! -f "$out_path" && ! -f "${out_path}.exe" ]]; then
-    return 0
-  fi
+  if [[ -f "$cache_key_file" ]]; then old_key="$(cat "$cache_key_file")"; fi
   if [[ "$new_key" != "$old_key" ]]; then
     return 0
   fi
@@ -216,11 +206,15 @@ build_from_bootstrap() {
   local bootstrap_bin="$1"
   local bootstrap_base=""
   bootstrap_base="$(basename "$bootstrap_bin")"
-  local help_text=""
-  help_text="$("$bootstrap_bin" 2>&1 || true)"
   local is_legacy_bootstrap=0
-  if [[ "$help_text" == *"build-pkg <out.bin>"* ]]; then
-    is_legacy_bootstrap=1
+  if [[ "$bootstrap_base" == "vox_rolling" || "$bootstrap_base" == "vox_rolling.exe" || "$bootstrap_base" == "vox_tool" || "$bootstrap_base" == "vox_tool.exe" || "$bootstrap_base" == "vox" || "$bootstrap_base" == "vox.exe" ]]; then
+    is_legacy_bootstrap=0
+  else
+    local help_text=""
+    help_text="$("$bootstrap_bin" 2>&1 || true)"
+    if [[ "$help_text" == *"build-pkg <out.bin>"* ]]; then
+      is_legacy_bootstrap=1
+    fi
   fi
   local legacy_runtime_c="${VOX_LEGACY_C_RUNTIME:-}"
   if [[ -z "$legacy_runtime_c" ]]; then
