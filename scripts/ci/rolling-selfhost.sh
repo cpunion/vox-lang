@@ -207,15 +207,18 @@ build_from_bootstrap() {
   local bootstrap_base=""
   bootstrap_base="$(basename "$bootstrap_bin")"
   local is_legacy_bootstrap=0
-  if [[ "$bootstrap_base" == "vox_rolling" || "$bootstrap_base" == "vox_rolling.exe" || "$bootstrap_base" == "vox_tool" || "$bootstrap_base" == "vox_tool.exe" || "$bootstrap_base" == "vox" || "$bootstrap_base" == "vox.exe" ]]; then
-    is_legacy_bootstrap=0
-  else
-    local help_text=""
-    help_text="$("$bootstrap_bin" 2>&1 || true)"
-    if [[ "$help_text" == *"build-pkg <out.bin>"* ]]; then
-      is_legacy_bootstrap=1
-    fi
-  fi
+  case "$bootstrap_base" in
+    vox_rolling|vox_rolling.exe|vox_tool|vox_tool.exe|vox|vox.exe)
+      is_legacy_bootstrap=0
+      ;;
+    *)
+      local help_text=""
+      help_text="$("$bootstrap_bin" 2>&1 || true)"
+      if [[ "$help_text" == *"build-pkg <out.bin>"* ]]; then
+        is_legacy_bootstrap=1
+      fi
+      ;;
+  esac
   local legacy_runtime_c="${VOX_LEGACY_C_RUNTIME:-}"
   if [[ -z "$legacy_runtime_c" ]]; then
     # Locked bootstrap binaries named vox_prev still require runtime C bridge.
