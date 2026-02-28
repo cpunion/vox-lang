@@ -104,6 +104,12 @@ Invalidate unit on any of:
 2. Phase B: per-package C/object cache for dependencies first, root package last.
 3. Phase C: semantic cache and incremental typecheck reuse.
 
+### 4.6 Progress Notes
+
+- 2026-02-28: link-cache hit check was decoupled from package C path existence.
+- Current link hit condition is: `link` meta key match + linked binary artifact exists.
+- Package object cache (`pkg-obj`) still requires C path + object + obj meta, unchanged.
+
 ## 5. Validation Gates
 
 Required before each phase merge:
@@ -111,4 +117,3 @@ Required before each phase merge:
 - `make test-active`
 - cache hit/miss deterministic tests in `src/main_cache_test.vox`
 - CI smoke on linux/darwin/windows + wasm
-
