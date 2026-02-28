@@ -159,9 +159,12 @@ write_selfhost_cache_key() {
   local bootstrap_bin="$1"
   local out_path="$WORK_DIR/$OUT_REL"
   local cache_key_file="${out_path}.cache.key"
-  local tmp_file="${cache_key_file}.tmp.$$"
+  local cache_dir
+  local tmp_file
   local new_key
-  mkdir -p "$(dirname "$cache_key_file")"
+  cache_dir="$(dirname "$cache_key_file")"
+  mkdir -p "$cache_dir"
+  tmp_file="$(mktemp "${cache_key_file}.tmp.XXXXXX")"
   new_key="$(selfhost_cache_key "$bootstrap_bin")"
   printf '%s\n' "$new_key" > "$tmp_file"
   mv "$tmp_file" "$cache_key_file"
