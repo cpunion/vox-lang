@@ -59,8 +59,45 @@ sha256_text() {
   cksum | awk '{print $1}'
 }
 
+abs_path() {
+  local p="$1"
+  if [[ "$p" == /* ]]; then
+    printf '%s\n' "$p"
+    return 0
+  fi
+  local dir
+  local base
+  dir="$(dirname "$p")"
+  base="$(basename "$p")"
+  local resolved
+  resolved="$(
+    cd "$dir" >/dev/null 2>&1 && printf '%s/%s\n' "$(pwd -P)" "$base"
+  )"
+  if [[ -n "$resolved" ]]; then
+    printf '%s\n' "$resolved"
+    return 0
+  fi
+  printf '%s\n' "$p"
+}
+
+is_self_bootstrap_path() {
+  local b_abs
+  local out_abs
+  local out_exe_abs
+  b_abs="$(abs_path "$1")"
+  out_abs="$(abs_path "$WORK_DIR/$OUT_REL")"
+  out_exe_abs="$(abs_path "$WORK_DIR/${OUT_REL}.exe")"
+  [[ "$b_abs" == "$out_abs" || "$b_abs" == "$out_exe_abs" ]]
+}
+
 bootstrap_fingerprint() {
   local bootstrap_bin="$1"
+  if is_self_bootstrap_path "$bootstrap_bin"; then
+    # Self-bootstrap output path itself changes mtime/size on rebuild.
+    # Keep a stable key component so no-op source trees can hit cache.
+    printf 'self:%s\n' "$OUT_REL"
+    return 0
+  fi
   local size=0
   local mtime=0
   if [[ "$(uname -s)" == "Darwin" ]]; then
