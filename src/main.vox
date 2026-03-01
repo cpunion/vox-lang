@@ -1864,23 +1864,26 @@ fn read_failed_tests() -> Vec[String] {
   return normalize_failed_tests(split_lines(file_text));
 }
 
-fn write_failed_tests(names: Vec[String]) -> () {
+fn write_failed_tests(names: Vec[String]) -> Vec[String] {
   fs.mkdir_p("target/debug");
   let canon: Vec[String] = normalize_failed_tests(names);
-  let mut canon_for_failed: Vec[String] = Vec();
+  let mut tests_json: String = "[";
   let mut cfi: i32 = 0;
   while cfi < canon.len() {
-    canon_for_failed.push(canon.get(cfi));
+    if cfi > 0 { tests_json = tests_json.concat(","); }
+    tests_json = tests_json.concat(json_quote(canon.get(cfi)));
     cfi = cfi + 1;
   }
+  tests_json = tests_json.concat("]");
   let updated_us: i64 = tm.now_ns() / 1000;
   let mut out: String = "{";
   out = out.concat("\"version\":1");
   out = out.concat(",\"updated_unix_us\":").concat(updated_us.to_string());
-  out = out.concat(",\"tests\":").concat(json_of_tests(canon));
-  out = out.concat(",\"failed_tests\":").concat(json_of_tests(canon_for_failed));
+  out = out.concat(",\"tests\":").concat(tests_json.slice(0, tests_json.len()));
+  out = out.concat(",\"failed_tests\":").concat(tests_json);
   out = out.concat("}\n");
   fs.write_string(failed_tests_path(), out);
+  return canon;
 }
 
 fn intersect_tests(a: Vec[String], b: Vec[String]) -> Vec[String] {
@@ -3674,6 +3677,7 @@ fn main() -> i32 {
     let mut queues: Vec[ModuleQueue] = build_module_queues(tests_for_queues);
     let mut module_summaries: Vec[ModuleSummary] = Vec();
     let mut module_details: Vec[ModuleDetail] = Vec();
+    let mut slowest: Vec[NamedDuration] = Vec();
     let mut qsi: i32 = 0;
     while qsi < queues.len() {
       let q: ModuleQueue = queues.get(qsi);
@@ -3768,7 +3772,9 @@ fn main() -> i32 {
             }
             module_summaries = update_module_summary_idx(module_summaries, job.module_idx, false, dur_ns);
             module_details = update_module_detail_idx(module_details, job.module_idx, job.name, false, dur_ns);
-            results.push(TestRunResult { name: job.name, module: test_module_name(job.name), ok: false, dur_ns: dur_ns, err: "test failed", log_file: job.log_file });
+            let module_name: String = test_module_name(job.name);
+            slowest = slowest_insert(slowest, NamedDuration { name: job.name, module: module_name.slice(0, module_name.len()), dur_ns: dur_ns });
+            results.push(TestRunResult { name: job.name, module: module_name, ok: false, dur_ns: dur_ns, err: "test failed", log_file: job.log_file });
             if !test_json {
               print("[FAIL] ".concat(job.name).concat(" (").concat(format_duration_ns(dur_ns)).concat(")\n"));
               print_failed_test_log(job.name, job.log_file);
@@ -3781,7 +3787,9 @@ fn main() -> i32 {
             passed = passed + 1;
             module_summaries = update_module_summary_idx(module_summaries, job.module_idx, true, dur_ns);
             module_details = update_module_detail_idx(module_details, job.module_idx, job.name, true, dur_ns);
-            results.push(TestRunResult { name: job.name, module: test_module_name(job.name), ok: true, dur_ns: dur_ns, err: "", log_file: "" });
+            let module_name: String = test_module_name(job.name);
+            slowest = slowest_insert(slowest, NamedDuration { name: job.name, module: module_name.slice(0, module_name.len()), dur_ns: dur_ns });
+            results.push(TestRunResult { name: job.name, module: module_name, ok: true, dur_ns: dur_ns, err: "", log_file: "" });
             if !test_json { print("[OK] ".concat(job.name).concat(" (").concat(format_duration_ns(dur_ns)).concat(")\n")); }
           }
         } else {
@@ -3804,21 +3812,7 @@ fn main() -> i32 {
     let results_sorted: Vec[TestRunResult] = sort_test_results(results);
     let module_summaries_sorted: Vec[ModuleSummary] = sort_module_summaries(module_summaries);
     let module_details_sorted: Vec[ModuleDetail] = sort_module_details(module_details);
-    let failed_names_sorted: Vec[String] = sort_strings(failed_names);
-    let mut results_for_slowest: Vec[TestRunResult] = Vec();
-    let mut rsi: i32 = 0;
-    while rsi < results_sorted.len() {
-      results_for_slowest.push(results_sorted.get(rsi));
-      rsi = rsi + 1;
-    }
-    let slowest: Vec[NamedDuration] = build_slowest(results_for_slowest);
-    let mut failed_names_for_write: Vec[String] = Vec();
-    let mut fwi: i32 = 0;
-    while fwi < failed_names_sorted.len() {
-      failed_names_for_write.push(failed_names_sorted.get(fwi));
-      fwi = fwi + 1;
-    }
-    write_failed_tests(failed_names_for_write);
+    let failed_names_sorted: Vec[String] = write_failed_tests(failed_names);
     let hint: String = if failed != 0 { build_rerun_hint(out, test_jobs, test_fail_fast) } else { "" };
     if test_json {
       print_json_report(discovered.len(), tests.len(), test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed.len() } else { 0 }, false, tests, results_sorted, module_summaries_sorted, module_details_sorted, slowest, failed_names_sorted, hint, "", passed, failed, skipped, total_ns);
