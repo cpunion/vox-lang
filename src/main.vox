@@ -730,22 +730,26 @@ fn is_test_file_for_discovery(p: String) -> bool {
   return false;
 }
 
-fn has_std_under_src(paths: Vec[String]) -> bool {
-  let mut i: i32 = 0;
-  while i < paths.len() {
-    if txt.has_prefix(paths.get(i), "src/std/") { return true; }
-    i = i + 1;
-  }
-  return false;
+struct SrcPresence {
+  has_std: bool,
+  has_vox: bool,
 }
 
-fn has_vox_under_src(paths: Vec[String]) -> bool {
+fn detect_src_presence(paths: Vec[String]) -> SrcPresence {
+  let mut has_std: bool = false;
+  let mut has_vox: bool = false;
   let mut i: i32 = 0;
   while i < paths.len() {
-    if txt.has_prefix(paths.get(i), "src/vox/") { return true; }
-    i = i + 1;
+    let p: String = paths.get(i);
+    if !has_std && txt.has_prefix(p, "src/std/") { has_std = true; }
+    if !has_vox && txt.has_prefix(p, "src/vox/") { has_vox = true; }
+    if has_std && has_vox {
+      i = paths.len();
+    } else {
+      i = i + 1;
+    }
   }
-  return false;
+  return SrcPresence { has_std: has_std, has_vox: has_vox };
 }
 
 fn filter_pkg_sources(paths: Vec[String]) -> Vec[String] {
@@ -3078,20 +3082,15 @@ fn main() -> i32 {
   if cmd == "list" {
     let all: Vec[String] = srcw.walk_vox_files(".");
     let paths: Vec[String] = if list_include_tests { filter_pkg_test_sources(all) } else { filter_pkg_sources(all) };
-    let mut paths_for_std: Vec[String] = Vec();
+    let mut paths_for_presence: Vec[String] = Vec();
     let mut psi: i32 = 0;
     while psi < paths.len() {
-      paths_for_std.push(paths.get(psi));
+      paths_for_presence.push(paths.get(psi));
       psi = psi + 1;
     }
-    let mut paths_for_vox: Vec[String] = Vec();
-    let mut psv: i32 = 0;
-    while psv < paths_for_std.len() {
-      paths_for_vox.push(paths_for_std.get(psv));
-      psv = psv + 1;
-    }
-    let mut files: Vec[ld.SourceFile] = if has_std_under_src(paths_for_std) { Vec() } else { load_stage1_std() };
-    if !has_vox_under_src(paths_for_vox) {
+    let src_presence: SrcPresence = detect_src_presence(paths_for_presence);
+    let mut files: Vec[ld.SourceFile] = if src_presence.has_std { Vec() } else { load_stage1_std() };
+    if !src_presence.has_vox {
       let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
       let mut pvi: i32 = 0;
       while pvi < preload_vox.len() {
@@ -3136,21 +3135,16 @@ fn main() -> i32 {
   if cmd == "build" {
     let all: Vec[String] = srcw.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_sources(all);
-    let mut paths_for_std: Vec[String] = Vec();
+    let mut paths_for_presence: Vec[String] = Vec();
     let mut psi: i32 = 0;
     while psi < paths.len() {
-      paths_for_std.push(paths.get(psi));
+      paths_for_presence.push(paths.get(psi));
       psi = psi + 1;
     }
-    let mut paths_for_vox: Vec[String] = Vec();
-    let mut psv: i32 = 0;
-    while psv < paths_for_std.len() {
-      paths_for_vox.push(paths_for_std.get(psv));
-      psv = psv + 1;
-    }
-    let is_self_std: bool = has_std_under_src(paths_for_std);
+    let src_presence: SrcPresence = detect_src_presence(paths_for_presence);
+    let is_self_std: bool = src_presence.has_std;
     let mut files: Vec[ld.SourceFile] = if is_self_std { Vec() } else { load_stage1_std() };
-    if !has_vox_under_src(paths_for_vox) {
+    if !src_presence.has_vox {
       let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
       let mut pvi: i32 = 0;
       while pvi < preload_vox.len() {
@@ -3395,18 +3389,6 @@ fn main() -> i32 {
   if cmd == "test" {
     let all: Vec[String] = srcw.walk_vox_files(".");
     let paths: Vec[String] = filter_pkg_test_sources(all);
-    let mut paths_for_std_test: Vec[String] = Vec();
-    let mut pst: i32 = 0;
-    while pst < paths.len() {
-      paths_for_std_test.push(paths.get(pst));
-      pst = pst + 1;
-    }
-    let mut paths_for_vox_test: Vec[String] = Vec();
-    let mut pvt: i32 = 0;
-    while pvt < paths_for_std_test.len() {
-      paths_for_vox_test.push(paths_for_std_test.get(pvt));
-      pvt = pvt + 1;
-    }
 
     let prev_failed: Vec[String] = if test_rerun_failed { read_failed_tests() } else { Vec() };
     if test_rerun_failed && prev_failed.len() == 0 {
@@ -3417,19 +3399,13 @@ fn main() -> i32 {
       }
       return 0;
     }
-    let mut paths_fast: Vec[String] = Vec();
+    let mut paths_for_discover: Vec[String] = Vec();
     let mut pfi: i32 = 0;
     while pfi < paths.len() {
-      paths_fast.push(paths.get(pfi));
+      paths_for_discover.push(paths.get(pfi));
       pfi = pfi + 1;
     }
-    let mut paths_full: Vec[String] = Vec();
-    let mut pni: i32 = 0;
-    while pni < paths.len() {
-      paths_full.push(paths.get(pni));
-      pni = pni + 1;
-    }
-    let discovered: Vec[String] = if test_list_only { discover_tests_cached_fast(paths_fast) } else { discover_tests_cached(paths_full) };
+    let discovered: Vec[String] = if test_list_only { discover_tests_cached_fast(paths_for_discover) } else { discover_tests_cached(paths_for_discover) };
     let mut discovered_for_base: Vec[String] = Vec();
     let mut dbi: i32 = 0;
     while dbi < discovered.len() {
@@ -3479,9 +3455,15 @@ fn main() -> i32 {
       return 0;
     }
 
-    let is_self_std_test: bool = has_std_under_src(paths_for_std_test);
-    let mut files: Vec[ld.SourceFile] = if is_self_std_test { Vec() } else { load_stage1_std() };
-    if !has_vox_under_src(paths_for_vox_test) {
+    let mut paths_for_presence_test: Vec[String] = Vec();
+    let mut ppt: i32 = 0;
+    while ppt < paths.len() {
+      paths_for_presence_test.push(paths.get(ppt));
+      ppt = ppt + 1;
+    }
+    let src_presence_test: SrcPresence = detect_src_presence(paths_for_presence_test);
+    let mut files: Vec[ld.SourceFile] = if src_presence_test.has_std { Vec() } else { load_stage1_std() };
+    if !src_presence_test.has_vox {
       let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
       let mut pvi: i32 = 0;
       while pvi < preload_vox.len() {
