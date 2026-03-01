@@ -291,6 +291,188 @@ fn temp_flag_set(flags0: Vec[bool], tid: i32) -> Vec[bool] {
   return flags;
 }
 
+fn slot_flags_new(max_slot: i32) -> Vec[bool] {
+  let mut flags: Vec[bool] = Vec();
+  let mut i: i32 = 0;
+  while i <= max_slot {
+    flags.push(false);
+    i = i + 1;
+  }
+  return flags;
+}
+
+fn slot_flag_get(flags: Vec[bool], sid: i32) -> bool {
+  if sid < 0 || sid >= flags.len() { return false; }
+  return flags.get(sid);
+}
+
+fn slot_flag_set(flags0: Vec[bool], sid: i32) -> Vec[bool] {
+  if sid < 0 || sid >= flags0.len() { return flags0; }
+  let mut flags: Vec[bool] = flags0;
+  if !flags.get(sid) { flags.set(sid, true); }
+  return flags;
+}
+
+fn mark_live_slot_value(flags0: Vec[bool], v: ir.Value) -> Vec[bool] {
+  return match v {
+    ir.Value.Slot(sid) => slot_flag_set(flags0, sid),
+    _ => flags0,
+  };
+}
+
+fn mark_live_slot_values(flags0: Vec[bool], vals: Vec[ir.Value]) -> Vec[bool] {
+  let mut flags: Vec[bool] = flags0;
+  let mut i: i32 = 0;
+  while i < vals.len() {
+    flags = mark_live_slot_value(flags, vals.get(i));
+    i = i + 1;
+  }
+  return flags;
+}
+
+fn mark_live_slot_reads(flags0: Vec[bool], ins: ir.Instr) -> Vec[bool] {
+  return match ins {
+    ir.Instr.Load(_tid, _ty, sid) => slot_flag_set(flags0, sid),
+    ir.Instr.AddrOfSlot(_tid, _ty, sid) => slot_flag_set(flags0, sid),
+    ir.Instr.AddrOfFieldChain(_tid, _ty, sid, _fields) => slot_flag_set(flags0, sid),
+    ir.Instr.StoreField(sid, _field, _v) => slot_flag_set(flags0, sid),
+    ir.Instr.VecPush(sid, _elem, _v) => slot_flag_set(flags0, sid),
+    ir.Instr.VecInsert(sid, _elem, _idx, _v) => slot_flag_set(flags0, sid),
+    ir.Instr.VecSet(sid, _elem, _idx, _v) => slot_flag_set(flags0, sid),
+    ir.Instr.VecClear(sid) => slot_flag_set(flags0, sid),
+    ir.Instr.VecExtend(sid, other_sid) => slot_flag_set(slot_flag_set(flags0, sid), other_sid),
+    ir.Instr.VecPop(_tid, _elem, sid) => slot_flag_set(flags0, sid),
+    ir.Instr.VecRemove(_tid, _elem, sid, _idx) => slot_flag_set(flags0, sid),
+    ir.Instr.VecLen(_tid, sid) => slot_flag_set(flags0, sid),
+    ir.Instr.VecGet(_tid, _elem, sid, _idx) => slot_flag_set(flags0, sid),
+    _ => flags0,
+  };
+}
+
+fn mark_live_slot_values_from_instr(flags0: Vec[bool], ins: ir.Instr) -> Vec[bool] {
+  return match ins {
+    ir.Instr.Const(_tid, _ty, v) => mark_live_slot_value(flags0, v),
+    ir.Instr.BinOp(_tid, _op, _ty, a, b) => mark_live_slot_value(mark_live_slot_value(flags0, a), b),
+    ir.Instr.Cmp(_tid, _op, _oty, a, b) => mark_live_slot_value(mark_live_slot_value(flags0, a), b),
+    ir.Instr.And(_tid, a, b) => mark_live_slot_value(mark_live_slot_value(flags0, a), b),
+    ir.Instr.Or(_tid, a, b) => mark_live_slot_value(mark_live_slot_value(flags0, a), b),
+    ir.Instr.Not(_tid, a) => mark_live_slot_value(flags0, a),
+    ir.Instr.IntCast(_tid, _dst_ty, _src_ty, v) => mark_live_slot_value(flags0, v),
+    ir.Instr.IntCastChecked(_tid, _dst_ty, _src_ty, v) => mark_live_slot_value(flags0, v),
+    ir.Instr.FloatCast(_tid, _dst_ty, _src_ty, v) => mark_live_slot_value(flags0, v),
+    ir.Instr.RangeCheck(_ty, v, _lo, _hi) => mark_live_slot_value(flags0, v),
+    ir.Instr.SlotDecl(_sid, _ty) => flags0,
+    ir.Instr.Store(_sid, v) => mark_live_slot_value(flags0, v),
+    ir.Instr.Load(_tid, _ty, _sid) => flags0,
+    ir.Instr.GlobalLoad(_tid, _ty, _name) => flags0,
+    ir.Instr.GlobalStore(_ty, _name, v) => mark_live_slot_value(flags0, v),
+    ir.Instr.AddrOfSlot(_tid, _ty, _sid) => flags0,
+    ir.Instr.AddrOfFieldChain(_tid, _ty, _sid, _fields) => flags0,
+    ir.Instr.RefLoad(_tid, _ty, recv) => mark_live_slot_value(flags0, recv),
+    ir.Instr.RefStore(_ty, recv, v) => mark_live_slot_value(mark_live_slot_value(flags0, recv), v),
+    ir.Instr.PtrRead(_tid, _ty, ptr) => mark_live_slot_value(flags0, ptr),
+    ir.Instr.PtrWrite(_ty, ptr, v) => mark_live_slot_value(mark_live_slot_value(flags0, ptr), v),
+    ir.Instr.PtrOffset(_tid, ptr, off) => mark_live_slot_value(mark_live_slot_value(flags0, ptr), off),
+    ir.Instr.StructInit(_tid, _ty, fields) => {
+      let mut flags: Vec[bool] = flags0;
+      let mut i: i32 = 0;
+      while i < fields.len() {
+        flags = mark_live_slot_value(flags, fields.get(i).val);
+        i = i + 1;
+      }
+      flags
+    },
+    ir.Instr.FieldGet(_tid, _ty, recv, _field) => mark_live_slot_value(flags0, recv),
+    ir.Instr.StoreField(_sid, _field, v) => mark_live_slot_value(flags0, v),
+    ir.Instr.EnumInit(_tid, _ty, _variant, payload) => mark_live_slot_values(flags0, payload),
+    ir.Instr.EnumTag(_tid, recv) => mark_live_slot_value(flags0, recv),
+    ir.Instr.EnumPayload(_tid, _ty, recv, _variant, _idx) => mark_live_slot_value(flags0, recv),
+    ir.Instr.VecNew(_tid, _vty, _elem) => flags0,
+    ir.Instr.VecPush(_recv_slot, _elem, v) => mark_live_slot_value(flags0, v),
+    ir.Instr.VecInsert(_recv_slot, _elem, idx, v) => mark_live_slot_value(mark_live_slot_value(flags0, idx), v),
+    ir.Instr.VecSet(_recv_slot, _elem, idx, v) => mark_live_slot_value(mark_live_slot_value(flags0, idx), v),
+    ir.Instr.VecClear(_recv_slot) => flags0,
+    ir.Instr.VecExtend(_recv_slot, _other_slot) => flags0,
+    ir.Instr.VecPop(_tid, _elem, _recv_slot) => flags0,
+    ir.Instr.VecRemove(_tid, _elem, _recv_slot, idx) => mark_live_slot_value(flags0, idx),
+    ir.Instr.VecLen(_tid, _recv_slot) => flags0,
+    ir.Instr.VecGet(_tid, _elem, _recv_slot, idx) => mark_live_slot_value(flags0, idx),
+    ir.Instr.AtomicNew(_tid, _elem_ty, val) => mark_live_slot_value(flags0, val),
+    ir.Instr.AtomicLoad(_tid, _elem_ty, h) => mark_live_slot_value(flags0, h),
+    ir.Instr.AtomicStore(_elem_ty, h, val) => mark_live_slot_value(mark_live_slot_value(flags0, h), val),
+    ir.Instr.AtomicFetchAdd(_tid, _elem_ty, h, delta) => mark_live_slot_value(mark_live_slot_value(flags0, h), delta),
+    ir.Instr.AtomicSwap(_tid, _elem_ty, h, val) => mark_live_slot_value(mark_live_slot_value(flags0, h), val),
+    ir.Instr.AtomicCAS(_tid, _elem_ty, h, expected, desired) => mark_live_slot_value(mark_live_slot_value(mark_live_slot_value(flags0, h), expected), desired),
+    ir.Instr.AtomicDrop(_elem_ty, h) => mark_live_slot_value(flags0, h),
+    ir.Instr.Call(_has_dst, _tid, _ret_ty, _name, args) => mark_live_slot_values(flags0, args),
+  };
+}
+
+fn mark_live_slot_values_from_term(flags0: Vec[bool], t: ir.Term) -> Vec[bool] {
+  return match t {
+    ir.Term.Ret(has, v) => if has { mark_live_slot_value(flags0, v) } else { flags0 },
+    ir.Term.Br(_target) => flags0,
+    ir.Term.CondBr(cond, _then_block, _else_block) => mark_live_slot_value(flags0, cond),
+    ir.Term.Panic(msg) => mark_live_slot_value(flags0, msg),
+  };
+}
+
+fn collect_live_slots_all_reads(f: ir.Func, max_slot: i32) -> Vec[bool] {
+  let mut live: Vec[bool] = slot_flags_new(max_slot);
+  let mut bi: i32 = 0;
+  while bi < f.blocks.len() {
+    let b: ir.Block = f.blocks.get(bi);
+    let mut ii: i32 = 0;
+    while ii < b.instrs.len() {
+      let ins: ir.Instr = b.instrs.get(ii);
+      live = mark_live_slot_reads(live, ins);
+      live = mark_live_slot_values_from_instr(live, ins);
+      ii = ii + 1;
+    }
+    if b.has_term { live = mark_live_slot_values_from_term(live, b.term); }
+    bi = bi + 1;
+  }
+  return live;
+}
+
+fn collect_live_slots_filtered(pool: ir.TyPool, f: ir.Func, max_slot: i32, live_temps: Vec[bool], live_slots0: Vec[bool]) -> Vec[bool] {
+  let mut live: Vec[bool] = slot_flags_new(max_slot);
+  let mut bi: i32 = 0;
+  while bi < f.blocks.len() {
+    let b: ir.Block = f.blocks.get(bi);
+    let mut ii: i32 = 0;
+    while ii < b.instrs.len() {
+      let ins: ir.Instr = b.instrs.get(ii);
+      if !instr_is_dead_temp(pool, ins, live_temps) && !instr_is_dead_slot_instr(ins, live_slots0) {
+        live = mark_live_slot_reads(live, ins);
+        live = mark_live_slot_values_from_instr(live, ins);
+      }
+      ii = ii + 1;
+    }
+    if b.has_term { live = mark_live_slot_values_from_term(live, b.term); }
+    bi = bi + 1;
+  }
+  return live;
+}
+
+fn instr_is_dead_slot_decl(ins: ir.Instr, live_slots: Vec[bool]) -> bool {
+  return match ins {
+    ir.Instr.SlotDecl(sid, _ty) => !slot_flag_get(live_slots, sid),
+    _ => false,
+  };
+}
+
+fn instr_is_dead_slot_store(ins: ir.Instr, live_slots: Vec[bool]) -> bool {
+  return match ins {
+    ir.Instr.Store(sid, _v) => !slot_flag_get(live_slots, sid),
+    _ => false,
+  };
+}
+
+fn instr_is_dead_slot_instr(ins: ir.Instr, live_slots: Vec[bool]) -> bool {
+  return instr_is_dead_slot_decl(ins, live_slots) || instr_is_dead_slot_store(ins, live_slots);
+}
+
 fn mark_live_value(flags0: Vec[bool], v: ir.Value) -> Vec[bool] {
   return match v {
     ir.Value.Temp(tid) => temp_flag_set(flags0, tid),
@@ -461,7 +643,7 @@ fn temp_flags_true_count(flags: Vec[bool]) -> i32 {
   return n;
 }
 
-fn collect_live_temps(pool: ir.TyPool, f: ir.Func, max_temp: i32) -> Vec[bool] {
+fn collect_live_temps(pool: ir.TyPool, f: ir.Func, max_temp: i32, live_slots: Vec[bool]) -> Vec[bool] {
   // Seed from always-kept instruction operands and terminators.
   let mut live: Vec[bool] = temp_flags_new(max_temp);
   let mut bi: i32 = 0;
@@ -470,9 +652,11 @@ fn collect_live_temps(pool: ir.TyPool, f: ir.Func, max_temp: i32) -> Vec[bool] {
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
-      let dst: i32 = instr_dst_temp_id(ins);
-      if dst == -1 || !instr_can_drop_when_dead(pool, ins) {
-        live = mark_live_from_instr_operands(live, ins);
+      if !instr_is_dead_slot_instr(ins, live_slots) {
+        let dst: i32 = instr_dst_temp_id(ins);
+        if dst == -1 || !instr_can_drop_when_dead(pool, ins) {
+          live = mark_live_from_instr_operands(live, ins);
+        }
       }
       ii = ii + 1;
     }
@@ -491,9 +675,11 @@ fn collect_live_temps(pool: ir.TyPool, f: ir.Func, max_temp: i32) -> Vec[bool] {
       let mut i2: i32 = 0;
       while i2 < bb.instrs.len() {
         let ins2: ir.Instr = bb.instrs.get(i2);
-        let dst2: i32 = instr_dst_temp_id(ins2);
-        if dst2 != -1 && temp_flag_get(live, dst2) && instr_can_drop_when_dead(pool, ins2) {
-          live = mark_live_from_instr_operands(live, ins2);
+        if !instr_is_dead_slot_instr(ins2, live_slots) {
+          let dst2: i32 = instr_dst_temp_id(ins2);
+          if dst2 != -1 && temp_flag_get(live, dst2) && instr_can_drop_when_dead(pool, ins2) {
+            live = mark_live_from_instr_operands(live, ins2);
+          }
         }
         i2 = i2 + 1;
       }
@@ -591,7 +777,7 @@ fn collect_locals_all(pool: ir.TyPool, f: ir.Func) -> LocalsResult {
   return l;
 }
 
-fn collect_locals(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool]) -> LocalsResult {
+fn collect_locals(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool], live_slots: Vec[bool]) -> LocalsResult {
   let mut l: LocalsResult = locals0();
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
@@ -599,7 +785,7 @@ fn collect_locals(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool]) -> LocalsR
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
-      if !instr_is_dead_temp(pool, ins, live_temps) {
+      if !instr_is_dead_temp(pool, ins, live_temps) && !instr_is_dead_slot_instr(ins, live_slots) {
         l = locals_add_instr(pool, l, ins);
       }
       ii = ii + 1;
@@ -1259,8 +1445,11 @@ fn enum_variant_tag(en: ir.EnumDecl, variant: String) -> i32 {
 
 pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
   let all_locals: LocalsResult = collect_locals_all(pool, f);
-  let live_temps: Vec[bool] = collect_live_temps(pool, f, all_locals.max_temp);
-  let locals: LocalsResult = collect_locals(pool, f, live_temps);
+  let seed_slots: Vec[bool] = collect_live_slots_all_reads(f, all_locals.max_slot);
+  let live_temps0: Vec[bool] = collect_live_temps(pool, f, all_locals.max_temp, seed_slots);
+  let live_slots: Vec[bool] = collect_live_slots_filtered(pool, f, all_locals.max_slot, live_temps0, seed_slots);
+  let live_temps: Vec[bool] = collect_live_temps(pool, f, all_locals.max_temp, live_slots);
+  let locals: LocalsResult = collect_locals(pool, f, live_temps, live_slots);
   let mut out: Vec[String] = Vec();
 
   // Signature
@@ -1307,7 +1496,7 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
-      if !instr_is_dead_temp(pool, ins, live_temps) {
+      if !instr_is_dead_temp(pool, ins, live_temps) && !instr_is_dead_slot_instr(ins, live_slots) {
         let lines: Vec[String] = emit_instr(pool, p, ins);
         let mut li: i32 = 0;
         while li < lines.len() { out.push(lines.get(li)); li = li + 1; }
