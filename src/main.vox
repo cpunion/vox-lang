@@ -1548,15 +1548,6 @@ fn build_module_queues(tests: Vec[String]) -> Vec[ModuleQueue] {
   return out;
 }
 
-fn has_running_module(rs: Vec[RunningJob], module_idx: i32) -> bool {
-  let mut i: i32 = 0;
-  while i < rs.len() {
-    if rs.get(i).module_idx == module_idx { return true; }
-    i = i + 1;
-  }
-  return false;
-}
-
 fn set_module_queue_next(qs: Vec[ModuleQueue], idx: i32, next: i32) -> Vec[ModuleQueue] {
   let mut out: Vec[ModuleQueue] = Vec();
   let mut i: i32 = 0;
@@ -1570,26 +1561,6 @@ fn set_module_queue_next(qs: Vec[ModuleQueue], idx: i32, next: i32) -> Vec[Modul
     i = i + 1;
   }
   return out;
-}
-
-fn has_pending_queues(qs: Vec[ModuleQueue]) -> bool {
-  let mut i: i32 = 0;
-  while i < qs.len() {
-    let q: ModuleQueue = qs.get(i);
-    if q.next < q.tests.len() { return true; }
-    i = i + 1;
-  }
-  return false;
-}
-
-fn pick_runnable_queue_idx(qs: Vec[ModuleQueue], rs: Vec[RunningJob]) -> i32 {
-  let mut i: i32 = 0;
-  while i < qs.len() {
-    let q: ModuleQueue = qs.get(i);
-    if q.next < q.tests.len() && !has_running_module(rs, i) { return i; }
-    i = i + 1;
-  }
-  return -1;
 }
 
 fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test_name: String, runner_cmd: String, trace: bool) -> RunningJob {
@@ -3736,19 +3707,31 @@ fn main() -> i32 {
     fs.mkdir_p(run_dir);
     while passed + failed < total_tests {
       while !stop_launch && running.len() < test_jobs {
-        let mut queues_for_pick: Vec[ModuleQueue] = Vec();
+        let mut qi: i32 = -1;
         let mut qpi: i32 = 0;
         while qpi < queues.len() {
-          queues_for_pick.push(queues.get(qpi));
-          qpi = qpi + 1;
+          let q: ModuleQueue = queues.get(qpi);
+          if q.next < q.tests.len() {
+            let mut busy: bool = false;
+            let mut rpi: i32 = 0;
+            while rpi < running.len() {
+              if running.get(rpi).module_idx == qpi {
+                busy = true;
+                rpi = running.len();
+              } else {
+                rpi = rpi + 1;
+              }
+            }
+            if !busy {
+              qi = qpi;
+              qpi = queues.len();
+            } else {
+              qpi = qpi + 1;
+            }
+          } else {
+            qpi = qpi + 1;
+          }
         }
-        let mut running_for_pick: Vec[RunningJob] = Vec();
-        let mut rpi: i32 = 0;
-        while rpi < running.len() {
-          running_for_pick.push(running.get(rpi));
-          rpi = rpi + 1;
-        }
-        let qi: i32 = pick_runnable_queue_idx(queues_for_pick, running_for_pick);
         if qi < 0 { break; }
         let q: ModuleQueue = queues.get(qi);
         let name: String = q.tests.get(q.next);
@@ -3758,13 +3741,18 @@ fn main() -> i32 {
         launch_seq = launch_seq + 1;
       }
 
-      let mut queues_for_pending: Vec[ModuleQueue] = Vec();
+      let mut has_pending: bool = false;
       let mut qpn: i32 = 0;
       while qpn < queues.len() {
-        queues_for_pending.push(queues.get(qpn));
-        qpn = qpn + 1;
+        let q: ModuleQueue = queues.get(qpn);
+        if q.next < q.tests.len() {
+          has_pending = true;
+          qpn = queues.len();
+        } else {
+          qpn = qpn + 1;
+        }
       }
-      if running.len() == 0 && (!has_pending_queues(queues_for_pending) || stop_launch) { break; }
+      if running.len() == 0 && (!has_pending || stop_launch) { break; }
 
       let mut next_running: Vec[RunningJob] = Vec();
       let mut completed: bool = false;
