@@ -957,6 +957,37 @@ fn emit_term(t: ir.Term) -> Vec[String] {
   };
 }
 
+fn block_is_jump_target(blocks: Vec[ir.Block], name: String) -> bool {
+  let mut i: i32 = 0;
+  while i < blocks.len() {
+    let b: ir.Block = blocks.get(i);
+    if b.has_term {
+      let hit: bool =
+        match b.term {
+          ir.Term.Br(target) => target == name,
+          ir.Term.CondBr(_cond, t, e) => t == name || e == name,
+          _ => false,
+        };
+      if hit {
+        return true;
+      }
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn single_block_terminates_without_jump(f: ir.Func) -> bool {
+  if f.blocks.len() != 1 { return false; }
+  let b: ir.Block = f.blocks.get(0);
+  if !b.has_term { return false; }
+  return match b.term {
+    ir.Term.Ret(_has, _v) => true,
+    ir.Term.Panic(_msg) => true,
+    _ => false,
+  };
+}
+
 fn find_enum_decl(p: ir.Program, name: String) -> ir.EnumDecl {
   let mut i: i32 = 0;
   while i < p.enums.len() {
@@ -1020,7 +1051,14 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
     let b: ir.Block = f.blocks.get(bi);
-    out.push(c_label_name(b.name).concat(":"));
+    // C function entry starts at the first block; omit its label when no jump can target it.
+    let emit_label: bool =
+      if bi == 0 {
+        if single_block_terminates_without_jump(f) { false } else { block_is_jump_target(f.blocks, b.name) }
+      } else {
+        true
+      };
+    if emit_label { out.push(c_label_name(b.name).concat(":")); }
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let lines: Vec[String] = emit_instr(pool, p, b.instrs.get(ii));
