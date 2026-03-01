@@ -346,9 +346,39 @@ fn instr_dst_temp_id(ins: ir.Instr) -> i32 {
   };
 }
 
-fn instr_can_drop_when_dead(ins: ir.Instr) -> bool {
+fn binop_can_panic(pool: ir.TyPool, op: ir.BinOpKind, ty: i32) -> bool {
+  let t: ir.Ty = ir.ty_pool_get(pool, ty);
+  if !is_int_scalar_kind(t.kind) { return false; }
+  return match op {
+    ir.BinOpKind.Div => true,
+    ir.BinOpKind.Mod => true,
+    ir.BinOpKind.Shl => true,
+    ir.BinOpKind.Shr => true,
+    _ => false,
+  };
+}
+
+fn instr_can_drop_when_dead(pool: ir.TyPool, ins: ir.Instr) -> bool {
   return match ins {
     ir.Instr.Const(_tid, _ty, _v) => true,
+    ir.Instr.BinOp(_tid, op, ty, _a, _b) => !binop_can_panic(pool, op, ty),
+    ir.Instr.Cmp(_tid, _op, _oty, _a, _b) => true,
+    ir.Instr.And(_tid, _a, _b) => true,
+    ir.Instr.Or(_tid, _a, _b) => true,
+    ir.Instr.Not(_tid, _a) => true,
+    ir.Instr.IntCast(_tid, _dst_ty, _src_ty, _v) => true,
+    ir.Instr.FloatCast(_tid, _dst_ty, _src_ty, _v) => true,
+    ir.Instr.Load(_tid, _ty, _sid) => true,
+    ir.Instr.GlobalLoad(_tid, _ty, _name) => true,
+    ir.Instr.AddrOfSlot(_tid, _ty, _sid) => true,
+    ir.Instr.AddrOfFieldChain(_tid, _ty, _sid, _fields) => true,
+    ir.Instr.PtrOffset(_tid, _ptr, _off) => true,
+    ir.Instr.StructInit(_tid, _ty, _fields) => true,
+    ir.Instr.FieldGet(_tid, _ty, _recv, _field) => true,
+    ir.Instr.EnumInit(_tid, _ty, _variant, _payload) => true,
+    ir.Instr.EnumTag(_tid, _recv) => true,
+    ir.Instr.EnumPayload(_tid, _ty, _recv, _variant, _idx) => true,
+    ir.Instr.VecLen(_tid, _recv_slot) => true,
     _ => false,
   };
 }
@@ -421,7 +451,18 @@ fn mark_live_from_term(flags0: Vec[bool], t: ir.Term) -> Vec[bool] {
   };
 }
 
-fn collect_live_temps(f: ir.Func, max_temp: i32) -> Vec[bool] {
+fn temp_flags_true_count(flags: Vec[bool]) -> i32 {
+  let mut n: i32 = 0;
+  let mut i: i32 = 0;
+  while i < flags.len() {
+    if flags.get(i) { n = n + 1; }
+    i = i + 1;
+  }
+  return n;
+}
+
+fn collect_live_temps(pool: ir.TyPool, f: ir.Func, max_temp: i32) -> Vec[bool] {
+  // Seed from always-kept instruction operands and terminators.
   let mut live: Vec[bool] = temp_flags_new(max_temp);
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
@@ -429,19 +470,44 @@ fn collect_live_temps(f: ir.Func, max_temp: i32) -> Vec[bool] {
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
-      live = mark_live_from_instr_operands(live, ins);
+      let dst: i32 = instr_dst_temp_id(ins);
+      if dst == -1 || !instr_can_drop_when_dead(pool, ins) {
+        live = mark_live_from_instr_operands(live, ins);
+      }
       ii = ii + 1;
     }
     if b.has_term { live = mark_live_from_term(live, b.term); }
     bi = bi + 1;
   }
+
+  // Close over temp defs that must be kept because their result is live.
+  let mut prev_live_count: i32 = -1;
+  let mut live_count: i32 = temp_flags_true_count(live);
+  while live_count != prev_live_count {
+    prev_live_count = live_count;
+    let mut b2: i32 = 0;
+    while b2 < f.blocks.len() {
+      let bb: ir.Block = f.blocks.get(b2);
+      let mut i2: i32 = 0;
+      while i2 < bb.instrs.len() {
+        let ins2: ir.Instr = bb.instrs.get(i2);
+        let dst2: i32 = instr_dst_temp_id(ins2);
+        if dst2 != -1 && temp_flag_get(live, dst2) && instr_can_drop_when_dead(pool, ins2) {
+          live = mark_live_from_instr_operands(live, ins2);
+        }
+        i2 = i2 + 1;
+      }
+      b2 = b2 + 1;
+    }
+    live_count = temp_flags_true_count(live);
+  }
   return live;
 }
 
-fn instr_is_dead_temp(ins: ir.Instr, live_temps: Vec[bool]) -> bool {
+fn instr_is_dead_temp(pool: ir.TyPool, ins: ir.Instr, live_temps: Vec[bool]) -> bool {
   let dst: i32 = instr_dst_temp_id(ins);
   if dst == -1 { return false; }
-  return !temp_flag_get(live_temps, dst) && instr_can_drop_when_dead(ins);
+  return !temp_flag_get(live_temps, dst) && instr_can_drop_when_dead(pool, ins);
 }
 
 fn locals_add_slot(l0: LocalsResult, sid: i32, ty: String) -> LocalsResult {
@@ -533,7 +599,7 @@ fn collect_locals(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool]) -> LocalsR
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
-      if !instr_is_dead_temp(ins, live_temps) {
+      if !instr_is_dead_temp(pool, ins, live_temps) {
         l = locals_add_instr(pool, l, ins);
       }
       ii = ii + 1;
@@ -1193,7 +1259,7 @@ fn enum_variant_tag(en: ir.EnumDecl, variant: String) -> i32 {
 
 pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
   let all_locals: LocalsResult = collect_locals_all(pool, f);
-  let live_temps: Vec[bool] = collect_live_temps(f, all_locals.max_temp);
+  let live_temps: Vec[bool] = collect_live_temps(pool, f, all_locals.max_temp);
   let locals: LocalsResult = collect_locals(pool, f, live_temps);
   let mut out: Vec[String] = Vec();
 
@@ -1241,7 +1307,7 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
-      if !instr_is_dead_temp(ins, live_temps) {
+      if !instr_is_dead_temp(pool, ins, live_temps) {
         let lines: Vec[String] = emit_instr(pool, p, ins);
         let mut li: i32 = 0;
         while li < lines.len() { out.push(lines.get(li)); li = li + 1; }
