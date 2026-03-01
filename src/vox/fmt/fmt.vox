@@ -1,6 +1,7 @@
 // Stability: Experimental module API (vox/fmt).
 
 import "std/fs" as fs
+import "std/sys" as sys
 import "vox/internal/source" as srcw
 import "vox/internal/text" as txt
 
@@ -13,6 +14,51 @@ struct ScanState {
 
 fn is_space_tab(b: i32) -> bool { return b == 32 || b == 9; }
 
+fn str_as_ptr(s: String) -> rawptr {
+  return (s as const rawptr) as isize as rawptr;
+}
+
+fn byte_at_unchecked(s: String, idx: i32) -> i32 {
+  let p: rawptr = @ptr_offset(str_as_ptr(s), idx as isize);
+  return @ptr_read[u8](p) as i32;
+}
+
+fn slice_unchecked(s: String, start: i32, end: i32) -> String {
+  let m: i32 = end - start;
+  let out: rawptr = sys.malloc((m as usize) + (1 as usize));
+  if (out as isize) == (0 as isize) { panic("out of memory"); }
+  let srcp: rawptr = @ptr_offset(str_as_ptr(s), start as isize);
+  let _: rawptr = sys.memcpy(out, srcp as const rawptr, m as usize);
+  @ptr_write[u8](@ptr_offset(out, m as isize), 0 as u8);
+  return out as String;
+}
+
+fn range_has_non_ws(s: String, start: i32, end: i32) -> bool {
+  let mut i: i32 = start;
+  while i < end {
+    let b: i32 = byte_at_unchecked(s, i);
+    if !is_space_tab(b) && b != 13 { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn trim_range_to_string(s: String, start: i32, end: i32) -> String {
+  let mut i: i32 = start;
+  while i < end {
+    let b: i32 = byte_at_unchecked(s, i);
+    if !is_space_tab(b) && b != 13 { break; }
+    i = i + 1;
+  }
+  let mut j: i32 = end;
+  while j > i {
+    let b: i32 = byte_at_unchecked(s, j - 1);
+    if !is_space_tab(b) && b != 13 { break; }
+    j = j - 1;
+  }
+  return slice_unchecked(s, i, j);
+}
+
 fn has_suffix(s: String, suf: String) -> bool {
   return txt.has_suffix(s, suf);
 }
@@ -22,9 +68,11 @@ fn has_prefix(s: String, pre: String) -> bool {
 }
 
 fn line_has_non_ws(s: String) -> bool {
+  let n: i32 = s.len();
   let mut i: i32 = 0;
-  while i < s.len() {
-    if !is_space_tab(s.byte_at(i)) && s.byte_at(i) != 13 {
+  while i < n {
+    let b: i32 = byte_at_unchecked(s, i);
+    if !is_space_tab(b) && b != 13 {
       return true;
     }
     i = i + 1;
@@ -41,18 +89,20 @@ fn is_ident_continue_ascii(b: i32) -> bool {
 }
 
 fn trim_left_ws(s: String) -> String {
+  let n: i32 = s.len();
   let mut i: i32 = 0;
-  while i < s.len() && is_space_tab(s.byte_at(i)) {
+  while i < n && is_space_tab(byte_at_unchecked(s, i)) {
     i = i + 1;
   }
-  return s.slice(i, s.len());
+  return s.slice(i, n);
 }
 
 fn trim_right_ws(s: String) -> String {
-  if s.len() == 0 { return s; }
-  let mut i: i32 = s.len() - 1;
+  let n: i32 = s.len();
+  if n == 0 { return s; }
+  let mut i: i32 = n - 1;
   while i >= 0 {
-    let b: i32 = s.byte_at(i);
+    let b: i32 = byte_at_unchecked(s, i);
     if !is_space_tab(b) && b != 13 {
       return s.slice(0, i + 1);
     }
@@ -62,15 +112,16 @@ fn trim_right_ws(s: String) -> String {
 }
 
 fn strip_line_comment(s: String) -> String {
+  let n: i32 = s.len();
   let mut i: i32 = 0;
-  while i < s.len() {
-    if i + 1 < s.len() && s.byte_at(i) == 47 && s.byte_at(i + 1) == 47 {
+  while i < n {
+    if i + 1 < n && byte_at_unchecked(s, i) == 47 && byte_at_unchecked(s, i + 1) == 47 {
       return s.slice(0, i);
     }
-    if s.byte_at(i) == 34 { // string
+    if byte_at_unchecked(s, i) == 34 { // string
       i = i + 1;
-      while i < s.len() {
-        let b: i32 = s.byte_at(i);
+      while i < n {
+        let b: i32 = byte_at_unchecked(s, i);
         if b == 92 { // escape
           i = i + 2;
           continue;
@@ -89,11 +140,12 @@ fn strip_line_comment(s: String) -> String {
 }
 
 fn line_starts_with_continuation_clean(s: String) -> bool {
-  if s.len() == 0 { return false; }
+  let n: i32 = s.len();
+  if n == 0 { return false; }
   // '.' chain line, or infix boolean continuation.
-  if s.byte_at(0) == 46 { return true; } // '.'
-  if s.len() >= 2 && s.byte_at(0) == 124 && s.byte_at(1) == 124 { return true; } // "||"
-  if s.len() >= 2 && s.byte_at(0) == 38 && s.byte_at(1) == 38 { return true; } // "&&"
+  if byte_at_unchecked(s, 0) == 46 { return true; } // '.'
+  if n >= 2 && byte_at_unchecked(s, 0) == 124 && byte_at_unchecked(s, 1) == 124 { return true; } // "||"
+  if n >= 2 && byte_at_unchecked(s, 0) == 38 && byte_at_unchecked(s, 1) == 38 { return true; } // "&&"
   return false;
 }
 
@@ -107,8 +159,8 @@ fn line_ends_with_scope_start_clean(s: String) -> bool {
   let t: String = trim_left_ws(s);
   if t == "return" { return true; }
   let n: i32 = s.len();
-  let c1: i32 = s.byte_at(n - 1);
-  let c0: i32 = if n >= 2 { s.byte_at(n - 2) } else { -1 };
+  let c1: i32 = byte_at_unchecked(s, n - 1);
+  let c0: i32 = if n >= 2 { byte_at_unchecked(s, n - 2) } else { -1 };
   // assignment "=" (not comparison), and match arm "=>".
   if c1 == 61 {
     if c0 == 61 || c0 == 33 || c0 == 60 || c0 == 62 { return false; }
@@ -123,8 +175,9 @@ fn line_ends_with_scope_start(s0: String) -> bool {
 }
 
 fn line_ends_with_char_clean(s: String, ch: i32) -> bool {
-  if s.len() == 0 { return false; }
-  return s.byte_at(s.len() - 1) == ch;
+  let n: i32 = s.len();
+  if n == 0 { return false; }
+  return byte_at_unchecked(s, n - 1) == ch;
 }
 
 fn line_ends_with_char(s0: String, ch: i32) -> bool {
@@ -135,7 +188,7 @@ fn line_ends_with_char(s0: String, ch: i32) -> bool {
 fn line_ends_with_match_arm_arrow_clean(s: String) -> bool {
   if s.len() < 2 { return false; }
   let n: i32 = s.len();
-  return s.byte_at(n - 2) == 61 && s.byte_at(n - 1) == 62; // "=>"
+  return byte_at_unchecked(s, n - 2) == 61 && byte_at_unchecked(s, n - 1) == 62; // "=>"
 }
 
 fn line_ends_with_match_arm_arrow(s0: String) -> bool {
@@ -146,8 +199,8 @@ fn line_ends_with_match_arm_arrow(s0: String) -> bool {
 fn line_ends_with_field_label_colon_clean(s: String) -> bool {
   if s.len() == 0 { return false; }
   let n: i32 = s.len();
-  if s.byte_at(n - 1) != 58 { return false; } // ':'
-  if n >= 2 && s.byte_at(n - 2) == 58 { return false; } // '::'
+  if byte_at_unchecked(s, n - 1) != 58 { return false; } // ':'
+  if n >= 2 && byte_at_unchecked(s, n - 2) == 58 { return false; } // '::'
   return true;
 }
 
@@ -157,10 +210,11 @@ fn line_ends_with_field_label_colon(s0: String) -> bool {
 }
 
 fn line_starts_with_match_keyword_clean(s: String) -> bool {
-  if s.len() < 5 { return false; }
+  let n: i32 = s.len();
+  if n < 5 { return false; }
   if s.slice(0, 5) != "match" { return false; }
-  if s.len() == 5 { return true; }
-  return !is_ident_continue_ascii(s.byte_at(5));
+  if n == 5 { return true; }
+  return !is_ident_continue_ascii(byte_at_unchecked(s, 5));
 }
 
 fn line_starts_with_match_keyword(s0: String) -> bool {
@@ -170,23 +224,27 @@ fn line_starts_with_match_keyword(s0: String) -> bool {
 
 fn line_is_comment_only(s0: String) -> bool {
   let s: String = trim_left_ws(s0);
-  return s.len() >= 2 && s.byte_at(0) == 47 && s.byte_at(1) == 47; // "//"
+  let n: i32 = s.len();
+  return n >= 2 && byte_at_unchecked(s, 0) == 47 && byte_at_unchecked(s, 1) == 47; // "//"
 }
 
 fn starts_with_keyword(s: String, kw: String) -> bool {
-  if s.len() < kw.len() { return false; }
-  if s.slice(0, kw.len()) != kw { return false; }
-  if s.len() == kw.len() { return true; }
-  return !is_ident_continue_ascii(s.byte_at(kw.len()));
+  let s_n: i32 = s.len();
+  let kw_n: i32 = kw.len();
+  if s_n < kw_n { return false; }
+  if s.slice(0, kw_n) != kw { return false; }
+  if s_n == kw_n { return true; }
+  return !is_ident_continue_ascii(byte_at_unchecked(s, kw_n));
 }
 
 fn top_level_decl_kind(s0: String) -> i32 {
   let s: String = trim_left_ws(strip_line_comment(s0));
-  if s.len() == 0 { return 0; }
+  let s_n: i32 = s.len();
+  if s_n == 0 { return 0; }
   if starts_with_keyword(s, "import") { return 1; }
-  if s.byte_at(0) == 64 { return 2; } // '@'
+  if byte_at_unchecked(s, 0) == 64 { return 2; } // '@'
   if starts_with_keyword(s, "pub") {
-    let tail: String = trim_left_ws(s.slice(3, s.len()));
+    let tail: String = trim_left_ws(s.slice(3, s_n));
     if starts_with_keyword(tail, "fn")
       || starts_with_keyword(tail, "const")
       || starts_with_keyword(tail, "struct")
@@ -221,20 +279,19 @@ fn should_insert_top_level_blank(prev_kind: i32, curr_kind: i32) -> bool {
 }
 
 fn next_nonblank_content(src: String, from0: i32) -> String {
+  let src_n: i32 = src.len();
   let mut pos: i32 = from0;
   if pos < 0 { pos = 0; }
-  if pos > src.len() { return ""; }
+  if pos > src_n { return ""; }
   let mut line_start: i32 = pos;
   let mut i: i32 = pos;
-  while i <= src.len() {
-    let at_eof: bool = i == src.len();
-    if !at_eof && src.byte_at(i) != 10 {
+  while i <= src_n {
+    let at_eof: bool = i == src_n;
+    if !at_eof && byte_at_unchecked(src, i) != 10 {
       i = i + 1;
       continue;
     }
-    let raw_line: String = src.slice(line_start, i);
-    let content: String = trim_left_ws(trim_right_ws(raw_line));
-    if line_has_non_ws(content) { return content; }
+    if range_has_non_ws(src, line_start, i) { return trim_range_to_string(src, line_start, i); }
     line_start = i + 1;
     i = i + 1;
   }
@@ -261,8 +318,8 @@ fn line_ends_with_continuation_clean(s: String) -> bool {
   if s.len() == 0 { return false; }
 
   let n: i32 = s.len();
-  let c1: i32 = s.byte_at(n - 1);
-  let c0: i32 = if n >= 2 { s.byte_at(n - 2) } else { -1 };
+  let c1: i32 = byte_at_unchecked(s, n - 1);
+  let c0: i32 = if n >= 2 { byte_at_unchecked(s, n - 2) } else { -1 };
 
   // obvious continue marker: member-chain dot.
   if c1 == 46 { return true; } // "."
@@ -302,15 +359,16 @@ fn repeat_spaces(n0: i32) -> String {
 }
 
 fn scan_line_state(line: String, in_triple0: bool) -> ScanState {
+  let n: i32 = line.len();
   let mut in_triple: bool = in_triple0;
   let mut brace_delta: i32 = 0;
   let mut paren_delta: i32 = 0;
   let mut leading_paren_close: i32 = 0;
   let mut seen_code: bool = false;
   let mut i: i32 = 0;
-  while i < line.len() {
+  while i < n {
     if in_triple {
-      if i + 2 < line.len() && line.byte_at(i) == 34 && line.byte_at(i + 1) == 34 && line.byte_at(i + 2) == 34 {
+      if i + 2 < n && byte_at_unchecked(line, i) == 34 && byte_at_unchecked(line, i + 1) == 34 && byte_at_unchecked(line, i + 2) == 34 {
         in_triple = false;
         i = i + 3;
         continue;
@@ -320,23 +378,23 @@ fn scan_line_state(line: String, in_triple0: bool) -> ScanState {
     }
 
     // line comment
-    if i + 1 < line.len() && line.byte_at(i) == 47 && line.byte_at(i + 1) == 47 {
+    if i + 1 < n && byte_at_unchecked(line, i) == 47 && byte_at_unchecked(line, i + 1) == 47 {
       break;
     }
 
     // triple-quoted string
-    if i + 2 < line.len() && line.byte_at(i) == 34 && line.byte_at(i + 1) == 34 && line.byte_at(i + 2) == 34 {
+    if i + 2 < n && byte_at_unchecked(line, i) == 34 && byte_at_unchecked(line, i + 1) == 34 && byte_at_unchecked(line, i + 2) == 34 {
       in_triple = true;
       i = i + 3;
       continue;
     }
 
     // normal string
-    if line.byte_at(i) == 34 {
+    if byte_at_unchecked(line, i) == 34 {
       seen_code = true;
       i = i + 1;
-      while i < line.len() {
-        let b: i32 = line.byte_at(i);
+      while i < n {
+        let b: i32 = byte_at_unchecked(line, i);
         if b == 92 { // escape
           i = i + 2;
           continue;
@@ -350,7 +408,7 @@ fn scan_line_state(line: String, in_triple0: bool) -> ScanState {
       continue;
     }
 
-    let b: i32 = line.byte_at(i);
+    let b: i32 = byte_at_unchecked(line, i);
     if !seen_code {
       if b == 32 || b == 9 || b == 13 {
         i = i + 1;
@@ -363,22 +421,22 @@ fn scan_line_state(line: String, in_triple0: bool) -> ScanState {
       }
     }
 
-    if line.byte_at(i) == 123 {
+    if b == 123 {
       brace_delta = brace_delta + 1;
       i = i + 1;
       continue;
     }
-    if line.byte_at(i) == 125 {
+    if b == 125 {
       brace_delta = brace_delta - 1;
       i = i + 1;
       continue;
     }
-    if line.byte_at(i) == 40 || line.byte_at(i) == 91 { // '(' or '['
+    if b == 40 || b == 91 { // '(' or '['
       paren_delta = paren_delta + 1;
       i = i + 1;
       continue;
     }
-    if line.byte_at(i) == 41 || line.byte_at(i) == 93 { // ')' or ']'
+    if b == 41 || b == 93 { // ')' or ']'
       paren_delta = paren_delta - 1;
       i = i + 1;
       continue;
@@ -395,8 +453,9 @@ fn scan_line_state(line: String, in_triple0: bool) -> ScanState {
 }
 
 fn line_ends_with_open_brace_clean(s: String) -> bool {
-  if s.len() == 0 { return false; }
-  return s.byte_at(s.len() - 1) == 123; // '{'
+  let n: i32 = s.len();
+  if n == 0 { return false; }
+  return byte_at_unchecked(s, n - 1) == 123; // '{'
 }
 
 fn line_ends_with_open_brace(s0: String) -> bool {
@@ -405,12 +464,13 @@ fn line_ends_with_open_brace(s0: String) -> bool {
 }
 
 fn line_ends_with_open_brace_in_paren_ctx_clean(s: String, paren_depth_before: i32) -> bool {
-  if s.len() == 0 { return false; }
-  if s.byte_at(s.len() - 1) != 123 { return false; } // '{'
+  let n: i32 = s.len();
+  if n == 0 { return false; }
+  if byte_at_unchecked(s, n - 1) != 123 { return false; } // '{'
   let mut depth: i32 = paren_depth_before;
   let mut i: i32 = 0;
-  while i < s.len() - 1 {
-    let b: i32 = s.byte_at(i);
+  while i < n - 1 {
+    let b: i32 = byte_at_unchecked(s, i);
     if b == 40 || b == 91 { depth = depth + 1; } // '(' or '['
     if (b == 41 || b == 93) && depth > 0 { depth = depth - 1; } // ')' or ']'
     i = i + 1;
@@ -424,7 +484,8 @@ fn line_ends_with_open_brace_in_paren_ctx(s0: String, paren_depth_before: i32) -
 }
 
 pub fn format_text(src: String) -> String {
-  if src.len() == 0 { return src; }
+  let src_n: i32 = src.len();
+  if src_n == 0 { return src; }
 
   let mut out_lines: Vec[String] = Vec();
   let mut indent: i32 = 0;
@@ -441,14 +502,14 @@ pub fn format_text(src: String) -> String {
 
   let mut line_start: i32 = 0;
   let mut i: i32 = 0;
-  while i <= src.len() {
-    let at_eof: bool = i == src.len();
-    if !at_eof && src.byte_at(i) != 10 {
+  while i <= src_n {
+    let at_eof: bool = i == src_n;
+    if !at_eof && byte_at_unchecked(src, i) != 10 {
       i = i + 1;
       continue;
     }
 
-    let raw_line: String = src.slice(line_start, i);
+    let raw_line: String = slice_unchecked(src, line_start, i);
     line_start = i + 1;
     i = i + 1;
 
@@ -468,7 +529,7 @@ pub fn format_text(src: String) -> String {
         if line_ends_with_open_brace_in_paren_ctx_clean(content_t_clean_r, paren_before_t) && !line_starts_with_match_keyword_clean(content_t_clean_l) {
           paren_field_scope = paren_field_scope + 1;
         }
-        let is_closing_brace_t: bool = content_t.len() > 0 && content_t.byte_at(0) == 125;
+        let is_closing_brace_t: bool = content_t.len() > 0 && byte_at_unchecked(content_t, 0) == 125;
         if is_closing_brace_t && paren_field_scope > 0 {
           paren_field_scope = paren_field_scope - 1;
         }
@@ -526,7 +587,7 @@ pub fn format_text(src: String) -> String {
     blank_run = 0;
 
     let mut line_indent: i32 = indent;
-    let is_closing_brace: bool = content.len() > 0 && content.byte_at(0) == 125;
+    let is_closing_brace: bool = content.len() > 0 && byte_at_unchecked(content, 0) == 125;
     if is_closing_brace && line_indent > 0 { // '}'
       line_indent = line_indent - 1;
     }
