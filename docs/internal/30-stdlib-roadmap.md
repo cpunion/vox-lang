@@ -26,13 +26,14 @@ Status: active.
   - `Path.clean/join/base_name/dir_name/ext/stem/is_abs` + free-function 同名入口
 - [ ] A44-1 `String -> C` 边界收敛（先迁 payload，后收敛路径类接口）
   - [x] 文档盘点当前边界（见 `docs/internal/17-ffi-interop.md` 3.2）
-  - [x] `std/io::NetConn.try_send` 已切到 `std/sys::socket_send_text(handle, text, len)`，不新增 `c_runtime` 网络符号
+  - [x] `std/net::NetConn.try_send` 已切到 `std/sys::socket_send(handle, text as const rawptr, len)`，不新增 `c_runtime` 网络符号
     - windows-x86 目前为占位实现（FFI 缺少按符号 calling convention，无法安全声明 winsock `send` 的 stdcall 变体）
   - [x] `std/runtime` 已删除 `tcp_send/write_file/path_exists/mkdir_p` 旧 facade，减少 runtime API 面积并避免 std 回退依赖
   - [x] `c_runtime` 已移除未被源码使用的 `vox_builtin_* -> vox_host_*` 兼容导出，进一步收缩 runtime 符号面
   - [x] `c_runtime` 已移除未被源码引用的 `vox_impl_print` 导出与 `vox_host_print` helper（`print` 走 `std/sys::write`）
   - [x] `c_runtime` 已移除未被源码使用的 `vox_host_sys_write` 导出
   - [x] `std/sys::open_read` Windows x86 已从占位切为 `_sopen_s(&mut i32, ...)` 实现（amd64 保持 `_sopen_dispatch`）
+  - [x] `std/sys::socket_send` 已收敛为 `socket_send(handle, const rawptr, len)`，`std/net::NetConn.try_send` 显式做 `String -> ptr+len` 适配
   - [ ] 其余 payload 类接口继续迁移到 `ptr + len`
   - [ ] 路径/命令类接口保留阶段性适配，等待更完整文本/指针模型后继续收敛
 
