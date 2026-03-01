@@ -128,6 +128,8 @@ fn test_codegen_drops_dead_pure_temps() -> () {
   let mut instrs: Vec[ir.Instr] = Vec();
   // Dead const can be dropped.
   instrs.push(ir.Instr.Const(987654, ty_i32, ir.v_int(1)));
+  // Dead pure arithmetic can be dropped.
+  instrs.push(ir.Instr.BinOp(987656, ir.BinOpKind.Add, ty_i32, ir.v_int(1), ir.v_int(2)));
   // Shift can panic on invalid counts; keep it even if result is unused.
   instrs.push(ir.Instr.BinOp(987655, ir.BinOpKind.Shl, ty_i32, ir.v_int(1), ir.v_int(2)));
   let mut blocks: Vec[ir.Block] = Vec();
@@ -142,8 +144,37 @@ fn test_codegen_drops_dead_pure_temps() -> () {
     c_sources: Vec(),
   });
   t.assert(!contains(c, "t987654"));
+  t.assert(!contains(c, "t987656"));
   t.assert(contains(c, "int32_t t987655;"));
   t.assert(contains(c, "shift count out of range"));
+}
+
+fn test_codegen_drops_dead_load_chain_temps() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r_i32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r_i32.pool;
+  let ty_i32: i32 = r_i32.idx;
+
+  let mut p0: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.SlotDecl(0, ty_i32));
+  instrs.push(ir.Instr.Store(0, ir.v_int(7)));
+  // Entire chain is dead and pure, should be removed.
+  instrs.push(ir.Instr.Load(88, ty_i32, 0));
+  instrs.push(ir.Instr.IntCast(89, ty_i32, ty_i32, ir.v_temp(88)));
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(true, ir.v_int(0)) });
+  p0.funcs.push(ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks });
+
+  let c: String = cg.emit_c(p0, cg.EmitOptions {
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+    c_sources: Vec(),
+  });
+  t.assert(!contains(c, "t88"));
+  t.assert(!contains(c, "t89"));
 }
 
 fn test_codegen_smoke_main_i8() -> () {
