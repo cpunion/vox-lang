@@ -1,4 +1,5 @@
 import "std/testing" as t
+import "vox/ir" as ir
 import "vox/parse" as p
 import "vox/typecheck" as tc
 import "vox/irgen" as irgen
@@ -74,6 +75,34 @@ fn test_codegen_smoke_main_i32() -> () {
 fn test_codegen_straight_line_func_skips_entry_label() -> () {
   let c: String = compile_to_c("fn main() -> i32 { let x: i32 = 1; return x; }");
   t.assert(!contains(c, "vox_blk_entry:"));
+}
+
+fn test_codegen_drops_dead_pure_temps() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r_i32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r_i32.pool;
+  let ty_i32: i32 = r_i32.idx;
+
+  let mut p0: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  // Dead const can be dropped.
+  instrs.push(ir.Instr.Const(987654, ty_i32, ir.v_int(1)));
+  // Shift can panic on invalid counts; keep it even if result is unused.
+  instrs.push(ir.Instr.BinOp(987655, ir.BinOpKind.Shl, ty_i32, ir.v_int(1), ir.v_int(2)));
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(true, ir.v_int(0)) });
+  p0.funcs.push(ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks });
+
+  let c: String = cg.emit_c(p0, cg.EmitOptions {
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+    c_sources: Vec(),
+  });
+  t.assert(!contains(c, "t987654"));
+  t.assert(contains(c, "int32_t t987655;"));
+  t.assert(contains(c, "shift count out of range"));
 }
 
 fn test_codegen_smoke_main_i8() -> () {
