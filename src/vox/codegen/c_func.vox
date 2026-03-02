@@ -692,9 +692,13 @@ fn instr_is_dead_temp(pool: ir.TyPool, ins: ir.Instr, live_temps: Vec[bool]) -> 
   return !temp_flag_get(live_temps, dst) && instr_can_drop_when_dead(pool, ins);
 }
 
-fn call_dst_is_live(has_dst: bool, tid: i32, live_temps: Vec[bool]) -> bool {
+fn call_dst_is_read(has_dst: bool, tid: i32, read_temps: Vec[bool]) -> bool {
   if !has_dst { return false; }
-  return temp_flag_get(live_temps, tid);
+  return temp_flag_get(read_temps, tid);
+}
+
+fn temp_is_read(tid: i32, read_temps: Vec[bool]) -> bool {
+  return temp_flag_get(read_temps, tid);
 }
 
 fn locals_add_slot(l0: LocalsResult, sid: i32, ty: String) -> LocalsResult {
@@ -778,7 +782,7 @@ fn collect_locals_all(pool: ir.TyPool, f: ir.Func) -> LocalsResult {
   return l;
 }
 
-fn collect_locals(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool], live_slots: Vec[bool]) -> LocalsResult {
+fn collect_locals(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool], live_slots: Vec[bool], read_temps: Vec[bool]) -> LocalsResult {
   let mut l: LocalsResult = locals0();
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
@@ -789,7 +793,13 @@ fn collect_locals(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool], live_slots
       if !instr_is_dead_temp(pool, ins, live_temps) && !instr_is_dead_slot_instr(ins, live_slots) {
         l = match ins {
           ir.Instr.Call(has_dst, tid, ret_ty, _name, _args) =>
-            locals_add_call(pool, l, call_dst_is_live(has_dst, tid, live_temps), tid, ret_ty),
+            locals_add_call(pool, l, call_dst_is_read(has_dst, tid, read_temps), tid, ret_ty),
+          ir.Instr.VecPop(tid, ty, _sid) =>
+            if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type(pool, ty)) } else { l },
+          ir.Instr.VecRemove(tid, ty, _sid, _idx) =>
+            if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type(pool, ty)) } else { l },
+          ir.Instr.VecGet(tid, ty, _sid, _idx) =>
+            if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type(pool, ty)) } else { l },
           _ => locals_add_instr(pool, l, ins),
         };
       }
@@ -1227,20 +1237,22 @@ fn emit_instr_vec_extend(recv_slot: i32, other_slot: i32) -> Vec[String] {
   return out;
 }
 
-fn emit_instr_vec_pop(pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32) -> Vec[String] {
+fn emit_instr_vec_pop(pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, load_dst: bool) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name(recv_slot)).concat(";"));
   out.push("    if (!vox_v || !vox_v->h) { vox_host_panic(\"vec pop invalid args\"); }");
   out.push("    if (vox_v->len <= 0) { vox_host_panic(\"vec pop on empty vector\"); }");
   out.push("    int32_t vox_idx = vox_v->len - 1;");
-  out.push(vec_elem_load_line(pool, tid, elem, "vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size"));
+  if load_dst {
+    out.push(vec_elem_load_line(pool, tid, elem, "vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size"));
+  }
   out.push("    vox_v->len = vox_idx;");
   out.push("  }");
   return out;
 }
 
-fn emit_instr_vec_remove(pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value) -> Vec[String] {
+fn emit_instr_vec_remove(pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name(recv_slot)).concat(";"));
@@ -1248,7 +1260,9 @@ fn emit_instr_vec_remove(pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, i
   out.push("    int32_t vox_idx = (int32_t)".concat(c_value(idx)).concat(";"));
   out.push("    if (vox_idx < 0 || vox_idx >= vox_v->len) { vox_host_panic(\"vec remove index out of bounds\"); }");
   out.push("    uint8_t* vox_ptr = vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size;");
-  out.push(vec_elem_load_line(pool, tid, elem, "vox_ptr"));
+  if load_dst {
+    out.push(vec_elem_load_line(pool, tid, elem, "vox_ptr"));
+  }
   out.push("    int32_t vox_tail = vox_v->len - vox_idx - 1;");
   out.push("    if (vox_tail > 0) {");
   out.push("      memmove(vox_ptr, vox_ptr + (size_t)vox_v->h->elem_size, (size_t)vox_tail * (size_t)vox_v->h->elem_size);");
@@ -1262,14 +1276,16 @@ fn emit_instr_vec_len(tid: i32, recv_slot: i32) -> Vec[String] {
   return vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_slot_name(recv_slot)).concat(".len;"));
 }
 
-fn emit_instr_vec_get(pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value) -> Vec[String] {
+fn emit_instr_vec_get(pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("  {");
   out.push("    const vox_vec* vox_v = &".concat(c_slot_name(recv_slot)).concat(";"));
   out.push("    if (!vox_v || !vox_v->h) { vox_host_panic(\"vec get invalid args\"); }");
   out.push("    int32_t vox_idx = (int32_t)".concat(c_value(idx)).concat(";"));
   out.push("    if (vox_idx < 0 || vox_idx >= vox_v->len) { vox_host_panic(\"vec index out of bounds\"); }");
-  out.push(vec_elem_load_line(pool, tid, elem, "vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size"));
+  if load_dst {
+    out.push(vec_elem_load_line(pool, tid, elem, "vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size"));
+  }
   out.push("  }");
   return out;
 }
@@ -1296,13 +1312,13 @@ fn c_call_name(p: ir.Program, name: String) -> String {
   return c_fn_name(name);
 }
 
-fn emit_instr_call(p: ir.Program, has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec[ir.Value], live_temps: Vec[bool]) -> Vec[String] {
+fn emit_instr_call(p: ir.Program, has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec[ir.Value], read_temps: Vec[bool]) -> Vec[String] {
   if name == "panic" {
     if args.len() != 1 { panic("panic expects 1 arg"); }
     return vec1("  vox_host_panic(".concat(c_value(args.get(0))).concat(");"));
   }
   let mut s: String = "  ";
-  if call_dst_is_live(has_dst, tid, live_temps) && ret_ty != -1 { s = s.concat(c_temp_name(tid)).concat(" = "); }
+  if call_dst_is_read(has_dst, tid, read_temps) && ret_ty != -1 { s = s.concat(c_temp_name(tid)).concat(" = "); }
   s = s.concat(c_call_name(p, name)).concat("(");
   let mut i: i32 = 0;
   while i < args.len() {
@@ -1314,7 +1330,7 @@ fn emit_instr_call(p: ir.Program, has_dst: bool, tid: i32, ret_ty: i32, name: St
   return vec1(s);
 }
 
-fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr, live_temps: Vec[bool]) -> Vec[String] {
+fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr, read_temps: Vec[bool]) -> Vec[String] {
   return match ins {
     ir.Instr.SlotDecl(_sid, _ty) => vec0(),
 
@@ -1382,10 +1398,10 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr, live_temps: Vec[boo
     ir.Instr.VecSet(recv_slot, elem, idx, v) => emit_instr_vec_set(pool, recv_slot, elem, idx, v),
     ir.Instr.VecClear(recv_slot) => emit_instr_vec_clear(recv_slot),
     ir.Instr.VecExtend(recv_slot, other_slot) => emit_instr_vec_extend(recv_slot, other_slot),
-    ir.Instr.VecPop(tid, elem, recv_slot) => emit_instr_vec_pop(pool, tid, elem, recv_slot),
-    ir.Instr.VecRemove(tid, elem, recv_slot, idx) => emit_instr_vec_remove(pool, tid, elem, recv_slot, idx),
+    ir.Instr.VecPop(tid, elem, recv_slot) => emit_instr_vec_pop(pool, tid, elem, recv_slot, temp_is_read(tid, read_temps)),
+    ir.Instr.VecRemove(tid, elem, recv_slot, idx) => emit_instr_vec_remove(pool, tid, elem, recv_slot, idx, temp_is_read(tid, read_temps)),
     ir.Instr.VecLen(tid, recv_slot) => emit_instr_vec_len(tid, recv_slot),
-    ir.Instr.VecGet(tid, elem, recv_slot, idx) => emit_instr_vec_get(pool, tid, elem, recv_slot, idx),
+    ir.Instr.VecGet(tid, elem, recv_slot, idx) => emit_instr_vec_get(pool, tid, elem, recv_slot, idx, temp_is_read(tid, read_temps)),
 
     ir.Instr.AtomicNew(tid, elem_ty, val) => emit_instr_atomic_new(pool, tid, elem_ty, val),
     ir.Instr.AtomicLoad(tid, elem_ty, h) => vec1("  ".concat(c_temp_name(tid)).concat(" = atomic_load_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value(h)).concat(", memory_order_seq_cst);")),
@@ -1395,8 +1411,27 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr, live_temps: Vec[boo
     ir.Instr.AtomicCAS(tid, elem_ty, h, expected, desired) => emit_instr_atomic_cas(pool, tid, elem_ty, h, expected, desired),
     ir.Instr.AtomicDrop(_elem_ty, h) => vec1("  free((void*)".concat(c_value(h)).concat(");")),
 
-    ir.Instr.Call(has_dst, tid, ret_ty, name, args) => emit_instr_call(p, has_dst, tid, ret_ty, name, args, live_temps),
+    ir.Instr.Call(has_dst, tid, ret_ty, name, args) => emit_instr_call(p, has_dst, tid, ret_ty, name, args, read_temps),
   };
+}
+
+fn collect_read_temps(pool: ir.TyPool, f: ir.Func, max_temp: i32, live_temps: Vec[bool], live_slots: Vec[bool]) -> Vec[bool] {
+  let mut read: Vec[bool] = temp_flags_new(max_temp);
+  let mut bi: i32 = 0;
+  while bi < f.blocks.len() {
+    let b: ir.Block = f.blocks.get(bi);
+    let mut ii: i32 = 0;
+    while ii < b.instrs.len() {
+      let ins: ir.Instr = b.instrs.get(ii);
+      if !instr_is_dead_temp(pool, ins, live_temps) && !instr_is_dead_slot_instr(ins, live_slots) {
+        read = mark_live_from_instr_operands(read, ins);
+      }
+      ii = ii + 1;
+    }
+    if b.has_term { read = mark_live_from_term(read, b.term); }
+    bi = bi + 1;
+  }
+  return read;
 }
 
 fn emit_term_ret(has: bool, v: ir.Value) -> Vec[String] {
@@ -1460,7 +1495,8 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
   let live_temps0: Vec[bool] = collect_live_temps(pool, f, all_locals.max_temp, seed_slots);
   let live_slots: Vec[bool] = collect_live_slots_filtered(pool, f, all_locals.max_slot, live_temps0, seed_slots);
   let live_temps: Vec[bool] = collect_live_temps(pool, f, all_locals.max_temp, live_slots);
-  let locals: LocalsResult = collect_locals(pool, f, live_temps, live_slots);
+  let read_temps: Vec[bool] = collect_read_temps(pool, f, all_locals.max_temp, live_temps, live_slots);
+  let locals: LocalsResult = collect_locals(pool, f, live_temps, live_slots, read_temps);
   let mut out: Vec[String] = Vec();
 
   // Signature
@@ -1520,7 +1556,7 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
       if !instr_is_dead_temp(pool, ins, live_temps) && !instr_is_dead_slot_instr(ins, live_slots) {
-        let lines: Vec[String] = emit_instr(pool, p, ins, live_temps);
+        let lines: Vec[String] = emit_instr(pool, p, ins, read_temps);
         let mut li: i32 = 0;
         while li < lines.len() { out.push(lines.get(li)); li = li + 1; }
       }
