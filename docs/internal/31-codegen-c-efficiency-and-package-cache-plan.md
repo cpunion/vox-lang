@@ -120,6 +120,7 @@ Invalidate unit on any of:
 - 2026-03-02: calls with dead destination temps are now emitted as plain call statements (no `tN = ...`) while preserving side effects, reducing generated C temp noise and `-Wunused-but-set-variable` warnings.
 - 2026-03-02: dead-temp emission now uses exact read-set checks on kept instructions for call destinations, avoiding conservative `live_temps` false positives; selfhost C warning count (`-Wunused-but-set-variable`) dropped from 48 to 9 on macOS arm64.
 - 2026-03-02: in `emit_driver_main`/`emit_test_main` modes, codegen now emits only call-graph-reachable functions (plus `ffi_export` roots), keeping library/no-driver emission unchanged; on macOS arm64 selfhost C dropped from 652,316 to 611,747 lines and `-Wunused-function` warnings from 806 to 428.
+- 2026-03-02: vec allocation/grow scaffolding was hoisted into shared runtime-core inline helpers (`vox_vec_data_new` / `vox_vec_grow_to`) instead of re-emitting the same `malloc/realloc` growth loop at every vec op site; on macOS arm64 selfhost C dropped from 611,747 to 608,407 lines, size from 16,194,675 to 15,829,654 bytes, and `-Wunused-function` warnings from 428 to 3.
 
 ## 5. Validation Gates
 
