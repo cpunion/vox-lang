@@ -130,19 +130,98 @@ fn static_init_value(pool: ir.TyPool, sv: ir.StaticVarDecl) -> String {
 
 struct FindFuncByNameResult { found: bool, f: ir.Func }
 
-fn find_func_by_name(p: ir.Program, name: String) -> FindFuncByNameResult {
+fn find_func_by_name(funcs: Vec[ir.Func], name: String) -> FindFuncByNameResult {
   let mut i: i32 = 0;
-  while i < p.funcs.len() {
-    let f: ir.Func = p.funcs.get(i);
+  while i < funcs.len() {
+    let f: ir.Func = funcs.get(i);
     if f.name == name { return FindFuncByNameResult { found: true, f: f }; }
     i = i + 1;
   }
   return FindFuncByNameResult { found: false, f: ir.Func { name: "", params: Vec(), ret: -1, blocks: Vec() } };
 }
 
-fn emit_ffi_export_wrapper(pool: ir.TyPool, p: ir.Program, ex: ir.FfiExportDecl) -> Vec[String] {
+fn find_func_index_by_name(funcs: Vec[ir.Func], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < funcs.len() {
+    if funcs.get(i).name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn instr_call_target_index(funcs: Vec[ir.Func], ins: ir.Instr) -> i32 {
+  return match ins {
+    ir.Instr.Call(_has_dst, _dst, _ret_ty, name, _args) => find_func_index_by_name(funcs, name),
+    _ => -1,
+  };
+}
+
+fn funcs_for_emit(p: ir.Program, opts: EmitOptions) -> Vec[ir.Func] {
+  let mut funcs0: Vec[ir.Func] = Vec();
+  let mut fi: i32 = 0;
+  while fi < p.funcs.len() {
+    funcs0.push(p.funcs.get(fi));
+    fi = fi + 1;
+  }
+  if !opts.emit_driver_main && !opts.emit_test_main { return funcs0; }
+  let mut keep: Vec[bool] = Vec();
+  let mut i0: i32 = 0;
+  while i0 < funcs0.len() {
+    keep.push(false);
+    i0 = i0 + 1;
+  }
+  let mut q: Vec[i32] = Vec();
+  if opts.emit_driver_main {
+    let midx: i32 = find_func_index_by_name(funcs0, "main");
+    if midx >= 0 { q.push(midx); }
+  }
+  if opts.emit_test_main {
+    let mut ti: i32 = 0;
+    while ti < opts.test_funcs.len() {
+      let idx: i32 = find_func_index_by_name(funcs0, opts.test_funcs.get(ti));
+      if idx >= 0 { q.push(idx); }
+      ti = ti + 1;
+    }
+  }
+  let mut ei: i32 = 0;
+  while ei < p.ffi_exports.len() {
+    let idx: i32 = find_func_index_by_name(funcs0, p.ffi_exports.get(ei).func);
+    if idx >= 0 { q.push(idx); }
+    ei = ei + 1;
+  }
+  let mut qi: i32 = 0;
+  while qi < q.len() {
+    let fi: i32 = q.get(qi);
+    qi = qi + 1;
+    if fi < 0 || fi >= funcs0.len() { continue; }
+    if keep.get(fi) { continue; }
+    keep.set(fi, true);
+    let f: ir.Func = funcs0.get(fi);
+    let mut bi: i32 = 0;
+    while bi < f.blocks.len() {
+      let b: ir.Block = f.blocks.get(bi);
+      let mut ii: i32 = 0;
+      while ii < b.instrs.len() {
+        let ins: ir.Instr = b.instrs.get(ii);
+        let ci: i32 = instr_call_target_index(funcs0, ins);
+        if ci >= 0 && !keep.get(ci) { q.push(ci); }
+        ii = ii + 1;
+      }
+      bi = bi + 1;
+    }
+  }
+  let mut out: Vec[ir.Func] = Vec();
+  let mut i: i32 = 0;
+  while i < funcs0.len() {
+    if keep.get(i) { out.push(funcs0.get(i)); }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn emit_ffi_export_wrapper(pool: ir.TyPool, funcs: Vec[ir.Func], ex: ir.FfiExportDecl) -> Vec[String] {
   if ex.target != "c" && ex.target != "wasm" { panic("c backend does not support ffi_export target: ".concat(ex.target)); }
-  let fr: FindFuncByNameResult = find_func_by_name(p, ex.func);
+  let fr: FindFuncByNameResult = find_func_by_name(funcs, ex.func);
   if !fr.found { panic("ffi export function not found"); }
 
   let f: ir.Func = fr.f;
@@ -189,10 +268,10 @@ fn emit_ffi_export_wrapper(pool: ir.TyPool, p: ir.Program, ex: ir.FfiExportDecl)
   return out;
 }
 
-fn find_main(p: ir.Program) -> MainResult {
+fn find_main(funcs: Vec[ir.Func]) -> MainResult {
   let mut i: i32 = 0;
-  while i < p.funcs.len() {
-    let f: ir.Func = p.funcs.get(i);
+  while i < funcs.len() {
+    let f: ir.Func = funcs.get(i);
     if f.name == "main" { return MainResult { found: true, f: f }; }
     i = i + 1;
   }
@@ -465,6 +544,7 @@ fn emit_runtime_core(out0: Vec[String]) -> Vec[String] {
 
 pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
   let pool: ir.TyPool = p.pool;
+  let funcs: Vec[ir.Func] = funcs_for_emit(p, opts);
   let mut out: Vec[String] = Vec();
   out = emit_c_preamble(out);
   out = emit_c_sources(opts.c_sources);
@@ -512,16 +592,16 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
   if p.ffi_imports.len() != 0 { out.push(""); }
 
   let mut i: i32 = 0;
-  while i < p.funcs.len() {
-    out.push(emit_forward_decl(pool, p.funcs.get(i)));
+  while i < funcs.len() {
+    out.push(emit_forward_decl(pool, funcs.get(i)));
     i = i + 1;
   }
   out.push("");
 
   // Func defs
   let mut j: i32 = 0;
-  while j < p.funcs.len() {
-    out = append_lines(out, emit_func(pool, p, p.funcs.get(j)));
+  while j < funcs.len() {
+    out = append_lines(out, emit_func(pool, p, funcs.get(j)));
     out.push("");
     j = j + 1;
   }
@@ -529,7 +609,7 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
   // C exports wrappers.
   let mut exi: i32 = 0;
   while exi < p.ffi_exports.len() {
-    out = append_lines(out, emit_ffi_export_wrapper(pool, p, p.ffi_exports.get(exi)));
+    out = append_lines(out, emit_ffi_export_wrapper(pool, funcs, p.ffi_exports.get(exi)));
     out.push("");
     exi = exi + 1;
   }
@@ -539,7 +619,7 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
   }
 
   if opts.emit_driver_main {
-    let mr: MainResult = find_main(p);
+    let mr: MainResult = find_main(funcs);
     if !mr.found { panic("missing function main"); }
     out = append_lines(out, emit_driver_main(pool, mr.f, opts.driver_main_kind, p.statics));
   }

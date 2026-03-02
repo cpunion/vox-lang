@@ -119,6 +119,7 @@ Invalidate unit on any of:
 - 2026-03-02: `VecExtend` no longer emits runtime `elem_size` mismatch checks in codegen; IR verify now enforces both slots are declared `Vec` with identical element type, so the copy path remains lean and type-safe by construction.
 - 2026-03-02: calls with dead destination temps are now emitted as plain call statements (no `tN = ...`) while preserving side effects, reducing generated C temp noise and `-Wunused-but-set-variable` warnings.
 - 2026-03-02: dead-temp emission now uses exact read-set checks on kept instructions for call destinations, avoiding conservative `live_temps` false positives; selfhost C warning count (`-Wunused-but-set-variable`) dropped from 48 to 9 on macOS arm64.
+- 2026-03-02: in `emit_driver_main`/`emit_test_main` modes, codegen now emits only call-graph-reachable functions (plus `ffi_export` roots), keeping library/no-driver emission unchanged; on macOS arm64 selfhost C dropped from 652,316 to 611,747 lines and `-Wunused-function` warnings from 806 to 428.
 
 ## 5. Validation Gates
 
