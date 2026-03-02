@@ -123,6 +123,7 @@ Invalidate unit on any of:
 - 2026-03-02: vec allocation/grow scaffolding was hoisted into shared runtime-core inline helpers (`vox_vec_data_new` / `vox_vec_grow_to`) instead of re-emitting the same `malloc/realloc` growth loop at every vec op site; on macOS arm64 selfhost C dropped from 611,747 to 608,407 lines, size from 16,194,675 to 15,829,654 bytes, and `-Wunused-function` warnings from 428 to 3.
 - 2026-03-02: build/test cache key derivation and cache-list formatting replaced several O(n^2) insertion-sort loops with shared O(n log n) sorting paths (`sort_source_files` / `sort_strings`) in `src/main_test_cache.vox`, reducing cache-bookkeeping overhead on large file/test sets without changing cache-key semantics.
 - 2026-03-02: source-file ordering in build/test cache key derivation switched to in-place index shell-sort (`Vec[i32]` over source paths) so cache hashing avoids copying large `SourceFile.text` payloads while keeping deterministic order.
+- 2026-03-02: package source-key aggregation now sorts by `(pkg,path)` index order first and then linearly folds digests per package, removing per-file binary-search/insert maintenance in `build_cache_pkg_source_keys_with_files`.
 
 ## 5. Validation Gates
 
