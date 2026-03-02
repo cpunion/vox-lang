@@ -65,25 +65,54 @@ fn test_build_cache_cpath_for_key(key: String) -> String {
   return test_build_cache_root_for_key("test-pkg-obj-v1", key).concat(".c");
 }
 
-fn test_build_cache_key(files0: Vec[ld.SourceFile], mode: String) -> String {
+struct TestBuildCacheKeyResult {
+  files: Vec[ld.SourceFile],
+  key: String,
+}
+
+fn test_build_cache_key_with_files(files0: Vec[ld.SourceFile], mode: String) -> TestBuildCacheKeyResult {
+  let files: Vec[ld.SourceFile] = files0;
   let mut h: u64 = 1469598103934665603 as u64;
   h = lock_hash_text(h, "test-build-cache-v4\n");
   h = lock_hash_text(h, if host_is_windows() { "windows\n" } else { "posix\n" });
   h = lock_hash_text(h, mode);
   h = lock_hash_text(h, "\n");
 
-  let files: Vec[ld.SourceFile] = sort_source_files(files0);
+  // Keep original `files` ownership for later compile flow by sorting indices only.
+  let mut order: Vec[i32] = Vec();
   let mut i: i32 = 0;
   while i < files.len() {
-    let f: ld.SourceFile = files.get(i);
+    let p: String = files.get(i).path;
+    let mut lo: i32 = 0;
+    let mut hi: i32 = order.len();
+    while lo < hi {
+      let mid: i32 = lo + ((hi - lo) / 2);
+      let oi: i32 = order.get(mid);
+      if files.get(oi).path <= p {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    order.insert(lo, i);
+    i = i + 1;
+  }
+
+  let mut oi: i32 = 0;
+  while oi < order.len() {
+    let f: ld.SourceFile = files.get(order.get(oi));
     h = lock_hash_text(h, "F\n");
     h = lock_hash_text(h, f.path);
     h = lock_hash_text(h, "\n");
     h = lock_hash_text(h, f.text);
     h = lock_hash_text(h, "\n");
-    i = i + 1;
+    oi = oi + 1;
   }
-  return h.to_string();
+  return TestBuildCacheKeyResult { files: files, key: h.to_string() };
+}
+
+fn test_build_cache_key(files0: Vec[ld.SourceFile], mode: String) -> String {
+  return test_build_cache_key_with_files(files0, mode).key;
 }
 
 fn parse_test_build_cache_tests(text: String) -> Vec[String] {
