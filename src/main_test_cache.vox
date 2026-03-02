@@ -226,6 +226,16 @@ struct BuildCacheKeyPair {
   link_key: String,
 }
 
+struct BuildCachePkgSourceKeysResult {
+  files: Vec[ld.SourceFile],
+  keys: Vec[BuildCachePkgKey],
+}
+
+struct BuildCacheKeyPairResult {
+  files: Vec[ld.SourceFile],
+  keys: BuildCacheKeyPair,
+}
+
 fn build_cache_pkg_from_source_path(path: String) -> String {
   let mp: String = ld.mod_path_from_file_path(path);
   if !txt.has_prefix(mp, "pkg/") { return "main"; }
@@ -248,11 +258,34 @@ fn build_cache_pkg_digest_init(pkg: String) -> BuildCachePkgDigest {
 }
 
 fn build_cache_pkg_source_keys(files0: Vec[ld.SourceFile]) -> Vec[BuildCachePkgKey] {
-  let files: Vec[ld.SourceFile] = sort_source_files(files0);
-  let mut ds: Vec[BuildCachePkgDigest] = Vec();
+  return build_cache_pkg_source_keys_with_files(files0).keys;
+}
+
+fn build_cache_pkg_source_keys_with_files(files0: Vec[ld.SourceFile]) -> BuildCachePkgSourceKeysResult {
+  let files: Vec[ld.SourceFile] = files0;
+  let mut order: Vec[i32] = Vec();
   let mut i: i32 = 0;
   while i < files.len() {
-    let f: ld.SourceFile = files.get(i);
+    let p: String = files.get(i).path;
+    let mut lo: i32 = 0;
+    let mut hi: i32 = order.len();
+    while lo < hi {
+      let mid: i32 = lo + ((hi - lo) / 2);
+      let oi: i32 = order.get(mid);
+      if files.get(oi).path <= p {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    order.insert(lo, i);
+    i = i + 1;
+  }
+
+  let mut ds: Vec[BuildCachePkgDigest] = Vec();
+  let mut oi: i32 = 0;
+  while oi < order.len() {
+    let f: ld.SourceFile = files.get(order.get(oi));
     let pkg: String = build_cache_pkg_from_source_path(f.path);
     let mut lo: i32 = 0;
     let mut hi: i32 = ds.len();
@@ -275,7 +308,7 @@ fn build_cache_pkg_source_keys(files0: Vec[ld.SourceFile]) -> Vec[BuildCachePkgK
     d.h = lock_hash_text(d.h, f.text);
     d.h = lock_hash_text(d.h, "\n");
     ds.set(di, d);
-    i = i + 1;
+    oi = oi + 1;
   }
 
   let mut out: Vec[BuildCachePkgKey] = Vec();
@@ -285,7 +318,7 @@ fn build_cache_pkg_source_keys(files0: Vec[ld.SourceFile]) -> Vec[BuildCachePkgK
     out.push(BuildCachePkgKey { pkg: d.pkg, key: d.h.to_string() });
     di = di + 1;
   }
-  return out;
+  return BuildCachePkgSourceKeysResult { files: files, keys: out };
 }
 
 fn build_cache_hash_for_mode_prefix(mode: String) -> u64 {
@@ -368,6 +401,14 @@ fn build_cache_key_pair_from_pkg_source_keys(pkg_source_keys0: Vec[BuildCachePkg
   }
 
   return BuildCacheKeyPair { compile_key: compile_h.to_string(), link_key: link_h.to_string() };
+}
+
+fn build_cache_key_pair_with_files(files0: Vec[ld.SourceFile], compile_mode: String, link_mode: String) -> BuildCacheKeyPairResult {
+  let keys_result: BuildCachePkgSourceKeysResult = build_cache_pkg_source_keys_with_files(files0);
+  return BuildCacheKeyPairResult {
+    files: keys_result.files,
+    keys: build_cache_key_pair_from_pkg_source_keys(keys_result.keys, compile_mode, link_mode),
+  };
 }
 
 fn build_cache_key(files0: Vec[ld.SourceFile], mode: String) -> String {
