@@ -2,63 +2,40 @@ import "std/fs" as fs
 import "vox/loader" as ld
 import "vox/internal/text" as txt
 
-fn merge_source_files(left: Vec[ld.SourceFile], right: Vec[ld.SourceFile]) -> Vec[ld.SourceFile] {
-  let mut out: Vec[ld.SourceFile] = Vec();
-  let mut li: i32 = 0;
-  let mut ri: i32 = 0;
-  while li < left.len() && ri < right.len() {
-    let l: ld.SourceFile = left.get(li);
-    let r: ld.SourceFile = right.get(ri);
-    if l.path <= r.path {
-      out.push(l);
-      li = li + 1;
-    } else {
-      out.push(r);
-      ri = ri + 1;
-    }
-  }
-  while li < left.len() {
-    out.push(left.get(li));
-    li = li + 1;
-  }
-  while ri < right.len() {
-    out.push(right.get(ri));
-    ri = ri + 1;
-  }
-  return out;
-}
-
-fn sort_source_files(xs0: Vec[ld.SourceFile]) -> Vec[ld.SourceFile] {
-  if xs0.len() <= 1 { return xs0; }
-  let mid: i32 = xs0.len() / 2;
-  let mut left: Vec[ld.SourceFile] = Vec();
-  let mut right: Vec[ld.SourceFile] = Vec();
-  let mut i: i32 = 0;
-  while i < xs0.len() {
-    if i < mid {
-      left.push(xs0.get(i));
-    } else {
-      right.push(xs0.get(i));
-    }
-    i = i + 1;
-  }
-  return merge_source_files(sort_source_files(left), sort_source_files(right));
-}
-
-struct SourceFileCopyResult {
+struct SourceFileOrderResult {
   files: Vec[ld.SourceFile],
-  copy: Vec[ld.SourceFile],
+  order: Vec[i32],
 }
 
-fn copy_source_files_keep(xs0: Vec[ld.SourceFile]) -> SourceFileCopyResult {
-  let xs: Vec[ld.SourceFile] = xs0;
-  let mut out: Vec[ld.SourceFile] = Vec();
+fn source_file_order_by_path_with_files(files0: Vec[ld.SourceFile]) -> SourceFileOrderResult {
+  let files: Vec[ld.SourceFile] = files0;
+  let mut order: Vec[i32] = Vec();
   let mut i: i32 = 0;
-  while i < xs.len() {
-    out.push(xs.get(i));
+  while i < files.len() {
+    order.push(i);
     i = i + 1;
   }
-  return SourceFileCopyResult { files: xs, copy: out };
+
+  let mut gap: i32 = order.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < order.len() {
+      let keep: i32 = order.get(oi);
+      let keep_path: String = files.get(keep).path;
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: i32 = order.get(j - gap);
+        if files.get(prev).path <= keep_path { break; }
+        order.set(j, prev);
+        j = j - gap;
+      }
+      order.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+
+  return SourceFileOrderResult { files: files, order: order };
 }
 
 struct StringCopyResult {
@@ -103,9 +80,9 @@ struct TestBuildCacheKeyResult {
 }
 
 fn test_build_cache_key_with_files(files0: Vec[ld.SourceFile], mode: String) -> TestBuildCacheKeyResult {
-  let copied: SourceFileCopyResult = copy_source_files_keep(files0);
-  let files: Vec[ld.SourceFile] = copied.files;
-  let sorted_files: Vec[ld.SourceFile] = sort_source_files(copied.copy);
+  let ordered: SourceFileOrderResult = source_file_order_by_path_with_files(files0);
+  let files: Vec[ld.SourceFile] = ordered.files;
+  let order: Vec[i32] = ordered.order;
   let mut h: u64 = 1469598103934665603 as u64;
   h = lock_hash_text(h, "test-build-cache-v4\n");
   h = lock_hash_text(h, if host_is_windows() { "windows\n" } else { "posix\n" });
@@ -113,8 +90,8 @@ fn test_build_cache_key_with_files(files0: Vec[ld.SourceFile], mode: String) -> 
   h = lock_hash_text(h, "\n");
 
   let mut oi: i32 = 0;
-  while oi < sorted_files.len() {
-    let f: ld.SourceFile = sorted_files.get(oi);
+  while oi < order.len() {
+    let f: ld.SourceFile = files.get(order.get(oi));
     h = lock_hash_text(h, "F\n");
     h = lock_hash_text(h, f.path);
     h = lock_hash_text(h, "\n");
@@ -318,14 +295,14 @@ fn build_cache_pkg_source_keys(files0: Vec[ld.SourceFile]) -> Vec[BuildCachePkgK
 }
 
 fn build_cache_pkg_source_keys_with_files(files0: Vec[ld.SourceFile]) -> BuildCachePkgSourceKeysResult {
-  let copied: SourceFileCopyResult = copy_source_files_keep(files0);
-  let files: Vec[ld.SourceFile] = copied.files;
-  let sorted_files: Vec[ld.SourceFile] = sort_source_files(copied.copy);
+  let ordered: SourceFileOrderResult = source_file_order_by_path_with_files(files0);
+  let files: Vec[ld.SourceFile] = ordered.files;
+  let order: Vec[i32] = ordered.order;
 
   let mut ds: Vec[BuildCachePkgDigest] = Vec();
   let mut oi: i32 = 0;
-  while oi < sorted_files.len() {
-    let f: ld.SourceFile = sorted_files.get(oi);
+  while oi < order.len() {
+    let f: ld.SourceFile = files.get(order.get(oi));
     let pkg: String = build_cache_pkg_from_source_path(f.path);
     let mut lo: i32 = 0;
     let mut hi: i32 = ds.len();
