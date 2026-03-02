@@ -2474,26 +2474,33 @@ fn local_selfhost_print_bin(trace_exec: bool) -> LocalSelfhostPrintBinResult {
 }
 
 fn maybe_handle_local_dev_selfhost(args: Vec[String], trace_exec: bool) -> ToolchainRouteResult {
-  if args.len() == 0 { return tc_route_no(); }
+  let routed: ToolchainRouteWithArgsResult = maybe_handle_local_dev_selfhost_with_args(args, trace_exec);
+  return ToolchainRouteResult { handled: routed.handled, code: routed.code };
+}
+
+fn maybe_handle_local_dev_selfhost_with_args(args0: Vec[String], trace_exec: bool) -> ToolchainRouteWithArgsResult {
+  let args: Vec[String] = args0;
+  if args.len() == 0 { return tc_route_no_with_args(args); }
   if txt.trim_space(proc.getenv("VOX_DEV_SELFHOST_DISABLE")) == "1" {
-    return tc_route_no();
+    return tc_route_no_with_args(args);
   }
   let cmd: String = args.get(0);
-  if !local_dev_selfhost_cmd(cmd) { return tc_route_no(); }
-  if !local_dev_repo_has_selfhost() { return tc_route_no(); }
+  if !local_dev_selfhost_cmd(cmd) { return tc_route_no_with_args(args); }
+  if !local_dev_repo_has_selfhost() { return tc_route_no_with_args(args); }
   if is_local_selfhost_bin(proc.exe_path()) {
-    return tc_route_no();
+    return tc_route_no_with_args(args);
   }
 
   let pr: LocalSelfhostPrintBinResult = local_selfhost_print_bin(trace_exec);
   if !pr.ok {
     print("local selfhost failed\n");
     if pr.err != "" { print(pr.err.concat("\n")); }
-    return tc_route_yes(1);
+    return tc_route_yes_with_args(1);
   }
-  let cmdline: String = tc_build_exec_cmd(pr.bin, args);
+  let mut cmdline: String = tc_build_exec_cmd(pr.bin, args);
+  if trace_exec { cmdline = cmdline.concat(" ").concat(shell_quote("-x")); }
   let rc: i32 = exec_cmd_with_env_once(cmdline, "VOX_DEV_SELFHOST_DISABLE", "1", trace_exec);
-  return tc_route_yes(rc);
+  return tc_route_yes_with_args(rc);
 }
 
 fn resolve_cli_version() -> String {
@@ -2680,25 +2687,11 @@ fn main() -> i32 {
     args = slice_vec(args, 1);
   }
   args = rewrite_run_alias(args);
-  let mut args_for_route: Vec[String] = Vec();
-  let mut ari: i32 = 0;
-  while ari < args.len() {
-    args_for_route.push(args.get(ari));
-    ari = ari + 1;
-  }
-  let mut args_for_local_route: Vec[String] = Vec();
-  let mut arl: i32 = 0;
-  while arl < args_for_route.len() {
-    args_for_local_route.push(args_for_route.get(arl));
-    arl = arl + 1;
-  }
-  if trace_exec {
-    args_for_route.push("-x");
-    args_for_local_route.push("-x");
-  }
-  let routed: ToolchainRouteResult = maybe_handle_toolchain_or_reroute(args_for_route);
+  let routed: ToolchainRouteWithArgsResult = maybe_handle_toolchain_or_reroute_with_args(args, trace_exec);
+  args = routed.args;
   if routed.handled { return routed.code; }
-  let local_routed: ToolchainRouteResult = maybe_handle_local_dev_selfhost(args_for_local_route, trace_exec);
+  let local_routed: ToolchainRouteWithArgsResult = maybe_handle_local_dev_selfhost_with_args(args, trace_exec);
+  args = local_routed.args;
   if local_routed.handled { return local_routed.code; }
   if args.len() < 1 {
     usage();
