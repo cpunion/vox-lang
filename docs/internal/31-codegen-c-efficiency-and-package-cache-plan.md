@@ -115,6 +115,7 @@ Invalidate unit on any of:
 - 2026-02-28: `rolling-selfhost` rebuild check now short-circuits `FORCE_REBUILD` and missing-output cases before source hash computation, avoiding one unnecessary full-tree hash on rebuild-miss paths; bootstrap CLI probing also skips known modern compiler binary names (`vox_rolling`/`vox_tool`/`vox`) and probes only fallback/unknown names.
 - 2026-03-02: `int_cast_checked` pointer-width checks (`i64/u64 -> isize/usize`) now reuse prelude inline helpers (`vox_i64_outside_intptr_range`/`vox_u64_exceeds_uintptr_max`) instead of emitting per-cast `#if` blocks, reducing generated C preprocessor noise in large outputs.
 - 2026-03-02: vec element typed ops now reuse IR elem type in codegen (`VecPush/Insert/Set/Pop/Remove/Get`) and emit typed load/store instead of per-access `memcpy`, while keeping bulk `VecExtend` copy on `memcpy`.
+- 2026-03-02: unsigned integer `+/-/*/&/|/^` lowering now stays in native unsigned width (`u8/u16/u32/u64/usize`) instead of widening every operation to `uint64_t`, reducing redundant casts in generated C.
 
 ## 5. Validation Gates
 
