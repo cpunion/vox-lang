@@ -45,6 +45,38 @@ fn sort_source_files(xs0: Vec[ld.SourceFile]) -> Vec[ld.SourceFile] {
   return merge_source_files(sort_source_files(left), sort_source_files(right));
 }
 
+struct SourceFileCopyResult {
+  files: Vec[ld.SourceFile],
+  copy: Vec[ld.SourceFile],
+}
+
+fn copy_source_files_keep(xs0: Vec[ld.SourceFile]) -> SourceFileCopyResult {
+  let xs: Vec[ld.SourceFile] = xs0;
+  let mut out: Vec[ld.SourceFile] = Vec();
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    out.push(xs.get(i));
+    i = i + 1;
+  }
+  return SourceFileCopyResult { files: xs, copy: out };
+}
+
+struct StringCopyResult {
+  xs: Vec[String],
+  copy: Vec[String],
+}
+
+fn copy_strings_keep(xs0: Vec[String]) -> StringCopyResult {
+  let xs: Vec[String] = xs0;
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    out.push(xs.get(i));
+    i = i + 1;
+  }
+  return StringCopyResult { xs: xs, copy: out };
+}
+
 fn test_build_cache_meta_path(out: String) -> String {
   return out.concat(".test.cache.key");
 }
@@ -71,36 +103,18 @@ struct TestBuildCacheKeyResult {
 }
 
 fn test_build_cache_key_with_files(files0: Vec[ld.SourceFile], mode: String) -> TestBuildCacheKeyResult {
-  let files: Vec[ld.SourceFile] = files0;
+  let copied: SourceFileCopyResult = copy_source_files_keep(files0);
+  let files: Vec[ld.SourceFile] = copied.files;
+  let sorted_files: Vec[ld.SourceFile] = sort_source_files(copied.copy);
   let mut h: u64 = 1469598103934665603 as u64;
   h = lock_hash_text(h, "test-build-cache-v4\n");
   h = lock_hash_text(h, if host_is_windows() { "windows\n" } else { "posix\n" });
   h = lock_hash_text(h, mode);
   h = lock_hash_text(h, "\n");
 
-  // Keep original `files` ownership for later compile flow by sorting indices only.
-  let mut order: Vec[i32] = Vec();
-  let mut i: i32 = 0;
-  while i < files.len() {
-    let p: String = files.get(i).path;
-    let mut lo: i32 = 0;
-    let mut hi: i32 = order.len();
-    while lo < hi {
-      let mid: i32 = lo + ((hi - lo) / 2);
-      let oi: i32 = order.get(mid);
-      if files.get(oi).path <= p {
-        lo = mid + 1;
-      } else {
-        hi = mid;
-      }
-    }
-    order.insert(lo, i);
-    i = i + 1;
-  }
-
   let mut oi: i32 = 0;
-  while oi < order.len() {
-    let f: ld.SourceFile = files.get(order.get(oi));
+  while oi < sorted_files.len() {
+    let f: ld.SourceFile = sorted_files.get(oi);
     h = lock_hash_text(h, "F\n");
     h = lock_hash_text(h, f.path);
     h = lock_hash_text(h, "\n");
@@ -137,29 +151,13 @@ struct FormatTestsResult {
 }
 
 fn format_test_build_cache_tests_with_tests(tests0: Vec[String]) -> FormatTestsResult {
-  let tests: Vec[String] = tests0;
-  let mut order: Vec[i32] = Vec();
-  let mut oi: i32 = 0;
-  while oi < tests.len() {
-    let s: String = tests.get(oi);
-    let mut lo: i32 = 0;
-    let mut hi: i32 = order.len();
-    while lo < hi {
-      let mid: i32 = lo + ((hi - lo) / 2);
-      let mid_i: i32 = order.get(mid);
-      if tests.get(mid_i) <= s {
-        lo = mid + 1;
-      } else {
-        hi = mid;
-      }
-    }
-    order.insert(lo, oi);
-    oi = oi + 1;
-  }
+  let copied: StringCopyResult = copy_strings_keep(tests0);
+  let tests: Vec[String] = copied.xs;
+  let tests_sorted: Vec[String] = sort_strings(copied.copy);
   let mut out: String = "";
   let mut i: i32 = 0;
-  while i < order.len() {
-    out = out.concat(tests.get(order.get(i))).concat("\n");
+  while i < tests_sorted.len() {
+    out = out.concat(tests_sorted.get(i)).concat("\n");
     i = i + 1;
   }
   return FormatTestsResult { tests: tests, text: out };
@@ -176,29 +174,13 @@ struct ContainsAllResult {
 
 fn test_build_cache_contains_all_with_need(hay0: Vec[String], need0: Vec[String]) -> ContainsAllResult {
   let hay: Vec[String] = sort_strings(hay0);
-  let need: Vec[String] = need0;
-  let mut order: Vec[i32] = Vec();
-  let mut oi: i32 = 0;
-  while oi < need.len() {
-    let s: String = need.get(oi);
-    let mut lo: i32 = 0;
-    let mut hi: i32 = order.len();
-    while lo < hi {
-      let mid: i32 = lo + ((hi - lo) / 2);
-      let mid_i: i32 = order.get(mid);
-      if need.get(mid_i) <= s {
-        lo = mid + 1;
-      } else {
-        hi = mid;
-      }
-    }
-    order.insert(lo, oi);
-    oi = oi + 1;
-  }
+  let copied_need: StringCopyResult = copy_strings_keep(need0);
+  let need: Vec[String] = copied_need.xs;
+  let need_sorted: Vec[String] = sort_strings(copied_need.copy);
   let mut i: i32 = 0; // sorted-need idx
   let mut j: i32 = 0; // hay idx
-  while i < order.len() {
-    let want: String = need.get(order.get(i));
+  while i < need_sorted.len() {
+    let want: String = need_sorted.get(i);
     while j < hay.len() && hay.get(j) < want {
       j = j + 1;
     }
@@ -336,30 +318,14 @@ fn build_cache_pkg_source_keys(files0: Vec[ld.SourceFile]) -> Vec[BuildCachePkgK
 }
 
 fn build_cache_pkg_source_keys_with_files(files0: Vec[ld.SourceFile]) -> BuildCachePkgSourceKeysResult {
-  let files: Vec[ld.SourceFile] = files0;
-  let mut order: Vec[i32] = Vec();
-  let mut i: i32 = 0;
-  while i < files.len() {
-    let p: String = files.get(i).path;
-    let mut lo: i32 = 0;
-    let mut hi: i32 = order.len();
-    while lo < hi {
-      let mid: i32 = lo + ((hi - lo) / 2);
-      let oi: i32 = order.get(mid);
-      if files.get(oi).path <= p {
-        lo = mid + 1;
-      } else {
-        hi = mid;
-      }
-    }
-    order.insert(lo, i);
-    i = i + 1;
-  }
+  let copied: SourceFileCopyResult = copy_source_files_keep(files0);
+  let files: Vec[ld.SourceFile] = copied.files;
+  let sorted_files: Vec[ld.SourceFile] = sort_source_files(copied.copy);
 
   let mut ds: Vec[BuildCachePkgDigest] = Vec();
   let mut oi: i32 = 0;
-  while oi < order.len() {
-    let f: ld.SourceFile = files.get(order.get(oi));
+  while oi < sorted_files.len() {
+    let f: ld.SourceFile = sorted_files.get(oi);
     let pkg: String = build_cache_pkg_from_source_path(f.path);
     let mut lo: i32 = 0;
     let mut hi: i32 = ds.len();
@@ -566,29 +532,13 @@ struct FormatDiscoverTestsCacheListResult {
 }
 
 fn format_discover_tests_cache_list_with_tests(tests0: Vec[String]) -> FormatDiscoverTestsCacheListResult {
-  let tests: Vec[String] = tests0;
-  let mut order: Vec[i32] = Vec();
-  let mut oi: i32 = 0;
-  while oi < tests.len() {
-    let s: String = tests.get(oi);
-    let mut lo: i32 = 0;
-    let mut hi: i32 = order.len();
-    while lo < hi {
-      let mid: i32 = lo + ((hi - lo) / 2);
-      let mid_i: i32 = order.get(mid);
-      if tests.get(mid_i) <= s {
-        lo = mid + 1;
-      } else {
-        hi = mid;
-      }
-    }
-    order.insert(lo, oi);
-    oi = oi + 1;
-  }
+  let copied: StringCopyResult = copy_strings_keep(tests0);
+  let tests: Vec[String] = copied.xs;
+  let tests_sorted: Vec[String] = sort_strings(copied.copy);
   let mut out: String = "";
   let mut i: i32 = 0;
-  while i < order.len() {
-    out = out.concat(tests.get(order.get(i))).concat("\n");
+  while i < tests_sorted.len() {
+    out = out.concat(tests_sorted.get(i)).concat("\n");
     i = i + 1;
   }
   return FormatDiscoverTestsCacheListResult { tests: tests, text: out };
