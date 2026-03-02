@@ -1135,19 +1135,29 @@ fn emit_vec_grow_if_needed(out0: Vec[String], vname: String, need_expr: String) 
   return out;
 }
 
-fn emit_instr_vec_push(recv_slot: i32, v: ir.Value) -> Vec[String] {
+fn vec_elem_store_line(pool: ir.TyPool, elem: i32, dst_ptr_expr: String, src_expr: String) -> String {
+  let ety: String = c_type(pool, elem);
+  return "    *((".concat(ety).concat("*)(").concat(dst_ptr_expr).concat(")) = ").concat(src_expr).concat(";");
+}
+
+fn vec_elem_load_line(pool: ir.TyPool, tid: i32, elem: i32, src_ptr_expr: String) -> String {
+  let ety: String = c_type(pool, elem);
+  return "    ".concat(c_temp_name(tid)).concat(" = *((").concat(ety).concat("*)(").concat(src_ptr_expr).concat("));");
+}
+
+fn emit_instr_vec_push(pool: ir.TyPool, recv_slot: i32, elem: i32, v: ir.Value) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name(recv_slot)).concat(";"));
   out.push("    if (!vox_v || !vox_v->h) { vox_host_panic(\"vec push invalid args\"); }");
   out = emit_vec_grow_if_needed(out, "vox_v", "vox_v->len + 1");
-  out.push("    memcpy(vox_v->h->data + (size_t)vox_v->len * (size_t)vox_v->h->elem_size, &".concat(c_value(v)).concat(", (size_t)vox_v->h->elem_size);"));
+  out.push(vec_elem_store_line(pool, elem, "vox_v->h->data + (size_t)vox_v->len * (size_t)vox_v->h->elem_size", c_value(v)));
   out.push("    vox_v->len++;");
   out.push("  }");
   return out;
 }
 
-fn emit_instr_vec_insert(recv_slot: i32, idx: ir.Value, v: ir.Value) -> Vec[String] {
+fn emit_instr_vec_insert(pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name(recv_slot)).concat(";"));
@@ -1160,20 +1170,20 @@ fn emit_instr_vec_insert(recv_slot: i32, idx: ir.Value, v: ir.Value) -> Vec[Stri
   out.push("    if (vox_tail > 0) {");
   out.push("      memmove(vox_ptr + (size_t)vox_v->h->elem_size, vox_ptr, (size_t)vox_tail * (size_t)vox_v->h->elem_size);");
   out.push("    }");
-  out.push("    memcpy(vox_ptr, &".concat(c_value(v)).concat(", (size_t)vox_v->h->elem_size);"));
+  out.push(vec_elem_store_line(pool, elem, "vox_ptr", c_value(v)));
   out.push("    vox_v->len++;");
   out.push("  }");
   return out;
 }
 
-fn emit_instr_vec_set(recv_slot: i32, idx: ir.Value, v: ir.Value) -> Vec[String] {
+fn emit_instr_vec_set(pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name(recv_slot)).concat(";"));
   out.push("    if (!vox_v || !vox_v->h) { vox_host_panic(\"vec set invalid args\"); }");
   out.push("    int32_t vox_idx = (int32_t)".concat(c_value(idx)).concat(";"));
   out.push("    if (vox_idx < 0 || vox_idx >= vox_v->len) { vox_host_panic(\"vec set index out of bounds\"); }");
-  out.push("    memcpy(vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size, &".concat(c_value(v)).concat(", (size_t)vox_v->h->elem_size);"));
+  out.push(vec_elem_store_line(pool, elem, "vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size", c_value(v)));
   out.push("  }");
   return out;
 }
@@ -1207,20 +1217,20 @@ fn emit_instr_vec_extend(recv_slot: i32, other_slot: i32) -> Vec[String] {
   return out;
 }
 
-fn emit_instr_vec_pop(tid: i32, recv_slot: i32) -> Vec[String] {
+fn emit_instr_vec_pop(pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name(recv_slot)).concat(";"));
   out.push("    if (!vox_v || !vox_v->h) { vox_host_panic(\"vec pop invalid args\"); }");
   out.push("    if (vox_v->len <= 0) { vox_host_panic(\"vec pop on empty vector\"); }");
   out.push("    int32_t vox_idx = vox_v->len - 1;");
-  out.push("    memcpy(&".concat(c_temp_name(tid)).concat(", vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size, (size_t)vox_v->h->elem_size);"));
+  out.push(vec_elem_load_line(pool, tid, elem, "vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size"));
   out.push("    vox_v->len = vox_idx;");
   out.push("  }");
   return out;
 }
 
-fn emit_instr_vec_remove(tid: i32, recv_slot: i32, idx: ir.Value) -> Vec[String] {
+fn emit_instr_vec_remove(pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name(recv_slot)).concat(";"));
@@ -1228,7 +1238,7 @@ fn emit_instr_vec_remove(tid: i32, recv_slot: i32, idx: ir.Value) -> Vec[String]
   out.push("    int32_t vox_idx = (int32_t)".concat(c_value(idx)).concat(";"));
   out.push("    if (vox_idx < 0 || vox_idx >= vox_v->len) { vox_host_panic(\"vec remove index out of bounds\"); }");
   out.push("    uint8_t* vox_ptr = vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size;");
-  out.push("    memcpy(&".concat(c_temp_name(tid)).concat(", vox_ptr, (size_t)vox_v->h->elem_size);"));
+  out.push(vec_elem_load_line(pool, tid, elem, "vox_ptr"));
   out.push("    int32_t vox_tail = vox_v->len - vox_idx - 1;");
   out.push("    if (vox_tail > 0) {");
   out.push("      memmove(vox_ptr, vox_ptr + (size_t)vox_v->h->elem_size, (size_t)vox_tail * (size_t)vox_v->h->elem_size);");
@@ -1242,14 +1252,14 @@ fn emit_instr_vec_len(tid: i32, recv_slot: i32) -> Vec[String] {
   return vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_slot_name(recv_slot)).concat(".len;"));
 }
 
-fn emit_instr_vec_get(tid: i32, recv_slot: i32, idx: ir.Value) -> Vec[String] {
+fn emit_instr_vec_get(pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   out.push("  {");
   out.push("    const vox_vec* vox_v = &".concat(c_slot_name(recv_slot)).concat(";"));
   out.push("    if (!vox_v || !vox_v->h) { vox_host_panic(\"vec get invalid args\"); }");
   out.push("    int32_t vox_idx = (int32_t)".concat(c_value(idx)).concat(";"));
   out.push("    if (vox_idx < 0 || vox_idx >= vox_v->len) { vox_host_panic(\"vec index out of bounds\"); }");
-  out.push("    memcpy(&".concat(c_temp_name(tid)).concat(", vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size, (size_t)vox_v->h->elem_size);"));
+  out.push(vec_elem_load_line(pool, tid, elem, "vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size"));
   out.push("  }");
   return out;
 }
@@ -1357,15 +1367,15 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr) -> Vec[String] {
         .concat(";")),
 
     ir.Instr.VecNew(tid, _vty, elem) => emit_instr_vec_new(pool, tid, elem),
-    ir.Instr.VecPush(recv_slot, _elem, v) => emit_instr_vec_push(recv_slot, v),
-    ir.Instr.VecInsert(recv_slot, _elem, idx, v) => emit_instr_vec_insert(recv_slot, idx, v),
-    ir.Instr.VecSet(recv_slot, _elem, idx, v) => emit_instr_vec_set(recv_slot, idx, v),
+    ir.Instr.VecPush(recv_slot, elem, v) => emit_instr_vec_push(pool, recv_slot, elem, v),
+    ir.Instr.VecInsert(recv_slot, elem, idx, v) => emit_instr_vec_insert(pool, recv_slot, elem, idx, v),
+    ir.Instr.VecSet(recv_slot, elem, idx, v) => emit_instr_vec_set(pool, recv_slot, elem, idx, v),
     ir.Instr.VecClear(recv_slot) => emit_instr_vec_clear(recv_slot),
     ir.Instr.VecExtend(recv_slot, other_slot) => emit_instr_vec_extend(recv_slot, other_slot),
-    ir.Instr.VecPop(tid, _elem, recv_slot) => emit_instr_vec_pop(tid, recv_slot),
-    ir.Instr.VecRemove(tid, _elem, recv_slot, idx) => emit_instr_vec_remove(tid, recv_slot, idx),
+    ir.Instr.VecPop(tid, elem, recv_slot) => emit_instr_vec_pop(pool, tid, elem, recv_slot),
+    ir.Instr.VecRemove(tid, elem, recv_slot, idx) => emit_instr_vec_remove(pool, tid, elem, recv_slot, idx),
     ir.Instr.VecLen(tid, recv_slot) => emit_instr_vec_len(tid, recv_slot),
-    ir.Instr.VecGet(tid, _elem, recv_slot, idx) => emit_instr_vec_get(tid, recv_slot, idx),
+    ir.Instr.VecGet(tid, elem, recv_slot, idx) => emit_instr_vec_get(pool, tid, elem, recv_slot, idx),
 
     ir.Instr.AtomicNew(tid, elem_ty, val) => emit_instr_atomic_new(pool, tid, elem_ty, val),
     ir.Instr.AtomicLoad(tid, elem_ty, h) => vec1("  ".concat(c_temp_name(tid)).concat(" = atomic_load_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value(h)).concat(", memory_order_seq_cst);")),
