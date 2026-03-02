@@ -125,6 +125,7 @@ Invalidate unit on any of:
 - 2026-03-02: source-file ordering in build/test cache key derivation switched to in-place index shell-sort (`Vec[i32]` over source paths) so cache hashing avoids copying large `SourceFile.text` payloads while keeping deterministic order.
 - 2026-03-02: package source-key aggregation now sorts by `(pkg,path)` index order first and then linearly folds digests per package, removing per-file binary-search/insert maintenance in `build_cache_pkg_source_keys_with_files`.
 - 2026-03-02: removed unused one-hop cache wrappers (`format_*` and `discover_tests_cached*` passthroughs) in `src/main_test_cache.vox` to keep helper surface tighter and reduce generated compiler C function noise.
+- 2026-03-02: removed additional cache passthrough wrappers (`test_build_cache_hit` / `write_test_build_cache`) and switched tests to direct `*_with_tests` calls, continuing forwarding-wrapper shrink in cache utilities.
 
 ## 5. Validation Gates
 
