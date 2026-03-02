@@ -169,6 +169,50 @@ fn verify_id_nonneg(id: i32, what: String) -> VerifyResult {
   return verify_ok();
 }
 
+struct SlotDeclTyResult {
+  found: bool,
+  ok: bool,
+  ty: i32,
+  err: String,
+}
+
+fn slot_decl_ty_in_func(f: Func, slot: i32) -> SlotDeclTyResult {
+  let mut found: bool = false;
+  let mut ty: i32 = -1;
+  let mut bi: i32 = 0;
+  while bi < f.blocks.len() {
+    let b: Block = f.blocks.get(bi);
+    let mut ii: i32 = 0;
+    while ii < b.instrs.len() {
+      let ins: Instr = b.instrs.get(ii);
+      let sid: i32 = match ins {
+        Instr.SlotDecl(slot_id, _sty) => slot_id,
+        _ => -1,
+      };
+      if sid == slot {
+        let sty: i32 = match ins {
+          Instr.SlotDecl(_slot_id, slot_ty) => slot_ty,
+          _ => -1,
+        };
+        if !found {
+          found = true;
+          ty = sty;
+        } else if ty != sty {
+          return SlotDeclTyResult {
+            found: true,
+            ok: false,
+            ty: ty,
+            err: "inconsistent slot_decl types for slot ".concat(slot.to_string()),
+          };
+        }
+      }
+      ii = ii + 1;
+    }
+    bi = bi + 1;
+  }
+  return SlotDeclTyResult { found: found, ok: true, ty: ty, err: "" };
+}
+
 fn binop_kind_text(op: BinOpKind) -> String {
   return
     match op {
@@ -530,7 +574,34 @@ fn verify_instr(p: Program, f: Func, b: Block, inst: Instr) -> VerifyResult {
       Instr.VecExtend(slot, other_slot) => {
         let vs: VerifyResult = verify_id_nonneg(slot, "vec_extend slot");
         if !vs.ok { return vs; }
-        verify_id_nonneg(other_slot, "vec_extend other_slot")
+        let vo: VerifyResult = verify_id_nonneg(other_slot, "vec_extend other_slot");
+        if !vo.ok { return vo; }
+        let left: SlotDeclTyResult = slot_decl_ty_in_func(f, slot);
+        if !left.ok { return verify_err(left.err); }
+        if !left.found {
+          return verify_err("vec_extend slot missing slot_decl: ".concat(slot.to_string()));
+        }
+        let right: SlotDeclTyResult = slot_decl_ty_in_func(f, other_slot);
+        if !right.ok { return verify_err(right.err); }
+        if !right.found {
+          return verify_err("vec_extend other_slot missing slot_decl: ".concat(other_slot.to_string()));
+        }
+        let vl: VerifyResult = verify_ty_idx(pool, left.ty, "vec_extend slot_decl ty");
+        if !vl.ok { return vl; }
+        let vr: VerifyResult = verify_ty_idx(pool, right.ty, "vec_extend other_slot_decl ty");
+        if !vr.ok { return vr; }
+        let lt: Ty = ty_pool_get(pool, left.ty);
+        let rt: Ty = ty_pool_get(pool, right.ty);
+        if lt.kind != TyKind.Vec {
+          return verify_err("vec_extend slot_decl type must be vec");
+        }
+        if rt.kind != TyKind.Vec {
+          return verify_err("vec_extend other_slot_decl type must be vec");
+        }
+        if lt.elem != rt.elem {
+          return verify_err("vec_extend slot elem type mismatch");
+        }
+        verify_ok()
       },
       Instr.VecPop(dst, ty, slot) => {
         let vd: VerifyResult = verify_id_nonneg(dst, "vec_pop dst");
