@@ -118,6 +118,7 @@ Invalidate unit on any of:
 - 2026-03-02: unsigned integer `+/-/*/&/|/^` lowering now stays in native unsigned width (`u8/u16/u32/u64/usize`) instead of widening every operation to `uint64_t`, reducing redundant casts in generated C.
 - 2026-03-02: `VecExtend` no longer emits runtime `elem_size` mismatch checks in codegen; IR verify now enforces both slots are declared `Vec` with identical element type, so the copy path remains lean and type-safe by construction.
 - 2026-03-02: calls with dead destination temps are now emitted as plain call statements (no `tN = ...`) while preserving side effects, reducing generated C temp noise and `-Wunused-but-set-variable` warnings.
+- 2026-03-02: dead-temp emission now uses exact read-set checks on kept instructions for call destinations, avoiding conservative `live_temps` false positives; selfhost C warning count (`-Wunused-but-set-variable`) dropped from 48 to 9 on macOS arm64.
 
 ## 5. Validation Gates
 
