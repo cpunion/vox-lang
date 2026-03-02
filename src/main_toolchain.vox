@@ -5,9 +5,23 @@ import "vox/internal/text" as txt
 
 struct ToolchainRouteResult { handled: bool, code: i32 }
 
+struct ToolchainRouteWithArgsResult {
+  args: Vec[String],
+  handled: bool,
+  code: i32,
+}
+
 fn tc_route_no() -> ToolchainRouteResult { return ToolchainRouteResult { handled: false, code: 0 }; }
 
 fn tc_route_yes(code: i32) -> ToolchainRouteResult { return ToolchainRouteResult { handled: true, code: code }; }
+
+fn tc_route_no_with_args(args: Vec[String]) -> ToolchainRouteWithArgsResult {
+  return ToolchainRouteWithArgsResult { args: args, handled: false, code: 0 };
+}
+
+fn tc_route_yes_with_args(code: i32) -> ToolchainRouteWithArgsResult {
+  return ToolchainRouteWithArgsResult { args: Vec(), handled: true, code: code };
+}
 
 fn usage_toolchain() -> () {
   let bin: String = path_base_name(proc.exe_path());
@@ -353,31 +367,46 @@ fn tc_should_route_cmd(cmd: String) -> bool {
       || cmd == "lsp";
 }
 
-fn maybe_handle_toolchain_or_reroute(args: Vec[String]) -> ToolchainRouteResult {
-  if args.len() == 0 { return tc_route_no(); }
+fn maybe_handle_toolchain_or_reroute_with_args(args0: Vec[String], trace_exec: bool) -> ToolchainRouteWithArgsResult {
+  let args: Vec[String] = args0;
+  if args.len() == 0 { return tc_route_no_with_args(args); }
   let cmd: String = args.get(0);
 
   if cmd == "toolchain" {
-    return tc_handle_toolchain_cmd(args);
+    let mut args_toolchain: Vec[String] = Vec();
+    let mut iat: i32 = 0;
+    while iat < args.len() {
+      args_toolchain.push(args.get(iat));
+      iat = iat + 1;
+    }
+    if trace_exec { args_toolchain.push("-x"); }
+    let routed: ToolchainRouteResult = tc_handle_toolchain_cmd(args_toolchain);
+    return ToolchainRouteWithArgsResult { args: Vec(), handled: routed.handled, code: routed.code };
   }
 
-  if !tc_should_route_cmd(cmd) { return tc_route_no(); }
-  if proc.getenv("VOX_TOOLCHAIN_DISABLE") == "1" { return tc_route_no(); }
+  if !tc_should_route_cmd(cmd) { return tc_route_no_with_args(args); }
+  if proc.getenv("VOX_TOOLCHAIN_DISABLE") == "1" { return tc_route_no_with_args(args); }
 
   let version: String = tc_selected_version();
-  if version == "" { return tc_route_no(); }
+  if version == "" { return tc_route_no_with_args(args); }
 
   let selected_bin: String = tc_install_bin(version);
   let self_bin: String = normalize_host_fs_path(proc.exe_path());
-  if normalize_host_fs_path(selected_bin) == self_bin { return tc_route_no(); }
+  if normalize_host_fs_path(selected_bin) == self_bin { return tc_route_no_with_args(args); }
 
   if !fs.exists(selected_bin) {
     print("toolchain ".concat(version).concat(" is not installed\n"));
     print("run: ".concat(path_base_name(proc.exe_path())).concat(" toolchain install ").concat(version).concat("\n"));
-    return tc_route_yes(1);
+    return tc_route_yes_with_args(1);
   }
 
-  let cmdline: String = tc_build_exec_cmd(selected_bin, args);
+  let mut cmdline: String = tc_build_exec_cmd(selected_bin, args);
+  if trace_exec { cmdline = cmdline.concat(" ").concat(shell_quote("-x")); }
   let rc: i32 = proc.exec(cmdline);
-  return tc_route_yes(rc);
+  return tc_route_yes_with_args(rc);
+}
+
+fn maybe_handle_toolchain_or_reroute(args: Vec[String]) -> ToolchainRouteResult {
+  let routed: ToolchainRouteWithArgsResult = maybe_handle_toolchain_or_reroute_with_args(args, false);
+  return ToolchainRouteResult { handled: routed.handled, code: routed.code };
 }
