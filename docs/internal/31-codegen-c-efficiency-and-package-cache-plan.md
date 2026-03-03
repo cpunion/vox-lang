@@ -130,6 +130,7 @@ Invalidate unit on any of:
 - 2026-03-03: removed two remaining unused cache passthrough wrappers (`test_build_cache_contains_all` / `write_discover_tests_cache`) to keep cache helper surface minimal and reduce generated forwarding-function noise.
 - 2026-03-03: codegen branch lowering now elides fallthrough jumps (`Br`/`CondBr` to the immediate next block) and only keeps labels for actually emitted jump targets, reducing redundant `goto`/label noise in generated C.
 - 2026-03-03: jump-target label marking in C codegen now precomputes a sorted unique target set once per function and does binary-search lookup per block, removing repeated full-block scans in `emit_func` hot path.
+- 2026-03-03: `CondBr` with identical targets now lowers to a single `goto` (or empty on fallthrough) instead of emitting redundant `if (...) goto X; else goto X;`.
 
 ## 5. Validation Gates
 
