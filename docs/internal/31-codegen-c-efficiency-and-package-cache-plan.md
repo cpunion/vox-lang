@@ -129,6 +129,7 @@ Invalidate unit on any of:
 - 2026-03-02: removed cache key passthrough wrappers (`test_build_cache_key` / `build_cache_pkg_source_keys` / `build_cache_key`) and switched cache tests to direct `*_with_files` + `.keys` / `.key` use.
 - 2026-03-03: removed two remaining unused cache passthrough wrappers (`test_build_cache_contains_all` / `write_discover_tests_cache`) to keep cache helper surface minimal and reduce generated forwarding-function noise.
 - 2026-03-03: codegen branch lowering now elides fallthrough jumps (`Br`/`CondBr` to the immediate next block) and only keeps labels for actually emitted jump targets, reducing redundant `goto`/label noise in generated C.
+- 2026-03-03: jump-target label marking in C codegen now precomputes a sorted unique target set once per function and does binary-search lookup per block, removing repeated full-block scans in `emit_func` hot path.
 
 ## 5. Validation Gates
 
