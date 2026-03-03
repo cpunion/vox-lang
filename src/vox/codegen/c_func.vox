@@ -1524,10 +1524,9 @@ fn block_index_by_name_ordered(blocks: Vec[ir.Block], order: Vec[i32], name: Str
   return -1;
 }
 
-fn collect_reachable_blocks(blocks: Vec[ir.Block]) -> Vec[ir.Block] {
-  if blocks.len() == 0 { return blocks; }
+fn collect_reachable_block_indices(blocks: Vec[ir.Block], order: Vec[i32]) -> Vec[i32] {
+  if blocks.len() == 0 { return Vec(); }
 
-  let order: Vec[i32] = block_name_order(blocks);
   let mut queue: Vec[i32] = Vec();
   let mut visited: Vec[bool] = Vec();
   let mut queued: Vec[bool] = Vec();
@@ -1575,29 +1574,48 @@ fn collect_reachable_blocks(blocks: Vec[ir.Block]) -> Vec[ir.Block] {
     }
   }
 
-  let mut out: Vec[ir.Block] = Vec();
+  let mut out: Vec[i32] = Vec();
   let mut i: i32 = 0;
   while i < blocks.len() {
-    if visited.get(i) { out.push(blocks.get(i)); }
+    if visited.get(i) { out.push(i); }
     i = i + 1;
   }
   return out;
 }
 
-fn collect_jump_target_flags(blocks: Vec[ir.Block]) -> Vec[bool] {
+fn collect_jump_target_flags(blocks: Vec[ir.Block], order: Vec[i32], reachable: Vec[i32]) -> Vec[bool] {
   let mut flags: Vec[bool] = Vec();
   let mut i0: i32 = 0;
-  while i0 < blocks.len() {
+  while i0 < reachable.len() {
     flags.push(false);
     i0 = i0 + 1;
   }
-  if blocks.len() == 0 { return flags; }
+  if reachable.len() == 0 { return flags; }
 
-  let order: Vec[i32] = block_name_order(blocks);
-  let mut i: i32 = 0;
-  while i < blocks.len() {
-    let b: ir.Block = blocks.get(i);
-    let fallthrough: String = if i + 1 < blocks.len() { blocks.get(i + 1).name } else { "" };
+  let mut reachable_pos: Vec[i32] = Vec();
+  let mut pi0: i32 = 0;
+  while pi0 < blocks.len() {
+    reachable_pos.push(-1);
+    pi0 = pi0 + 1;
+  }
+  let mut ri0: i32 = 0;
+  while ri0 < reachable.len() {
+    let bi0: i32 = reachable.get(ri0);
+    if bi0 >= 0 && bi0 < blocks.len() {
+      reachable_pos.set(bi0, ri0);
+    }
+    ri0 = ri0 + 1;
+  }
+
+  let mut ri: i32 = 0;
+  while ri < reachable.len() {
+    let bi: i32 = reachable.get(ri);
+    if bi < 0 || bi >= blocks.len() {
+      ri = ri + 1;
+      continue;
+    }
+    let b: ir.Block = blocks.get(bi);
+    let fallthrough: String = if ri + 1 < reachable.len() { blocks.get(reachable.get(ri + 1)).name } else { "" };
     if b.has_term {
       let target_a: String = match b.term {
         ir.Term.Br(target) => if target != fallthrough { target } else { "" },
@@ -1606,7 +1624,10 @@ fn collect_jump_target_flags(blocks: Vec[ir.Block]) -> Vec[bool] {
       };
       if target_a != fallthrough && target_a != "" {
         let idx_a: i32 = block_index_by_name_ordered(blocks, order, target_a);
-        if idx_a >= 0 { flags.set(idx_a, true); }
+        if idx_a >= 0 {
+          let pos_a: i32 = reachable_pos.get(idx_a);
+          if pos_a >= 0 { flags.set(pos_a, true); }
+        }
       }
       let target_b: String = match b.term {
         ir.Term.CondBr(_cond, t, e) => if t == fallthrough || e == fallthrough { "" } else { e },
@@ -1614,10 +1635,13 @@ fn collect_jump_target_flags(blocks: Vec[ir.Block]) -> Vec[bool] {
       };
       if target_b != "" {
         let idx_b: i32 = block_index_by_name_ordered(blocks, order, target_b);
-        if idx_b >= 0 { flags.set(idx_b, true); }
+        if idx_b >= 0 {
+          let pos_b: i32 = reachable_pos.get(idx_b);
+          if pos_b >= 0 { flags.set(pos_b, true); }
+        }
       }
     }
-    i = i + 1;
+    ri = ri + 1;
   }
   return flags;
 }
@@ -1735,13 +1759,15 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]
   if locals.max_slot != -1 || locals.max_temp != -1 { out.push(""); }
 
   // Blocks
-  let blocks: Vec[ir.Block] = collect_reachable_blocks(f.blocks);
-  let jump_target_flags: Vec[bool] = collect_jump_target_flags(blocks);
-  let mut bi: i32 = 0;
-  while bi < blocks.len() {
-    let b: ir.Block = blocks.get(bi);
+  let block_order: Vec[i32] = block_name_order(f.blocks);
+  let block_indices: Vec[i32] = collect_reachable_block_indices(f.blocks, block_order);
+  let jump_target_flags: Vec[bool] = collect_jump_target_flags(f.blocks, block_order, block_indices);
+  let mut ri: i32 = 0;
+  while ri < block_indices.len() {
+    let bi: i32 = block_indices.get(ri);
+    let b: ir.Block = f.blocks.get(bi);
     // Emit labels only for real jump targets.
-    let emit_label: bool = jump_target_flags.get(bi);
+    let emit_label: bool = jump_target_flags.get(ri);
     if emit_label { out.push(c_label_name(b.name).concat(":")); }
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
@@ -1754,12 +1780,12 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]
       ii = ii + 1;
     }
     if !b.has_term { panic("block missing terminator"); }
-    let fallthrough: String = if bi + 1 < blocks.len() { blocks.get(bi + 1).name } else { "" };
+    let fallthrough: String = if ri + 1 < block_indices.len() { f.blocks.get(block_indices.get(ri + 1)).name } else { "" };
     let term_lines: Vec[String] = emit_term(b.term, fallthrough);
     let mut ti: i32 = 0;
     while ti < term_lines.len() { out.push(term_lines.get(ti)); ti = ti + 1; }
     out.push("");
-    bi = bi + 1;
+    ri = ri + 1;
   }
 
   out.push("}");
