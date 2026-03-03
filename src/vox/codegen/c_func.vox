@@ -1270,10 +1270,42 @@ fn emit_instr_vec_get(pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx:
   return out;
 }
 
-fn ffi_import_symbol_for_call(p: ir.Program, name: String) -> String {
+pub fn ffi_import_order(imports: Vec[ir.FfiImportDecl]) -> Vec[i32] {
+  let mut order: Vec[i32] = Vec();
   let mut i: i32 = 0;
-  while i < p.ffi_imports.len() {
-    let im: ir.FfiImportDecl = p.ffi_imports.get(i);
+  while i < imports.len() {
+    order.push(i);
+    i = i + 1;
+  }
+
+  let mut gap: i32 = order.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < order.len() {
+      let keep: i32 = order.get(oi);
+      let keep_name: String = imports.get(keep).func;
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: i32 = order.get(j - gap);
+        if imports.get(prev).func <= keep_name { break; }
+        order.set(j, prev);
+        j = j - gap;
+      }
+      order.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return order;
+}
+
+fn ffi_import_symbol_for_call_ordered(p: ir.Program, order: Vec[i32], name: String) -> String {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = order.len() - 1;
+  while lo <= hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let idx: i32 = order.get(mid);
+    let im: ir.FfiImportDecl = p.ffi_imports.get(idx);
     if im.func == name {
       if im.target != "c" && im.target != "wasm" {
         panic("c backend does not support ffi_import target in calls: ".concat(im.target));
@@ -1281,25 +1313,29 @@ fn ffi_import_symbol_for_call(p: ir.Program, name: String) -> String {
       if im.target == "wasm" { return c_ffi_import_name(im.func); }
       return im.symbol;
     }
-    i = i + 1;
+    if im.func < name {
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
   }
   return "";
 }
 
-fn c_call_name(p: ir.Program, name: String) -> String {
-  let sym: String = ffi_import_symbol_for_call(p, name);
+fn c_call_name(p: ir.Program, ffi_order: Vec[i32], name: String) -> String {
+  let sym: String = ffi_import_symbol_for_call_ordered(p, ffi_order, name);
   if sym != "" { return sym; }
   return c_fn_name(name);
 }
 
-fn emit_instr_call(p: ir.Program, has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec[ir.Value], read_temps: Vec[bool]) -> Vec[String] {
+fn emit_instr_call(p: ir.Program, ffi_order: Vec[i32], has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec[ir.Value], read_temps: Vec[bool]) -> Vec[String] {
   if name == "panic" {
     if args.len() != 1 { panic("panic expects 1 arg"); }
     return vec1("  vox_host_panic(".concat(c_value(args.get(0))).concat(");"));
   }
   let mut s: String = "  ";
   if call_dst_is_read(has_dst, tid, read_temps) && ret_ty != -1 { s = s.concat(c_temp_name(tid)).concat(" = "); }
-  s = s.concat(c_call_name(p, name)).concat("(");
+  s = s.concat(c_call_name(p, ffi_order, name)).concat("(");
   let mut i: i32 = 0;
   while i < args.len() {
     if i != 0 { s = s.concat(", "); }
@@ -1310,7 +1346,7 @@ fn emit_instr_call(p: ir.Program, has_dst: bool, tid: i32, ret_ty: i32, name: St
   return vec1(s);
 }
 
-fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr, read_temps: Vec[bool]) -> Vec[String] {
+fn emit_instr(pool: ir.TyPool, p: ir.Program, ffi_order: Vec[i32], ins: ir.Instr, read_temps: Vec[bool]) -> Vec[String] {
   return match ins {
     ir.Instr.SlotDecl(_sid, _ty) => vec0(),
 
@@ -1391,7 +1427,7 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ins: ir.Instr, read_temps: Vec[boo
     ir.Instr.AtomicCAS(tid, elem_ty, h, expected, desired) => emit_instr_atomic_cas(pool, tid, elem_ty, h, expected, desired),
     ir.Instr.AtomicDrop(_elem_ty, h) => vec1("  free((void*)".concat(c_value(h)).concat(");")),
 
-    ir.Instr.Call(has_dst, tid, ret_ty, name, args) => emit_instr_call(p, has_dst, tid, ret_ty, name, args, read_temps),
+    ir.Instr.Call(has_dst, tid, ret_ty, name, args) => emit_instr_call(p, ffi_order, has_dst, tid, ret_ty, name, args, read_temps),
   };
 }
 
@@ -1646,7 +1682,7 @@ fn enum_variant_tag(en: ir.EnumDecl, variant: String) -> i32 {
   return -1;
 }
 
-pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
+pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]) -> Vec[String] {
   let all_locals: LocalsResult = collect_locals_all(pool, f);
   let seed_slots: Vec[bool] = collect_live_slots_all_reads(f, all_locals.max_slot);
   let live_temps0: Vec[bool] = collect_live_temps(pool, f, all_locals.max_temp, seed_slots);
@@ -1715,7 +1751,7 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
       if !instr_is_dead_temp(pool, ins, live_temps) && !instr_is_dead_slot_instr(ins, live_slots) {
-        let lines: Vec[String] = emit_instr(pool, p, ins, read_temps);
+        let lines: Vec[String] = emit_instr(pool, p, ffi_order, ins, read_temps);
         let mut li: i32 = 0;
         while li < lines.len() { out.push(lines.get(li)); li = li + 1; }
       }
