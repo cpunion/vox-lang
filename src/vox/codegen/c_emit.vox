@@ -140,18 +140,55 @@ fn find_func_by_name(funcs: Vec[ir.Func], name: String) -> FindFuncByNameResult 
   return FindFuncByNameResult { found: false, f: ir.Func { name: "", params: Vec(), ret: -1, blocks: Vec() } };
 }
 
-fn find_func_index_by_name(funcs: Vec[ir.Func], name: String) -> i32 {
+fn func_name_order(funcs: Vec[ir.Func]) -> Vec[i32] {
+  let mut order: Vec[i32] = Vec();
   let mut i: i32 = 0;
   while i < funcs.len() {
-    if funcs.get(i).name == name { return i; }
+    order.push(i);
     i = i + 1;
+  }
+
+  let mut gap: i32 = order.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < order.len() {
+      let keep: i32 = order.get(oi);
+      let keep_name: String = funcs.get(keep).name;
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: i32 = order.get(j - gap);
+        if funcs.get(prev).name <= keep_name { break; }
+        order.set(j, prev);
+        j = j - gap;
+      }
+      order.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return order;
+}
+
+fn find_func_index_by_name_ordered(funcs: Vec[ir.Func], order: Vec[i32], name: String) -> i32 {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = order.len() - 1;
+  while lo <= hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let idx: i32 = order.get(mid);
+    let cur: String = funcs.get(idx).name;
+    if cur == name { return idx; }
+    if cur < name {
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
   }
   return -1;
 }
 
-fn instr_call_target_index(funcs: Vec[ir.Func], ins: ir.Instr) -> i32 {
+fn instr_call_target_index(funcs: Vec[ir.Func], order: Vec[i32], ins: ir.Instr) -> i32 {
   return match ins {
-    ir.Instr.Call(_has_dst, _dst, _ret_ty, name, _args) => find_func_index_by_name(funcs, name),
+    ir.Instr.Call(_has_dst, _dst, _ret_ty, name, _args) => find_func_index_by_name_ordered(funcs, order, name),
     _ => -1,
   };
 }
@@ -170,22 +207,23 @@ fn funcs_for_emit(p: ir.Program, opts: EmitOptions) -> Vec[ir.Func] {
     keep.push(false);
     i0 = i0 + 1;
   }
+  let order: Vec[i32] = func_name_order(funcs0);
   let mut q: Vec[i32] = Vec();
   if opts.emit_driver_main {
-    let midx: i32 = find_func_index_by_name(funcs0, "main");
+    let midx: i32 = find_func_index_by_name_ordered(funcs0, order, "main");
     if midx >= 0 { q.push(midx); }
   }
   if opts.emit_test_main {
     let mut ti: i32 = 0;
     while ti < opts.test_funcs.len() {
-      let idx: i32 = find_func_index_by_name(funcs0, opts.test_funcs.get(ti));
+      let idx: i32 = find_func_index_by_name_ordered(funcs0, order, opts.test_funcs.get(ti));
       if idx >= 0 { q.push(idx); }
       ti = ti + 1;
     }
   }
   let mut ei: i32 = 0;
   while ei < p.ffi_exports.len() {
-    let idx: i32 = find_func_index_by_name(funcs0, p.ffi_exports.get(ei).func);
+    let idx: i32 = find_func_index_by_name_ordered(funcs0, order, p.ffi_exports.get(ei).func);
     if idx >= 0 { q.push(idx); }
     ei = ei + 1;
   }
@@ -203,7 +241,7 @@ fn funcs_for_emit(p: ir.Program, opts: EmitOptions) -> Vec[ir.Func] {
       let mut ii: i32 = 0;
       while ii < b.instrs.len() {
         let ins: ir.Instr = b.instrs.get(ii);
-        let ci: i32 = instr_call_target_index(funcs0, ins);
+        let ci: i32 = instr_call_target_index(funcs0, order, ins);
         if ci >= 0 && !keep.get(ci) { q.push(ci); }
         ii = ii + 1;
       }
