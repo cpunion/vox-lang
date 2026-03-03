@@ -1513,23 +1513,6 @@ fn dedup_sorted_strings(xs0: Vec[String]) -> Vec[String] {
   return out;
 }
 
-fn sorted_strings_contains(xs: Vec[String], key: String) -> bool {
-  if xs.len() == 0 { return false; }
-  let mut lo: i32 = 0;
-  let mut hi: i32 = xs.len() - 1;
-  while lo <= hi {
-    let mid: i32 = lo + ((hi - lo) / 2);
-    let v: String = xs.get(mid);
-    if v == key { return true; }
-    if v < key {
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return false;
-}
-
 fn block_name_order(blocks: Vec[ir.Block]) -> Vec[i32] {
   let mut order: Vec[i32] = Vec();
   let mut i: i32 = 0;
@@ -1636,8 +1619,16 @@ fn collect_reachable_blocks(blocks: Vec[ir.Block]) -> Vec[ir.Block] {
   return out;
 }
 
-fn collect_jump_target_names(blocks: Vec[ir.Block]) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+fn collect_jump_target_flags(blocks: Vec[ir.Block]) -> Vec[bool] {
+  let mut flags: Vec[bool] = Vec();
+  let mut i0: i32 = 0;
+  while i0 < blocks.len() {
+    flags.push(false);
+    i0 = i0 + 1;
+  }
+  if blocks.len() == 0 { return flags; }
+
+  let order: Vec[i32] = block_name_order(blocks);
   let mut i: i32 = 0;
   while i < blocks.len() {
     let b: ir.Block = blocks.get(i);
@@ -1649,19 +1640,21 @@ fn collect_jump_target_names(blocks: Vec[ir.Block]) -> Vec[String] {
         _ => "",
       };
       if target_a != fallthrough && target_a != "" {
-        out.push(target_a);
+        let idx_a: i32 = block_index_by_name_ordered(blocks, order, target_a);
+        if idx_a >= 0 { flags.set(idx_a, true); }
       }
       let target_b: String = match b.term {
         ir.Term.CondBr(_cond, t, e) => if t == fallthrough || e == fallthrough { "" } else { e },
         _ => "",
       };
       if target_b != "" {
-        out.push(target_b);
+        let idx_b: i32 = block_index_by_name_ordered(blocks, order, target_b);
+        if idx_b >= 0 { flags.set(idx_b, true); }
       }
     }
     i = i + 1;
   }
-  return dedup_sorted_strings(sort_strings_shell(out));
+  return flags;
 }
 
 pub fn enum_decl_order(enums: Vec[ir.EnumDecl]) -> Vec[i32] {
@@ -1778,12 +1771,12 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]
 
   // Blocks
   let blocks: Vec[ir.Block] = collect_reachable_blocks(f.blocks);
-  let jump_targets: Vec[String] = collect_jump_target_names(blocks);
+  let jump_target_flags: Vec[bool] = collect_jump_target_flags(blocks);
   let mut bi: i32 = 0;
   while bi < blocks.len() {
     let b: ir.Block = blocks.get(bi);
     // Emit labels only for real jump targets.
-    let emit_label: bool = sorted_strings_contains(jump_targets, b.name);
+    let emit_label: bool = jump_target_flags.get(bi);
     if emit_label { out.push(c_label_name(b.name).concat(":")); }
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
