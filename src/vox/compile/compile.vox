@@ -9,6 +9,7 @@ import "vox/codegen" as cg
 import "vox/loader" as ld
 import "vox/ir" as ir
 import "vox/ast" as ast
+import "vox/query" as q
 import "vox/internal/text" as txt
 import "std/time" as tm
 
@@ -35,6 +36,28 @@ pub struct CompilePhaseProfile {
 pub struct CompileProfileResult {
   pub r: CompileResult,
   pub p: CompilePhaseProfile,
+}
+
+pub struct CompileQueryDepHash {
+  pub pkg: String,
+  pub export_sig_hash: String,
+  pub type_sig_hash: String,
+  pub impl_sig_hash: String,
+}
+
+pub struct CompileQueryShadowOptions {
+  pub enabled: bool,
+  pub mode: String,
+  pub diagnostics_mode: String,
+  pub compiler_version: String,
+  pub compiler_channel: String,
+  pub feature_switches: Vec[String],
+  pub dep_hashes: Vec[CompileQueryDepHash],
+}
+
+pub struct CompileQueryShadowState {
+  pub key: String,
+  pub predicted_hit: bool,
 }
 
 pub fn compile_profile_load_ns(p: CompilePhaseProfile) -> i64 { return p.load_ns; }
@@ -104,6 +127,80 @@ fn dur_nonneg_ns(start_ns: i64, end_ns: i64) -> i64 {
 
 fn prof_ok(r: CompileResult, p: CompilePhaseProfile) -> CompileProfileResult {
   return CompileProfileResult { r: r, p: p };
+}
+
+fn compile_driver_kind_text(kind: cg.DriverMainKind) -> String {
+  if kind == cg.DriverMainKind.Tool { return "tool"; }
+  return "user";
+}
+
+fn compile_query_dep_hashes(ds: Vec[CompileQueryDepHash]) -> Vec[q.ParseLoadDepHash] {
+  let mut out: Vec[q.ParseLoadDepHash] = Vec();
+  let mut i: i32 = 0;
+  while i < ds.len() {
+    let d: CompileQueryDepHash = ds.get(i);
+    out.push(q.ParseLoadDepHash {
+      pkg: d.pkg,
+      export_sig_hash: d.export_sig_hash,
+      type_sig_hash: d.type_sig_hash,
+      impl_sig_hash: d.impl_sig_hash,
+    });
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn compile_query_shadow_disabled() -> CompileQueryShadowOptions {
+  return CompileQueryShadowOptions {
+    enabled: false,
+    mode: "",
+    diagnostics_mode: "",
+    compiler_version: "",
+    compiler_channel: "",
+    feature_switches: Vec(),
+    dep_hashes: Vec(),
+  };
+}
+
+pub fn compile_query_shadow_prepare_for_target(
+  files: Vec[ld.SourceFile],
+  opts: cg.EmitOptions,
+  ptr_bits: i32,
+  target_os: String,
+  target_arch: String,
+  qopts: CompileQueryShadowOptions,
+) -> CompileQueryShadowState {
+  if !qopts.enabled { return CompileQueryShadowState { key: "", predicted_hit: false }; }
+  let qst: q.ParseLoadShadowState =
+    q.parse_load_shadow_prepare(
+      files,
+      compile_query_dep_hashes(qopts.dep_hashes),
+      q.ParseLoadKeySwitches {
+      mode: qopts.mode,
+      target_os: target_os,
+      target_arch: target_arch,
+      target_ptr_bits: ptr_bits,
+      driver_kind: compile_driver_kind_text(opts.driver_main_kind),
+      emit_driver_main: opts.emit_driver_main,
+      emit_test_main: opts.emit_test_main,
+      macro_max_rounds: 512,
+      async_rewrite_enabled: opts.emit_driver_main || opts.emit_test_main,
+      diagnostics_mode: qopts.diagnostics_mode,
+      compiler_version: qopts.compiler_version,
+      compiler_channel: qopts.compiler_channel,
+      feature_switches: qopts.feature_switches,
+    },
+    );
+  return CompileQueryShadowState { key: qst.key, predicted_hit: qst.predicted_hit };
+}
+
+pub fn compile_query_shadow_write(st: CompileQueryShadowState) -> () {
+  if st.key == "" { return; }
+  q.parse_load_shadow_write(st.key);
+}
+
+pub fn compile_query_shadow_trace_line(phase: String, st: CompileQueryShadowState) -> String {
+  return q.parse_load_shadow_trace_line(phase, q.ParseLoadShadowState { key: st.key, predicted_hit: st.predicted_hit });
 }
 
 fn compile_kind_from_tc(k: i32) -> i32 {

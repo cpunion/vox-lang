@@ -15,7 +15,6 @@ import "vox/ast" as ast
 import "vox/list" as lst
 import "vox/buildinfo" as bi
 import "vox/fmt" as vf
-import "vox/query" as q
 import "vox/internal/path" as pth
 import "vox/internal/source" as srcw
 import "vox/internal/strset" as ss
@@ -1208,14 +1207,14 @@ fn query_shadow_trace_enabled(trace_exec: bool) -> bool {
   return trace_exec || env_truthy(proc.getenv("VOX_QUERY_SHADOW_TRACE"));
 }
 
-fn query_dep_hashes_from_pkg_keys(keys0: Vec[BuildCachePkgKey]) -> Vec[q.ParseLoadDepHash] {
-  let mut out: Vec[q.ParseLoadDepHash] = Vec();
+fn query_dep_hashes_from_pkg_keys(keys0: Vec[BuildCachePkgKey]) -> Vec[c.CompileQueryDepHash] {
+  let mut out: Vec[c.CompileQueryDepHash] = Vec();
   let mut i: i32 = 0;
   while i < keys0.len() {
     let pk: BuildCachePkgKey = keys0.get(i);
     // PR1 shadow keying uses package source digests as a conservative superset
     // of export/type/impl signature changes to avoid false-green predictions.
-    out.push(q.ParseLoadDepHash {
+    out.push(c.CompileQueryDepHash {
       pkg: pk.pkg,
       export_sig_hash: pk.key,
       type_sig_hash: pk.key,
@@ -3230,14 +3229,21 @@ fn main() -> i32 {
     let emit_driver_key: String = if artifact == "exe" { "1" } else { "0" };
     let compile_mode: String = build_compile_mode_text("build", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi);
     let link_mode: String = build_mode_text("build", driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi, artifact);
+    let emit_opts: cg.EmitOptions = cg.EmitOptions {
+      emit_driver_main: artifact == "exe",
+      driver_main_kind: driver,
+      emit_test_main: false,
+      test_funcs: Vec(),
+      c_sources: Vec(),
+    };
     let query_shadow_on: bool = query_shadow_enabled();
     let query_shadow_trace: bool = query_shadow_trace_enabled(trace_exec);
-    let mut query_shadow_key: String = "";
+    let mut query_shadow_state: c.CompileQueryShadowState = c.CompileQueryShadowState { key: "", predicted_hit: false };
     if query_shadow_on {
       let copied0: SourceFilesCopyResult = copy_source_files_keep(files);
       files = copied0.files;
       let dep_keys: Vec[BuildCachePkgKey] = build_cache_pkg_source_keys_with_files(copied0.copy).keys;
-      let dep_hashes: Vec[q.ParseLoadDepHash] = query_dep_hashes_from_pkg_keys(dep_keys);
+      let dep_hashes: Vec[c.CompileQueryDepHash] = query_dep_hashes_from_pkg_keys(dep_keys);
       let mut qswitches: Vec[String] = Vec();
       qswitches.push("compile_mode=".concat(compile_mode));
       qswitches.push("link_mode=".concat(link_mode));
@@ -3246,29 +3252,25 @@ fn main() -> i32 {
       qswitches.push("artifact=".concat(artifact));
       let copied1: SourceFilesCopyResult = copy_source_files_keep(files);
       files = copied1.files;
-      let qst: q.ParseLoadShadowState =
-        q.parse_load_shadow_prepare(
+      query_shadow_state =
+        c.compile_query_shadow_prepare_for_target(
           copied1.copy,
-          dep_hashes,
-          q.ParseLoadKeySwitches {
+          emit_opts,
+          target_ptr,
+          target_os,
+          target_arch,
+          c.CompileQueryShadowOptions {
+          enabled: true,
           mode: "build",
-          target_os: target_os,
-          target_arch: target_arch,
-          target_ptr_bits: target_ptr,
-          driver_kind: driver_key,
-          emit_driver_main: artifact == "exe",
-          emit_test_main: false,
-          macro_max_rounds: 512,
-          async_rewrite_enabled: artifact == "exe",
           diagnostics_mode: "diag-v0",
           compiler_version: bi.version(),
           compiler_channel: bi.channel(),
           feature_switches: qswitches,
+          dep_hashes: dep_hashes,
         },
         );
-      query_shadow_key = qst.key;
       if query_shadow_trace {
-        print(q.parse_load_shadow_trace_line("build", qst).concat("\n"));
+        print(c.compile_query_shadow_trace_line("build", query_shadow_state).concat("\n"));
       }
     }
     let cc_target_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
@@ -3297,7 +3299,7 @@ fn main() -> i32 {
       let cp: c.CompileProfileResult =
         c.compile_files_to_c_profile_for_target(
           files,
-          cg.EmitOptions { emit_driver_main: artifact == "exe", driver_main_kind: driver, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() },
+          emit_opts,
           target_ptr,
           target_os,
           target_arch,
@@ -3362,8 +3364,8 @@ fn main() -> i32 {
     if compile_cache_hit {
       copy_emit_c_from_file(emit_c_enabled, emit_c_path, out_cpath);
     }
-    if query_shadow_on && query_shadow_key != "" {
-      q.parse_load_shadow_write(query_shadow_key);
+    if query_shadow_on {
+      c.compile_query_shadow_write(query_shadow_state);
     }
     return 0;
   }
@@ -3554,14 +3556,22 @@ fn main() -> i32 {
     while cuti < c_user_test.len() { files.push(c_user_test.get(cuti)); cuti = cuti + 1; }
 
     let test_mode: String = build_mode_text("test", "user", "0", host_os, host_arch, target_os, target_arch, target_triple, target_abi, "exe");
+    let mut tests_for_compile: Vec[String] = Vec();
+    let emit_test_opts: cg.EmitOptions = cg.EmitOptions {
+      emit_driver_main: false,
+      driver_main_kind: cg.DriverMainKind.User,
+      emit_test_main: true,
+      test_funcs: tests_for_compile,
+      c_sources: Vec(),
+    };
     let query_shadow_on: bool = query_shadow_enabled();
     let query_shadow_trace: bool = query_shadow_trace_enabled(trace_exec);
-    let mut query_shadow_key: String = "";
+    let mut query_shadow_state: c.CompileQueryShadowState = c.CompileQueryShadowState { key: "", predicted_hit: false };
     if query_shadow_on {
       let copied0: SourceFilesCopyResult = copy_source_files_keep(files);
       files = copied0.files;
       let dep_keys: Vec[BuildCachePkgKey] = build_cache_pkg_source_keys_with_files(copied0.copy).keys;
-      let dep_hashes: Vec[q.ParseLoadDepHash] = query_dep_hashes_from_pkg_keys(dep_keys);
+      let dep_hashes: Vec[c.CompileQueryDepHash] = query_dep_hashes_from_pkg_keys(dep_keys);
       let mut qswitches: Vec[String] = Vec();
       qswitches.push("test_mode=".concat(test_mode));
       qswitches.push("target_triple=".concat(target_triple));
@@ -3572,29 +3582,25 @@ fn main() -> i32 {
       qswitches.push("test_rerun_failed=".concat(bool_key(test_rerun_failed)));
       let copied1: SourceFilesCopyResult = copy_source_files_keep(files);
       files = copied1.files;
-      let qst: q.ParseLoadShadowState =
-        q.parse_load_shadow_prepare(
+      query_shadow_state =
+        c.compile_query_shadow_prepare_for_target(
           copied1.copy,
-          dep_hashes,
-          q.ParseLoadKeySwitches {
+          emit_test_opts,
+          target_ptr,
+          target_os,
+          target_arch,
+          c.CompileQueryShadowOptions {
+          enabled: true,
           mode: "test",
-          target_os: target_os,
-          target_arch: target_arch,
-          target_ptr_bits: target_ptr,
-          driver_kind: "user",
-          emit_driver_main: false,
-          emit_test_main: true,
-          macro_max_rounds: 512,
-          async_rewrite_enabled: true,
           diagnostics_mode: "diag-v0",
           compiler_version: bi.version(),
           compiler_channel: bi.channel(),
           feature_switches: qswitches,
+          dep_hashes: dep_hashes,
         },
         );
-      query_shadow_key = qst.key;
       if query_shadow_trace {
-        print(q.parse_load_shadow_trace_line("test", qst).concat("\n"));
+        print(c.compile_query_shadow_trace_line("test", query_shadow_state).concat("\n"));
       }
     }
     let test_build_key_result: TestBuildCacheKeyResult = test_build_cache_key_with_files(files, test_mode);
@@ -3620,7 +3626,7 @@ fn main() -> i32 {
       cache_hit = cache_lookup_result.hit;
     }
     if !cache_hit {
-      let mut tests_for_compile: Vec[String] = Vec();
+      tests_for_compile = Vec();
       let mut tco: i32 = 0;
       while tco < tests.len() {
         tests_for_compile.push(tests.get(tco));
@@ -3662,8 +3668,8 @@ fn main() -> i32 {
     } else {
       copy_emit_c_from_file(emit_c_enabled, emit_c_path, cpath);
     }
-    if query_shadow_on && query_shadow_key != "" {
-      q.parse_load_shadow_write(query_shadow_key);
+    if query_shadow_on {
+      c.compile_query_shadow_write(query_shadow_state);
     }
 
     // Run tests by module-level parallel queues, keeping module-internal order.
