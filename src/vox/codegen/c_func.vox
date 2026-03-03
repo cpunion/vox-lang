@@ -1011,8 +1011,11 @@ fn emit_instr_struct_init(pool: ir.TyPool, tid: i32, ty: i32, fs: Vec[ir.StructI
   return vec1(s);
 }
 
-fn emit_instr_enum_init(pool: ir.TyPool, p: ir.Program, tid: i32, ty: i32, variant: String, payload: Vec[ir.Value]) -> Vec[String] {
-  let en: ir.EnumDecl = find_enum_decl(p, ty_qname(ir.ty_pool_get(pool, ty)));
+fn emit_instr_enum_init(pool: ir.TyPool, p: ir.Program, enum_order: Vec[i32], tid: i32, ty: i32, variant: String, payload: Vec[ir.Value]) -> Vec[String] {
+  let enum_name: String = ty_qname(ir.ty_pool_get(pool, ty));
+  let en_idx: i32 = find_enum_decl_index_ordered(p, enum_order, enum_name);
+  if en_idx < 0 { panic("unknown enum in codegen"); }
+  let en: ir.EnumDecl = p.enums.get(en_idx);
   let tag: i32 = enum_variant_tag(en, variant);
   let mut s: String = "  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, ty)).concat("){.tag = ").concat(tag.to_string());
   if enum_has_payload(en) {
@@ -1346,7 +1349,7 @@ fn emit_instr_call(p: ir.Program, ffi_order: Vec[i32], has_dst: bool, tid: i32, 
   return vec1(s);
 }
 
-fn emit_instr(pool: ir.TyPool, p: ir.Program, ffi_order: Vec[i32], ins: ir.Instr, read_temps: Vec[bool]) -> Vec[String] {
+fn emit_instr(pool: ir.TyPool, p: ir.Program, ffi_order: Vec[i32], enum_order: Vec[i32], ins: ir.Instr, read_temps: Vec[bool]) -> Vec[String] {
   return match ins {
     ir.Instr.SlotDecl(_sid, _ty) => vec0(),
 
@@ -1395,7 +1398,7 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ffi_order: Vec[i32], ins: ir.Instr
     ir.Instr.FieldGet(tid, _ty, recv, field) => vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_value(recv)).concat(".").concat(c_ident(field)).concat(";")),
     ir.Instr.StoreField(sid, field, v) => vec1("  ".concat(c_slot_name(sid)).concat(".").concat(c_ident(field)).concat(" = ").concat(c_value(v)).concat(";")),
 
-    ir.Instr.EnumInit(tid, ty, variant, payload) => emit_instr_enum_init(pool, p, tid, ty, variant, payload),
+    ir.Instr.EnumInit(tid, ty, variant, payload) => emit_instr_enum_init(pool, p, enum_order, tid, ty, variant, payload),
     ir.Instr.EnumTag(tid, recv) => vec1("  ".concat(c_temp_name(tid)).concat(" = ").concat(c_value(recv)).concat(".tag;")),
     ir.Instr.EnumPayload(tid, _ty, recv, variant, idx) =>
       vec1("  "
@@ -1661,15 +1664,50 @@ fn collect_jump_target_names(blocks: Vec[ir.Block]) -> Vec[String] {
   return dedup_sorted_strings(sort_strings_shell(out));
 }
 
-fn find_enum_decl(p: ir.Program, name: String) -> ir.EnumDecl {
+pub fn enum_decl_order(enums: Vec[ir.EnumDecl]) -> Vec[i32] {
+  let mut order: Vec[i32] = Vec();
   let mut i: i32 = 0;
-  while i < p.enums.len() {
-    let en: ir.EnumDecl = p.enums.get(i);
-    if en.name == name { return en; }
+  while i < enums.len() {
+    order.push(i);
     i = i + 1;
   }
-  panic("unknown enum in codegen");
-  return ir.EnumDecl { name: "", variants: Vec() };
+
+  let mut gap: i32 = order.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < order.len() {
+      let keep: i32 = order.get(oi);
+      let keep_name: String = enums.get(keep).name;
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: i32 = order.get(j - gap);
+        if enums.get(prev).name <= keep_name { break; }
+        order.set(j, prev);
+        j = j - gap;
+      }
+      order.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return order;
+}
+
+fn find_enum_decl_index_ordered(p: ir.Program, order: Vec[i32], name: String) -> i32 {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = order.len() - 1;
+  while lo <= hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let idx: i32 = order.get(mid);
+    let cur: String = p.enums.get(idx).name;
+    if cur == name { return idx; }
+    if cur < name {
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return -1;
 }
 
 fn enum_variant_tag(en: ir.EnumDecl, variant: String) -> i32 {
@@ -1682,7 +1720,7 @@ fn enum_variant_tag(en: ir.EnumDecl, variant: String) -> i32 {
   return -1;
 }
 
-pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]) -> Vec[String] {
+pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32], enum_order: Vec[i32]) -> Vec[String] {
   let all_locals: LocalsResult = collect_locals_all(pool, f);
   let seed_slots: Vec[bool] = collect_live_slots_all_reads(f, all_locals.max_slot);
   let live_temps0: Vec[bool] = collect_live_temps(pool, f, all_locals.max_temp, seed_slots);
@@ -1751,7 +1789,7 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
       if !instr_is_dead_temp(pool, ins, live_temps) && !instr_is_dead_slot_instr(ins, live_slots) {
-        let lines: Vec[String] = emit_instr(pool, p, ffi_order, ins, read_temps);
+        let lines: Vec[String] = emit_instr(pool, p, ffi_order, enum_order, ins, read_temps);
         let mut li: i32 = 0;
         while li < lines.len() { out.push(lines.get(li)); li = li + 1; }
       }
