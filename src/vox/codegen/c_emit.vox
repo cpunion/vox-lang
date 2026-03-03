@@ -128,18 +128,6 @@ fn static_init_value(pool: ir.TyPool, sv: ir.StaticVarDecl) -> String {
   return sv.init_iv.to_string();
 }
 
-struct FindFuncByNameResult { found: bool, f: ir.Func }
-
-fn find_func_by_name(funcs: Vec[ir.Func], name: String) -> FindFuncByNameResult {
-  let mut i: i32 = 0;
-  while i < funcs.len() {
-    let f: ir.Func = funcs.get(i);
-    if f.name == name { return FindFuncByNameResult { found: true, f: f }; }
-    i = i + 1;
-  }
-  return FindFuncByNameResult { found: false, f: ir.Func { name: "", params: Vec(), ret: -1, blocks: Vec() } };
-}
-
 fn func_name_order(funcs: Vec[ir.Func]) -> Vec[i32] {
   let mut order: Vec[i32] = Vec();
   let mut i: i32 = 0;
@@ -271,12 +259,11 @@ fn funcs_for_emit(p: ir.Program, opts: EmitOptions) -> Vec[ir.Func] {
   return out;
 }
 
-fn emit_ffi_export_wrapper(pool: ir.TyPool, funcs: Vec[ir.Func], ex: ir.FfiExportDecl) -> Vec[String] {
+fn emit_ffi_export_wrapper(pool: ir.TyPool, funcs: Vec[ir.Func], order: Vec[i32], ex: ir.FfiExportDecl) -> Vec[String] {
   if ex.target != "c" && ex.target != "wasm" { panic("c backend does not support ffi_export target: ".concat(ex.target)); }
-  let fr: FindFuncByNameResult = find_func_by_name(funcs, ex.func);
-  if !fr.found { panic("ffi export function not found"); }
-
-  let f: ir.Func = fr.f;
+  let idx: i32 = find_func_index_by_name_ordered(funcs, order, ex.func);
+  if idx < 0 { panic("ffi export function not found"); }
+  let f: ir.Func = funcs.get(idx);
   let mut out: Vec[String] = Vec();
   let mut sig: String = "";
   let mut cname: String = ex.symbol;
@@ -637,6 +624,7 @@ fn emit_runtime_core(out0: Vec[String]) -> Vec[String] {
 pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
   let pool: ir.TyPool = p.pool;
   let funcs: Vec[ir.Func] = funcs_for_emit(p, opts);
+  let func_order: Vec[i32] = func_name_order(funcs);
   let mut out: Vec[String] = Vec();
   out = emit_c_preamble(out);
   out = emit_c_sources(opts.c_sources);
@@ -701,7 +689,7 @@ pub fn emit_c(p: ir.Program, opts: EmitOptions) -> String {
   // C exports wrappers.
   let mut exi: i32 = 0;
   while exi < p.ffi_exports.len() {
-    out = append_lines(out, emit_ffi_export_wrapper(pool, funcs, p.ffi_exports.get(exi)));
+    out = append_lines(out, emit_ffi_export_wrapper(pool, funcs, func_order, p.ffi_exports.get(exi)));
     out.push("");
     exi = exi + 1;
   }
