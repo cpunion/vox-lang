@@ -1,0 +1,246 @@
+// Stability: Experimental module API (vox/query).
+// Migration: API may change between minor releases; key schema is versioned.
+
+import "std/fs" as fs
+import "vox/loader" as ld
+import "vox/internal/text" as txt
+
+pub struct ParseLoadDepHash {
+  pub pkg: String,
+  pub export_sig_hash: String,
+  pub type_sig_hash: String,
+  pub impl_sig_hash: String,
+}
+
+pub struct ParseLoadKeySwitches {
+  pub mode: String,
+  pub target_os: String,
+  pub target_arch: String,
+  pub target_ptr_bits: i32,
+  pub driver_kind: String,
+  pub emit_driver_main: bool,
+  pub emit_test_main: bool,
+  pub macro_max_rounds: i32,
+  pub async_rewrite_enabled: bool,
+  pub diagnostics_mode: String,
+  pub compiler_version: String,
+  pub compiler_channel: String,
+  pub feature_switches: Vec[String],
+}
+
+pub struct ParseLoadShadowState {
+  pub key: String,
+  pub predicted_hit: bool,
+}
+
+fn hash_byte(h0: u64, b: i32) -> u64 {
+  let h1: u64 = h0 ^ (b as u64);
+  return h1 * (1099511628211 as u64);
+}
+
+fn hash_text(h0: u64, s: String) -> u64 {
+  let mut h: u64 = h0;
+  let mut i: i32 = 0;
+  while i < s.len() {
+    h = hash_byte(h, s.byte_at(i));
+    i = i + 1;
+  }
+  return h;
+}
+
+fn bool_text(v: bool) -> String {
+  if v { return "1"; }
+  return "0";
+}
+
+fn sort_string_indices(xs: Vec[String]) -> Vec[i32] {
+  let mut order: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    order.push(i);
+    i = i + 1;
+  }
+
+  let mut gap: i32 = order.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < order.len() {
+      let keep: i32 = order.get(oi);
+      let keep_text: String = xs.get(keep);
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: i32 = order.get(j - gap);
+        if xs.get(prev) <= keep_text { break; }
+        order.set(j, prev);
+        j = j - gap;
+      }
+      order.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return order;
+}
+
+fn file_indices_by_path(files: Vec[ld.SourceFile]) -> Vec[i32] {
+  let mut paths: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < files.len() {
+    paths.push(files.get(i).path);
+    i = i + 1;
+  }
+  return sort_string_indices(paths);
+}
+
+fn dep_less(ds: Vec[ParseLoadDepHash], a: i32, b: i32) -> bool {
+  let da: ParseLoadDepHash = ds.get(a);
+  let db: ParseLoadDepHash = ds.get(b);
+  if da.pkg != db.pkg { return da.pkg < db.pkg; }
+  if da.export_sig_hash != db.export_sig_hash { return da.export_sig_hash < db.export_sig_hash; }
+  if da.type_sig_hash != db.type_sig_hash { return da.type_sig_hash < db.type_sig_hash; }
+  return da.impl_sig_hash < db.impl_sig_hash;
+}
+
+fn dep_indices_sorted(ds: Vec[ParseLoadDepHash]) -> Vec[i32] {
+  let mut order: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < ds.len() {
+    order.push(i);
+    i = i + 1;
+  }
+
+  let mut gap: i32 = order.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < order.len() {
+      let keep: i32 = order.get(oi);
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: i32 = order.get(j - gap);
+        if dep_less(ds, prev, keep) || (!dep_less(ds, keep, prev) && !dep_less(ds, prev, keep)) { break; }
+        order.set(j, prev);
+        j = j - gap;
+      }
+      order.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return order;
+}
+
+fn hash_parse_load_switches(h0: u64, sw: ParseLoadKeySwitches) -> u64 {
+  let mut h: u64 = h0;
+  h = hash_text(h, "S\n");
+  h = hash_text(h, sw.mode);
+  h = hash_text(h, "\n");
+  h = hash_text(h, sw.target_os);
+  h = hash_text(h, "\n");
+  h = hash_text(h, sw.target_arch);
+  h = hash_text(h, "\n");
+  h = hash_text(h, sw.target_ptr_bits.to_string());
+  h = hash_text(h, "\n");
+  h = hash_text(h, sw.driver_kind);
+  h = hash_text(h, "\n");
+  h = hash_text(h, bool_text(sw.emit_driver_main));
+  h = hash_text(h, "\n");
+  h = hash_text(h, bool_text(sw.emit_test_main));
+  h = hash_text(h, "\n");
+  h = hash_text(h, sw.macro_max_rounds.to_string());
+  h = hash_text(h, "\n");
+  h = hash_text(h, bool_text(sw.async_rewrite_enabled));
+  h = hash_text(h, "\n");
+  h = hash_text(h, sw.diagnostics_mode);
+  h = hash_text(h, "\n");
+  h = hash_text(h, sw.compiler_version);
+  h = hash_text(h, "\n");
+  h = hash_text(h, sw.compiler_channel);
+  h = hash_text(h, "\n");
+
+  let feature_order: Vec[i32] = sort_string_indices(sw.feature_switches);
+  let mut i: i32 = 0;
+  while i < feature_order.len() {
+    let v: String = sw.feature_switches.get(feature_order.get(i));
+    h = hash_text(h, "X\n");
+    h = hash_text(h, v);
+    h = hash_text(h, "\n");
+    i = i + 1;
+  }
+  return h;
+}
+
+fn hash_parse_load_deps(h0: u64, deps: Vec[ParseLoadDepHash]) -> u64 {
+  let mut h: u64 = h0;
+  let order: Vec[i32] = dep_indices_sorted(deps);
+  let mut i: i32 = 0;
+  while i < order.len() {
+    let d: ParseLoadDepHash = deps.get(order.get(i));
+    h = hash_text(h, "D\n");
+    h = hash_text(h, d.pkg);
+    h = hash_text(h, "\n");
+    h = hash_text(h, d.export_sig_hash);
+    h = hash_text(h, "\n");
+    h = hash_text(h, d.type_sig_hash);
+    h = hash_text(h, "\n");
+    h = hash_text(h, d.impl_sig_hash);
+    h = hash_text(h, "\n");
+    i = i + 1;
+  }
+  return h;
+}
+
+fn hash_parse_load_files(h0: u64, files: Vec[ld.SourceFile]) -> u64 {
+  let mut h: u64 = h0;
+  let order: Vec[i32] = file_indices_by_path(files);
+  let mut i: i32 = 0;
+  while i < order.len() {
+    let f: ld.SourceFile = files.get(order.get(i));
+    h = hash_text(h, "F\n");
+    h = hash_text(h, f.path);
+    h = hash_text(h, "\n");
+    h = hash_text(h, f.text);
+    h = hash_text(h, "\n");
+    i = i + 1;
+  }
+  return h;
+}
+
+pub fn parse_load_key(files: Vec[ld.SourceFile], deps: Vec[ParseLoadDepHash], sw: ParseLoadKeySwitches) -> String {
+  let mut h: u64 = 1469598103934665603 as u64;
+  h = hash_text(h, "query-parse-load-v1\n");
+  h = hash_parse_load_switches(h, sw);
+  h = hash_parse_load_deps(h, deps);
+  h = hash_parse_load_files(h, files);
+  return h.to_string();
+}
+
+fn parse_load_shadow_root() -> String {
+  return fs.join(fs.join(fs.join("target", "cache"), "pkg-sem-v1"), "parse-load-shadow-v1");
+}
+
+pub fn parse_load_shadow_meta_path(key: String) -> String {
+  return fs.join(parse_load_shadow_root(), key.concat(".meta"));
+}
+
+pub fn parse_load_shadow_predict_hit(key: String) -> bool {
+  let meta: String = parse_load_shadow_meta_path(key);
+  if !fs.exists(meta) { return false; }
+  let cur: String = txt.trim_space(fs.read_to_string(meta));
+  return cur == key;
+}
+
+pub fn parse_load_shadow_write(key: String) -> () {
+  let meta: String = parse_load_shadow_meta_path(key);
+  fs.mkdir_p(fs.dir_name(meta));
+  fs.write_string(meta, key.concat("\n"));
+}
+
+pub fn parse_load_shadow_prepare(files: Vec[ld.SourceFile], deps: Vec[ParseLoadDepHash], sw: ParseLoadKeySwitches) -> ParseLoadShadowState {
+  let key: String = parse_load_key(files, deps, sw);
+  return ParseLoadShadowState { key: key, predicted_hit: parse_load_shadow_predict_hit(key) };
+}
+
+pub fn parse_load_shadow_trace_line(phase: String, st: ParseLoadShadowState) -> String {
+  let hit_text: String = if st.predicted_hit { "yes" } else { "no" };
+  return "[query-shadow] phase=".concat(phase).concat(" parse-load predicted-hit=").concat(hit_text).concat(" key=").concat(st.key);
+}
