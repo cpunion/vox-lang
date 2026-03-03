@@ -1423,11 +1423,20 @@ fn emit_term_ret(has: bool, v: ir.Value) -> Vec[String] {
   return vec1("  return;");
 }
 
-fn emit_term(t: ir.Term) -> Vec[String] {
+fn emit_term(t: ir.Term, fallthrough: String) -> Vec[String] {
   return match t {
     ir.Term.Ret(has, v) => emit_term_ret(has, v),
-    ir.Term.Br(target) => vec1("  goto ".concat(c_label_name(target)).concat(";")),
-    ir.Term.CondBr(cond, t, e) => vec1("  if (".concat(c_value(cond)).concat(") goto ").concat(c_label_name(t)).concat("; else goto ").concat(c_label_name(e)).concat(";")),
+    ir.Term.Br(target) => if target == fallthrough { Vec() } else { vec1("  goto ".concat(c_label_name(target)).concat(";")) },
+    ir.Term.CondBr(cond, t, e) =>
+      if t == fallthrough && e == fallthrough {
+        Vec()
+      } else if t == fallthrough {
+        vec1("  if (!(".concat(c_value(cond)).concat(")) goto ").concat(c_label_name(e)).concat(";"))
+      } else if e == fallthrough {
+        vec1("  if (".concat(c_value(cond)).concat(") goto ").concat(c_label_name(t)).concat(";"))
+      } else {
+        vec1("  if (".concat(c_value(cond)).concat(") goto ").concat(c_label_name(t)).concat("; else goto ").concat(c_label_name(e)).concat(";"))
+      },
     ir.Term.Panic(msg) => vec1("  vox_host_panic(".concat(c_value(msg)).concat(");")),
   };
 }
@@ -1436,11 +1445,22 @@ fn block_is_jump_target(blocks: Vec[ir.Block], name: String) -> bool {
   let mut i: i32 = 0;
   while i < blocks.len() {
     let b: ir.Block = blocks.get(i);
+    let fallthrough: String = if i + 1 < blocks.len() { blocks.get(i + 1).name } else { "" };
     if b.has_term {
       let hit: bool =
         match b.term {
-          ir.Term.Br(target) => target == name,
-          ir.Term.CondBr(_cond, t, e) => t == name || e == name,
+          ir.Term.Br(target) => target != fallthrough && target == name,
+          ir.Term.CondBr(_cond, t, e) => {
+            if t == fallthrough && e == fallthrough {
+              false
+            } else if t == fallthrough {
+              e == name
+            } else if e == fallthrough {
+              t == name
+            } else {
+              t == name || e == name
+            }
+          },
           _ => false,
         };
       if hit {
@@ -1547,7 +1567,8 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func) -> Vec[String] {
       ii = ii + 1;
     }
     if !b.has_term { panic("block missing terminator"); }
-    let term_lines: Vec[String] = emit_term(b.term);
+    let fallthrough: String = if bi + 1 < f.blocks.len() { f.blocks.get(bi + 1).name } else { "" };
+    let term_lines: Vec[String] = emit_term(b.term, fallthrough);
     let mut ti: i32 = 0;
     while ti < term_lines.len() { out.push(term_lines.get(ti)); ti = ti + 1; }
     out.push("");

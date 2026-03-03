@@ -128,6 +128,7 @@ Invalidate unit on any of:
 - 2026-03-02: removed additional cache passthrough wrappers (`test_build_cache_hit` / `write_test_build_cache`) and switched tests to direct `*_with_tests` calls, continuing forwarding-wrapper shrink in cache utilities.
 - 2026-03-02: removed cache key passthrough wrappers (`test_build_cache_key` / `build_cache_pkg_source_keys` / `build_cache_key`) and switched cache tests to direct `*_with_files` + `.keys` / `.key` use.
 - 2026-03-03: removed two remaining unused cache passthrough wrappers (`test_build_cache_contains_all` / `write_discover_tests_cache`) to keep cache helper surface minimal and reduce generated forwarding-function noise.
+- 2026-03-03: codegen branch lowering now elides fallthrough jumps (`Br`/`CondBr` to the immediate next block) and only keeps labels for actually emitted jump targets, reducing redundant `goto`/label noise in generated C.
 
 ## 5. Validation Gates
 
