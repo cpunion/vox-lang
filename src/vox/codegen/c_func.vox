@@ -1459,15 +1459,6 @@ fn sort_strings_shell(xs0: Vec[String]) -> Vec[String] {
   return xs;
 }
 
-fn strings_contains(xs: Vec[String], key: String) -> bool {
-  let mut i: i32 = 0;
-  while i < xs.len() {
-    if xs.get(i) == key { return true; }
-    i = i + 1;
-  }
-  return false;
-}
-
 fn dedup_sorted_strings(xs0: Vec[String]) -> Vec[String] {
   if xs0.len() == 0 { return xs0; }
   let mut out: Vec[String] = Vec();
@@ -1500,11 +1491,48 @@ fn sorted_strings_contains(xs: Vec[String], key: String) -> bool {
   return false;
 }
 
-fn block_index_by_name(blocks: Vec[ir.Block], name: String) -> i32 {
+fn block_name_order(blocks: Vec[ir.Block]) -> Vec[i32] {
+  let mut order: Vec[i32] = Vec();
   let mut i: i32 = 0;
   while i < blocks.len() {
-    if blocks.get(i).name == name { return i; }
+    order.push(i);
     i = i + 1;
+  }
+
+  let mut gap: i32 = order.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < order.len() {
+      let keep: i32 = order.get(oi);
+      let keep_name: String = blocks.get(keep).name;
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: i32 = order.get(j - gap);
+        if blocks.get(prev).name <= keep_name { break; }
+        order.set(j, prev);
+        j = j - gap;
+      }
+      order.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return order;
+}
+
+fn block_index_by_name_ordered(blocks: Vec[ir.Block], order: Vec[i32], name: String) -> i32 {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = order.len() - 1;
+  while lo <= hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let idx: i32 = order.get(mid);
+    let cur: String = blocks.get(idx).name;
+    if cur == name { return idx; }
+    if cur < name {
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
   }
   return -1;
 }
@@ -1512,18 +1540,27 @@ fn block_index_by_name(blocks: Vec[ir.Block], name: String) -> i32 {
 fn collect_reachable_blocks(blocks: Vec[ir.Block]) -> Vec[ir.Block] {
   if blocks.len() == 0 { return blocks; }
 
-  let mut queue: Vec[String] = Vec();
-  let mut visited: Vec[String] = Vec();
-  queue.push(blocks.get(0).name);
+  let order: Vec[i32] = block_name_order(blocks);
+  let mut queue: Vec[i32] = Vec();
+  let mut visited: Vec[bool] = Vec();
+  let mut queued: Vec[bool] = Vec();
+  let mut i0: i32 = 0;
+  while i0 < blocks.len() {
+    visited.push(false);
+    queued.push(false);
+    i0 = i0 + 1;
+  }
+  queue.push(0);
+  queued.set(0, true);
 
   let mut qi: i32 = 0;
   while qi < queue.len() {
-    let cur: String = queue.get(qi);
+    let bi: i32 = queue.get(qi);
     qi = qi + 1;
-    if strings_contains(visited, cur) { continue; }
-    visited.push(cur);
-    let bi: i32 = block_index_by_name(blocks, cur);
     if bi < 0 { continue; }
+    if bi >= blocks.len() { continue; }
+    if visited.get(bi) { continue; }
+    visited.set(bi, true);
     let b: ir.Block = blocks.get(bi);
     if !b.has_term { continue; }
     let edge_a: String = match b.term {
@@ -1531,26 +1568,30 @@ fn collect_reachable_blocks(blocks: Vec[ir.Block]) -> Vec[ir.Block] {
       ir.Term.CondBr(_cond, t, _e) => t,
       _ => "",
     };
-    if edge_a != "" && !strings_contains(visited, edge_a) {
-      queue.push(edge_a);
+    if edge_a != "" {
+      let next_a: i32 = block_index_by_name_ordered(blocks, order, edge_a);
+      if next_a >= 0 && !queued.get(next_a) {
+        queue.push(next_a);
+        queued.set(next_a, true);
+      }
     }
     let edge_b: String = match b.term {
       ir.Term.CondBr(_cond, _t, e) => e,
       _ => "",
     };
-    if edge_b != "" && !strings_contains(visited, edge_b) {
-      queue.push(edge_b);
+    if edge_b != "" {
+      let next_b: i32 = block_index_by_name_ordered(blocks, order, edge_b);
+      if next_b >= 0 && !queued.get(next_b) {
+        queue.push(next_b);
+        queued.set(next_b, true);
+      }
     }
   }
 
-  let keep: Vec[String] = dedup_sorted_strings(sort_strings_shell(visited));
   let mut out: Vec[ir.Block] = Vec();
   let mut i: i32 = 0;
   while i < blocks.len() {
-    let b: ir.Block = blocks.get(i);
-    if sorted_strings_contains(keep, b.name) {
-      out.push(b);
-    }
+    if visited.get(i) { out.push(blocks.get(i)); }
     i = i + 1;
   }
   return out;
