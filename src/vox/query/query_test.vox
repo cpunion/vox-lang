@@ -1,0 +1,103 @@
+import "std/testing" as t
+import "std/time" as tm
+import "vox/loader" as ld
+
+fn test_query_parse_load_key_order_insensitive() -> () {
+  let mut files_a: Vec[ld.SourceFile] = Vec();
+  files_a.push(ld.SourceFile { path: "src/b.vox", text: "fn b() -> i32 { return 2; }" });
+  files_a.push(ld.SourceFile { path: "src/a.vox", text: "fn a() -> i32 { return 1; }" });
+
+  let mut files_b: Vec[ld.SourceFile] = Vec();
+  files_b.push(ld.SourceFile { path: "src/a.vox", text: "fn a() -> i32 { return 1; }" });
+  files_b.push(ld.SourceFile { path: "src/b.vox", text: "fn b() -> i32 { return 2; }" });
+
+  let mut deps_a: Vec[ParseLoadDepHash] = Vec();
+  deps_a.push(ParseLoadDepHash { pkg: "pkg/dep_b", export_sig_hash: "eb", type_sig_hash: "tb", impl_sig_hash: "ib" });
+  deps_a.push(ParseLoadDepHash { pkg: "pkg/dep_a", export_sig_hash: "ea", type_sig_hash: "ta", impl_sig_hash: "ia" });
+
+  let mut deps_b: Vec[ParseLoadDepHash] = Vec();
+  deps_b.push(ParseLoadDepHash { pkg: "pkg/dep_a", export_sig_hash: "ea", type_sig_hash: "ta", impl_sig_hash: "ia" });
+  deps_b.push(ParseLoadDepHash { pkg: "pkg/dep_b", export_sig_hash: "eb", type_sig_hash: "tb", impl_sig_hash: "ib" });
+
+  let mut switches0: Vec[String] = Vec();
+  switches0.push("diag:error-codes");
+  switches0.push("async-rewrite:on");
+
+  let sw: ParseLoadKeySwitches = ParseLoadKeySwitches {
+    mode: "build",
+    target_os: "linux",
+    target_arch: "amd64",
+    target_ptr_bits: 64,
+    driver_kind: "user",
+    emit_driver_main: true,
+    emit_test_main: false,
+    macro_max_rounds: 512,
+    async_rewrite_enabled: true,
+    diagnostics_mode: "diag-v0",
+    compiler_version: "0.2.4",
+    compiler_channel: "dev",
+    feature_switches: switches0,
+  };
+
+  let mut switches1: Vec[String] = Vec();
+  switches1.push("async-rewrite:on");
+  switches1.push("diag:error-codes");
+  let sw_reordered: ParseLoadKeySwitches = ParseLoadKeySwitches {
+    mode: sw.mode,
+    target_os: sw.target_os,
+    target_arch: sw.target_arch,
+    target_ptr_bits: sw.target_ptr_bits,
+    driver_kind: sw.driver_kind,
+    emit_driver_main: sw.emit_driver_main,
+    emit_test_main: sw.emit_test_main,
+    macro_max_rounds: sw.macro_max_rounds,
+    async_rewrite_enabled: sw.async_rewrite_enabled,
+    diagnostics_mode: sw.diagnostics_mode,
+    compiler_version: sw.compiler_version,
+    compiler_channel: sw.compiler_channel,
+    feature_switches: switches1,
+  };
+
+  let k1: String = parse_load_key(files_a, deps_a, sw);
+  let k2: String = parse_load_key(files_b, deps_b, sw_reordered);
+  t.assert_eq(k1, k2);
+}
+
+fn test_query_parse_load_key_changes_on_diagnostics_switch() -> () {
+  let mut files: Vec[ld.SourceFile] = Vec();
+  files.push(ld.SourceFile { path: "src/main.vox", text: "fn main() -> i32 { return 0; }" });
+
+  let deps: Vec[ParseLoadDepHash] = Vec();
+
+  let mut features: Vec[String] = Vec();
+  features.push("macro-path:default");
+
+  let sw0: ParseLoadKeySwitches = ParseLoadKeySwitches {
+    mode: "build",
+    target_os: "linux",
+    target_arch: "amd64",
+    target_ptr_bits: 64,
+    driver_kind: "user",
+    emit_driver_main: true,
+    emit_test_main: false,
+    macro_max_rounds: 512,
+    async_rewrite_enabled: true,
+    diagnostics_mode: "diag-v0",
+    compiler_version: "0.2.4",
+    compiler_channel: "dev",
+    feature_switches: features,
+  };
+  let mut sw1: ParseLoadKeySwitches = sw0;
+  sw1.diagnostics_mode = "diag-v1";
+
+  let k0: String = parse_load_key(files, deps, sw0);
+  let k1: String = parse_load_key(files, deps, sw1);
+  t.assert(k0 != k1);
+}
+
+fn test_query_parse_load_shadow_predict_then_write() -> () {
+  let key: String = "qshadow_".concat(tm.now_ns().to_string());
+  t.assert(!parse_load_shadow_predict_hit(key));
+  parse_load_shadow_write(key);
+  t.assert(parse_load_shadow_predict_hit(key));
+}

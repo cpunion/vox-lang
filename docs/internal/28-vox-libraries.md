@@ -32,6 +32,7 @@
 - `vox/compile`
 - `vox/loader`
 - `vox/list`
+- `vox/query`
 
 适用场景：自定义编译流程、实验性后端、高级静态分析。
 
