@@ -131,6 +131,8 @@ Invalidate unit on any of:
 - 2026-03-03: codegen branch lowering now elides fallthrough jumps (`Br`/`CondBr` to the immediate next block) and only keeps labels for actually emitted jump targets, reducing redundant `goto`/label noise in generated C.
 - 2026-03-03: jump-target label marking in C codegen now precomputes a sorted unique target set once per function and does binary-search lookup per block, removing repeated full-block scans in `emit_func` hot path.
 - 2026-03-03: `CondBr` with identical targets now lowers to a single `goto` (or empty on fallthrough) instead of emitting redundant `if (...) goto X; else goto X;`.
+- 2026-03-03: codegen now filters unreachable IR blocks (from function entry CFG reachability) before C emission, avoiding dead block body emission in generated C.
+- 2026-03-03: vec op arg/index checks now reuse shared inline runtime-core helpers (`vox_vec_require_handle` / `vox_vec_checked_index` / `vox_vec_checked_insert_index`) instead of repeating the same guard branches at each vec op site; on macOS arm64 selfhost C dropped from 552,511 to 550,280 lines and `goto` count from 29,592 to 28,445.
 
 ## 5. Validation Gates
 
