@@ -67,7 +67,7 @@ pub struct ImportsResult {
   pub imps: Imports,
 }
 
-struct ResolveImportResult { ok: bool, err: TcError, path: String }
+struct ResolveImportResult { ok: bool, err: TcError, path: String, mod_idx: i32 }
 
 fn ok_aliases(xs: Vec[ImportAlias]) -> ImportAliasesResult {
   return ImportAliasesResult { ok: true, err: TcError.None, aliases: xs };
@@ -77,10 +77,14 @@ fn err_aliases_at_code(sp: ast.Span, msg: String, code: String) -> ImportAliases
   return ImportAliasesResult { ok: false, err: import_error_at_code(sp, msg, code), aliases: Vec() };
 }
 
-fn ok_path(p: String) -> ResolveImportResult { return ResolveImportResult { ok: true, err: TcError.None, path: p }; }
+fn ok_path(p: String) -> ResolveImportResult { return ResolveImportResult { ok: true, err: TcError.None, path: p, mod_idx: -1 }; }
+
+fn ok_path_with_idx(p: String, idx: i32) -> ResolveImportResult {
+  return ResolveImportResult { ok: true, err: TcError.None, path: p, mod_idx: idx };
+}
 
 fn err_path_at_code(sp: ast.Span, msg: String, code: String) -> ResolveImportResult {
-  return ResolveImportResult { ok: false, err: import_error_at_code(sp, msg, code), path: "" };
+  return ResolveImportResult { ok: false, err: import_error_at_code(sp, msg, code), path: "", mod_idx: -1 };
 }
 
 fn last_path_seg(path: String) -> String {
@@ -166,13 +170,13 @@ fn resolve_import_path(w: World, file: String, path: String, sp: ast.Span) -> Re
 
   let local: String = join_base(base, path);
   let pkg: String = "pkg/".concat(path);
-  let has_local: bool = find_mod(w, local).found;
-  let has_pkg: bool = find_mod(w, pkg).found;
-  if has_local && has_pkg {
+  let local_fm: FindModResult = find_mod(w, local);
+  let pkg_fm: FindModResult = find_mod(w, pkg);
+  if local_fm.found && pkg_fm.found {
     return err_path_at_code(sp, "ambiguous import: ".concat(path).concat(" (use pkg: or mod:)"), diag_code_import_ambiguous_module());
   }
-  if has_local { return ok_path(local); }
-  if has_pkg { return ok_path(pkg); }
+  if local_fm.found { return ok_path_with_idx(local, local_fm.idx); }
+  if pkg_fm.found { return ok_path_with_idx(pkg, pkg_fm.idx); }
   // Unknown: keep the local candidate, so the caller can produce a good error.
   return ok_path(local);
 }
@@ -428,9 +432,13 @@ pub fn build_imports(w: World, cur_mod: String, imps: Vec[ast.ImportDecl], file:
     let rr: ResolveImportResult = resolve_import_path(w, file, imp.path, imp.sp);
     if !rr.ok { return ImportsResult { ok: false, err: rr.err, imps: Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() } }; }
     let target_mod: String = rr.path;
-    let fm: FindModResult = find_mod(w, target_mod);
-    if !fm.found { return err_imps_at_code(imp.sp, "unknown module import: ".concat(imp.path), diag_code_import_unknown_module()); }
-    let target_world_mod: WorldModule = w.mods.get(fm.idx);
+    let mut target_mod_idx: i32 = rr.mod_idx;
+    if target_mod_idx == -1 {
+      let fm: FindModResult = find_mod(w, target_mod);
+      if !fm.found { return err_imps_at_code(imp.sp, "unknown module import: ".concat(imp.path), diag_code_import_unknown_module()); }
+      target_mod_idx = fm.idx;
+    }
+    let target_world_mod: WorldModule = w.mods.get(target_mod_idx);
 
     let mut ni: i32 = 0;
     while ni < imp.names.len() {
