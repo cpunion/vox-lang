@@ -163,6 +163,8 @@ fn find_mod(w: tc.World, path: String) -> FindModResult {
 }
 
 struct FindFuncDeclResult { found: bool, mod_path: String, fd: ast.FuncDecl }
+struct GenericFuncCacheEntry { mod_path: String, name: String, res: FindFuncDeclResult }
+struct FindGenericFuncCachedResult { cache: Vec[GenericFuncCacheEntry], res: FindFuncDeclResult }
 
 fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDeclResult {
   let mut i: i32 = 0;
@@ -255,6 +257,21 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
       body: ast.Block { stmts: Vec() },
     },
   };
+}
+
+fn find_generic_func_cached(ctx: tc.Ctx, m: tc.WorldModule, name: String, cache0: Vec[GenericFuncCacheEntry]) -> FindGenericFuncCachedResult {
+  let mut i: i32 = 0;
+  while i < cache0.len() {
+    let ce: GenericFuncCacheEntry = cache0.get(i);
+    if ce.mod_path == m.path && ce.name == name {
+      return FindGenericFuncCachedResult { cache: cache0, res: ce.res };
+    }
+    i = i + 1;
+  }
+  let res: FindFuncDeclResult = find_generic_func(ctx, m, name);
+  let mut cache: Vec[GenericFuncCacheEntry] = cache0;
+  cache.push(GenericFuncCacheEntry { mod_path: m.path, name: name, res: res });
+  return FindGenericFuncCachedResult { cache: cache, res: res };
 }
 
 struct FindImplSigResult { found: bool, sig: tc.ImplSig }
@@ -494,6 +511,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
   let mut emitted_sorted: Vec[String] = Vec();
   let mut cached_mod_path: String = "";
   let mut cached_mod_idx: i32 = -1;
+  let mut generic_func_cache: Vec[GenericFuncCacheEntry] = Vec();
   let mut ti: i32 = 0;
   while ti < tasks.len() {
     let t: FuncTask = tasks.get(ti);
@@ -622,7 +640,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       }
     } else {
       // Generic instantiation task.
-      let fr: FindFuncDeclResult = find_generic_func(ctx, m2, t.base_name);
+      let cfr: FindGenericFuncCachedResult = find_generic_func_cached(ctx, m2, t.base_name, generic_func_cache);
+      generic_func_cache = cfr.cache;
+      let fr: FindFuncDeclResult = cfr.res;
       if !fr.found { return err0(p, "missing generic fn for instantiation"); }
       let mut bmod: tc.WorldModule = m2;
       if fr.mod_path != t.mod_path {
