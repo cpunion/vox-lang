@@ -250,20 +250,8 @@ fn signed_max_macro(k: ir.TyKind) -> String {
 }
 
 struct LocalsResult { slots: Vec[IdTy], temps: Vec[IdTy], max_slot: i32, max_temp: i32 }
-struct LocalBoundsResult { max_slot: i32, max_temp: i32 }
 
 fn locals0() -> LocalsResult { return LocalsResult { slots: Vec(), temps: Vec(), max_slot: -1, max_temp: -1 }; }
-fn local_bounds0() -> LocalBoundsResult { return LocalBoundsResult { max_slot: -1, max_temp: -1 }; }
-
-fn temp_flags_new(max_temp: i32) -> Vec[bool] {
-  let mut flags: Vec[bool] = Vec();
-  let mut i: i32 = 0;
-  while i <= max_temp {
-    flags.push(false);
-    i = i + 1;
-  }
-  return flags;
-}
 
 fn temp_flag_get(flags: Vec[bool], tid: i32) -> bool {
   if tid < 0 || tid >= flags.len() { return false; }
@@ -271,19 +259,10 @@ fn temp_flag_get(flags: Vec[bool], tid: i32) -> bool {
 }
 
 fn temp_flag_set(flags0: Vec[bool], tid: i32) -> Vec[bool] {
-  if tid < 0 || tid >= flags0.len() { return flags0; }
+  if tid < 0 { return flags0; }
   let mut flags: Vec[bool] = flags0;
+  while flags.len() <= tid { flags.push(false); }
   if !flags.get(tid) { flags.set(tid, true); }
-  return flags;
-}
-
-fn slot_flags_new(max_slot: i32) -> Vec[bool] {
-  let mut flags: Vec[bool] = Vec();
-  let mut i: i32 = 0;
-  while i <= max_slot {
-    flags.push(false);
-    i = i + 1;
-  }
   return flags;
 }
 
@@ -293,8 +272,9 @@ fn slot_flag_get(flags: Vec[bool], sid: i32) -> bool {
 }
 
 fn slot_flag_set(flags0: Vec[bool], sid: i32) -> Vec[bool] {
-  if sid < 0 || sid >= flags0.len() { return flags0; }
+  if sid < 0 { return flags0; }
   let mut flags: Vec[bool] = flags0;
+  while flags.len() <= sid { flags.push(false); }
   if !flags.get(sid) { flags.set(sid, true); }
   return flags;
 }
@@ -403,8 +383,8 @@ fn mark_live_slot_values_from_term(flags0: Vec[bool], t: ir.Term) -> Vec[bool] {
   };
 }
 
-fn collect_live_slots_all_reads(f: ir.Func, max_slot: i32) -> Vec[bool] {
-  let mut live: Vec[bool] = slot_flags_new(max_slot);
+fn collect_live_slots_all_reads(f: ir.Func) -> Vec[bool] {
+  let mut live: Vec[bool] = Vec();
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
     let b: ir.Block = f.blocks.get(bi);
@@ -421,8 +401,8 @@ fn collect_live_slots_all_reads(f: ir.Func, max_slot: i32) -> Vec[bool] {
   return live;
 }
 
-fn collect_live_slots_filtered(pool: ir.TyPool, f: ir.Func, max_slot: i32, live_temps: Vec[bool], live_slots0: Vec[bool]) -> Vec[bool] {
-  let mut live: Vec[bool] = slot_flags_new(max_slot);
+fn collect_live_slots_filtered(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool], live_slots0: Vec[bool]) -> Vec[bool] {
+  let mut live: Vec[bool] = Vec();
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
     let b: ir.Block = f.blocks.get(bi);
@@ -629,9 +609,9 @@ fn temp_flags_true_count(flags: Vec[bool]) -> i32 {
   return n;
 }
 
-fn collect_live_temps(pool: ir.TyPool, f: ir.Func, max_temp: i32, live_slots: Vec[bool]) -> Vec[bool] {
+fn collect_live_temps(pool: ir.TyPool, f: ir.Func, live_slots: Vec[bool]) -> Vec[bool] {
   // Seed from always-kept instruction operands and terminators.
-  let mut live: Vec[bool] = temp_flags_new(max_temp);
+  let mut live: Vec[bool] = Vec();
   let mut closure_instrs: Vec[ir.Instr] = Vec();
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
@@ -751,38 +731,6 @@ fn locals_add_instr(pool: ir.TyPool, l0: LocalsResult, ins: ir.Instr) -> LocalsR
     ir.Instr.Call(has_dst, tid, ret_ty, _name, _args) => locals_add_call(pool, l0, has_dst, tid, ret_ty),
     _ => l0,
   };
-}
-
-fn collect_local_bounds(f: ir.Func) -> LocalBoundsResult {
-  let mut out: LocalBoundsResult = local_bounds0();
-  let mut bi: i32 = 0;
-  while bi < f.blocks.len() {
-    let b: ir.Block = f.blocks.get(bi);
-    let mut ii: i32 = 0;
-    while ii < b.instrs.len() {
-      let ins: ir.Instr = b.instrs.get(ii);
-      out = match ins {
-        ir.Instr.SlotDecl(sid, _ty) => LocalBoundsResult {
-          max_slot: if sid > out.max_slot { sid } else { out.max_slot },
-          max_temp: out.max_temp,
-        },
-        _ => {
-          let tid: i32 = instr_dst_temp_id(ins);
-          if tid == -1 {
-            out
-          } else {
-            LocalBoundsResult {
-              max_slot: out.max_slot,
-              max_temp: if tid > out.max_temp { tid } else { out.max_temp },
-            }
-          }
-        },
-      };
-      ii = ii + 1;
-    }
-    bi = bi + 1;
-  }
-  return out;
 }
 
 fn collect_locals(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool], live_slots: Vec[bool], read_temps: Vec[bool]) -> LocalsResult {
@@ -1437,25 +1385,6 @@ fn emit_instr(pool: ir.TyPool, p: ir.Program, ffi_order: Vec[i32], enum_order: V
   };
 }
 
-fn collect_read_temps(pool: ir.TyPool, f: ir.Func, max_temp: i32, live_temps: Vec[bool], live_slots: Vec[bool]) -> Vec[bool] {
-  let mut read: Vec[bool] = temp_flags_new(max_temp);
-  let mut bi: i32 = 0;
-  while bi < f.blocks.len() {
-    let b: ir.Block = f.blocks.get(bi);
-    let mut ii: i32 = 0;
-    while ii < b.instrs.len() {
-      let ins: ir.Instr = b.instrs.get(ii);
-      if !instr_is_dead_temp(pool, ins, live_temps) && !instr_is_dead_slot_instr(ins, live_slots) {
-        read = mark_live_from_instr_operands(read, ins);
-      }
-      ii = ii + 1;
-    }
-    if b.has_term { read = mark_live_from_term(read, b.term); }
-    bi = bi + 1;
-  }
-  return read;
-}
-
 fn emit_term_ret(has: bool, v: ir.Value) -> Vec[String] {
   if has { return vec1("  return ".concat(c_value(v)).concat(";")); }
   return vec1("  return;");
@@ -1726,11 +1655,10 @@ fn enum_variant_tag(en: ir.EnumDecl, variant: String) -> i32 {
 }
 
 pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32], enum_order: Vec[i32]) -> Vec[String] {
-  let all_locals: LocalBoundsResult = collect_local_bounds(f);
-  let seed_slots: Vec[bool] = collect_live_slots_all_reads(f, all_locals.max_slot);
-  let live_temps0: Vec[bool] = collect_live_temps(pool, f, all_locals.max_temp, seed_slots);
-  let live_slots: Vec[bool] = collect_live_slots_filtered(pool, f, all_locals.max_slot, live_temps0, seed_slots);
-  let live_temps: Vec[bool] = collect_live_temps(pool, f, all_locals.max_temp, live_slots);
+  let seed_slots: Vec[bool] = collect_live_slots_all_reads(f);
+  let live_temps0: Vec[bool] = collect_live_temps(pool, f, seed_slots);
+  let live_slots: Vec[bool] = collect_live_slots_filtered(pool, f, live_temps0, seed_slots);
+  let live_temps: Vec[bool] = collect_live_temps(pool, f, live_slots);
   // `live_temps` is already derived from read-use closure on kept instructions;
   // reuse it directly to avoid an extra full-function scan.
   let read_temps: Vec[bool] = live_temps;
