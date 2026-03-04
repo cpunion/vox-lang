@@ -172,6 +172,8 @@ fn find_mod_idx_from_index(ix: Vec[ModIndexEntry], path: String) -> i32 {
 struct FindFuncDeclResult { found: bool, mod_path: String, fd: ast.FuncDecl }
 struct GenericFuncCacheEntry { key: String, res: FindFuncDeclResult }
 struct FindGenericFuncCachedResult { cache: Vec[GenericFuncCacheEntry], res: FindFuncDeclResult }
+struct ImportsCacheEntry { key: String, imps: tc.Imports }
+struct FindImportsCachedResult { cache: Vec[ImportsCacheEntry], ar: tc.ImportsResult }
 
 fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDeclResult {
   let mut i: i32 = 0;
@@ -270,6 +272,10 @@ fn generic_func_cache_key(mod_path: String, name: String) -> String {
   return mod_path.concat("\n").concat(name);
 }
 
+fn imports_cache_key(mod_path: String, file: String) -> String {
+  return mod_path.concat("\n").concat(file);
+}
+
 fn find_generic_func_cached(ctx: tc.Ctx, m: tc.WorldModule, name: String, cache0: Vec[GenericFuncCacheEntry]) -> FindGenericFuncCachedResult {
   let key: String = generic_func_cache_key(m.path, name);
   let mut lo: i32 = 0;
@@ -290,6 +296,33 @@ fn find_generic_func_cached(ctx: tc.Ctx, m: tc.WorldModule, name: String, cache0
   let mut cache: Vec[GenericFuncCacheEntry] = cache0;
   cache.insert(lo, GenericFuncCacheEntry { key: key, res: res });
   return FindGenericFuncCachedResult { cache: cache, res: res };
+}
+
+fn find_imports_cached(w: tc.World, mod_path: String, mod_imports: Vec[ast.ImportDecl], file: String, cache0: Vec[ImportsCacheEntry]) -> FindImportsCachedResult {
+  let key: String = imports_cache_key(mod_path, file);
+  let mut lo: i32 = 0;
+  let mut hi: i32 = cache0.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let ce: ImportsCacheEntry = cache0.get(mid);
+    if ce.key == key {
+      return FindImportsCachedResult {
+        cache: cache0,
+        ar: tc.ImportsResult { ok: true, err: tc.TcError.None, imps: ce.imps },
+      };
+    }
+    if ce.key < key {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  let ar: tc.ImportsResult = tc.build_imports(w, mod_path, mod_imports, file);
+  if !ar.ok { return FindImportsCachedResult { cache: cache0, ar: ar }; }
+  let mut cache: Vec[ImportsCacheEntry] = cache0;
+  cache.insert(lo, ImportsCacheEntry { key: key, imps: ar.imps });
+  return FindImportsCachedResult { cache: cache, ar: ar };
 }
 
 struct FindImplSigResult { found: bool, sig: tc.ImplSig }
@@ -531,6 +564,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
   let mut cached_mod_path: String = "";
   let mut cached_mod_idx: i32 = -1;
   let mut generic_func_cache: Vec[GenericFuncCacheEntry] = Vec();
+  let mut imports_cache: Vec[ImportsCacheEntry] = Vec();
   let mut ti: i32 = 0;
   while ti < tasks.len() {
     let t: FuncTask = tasks.get(ti);
@@ -551,9 +585,10 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
     if t.func_idx != -1 {
       // Normal task.
       let fd: ast.FuncDecl = m2.prog.funcs.get(t.func_idx);
-      let ar: tc.ImportsResult = tc.build_imports(w, t.mod_path, m2.prog.imports, fd.file);
-      if !ar.ok { return err0(p, tc.tc_error_to_string(ar.err)); }
-      imps = ar.imps;
+      let air: FindImportsCachedResult = find_imports_cached(w, t.mod_path, m2.prog.imports, fd.file, imports_cache);
+      imports_cache = air.cache;
+      if !air.ar.ok { return err0(p, tc.tc_error_to_string(air.ar.err)); }
+      imps = air.ar.imps;
       want_name = qname(t.mod_path, fd.name);
       if has_str_sorted(emitted_sorted, want_name) { ti = ti + 1; continue; }
       r = gen_func(ctx, w, t.mod_path, imps, m2.prog.exprs, fd);
@@ -623,9 +658,10 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         md = id.methods.get(t.impl_m_idx);
         file_for_imports = md.file;
       }
-      let ar: tc.ImportsResult = tc.build_imports(w, body_mod_path, body_imports, file_for_imports);
-      if !ar.ok { return err0(p, tc.tc_error_to_string(ar.err)); }
-      imps = ar.imps;
+      let air: FindImportsCachedResult = find_imports_cached(w, body_mod_path, body_imports, file_for_imports, imports_cache);
+      imports_cache = air.cache;
+      if !air.ar.ok { return err0(p, tc.tc_error_to_string(air.ar.err)); }
+      imps = air.ar.imps;
       want_name = qname(t.mod_path, t.impl_name);
       if has_str_sorted(emitted_sorted, want_name) { ti = ti + 1; continue; }
       if md.is_async {
@@ -670,9 +706,10 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         if fm2_idx < 0 { return err0(p, "missing module for generic body"); }
         bmod = w.mods.get(fm2_idx);
       }
-      let ar: tc.ImportsResult = tc.build_imports(w, bmod.path, bmod.prog.imports, fr.fd.file);
-      if !ar.ok { return err0(p, tc.tc_error_to_string(ar.err)); }
-      imps = ar.imps;
+      let air: FindImportsCachedResult = find_imports_cached(w, bmod.path, bmod.prog.imports, fr.fd.file, imports_cache);
+      imports_cache = air.cache;
+      if !air.ar.ok { return err0(p, tc.tc_error_to_string(air.ar.err)); }
+      imps = air.ar.imps;
       want_name = qname(t.mod_path, t.inst_name);
       if has_str_sorted(emitted_sorted, want_name) { ti = ti + 1; continue; }
       r = gen_func_inst(ctx, w, bmod.path, t.mod_path, imps, bmod.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs, t.const_subs);
