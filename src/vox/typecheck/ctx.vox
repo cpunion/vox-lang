@@ -37,6 +37,140 @@ pub struct Ctx {
   pub consts: Vec[ConstSig],
   pub statics: Vec[StaticSig],
   pub ffi_export_symbols: Vec[FfiExportSym],
+  pub func_lookup_index: Vec[SymLookupIndexEntry],
+  pub struct_lookup_index: Vec[SymLookupIndexEntry],
+  pub enum_lookup_index: Vec[SymLookupIndexEntry],
+  pub trait_lookup_index: Vec[SymLookupIndexEntry],
+  pub func_lookup_index_src_len: i32,
+  pub struct_lookup_index_src_len: i32,
+  pub enum_lookup_index_src_len: i32,
+  pub trait_lookup_index_src_len: i32,
+}
+
+pub struct SymLookupIndexEntry {
+  pub mod_path: String,
+  pub name: String,
+  pub idx: i32,
+}
+
+pub fn sym_lookup_norm_mod_path(mod_path0: String) -> String {
+  if mod_path0 == "main" { return ""; }
+  return mod_path0;
+}
+
+fn sym_lookup_entry_lt(a: SymLookupIndexEntry, mod_path: String, name: String) -> bool {
+  if a.mod_path < mod_path { return true; }
+  if a.mod_path > mod_path { return false; }
+  return a.name < name;
+}
+
+fn sym_lookup_entry_eq(a: SymLookupIndexEntry, mod_path: String, name: String) -> bool {
+  return a.mod_path == mod_path && a.name == name;
+}
+
+fn sym_lookup_index_insert_sorted_unique(xs0: Vec[SymLookupIndexEntry], e: SymLookupIndexEntry) -> Vec[SymLookupIndexEntry] {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = xs0.len();
+  while lo < hi {
+    let mid: i32 = lo + (hi - lo) / 2;
+    let cur: SymLookupIndexEntry = xs0.get(mid);
+    if sym_lookup_entry_lt(cur, e.mod_path, e.name) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  if lo < xs0.len() {
+    let cur2: SymLookupIndexEntry = xs0.get(lo);
+    if sym_lookup_entry_eq(cur2, e.mod_path, e.name) {
+      return xs0;
+    }
+  }
+  let mut out: Vec[SymLookupIndexEntry] = Vec();
+  let mut i: i32 = 0;
+  while i < lo {
+    out.push(xs0.get(i));
+    i = i + 1;
+  }
+  out.push(e);
+  while i < xs0.len() {
+    out.push(xs0.get(i));
+    i = i + 1;
+  }
+  return out;
+}
+
+fn build_func_lookup_index(fs: Vec[FuncSym]) -> Vec[SymLookupIndexEntry] {
+  let mut out: Vec[SymLookupIndexEntry] = Vec();
+  let mut i: i32 = 0;
+  while i < fs.len() {
+    let f: FuncSym = fs.get(i);
+    out = sym_lookup_index_insert_sorted_unique(out, SymLookupIndexEntry {
+      mod_path: sym_lookup_norm_mod_path(f.mod_path),
+      name: f.name,
+      idx: i,
+    });
+    i = i + 1;
+  }
+  return out;
+}
+
+fn build_struct_lookup_index(ss: Vec[StructSig]) -> Vec[SymLookupIndexEntry] {
+  let mut out: Vec[SymLookupIndexEntry] = Vec();
+  let mut i: i32 = 0;
+  while i < ss.len() {
+    let s: StructSig = ss.get(i);
+    out = sym_lookup_index_insert_sorted_unique(out, SymLookupIndexEntry {
+      mod_path: sym_lookup_norm_mod_path(s.mod_path),
+      name: s.name,
+      idx: i,
+    });
+    i = i + 1;
+  }
+  return out;
+}
+
+fn build_enum_lookup_index(es: Vec[EnumSig]) -> Vec[SymLookupIndexEntry] {
+  let mut out: Vec[SymLookupIndexEntry] = Vec();
+  let mut i: i32 = 0;
+  while i < es.len() {
+    let e: EnumSig = es.get(i);
+    out = sym_lookup_index_insert_sorted_unique(out, SymLookupIndexEntry {
+      mod_path: sym_lookup_norm_mod_path(e.mod_path),
+      name: e.name,
+      idx: i,
+    });
+    i = i + 1;
+  }
+  return out;
+}
+
+fn build_trait_lookup_index(ts: Vec[TraitSig]) -> Vec[SymLookupIndexEntry] {
+  let mut out: Vec[SymLookupIndexEntry] = Vec();
+  let mut i: i32 = 0;
+  while i < ts.len() {
+    let t: TraitSig = ts.get(i);
+    out = sym_lookup_index_insert_sorted_unique(out, SymLookupIndexEntry {
+      mod_path: sym_lookup_norm_mod_path(t.mod_path),
+      name: t.name,
+      idx: i,
+    });
+    i = i + 1;
+  }
+  return out;
+}
+
+pub fn ctx_rebuild_sym_lookup_indexes(ctx0: Ctx) -> Ctx {
+  let mut c: Ctx = ctx0;
+  c.func_lookup_index = build_func_lookup_index(c.funcs);
+  c.struct_lookup_index = build_struct_lookup_index(c.structs);
+  c.enum_lookup_index = build_enum_lookup_index(c.enums);
+  c.trait_lookup_index = build_trait_lookup_index(c.traits);
+  c.func_lookup_index_src_len = c.funcs.len();
+  c.struct_lookup_index_src_len = c.structs.len();
+  c.enum_lookup_index_src_len = c.enums.len();
+  c.trait_lookup_index_src_len = c.traits.len();
+  return c;
 }
 
 fn normalize_ptr_bits(bits0: i32) -> i32 {
@@ -193,6 +327,14 @@ pub fn new_ctx_with_target(bits0: i32, target_os0: String, target_arch0: String)
     ty_f32: -1, ty_f64: -1,
     ty_string: -1,
     funcs: Vec(), structs: Vec(), enums: Vec(), traits: Vec(), impls: Vec(), async_fns: Vec(), async_inst_reqs: Vec(), type_aliases: Vec(), consts: Vec(), statics: Vec(), ffi_export_symbols: Vec(),
+    func_lookup_index: Vec(),
+    struct_lookup_index: Vec(),
+    enum_lookup_index: Vec(),
+    trait_lookup_index: Vec(),
+    func_lookup_index_src_len: 0,
+    struct_lookup_index_src_len: 0,
+    enum_lookup_index_src_len: 0,
+    trait_lookup_index_src_len: 0,
   };
   let r0: InternResult = intern_ty(c, ir.ty_bad()); c = r0.ctx; c.ty_bad = r0.idx;
   let r1: InternResult = intern_ty(c, ir.ty_unit()); c = r1.ctx; c.ty_unit = r1.idx;
