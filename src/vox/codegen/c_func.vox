@@ -250,8 +250,10 @@ fn signed_max_macro(k: ir.TyKind) -> String {
 }
 
 struct LocalsResult { slots: Vec[IdTy], temps: Vec[IdTy], max_slot: i32, max_temp: i32 }
+struct LocalBoundsResult { max_slot: i32, max_temp: i32 }
 
 fn locals0() -> LocalsResult { return LocalsResult { slots: Vec(), temps: Vec(), max_slot: -1, max_temp: -1 }; }
+fn local_bounds0() -> LocalBoundsResult { return LocalBoundsResult { max_slot: -1, max_temp: -1 }; }
 
 fn temp_flags_new(max_temp: i32) -> Vec[bool] {
   let mut flags: Vec[bool] = Vec();
@@ -755,19 +757,36 @@ fn locals_add_instr(pool: ir.TyPool, l0: LocalsResult, ins: ir.Instr) -> LocalsR
   };
 }
 
-fn collect_locals_all(pool: ir.TyPool, f: ir.Func) -> LocalsResult {
-  let mut l: LocalsResult = locals0();
+fn collect_local_bounds(f: ir.Func) -> LocalBoundsResult {
+  let mut out: LocalBoundsResult = local_bounds0();
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
     let b: ir.Block = f.blocks.get(bi);
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
-      l = locals_add_instr(pool, l, b.instrs.get(ii));
+      let ins: ir.Instr = b.instrs.get(ii);
+      out = match ins {
+        ir.Instr.SlotDecl(sid, _ty) => LocalBoundsResult {
+          max_slot: if sid > out.max_slot { sid } else { out.max_slot },
+          max_temp: out.max_temp,
+        },
+        _ => {
+          let tid: i32 = instr_dst_temp_id(ins);
+          if tid == -1 {
+            out
+          } else {
+            LocalBoundsResult {
+              max_slot: out.max_slot,
+              max_temp: if tid > out.max_temp { tid } else { out.max_temp },
+            }
+          }
+        },
+      };
       ii = ii + 1;
     }
     bi = bi + 1;
   }
-  return l;
+  return out;
 }
 
 fn collect_locals(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool], live_slots: Vec[bool], read_temps: Vec[bool]) -> LocalsResult {
@@ -1691,7 +1710,7 @@ fn enum_variant_tag(en: ir.EnumDecl, variant: String) -> i32 {
 }
 
 pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32], enum_order: Vec[i32]) -> Vec[String] {
-  let all_locals: LocalsResult = collect_locals_all(pool, f);
+  let all_locals: LocalBoundsResult = collect_local_bounds(f);
   let seed_slots: Vec[bool] = collect_live_slots_all_reads(f, all_locals.max_slot);
   let live_temps0: Vec[bool] = collect_live_temps(pool, f, all_locals.max_temp, seed_slots);
   let live_slots: Vec[bool] = collect_live_slots_filtered(pool, f, all_locals.max_slot, live_temps0, seed_slots);
