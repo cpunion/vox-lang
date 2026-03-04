@@ -632,6 +632,7 @@ fn temp_flags_true_count(flags: Vec[bool]) -> i32 {
 fn collect_live_temps(pool: ir.TyPool, f: ir.Func, max_temp: i32, live_slots: Vec[bool]) -> Vec[bool] {
   // Seed from always-kept instruction operands and terminators.
   let mut live: Vec[bool] = temp_flags_new(max_temp);
+  let mut closure_instrs: Vec[ir.Instr] = Vec();
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
     let b: ir.Block = f.blocks.get(bi);
@@ -642,6 +643,8 @@ fn collect_live_temps(pool: ir.TyPool, f: ir.Func, max_temp: i32, live_slots: Ve
         let dst: i32 = instr_dst_temp_id(ins);
         if dst == -1 || !instr_can_drop_when_dead(pool, ins) {
           live = mark_live_from_instr_operands(live, ins);
+        } else {
+          closure_instrs.push(ins);
         }
       }
       ii = ii + 1;
@@ -655,21 +658,14 @@ fn collect_live_temps(pool: ir.TyPool, f: ir.Func, max_temp: i32, live_slots: Ve
   let mut live_count: i32 = temp_flags_true_count(live);
   while live_count != prev_live_count {
     prev_live_count = live_count;
-    let mut b2: i32 = 0;
-    while b2 < f.blocks.len() {
-      let bb: ir.Block = f.blocks.get(b2);
-      let mut i2: i32 = 0;
-      while i2 < bb.instrs.len() {
-        let ins2: ir.Instr = bb.instrs.get(i2);
-        if !instr_is_dead_slot_instr(ins2, live_slots) {
-          let dst2: i32 = instr_dst_temp_id(ins2);
-          if dst2 != -1 && temp_flag_get(live, dst2) && instr_can_drop_when_dead(pool, ins2) {
-            live = mark_live_from_instr_operands(live, ins2);
-          }
-        }
-        i2 = i2 + 1;
+    let mut i2: i32 = 0;
+    while i2 < closure_instrs.len() {
+      let ins2: ir.Instr = closure_instrs.get(i2);
+      let dst2: i32 = instr_dst_temp_id(ins2);
+      if dst2 != -1 && temp_flag_get(live, dst2) {
+        live = mark_live_from_instr_operands(live, ins2);
       }
-      b2 = b2 + 1;
+      i2 = i2 + 1;
     }
     live_count = temp_flags_true_count(live);
   }
@@ -1531,7 +1527,43 @@ fn block_index_by_name_ordered(blocks: Vec[ir.Block], order: Vec[i32], name: Str
   return -1;
 }
 
-fn collect_reachable_block_indices(blocks: Vec[ir.Block], order: Vec[i32]) -> Vec[i32] {
+struct BlockJumpTables { next_a: Vec[i32], next_b: Vec[i32] }
+
+fn build_block_jump_tables(blocks: Vec[ir.Block], order: Vec[i32]) -> BlockJumpTables {
+  let mut next_a: Vec[i32] = Vec();
+  let mut next_b: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < blocks.len() {
+    next_a.push(-1);
+    next_b.push(-1);
+    i = i + 1;
+  }
+  let mut bi: i32 = 0;
+  while bi < blocks.len() {
+    let b: ir.Block = blocks.get(bi);
+    if b.has_term {
+      let edge_a: String = match b.term {
+        ir.Term.Br(target) => target,
+        ir.Term.CondBr(_cond, t, _e) => t,
+        _ => "",
+      };
+      if edge_a != "" {
+        next_a.set(bi, block_index_by_name_ordered(blocks, order, edge_a));
+      }
+      let edge_b: String = match b.term {
+        ir.Term.CondBr(_cond, _t, e) => e,
+        _ => "",
+      };
+      if edge_b != "" {
+        next_b.set(bi, block_index_by_name_ordered(blocks, order, edge_b));
+      }
+    }
+    bi = bi + 1;
+  }
+  return BlockJumpTables { next_a: next_a, next_b: next_b };
+}
+
+fn collect_reachable_block_indices(blocks: Vec[ir.Block], jumps: BlockJumpTables) -> Vec[i32] {
   if blocks.len() == 0 { return Vec(); }
 
   let mut queue: Vec[i32] = Vec();
@@ -1556,28 +1588,15 @@ fn collect_reachable_block_indices(blocks: Vec[ir.Block], order: Vec[i32]) -> Ve
     visited.set(bi, true);
     let b: ir.Block = blocks.get(bi);
     if !b.has_term { continue; }
-    let edge_a: String = match b.term {
-      ir.Term.Br(target) => target,
-      ir.Term.CondBr(_cond, t, _e) => t,
-      _ => "",
-    };
-    if edge_a != "" {
-      let next_a: i32 = block_index_by_name_ordered(blocks, order, edge_a);
-      if next_a >= 0 && !queued.get(next_a) {
-        queue.push(next_a);
-        queued.set(next_a, true);
-      }
+    let next_a: i32 = jumps.next_a.get(bi);
+    if next_a >= 0 && !queued.get(next_a) {
+      queue.push(next_a);
+      queued.set(next_a, true);
     }
-    let edge_b: String = match b.term {
-      ir.Term.CondBr(_cond, _t, e) => e,
-      _ => "",
-    };
-    if edge_b != "" {
-      let next_b: i32 = block_index_by_name_ordered(blocks, order, edge_b);
-      if next_b >= 0 && !queued.get(next_b) {
-        queue.push(next_b);
-        queued.set(next_b, true);
-      }
+    let next_b: i32 = jumps.next_b.get(bi);
+    if next_b >= 0 && !queued.get(next_b) {
+      queue.push(next_b);
+      queued.set(next_b, true);
     }
   }
 
@@ -1590,7 +1609,7 @@ fn collect_reachable_block_indices(blocks: Vec[ir.Block], order: Vec[i32]) -> Ve
   return out;
 }
 
-fn collect_jump_target_flags(blocks: Vec[ir.Block], order: Vec[i32], reachable: Vec[i32]) -> Vec[bool] {
+fn collect_jump_target_flags(blocks: Vec[ir.Block], jumps: BlockJumpTables, reachable: Vec[i32]) -> Vec[bool] {
   let mut flags: Vec[bool] = Vec();
   let mut i0: i32 = 0;
   while i0 < reachable.len() {
@@ -1622,30 +1641,27 @@ fn collect_jump_target_flags(blocks: Vec[ir.Block], order: Vec[i32], reachable: 
       continue;
     }
     let b: ir.Block = blocks.get(bi);
-    let fallthrough: String = if ri + 1 < reachable.len() { blocks.get(reachable.get(ri + 1)).name } else { "" };
+    let fallthrough_idx: i32 = if ri + 1 < reachable.len() { reachable.get(ri + 1) } else { -1 };
     if b.has_term {
-      let target_a: String = match b.term {
-        ir.Term.Br(target) => if target != fallthrough { target } else { "" },
-        ir.Term.CondBr(_cond, t, e) => if t == fallthrough { e } else { t },
-        _ => "",
+      let idx_a0: i32 = jumps.next_a.get(bi);
+      let idx_b0: i32 = jumps.next_b.get(bi);
+      let target_a_idx: i32 = match b.term {
+        ir.Term.Br(_target) => idx_a0,
+        ir.Term.CondBr(_cond, _t, _e) => if idx_a0 == fallthrough_idx { idx_b0 } else { idx_a0 },
+        _ => -1,
       };
-      if target_a != fallthrough && target_a != "" {
-        let idx_a: i32 = block_index_by_name_ordered(blocks, order, target_a);
-        if idx_a >= 0 {
-          let pos_a: i32 = reachable_pos.get(idx_a);
-          if pos_a >= 0 { flags.set(pos_a, true); }
-        }
+      if target_a_idx >= 0 && target_a_idx != fallthrough_idx {
+        let pos_a: i32 = reachable_pos.get(target_a_idx);
+        if pos_a >= 0 { flags.set(pos_a, true); }
       }
-      let target_b: String = match b.term {
-        ir.Term.CondBr(_cond, t, e) => if t == fallthrough || e == fallthrough { "" } else { e },
-        _ => "",
+      let target_b_idx: i32 = match b.term {
+        ir.Term.CondBr(_cond, _t, _e) =>
+          if idx_a0 == fallthrough_idx || idx_b0 == fallthrough_idx { -1 } else { idx_b0 },
+        _ => -1,
       };
-      if target_b != "" {
-        let idx_b: i32 = block_index_by_name_ordered(blocks, order, target_b);
-        if idx_b >= 0 {
-          let pos_b: i32 = reachable_pos.get(idx_b);
-          if pos_b >= 0 { flags.set(pos_b, true); }
-        }
+      if target_b_idx >= 0 {
+        let pos_b: i32 = reachable_pos.get(target_b_idx);
+        if pos_b >= 0 { flags.set(pos_b, true); }
       }
     }
     ri = ri + 1;
@@ -1769,8 +1785,9 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]
 
   // Blocks
   let block_order: Vec[i32] = block_name_order(f.blocks);
-  let block_indices: Vec[i32] = collect_reachable_block_indices(f.blocks, block_order);
-  let jump_target_flags: Vec[bool] = collect_jump_target_flags(f.blocks, block_order, block_indices);
+  let block_jumps: BlockJumpTables = build_block_jump_tables(f.blocks, block_order);
+  let block_indices: Vec[i32] = collect_reachable_block_indices(f.blocks, block_jumps);
+  let jump_target_flags: Vec[bool] = collect_jump_target_flags(f.blocks, block_jumps, block_indices);
   let mut ri: i32 = 0;
   while ri < block_indices.len() {
     let bi: i32 = block_indices.get(ri);
