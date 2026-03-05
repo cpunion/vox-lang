@@ -154,6 +154,7 @@ Invalidate unit on any of:
 - 2026-03-05: int-cast codegen now also uses a pointer-width helper for `isize -> u32` upper-bound checks (`vox_iptr_exceeds_u32_max`) so 32-bit targets compile this check away while 64-bit targets keep the overflow guard.
 - 2026-03-05: semantic cache key derivation in build/test paths now hashes only `.vox` sources (`build_cache_sem_key_from_files`) while compile/link/test-build keys still hash mixed sources, so C-source-only edits no longer invalidate `pkg-sem` warm-path decisions.
 - 2026-03-05: build/test hot paths now avoid deriving unused semantic/test keys in shared cache-key helpers (`build_cache_key_pair_from_pkg_source_keys_keep`, `test_build_key_from_pkg_source_keys_keep`), removing one redundant sem-hash loop from `vox build` and one redundant sem-hash loop from `vox test` cache setup.
+- 2026-03-05: package-key scaffolding now has a split pass (`build_cache_pkg_sem_source_keys_with_files`) that emits both `keys` and `sem_keys` from one ordered scan; `vox build`/`vox test` now reuse `sem_keys` directly for `pkg-sem` key derivation, avoiding an extra sem-only rescan of source files on cache-enabled paths.
 
 ## 5. Validation Gates
 
