@@ -3254,6 +3254,8 @@ fn main() -> i32 {
     let mut cache_cpath: String = out_cpath;
     let mut cache_obj: String = out.concat(obj_ext);
     let mut cache_bin: String = out;
+    let mut compile_c_cache_hit: bool = false;
+    let mut compile_reused_cached_c: bool = false;
     let mut compile_cache_hit: bool = false;
     let mut link_cache_hit: bool = false;
     let mut sem_cache_hit: bool = false;
@@ -3273,7 +3275,8 @@ fn main() -> i32 {
       cache_cpath = build_cache_cpath_for_key(compile_key);
       cache_obj = build_cache_obj_path_for_key(compile_key, obj_ext);
       cache_bin = build_cache_bin_for_key(link_key, target_os);
-      compile_cache_hit = build_cache_obj_hit(compile_key, cache_cpath, cache_obj);
+      compile_c_cache_hit = build_cache_c_hit(compile_key, cache_cpath);
+      compile_cache_hit = compile_c_cache_hit && fs.exists(cache_obj);
       link_cache_hit = build_link_cache_hit(link_key, cache_bin);
       sem_cache_hit = build_sem_cache_hit(sem_key);
     }
@@ -3310,24 +3313,29 @@ fn main() -> i32 {
       }
     }
     if !compile_cache_hit {
-      let cp: c.CompileProfileResult =
-        c.compile_files_to_c_profile_for_target(
-          files,
-          emit_opts,
-          target_ptr,
-          target_os,
-          target_arch,
-        );
-      let r: c.CompileResult = cp.r;
-      if !r.ok {
-        print("compile failed: ".concat(r.err).concat("\n"));
-        return 1;
+      if !compile_c_cache_hit {
+        let cp: c.CompileProfileResult =
+          c.compile_files_to_c_profile_for_target(
+            files,
+            emit_opts,
+            target_ptr,
+            target_os,
+            target_arch,
+          );
+        let r: c.CompileResult = cp.r;
+        if !r.ok {
+          print("compile failed: ".concat(r.err).concat("\n"));
+          return 1;
+        }
+        print_compile_warnings(r.warnings);
+        if profile_on { print_compile_profile("compile", cp.p); }
+        fs.mkdir_p(dir_name(cache_cpath));
+        fs.write_string(cache_cpath, r.c);
+        write_emit_c_text(emit_c_enabled, emit_c_path, out_cpath, r.c);
+        compile_c_cache_hit = true;
+      } else {
+        compile_reused_cached_c = true;
       }
-      print_compile_warnings(r.warnings);
-      if profile_on { print_compile_profile("compile", cp.p); }
-      fs.mkdir_p(dir_name(cache_cpath));
-      fs.write_string(cache_cpath, r.c);
-      write_emit_c_text(emit_c_enabled, emit_c_path, out_cpath, r.c);
       fs.mkdir_p(dir_name(cache_obj));
       let cc_obj_cmdline: String = cc_compile_obj_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cache_cpath, cache_obj);
       let cc_obj_t0: i64 = tm.now_ns();
@@ -3375,7 +3383,7 @@ fn main() -> i32 {
         }
       }
     }
-    if compile_cache_hit {
+    if compile_cache_hit || compile_reused_cached_c {
       copy_emit_c_from_file(emit_c_enabled, emit_c_path, out_cpath);
     }
     if cache_enabled && !sem_cache_hit && sem_key != "" {
