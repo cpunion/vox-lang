@@ -178,11 +178,17 @@ fn test_build_cache_contains_all_with_need(hay0: Vec[String], need0: Vec[String]
 }
 
 fn test_build_cache_load_tests(out: String, key: String, cpath: String, bin: String) -> Vec[String] {
+  let compiled: Vec[String] = test_build_cache_load_tests_for_c(out, key, cpath);
+  if compiled.len() == 0 { return compiled; }
+  let has_bin: bool = fs.exists(bin) || fs.exists(bin.concat(".exe"));
+  if !has_bin { return Vec(); }
+  return compiled;
+}
+
+fn test_build_cache_load_tests_for_c(out: String, key: String, cpath: String) -> Vec[String] {
   let meta: String = test_build_cache_meta_path(out);
   if !fs.exists(meta) { return Vec(); }
   if !fs.exists(cpath) { return Vec(); }
-  let has_bin: bool = fs.exists(bin) || fs.exists(bin.concat(".exe"));
-  if !has_bin { return Vec(); }
   let cur: String = txt.trim_space(fs.read_to_string(meta));
   if cur != key { return Vec(); }
   let tests_path: String = test_build_cache_tests_path(out);
@@ -195,12 +201,29 @@ struct TestBuildCacheHitResult {
   hit: bool,
 }
 
-fn test_build_cache_hit_with_tests(out: String, key: String, cpath: String, bin: String, selected0: Vec[String]) -> TestBuildCacheHitResult {
+struct TestBuildCacheStateResult {
+  selected: Vec[String],
+  c_hit: bool,
+  hit: bool,
+}
+
+fn test_build_cache_state_with_tests(out: String, key: String, cpath: String, bin: String, selected0: Vec[String]) -> TestBuildCacheStateResult {
   let selected: Vec[String] = selected0;
-  let compiled: Vec[String] = test_build_cache_load_tests(out, key, cpath, bin);
-  if compiled.len() == 0 { return TestBuildCacheHitResult { selected: selected, hit: false }; }
+  let compiled: Vec[String] = test_build_cache_load_tests_for_c(out, key, cpath);
+  if compiled.len() == 0 {
+    return TestBuildCacheStateResult { selected: selected, c_hit: false, hit: false };
+  }
   let contains: ContainsAllResult = test_build_cache_contains_all_with_need(compiled, selected);
-  return TestBuildCacheHitResult { selected: contains.need, hit: contains.ok };
+  if !contains.ok {
+    return TestBuildCacheStateResult { selected: contains.need, c_hit: false, hit: false };
+  }
+  let has_bin: bool = fs.exists(bin) || fs.exists(bin.concat(".exe"));
+  return TestBuildCacheStateResult { selected: contains.need, c_hit: true, hit: has_bin };
+}
+
+fn test_build_cache_hit_with_tests(out: String, key: String, cpath: String, bin: String, selected0: Vec[String]) -> TestBuildCacheHitResult {
+  let st: TestBuildCacheStateResult = test_build_cache_state_with_tests(out, key, cpath, bin, selected0);
+  return TestBuildCacheHitResult { selected: st.selected, hit: st.hit };
 }
 
 fn write_test_build_cache_with_tests(out: String, key: String, tests0: Vec[String]) -> Vec[String] {

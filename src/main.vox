@@ -3620,13 +3620,15 @@ fn main() -> i32 {
         tjr = tjr + 1;
       }
     }
+    let mut cache_c_hit: bool = false;
     let mut cache_hit: bool = false;
     if cache_enabled {
-      let cache_lookup_result: TestBuildCacheHitResult = test_build_cache_hit_with_tests(test_cache_out, test_build_key, cpath, bin, tests);
-      tests = cache_lookup_result.selected;
-      cache_hit = cache_lookup_result.hit;
+      let cache_state_result: TestBuildCacheStateResult = test_build_cache_state_with_tests(test_cache_out, test_build_key, cpath, bin, tests);
+      tests = cache_state_result.selected;
+      cache_c_hit = cache_state_result.c_hit;
+      cache_hit = cache_state_result.hit;
     }
-    let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, cache_hit, query_shadow_trace);
+    let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, cache_c_hit, query_shadow_trace);
     if query_shadow_on && !skip_query_shadow_prepare {
       let keys_result: BuildCachePkgSourceKeysResult = build_cache_pkg_source_keys_with_files(files);
       files = keys_result.files;
@@ -3663,32 +3665,34 @@ fn main() -> i32 {
       }
     }
     if !cache_hit {
-      tests_for_compile = Vec();
-      let mut tco: i32 = 0;
-      while tco < tests.len() {
-        tests_for_compile.push(tests.get(tco));
-        tco = tco + 1;
-      }
-      let cp: c.CompileProfileResult =
-        c.compile_files_to_c_profile_for_target(
-          files,
-          cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile, c_sources: Vec() },
-          target_ptr,
-          target_os,
-          target_arch,
-        );
-      let r: c.CompileResult = cp.r;
-      if !r.ok {
-        print("compile failed: ".concat(r.err).concat("\n"));
-        return 1;
-      }
-      print_compile_warnings(r.warnings);
-      if profile_on { print_compile_profile("test-compile", cp.p); }
+      if !cache_c_hit {
+        tests_for_compile = Vec();
+        let mut tco: i32 = 0;
+        while tco < tests.len() {
+          tests_for_compile.push(tests.get(tco));
+          tco = tco + 1;
+        }
+        let cp: c.CompileProfileResult =
+          c.compile_files_to_c_profile_for_target(
+            files,
+            cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile, c_sources: Vec() },
+            target_ptr,
+            target_os,
+            target_arch,
+          );
+        let r: c.CompileResult = cp.r;
+        if !r.ok {
+          print("compile failed: ".concat(r.err).concat("\n"));
+          return 1;
+        }
+        print_compile_warnings(r.warnings);
+        if profile_on { print_compile_profile("test-compile", cp.p); }
 
-      fs.mkdir_p(dir_name(cpath));
+        fs.mkdir_p(dir_name(cpath));
+        fs.write_string(cpath, r.c);
+        write_emit_c_text(emit_c_enabled, emit_c_path, cpath, r.c);
+      }
       fs.mkdir_p(dir_name(bin));
-      fs.write_string(cpath, r.c);
-      write_emit_c_text(emit_c_enabled, emit_c_path, cpath, r.c);
       let cmdline: String = cc_cmdline_for_target(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), cpath, bin);
       let cc_t0: i64 = tm.now_ns();
       let code: i32 = exec_cmd(cmdline, trace_exec);
@@ -3699,10 +3703,11 @@ fn main() -> i32 {
         print("cc exit: ".concat(code.to_string()).concat("\n"));
         return 1;
       }
-      if cache_enabled {
+      if cache_enabled && !cache_c_hit {
         tests = write_test_build_cache_with_tests(test_cache_out, test_build_key, tests);
       }
-    } else {
+    }
+    if cache_hit || cache_c_hit {
       copy_emit_c_from_file(emit_c_enabled, emit_c_path, cpath);
     }
     if query_shadow_on {
