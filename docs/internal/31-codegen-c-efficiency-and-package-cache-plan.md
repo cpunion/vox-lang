@@ -156,6 +156,8 @@ Invalidate unit on any of:
 - 2026-03-05: build/test hot paths now avoid deriving unused semantic/test keys in shared cache-key helpers (`build_cache_key_pair_from_pkg_source_keys_keep`, `test_build_key_from_pkg_source_keys_keep`), removing one redundant sem-hash loop from `vox build` and one redundant sem-hash loop from `vox test` cache setup.
 - 2026-03-05: package-key scaffolding now has a split pass (`build_cache_pkg_sem_source_keys_with_files`) that emits both `keys` and `sem_keys` from one ordered scan; `vox build`/`vox test` now reuse `sem_keys` directly for `pkg-sem` key derivation, avoiding an extra sem-only rescan of source files on cache-enabled paths.
 - 2026-03-05: `build_cache_pkg_source_keys_with_files` was switched back to a keys-only scan (no implicit sem key work), so query-shadow-only/non-cache paths avoid paying split-key computation overhead.
+- 2026-03-05: warm build cache copy now memoizes the local `out.c` sync by compile key (`build_cache_output_copy_hit` + `.build.copy.key` sidecar) and skips cache->output C copy when unchanged, removing repeated large C-file copy work on hot cache hits.
+- 2026-03-05: added src-only `.vox` walker (`walk_src_vox_files`) and switched build/dependency/stage1-load paths to it, avoiding redundant `tests/**` traversal on non-test flows; on macOS arm64 selfhost warm `vox build` dropped from ~0.75s to ~0.64s in local measurements.
 
 ## 5. Validation Gates
 
