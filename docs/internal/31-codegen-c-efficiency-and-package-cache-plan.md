@@ -151,6 +151,7 @@ Invalidate unit on any of:
 - 2026-03-05: moved test-only direct key-derivation helpers (`build_cache_key_from_pkg_source_keys`, `test_build_cache_key_from_pkg_source_keys`) into cache tests and renamed to `build_cache_test_key_from_pkg_source_keys` / `cache_test_build_test_key_from_pkg_source_keys`, removing these utilities from production cache helper code.
 - 2026-03-05: int-cast codegen now uses a pointer-width helper for `u32 -> isize` upper-bound checks (`vox_u32_exceeds_intptr_max`) so 64-bit targets compile the check away via preprocessor guard while 32-bit targets keep runtime overflow protection.
 - 2026-03-05: int-cast codegen now also uses a pointer-width helper for `usize -> i64` upper-bound checks (`vox_uptr_exceeds_i64_max`) so 32-bit targets compile this check away while 64-bit targets keep the overflow guard.
+- 2026-03-05: int-cast codegen now also uses a pointer-width helper for `isize -> u32` upper-bound checks (`vox_iptr_exceeds_u32_max`) so 32-bit targets compile this check away while 64-bit targets keep the overflow guard.
 
 ## 5. Validation Gates
 
