@@ -143,6 +143,7 @@ Invalidate unit on any of:
 - 2026-03-05: test path now adds the same partial-hit behavior: when test cache has valid `meta + .c + test-list` but the test binary is missing, it skips compile/typecheck and only re-runs `cc` from cached `.c` to rebuild the test executable.
 - 2026-03-05: test mode now also derives/stamps `pkg-sem` keys and skips `compile_query_shadow_prepare_for_target_with_files` when semantic cache already hits (with query-shadow trace off), reusing precomputed package dep hashes instead of re-deriving them in the test query-shadow branch.
 - 2026-03-05: test-build cache key derivation switched from per-file full-text re-hash (`test-build-cache-v4`) to package-source-key folding (`test-build-cache-v5`) and now computes test-cache key + sem key from one shared pkg-key pass in `vox test`, reducing duplicate cache hashing work on warm paths.
+- 2026-03-05: removed now-unused `test_build_cache_key_with_files` wrapper and switched cache tests to direct `build_cache_pkg_source_keys_with_files(...).keys` + `test_build_cache_key_from_pkg_source_keys(...)`, continuing cache-helper wrapper shrink.
 
 ## 5. Validation Gates
 
