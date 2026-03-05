@@ -158,6 +158,8 @@ Invalidate unit on any of:
 - 2026-03-05: `build_cache_pkg_source_keys_with_files` was switched back to a keys-only scan (no implicit sem key work), so query-shadow-only/non-cache paths avoid paying split-key computation overhead.
 - 2026-03-05: warm build cache copy now memoizes the local `out.c` sync by compile key (`build_cache_output_copy_hit` + `.build.copy.key` sidecar) and skips cache->output C copy when unchanged, removing repeated large C-file copy work on hot cache hits.
 - 2026-03-05: added src-only `.vox` walker (`walk_src_vox_files`) and switched build/dependency/stage1-load paths to it, avoiding redundant `tests/**` traversal on non-test flows; on macOS arm64 selfhost warm `vox build` dropped from ~0.75s to ~0.64s in local measurements.
+- 2026-03-05: non-test source collection now uses compiler-internal `walk_src_non_test_vox_files` (`src/**` minus `*_test.vox`) across `vox build`, stage1 preload, dependency source load, and lock digest walk, removing unnecessary `src/*_test.vox` participation from non-test paths.
+- 2026-03-05: `write_lockfile` now writes `vox.lock` only when content changes (`write_string_if_changed`), so repeated build/test runs with stable dependency graph no longer rewrite lockfile on every invocation.
 
 ## 5. Validation Gates
 
