@@ -926,9 +926,36 @@ fn discover_tests(paths: Vec[String]) -> Vec[String] {
   return discover_tests_with_paths(paths).tests;
 }
 
+fn discover_tests_from_cached_test_files(paths0: Vec[String], cached_test_files0: Vec[ld.SourceFile]) -> DiscoverTestsResult {
+  let paths: Vec[String] = paths0;
+  let cached_test_files: Vec[ld.SourceFile] = cached_test_files0;
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < cached_test_files.len() {
+    let sf: ld.SourceFile = cached_test_files.get(i);
+    let pth: String = sf.path;
+    let txt: String = sf.text;
+    let r: p.ParseResult = p.parse_text_with_path(pth, txt);
+    if r.err != p.ParseError.None {
+      // Fail fast: discovery should not ignore syntax errors.
+      panic(p.parse_error_to_string_with_source(pth, txt, r.err));
+    }
+    let mp: String = ld.mod_path_from_file_path(pth);
+    let mut fi: i32 = 0;
+    while fi < r.prog.funcs.len() {
+      let fd: ast.FuncDecl = r.prog.funcs.get(fi);
+      if txt.has_prefix(fd.name, "test_") {
+        out.push(qname(mp, fd.name));
+      }
+      fi = fi + 1;
+    }
+    i = i + 1;
+  }
+  return DiscoverTestsResult { paths: paths, tests: sort_strings(out), cached_files: cached_test_files };
+}
+
 fn discover_tests_with_paths(paths0: Vec[String]) -> DiscoverTestsResult {
   let paths: Vec[String] = paths0;
-  let mut out: Vec[String] = Vec();
   let mut cached_files: Vec[ld.SourceFile] = Vec();
   let mut i: i32 = 0;
   while i < paths.len() {
@@ -936,24 +963,10 @@ fn discover_tests_with_paths(paths0: Vec[String]) -> DiscoverTestsResult {
     if is_test_file_for_discovery(pth) {
       let txt: String = fs.read_to_string(pth);
       cached_files.push(ld.SourceFile { path: pth, text: txt });
-      let r: p.ParseResult = p.parse_text_with_path(pth, txt);
-      if r.err != p.ParseError.None {
-        // Fail fast: discovery should not ignore syntax errors.
-        panic(p.parse_error_to_string_with_source(pth, txt, r.err));
-      }
-      let mp: String = ld.mod_path_from_file_path(pth);
-      let mut fi: i32 = 0;
-      while fi < r.prog.funcs.len() {
-        let fd: ast.FuncDecl = r.prog.funcs.get(fi);
-        if txt.has_prefix(fd.name, "test_") {
-          out.push(qname(mp, fd.name));
-        }
-        fi = fi + 1;
-      }
     }
     i = i + 1;
   }
-  return DiscoverTestsResult { paths: paths, tests: sort_strings(out), cached_files: cached_files };
+  return discover_tests_from_cached_test_files(paths, cached_files);
 }
 
 fn text_contains(s: String, part: String) -> bool {
