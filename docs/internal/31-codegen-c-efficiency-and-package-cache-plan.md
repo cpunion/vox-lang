@@ -134,6 +134,7 @@ Invalidate unit on any of:
 - 2026-03-03: codegen now filters unreachable IR blocks (from function entry CFG reachability) before C emission, avoiding dead block body emission in generated C.
 - 2026-03-03: vec op arg/index checks now reuse shared inline runtime-core helpers (`vox_vec_require_handle` / `vox_vec_checked_index` / `vox_vec_checked_insert_index`) instead of repeating the same guard branches at each vec op site; on macOS arm64 selfhost C dropped from 552,511 to 550,280 lines and `goto` count from 29,592 to 28,445.
 - 2026-03-05: build cache scaffolding added `pkg-sem-v1` metadata read/write helpers (`build_sem_cache_hit` / `write_build_sem_cache`) and wired build flow to stamp semantic cache keys alongside existing `pkg-obj`/`link` keys, preparing phase-C semantic cache reuse without changing current compile behavior.
+- 2026-03-05: build-mode cache key derivation now computes compile/link/sem keys in a single pass (`build_cache_key_triple_from_pkg_source_keys`) instead of separate pair+single derivations, reducing duplicated package-key hashing in cache bookkeeping paths.
 
 ## 5. Validation Gates
 
