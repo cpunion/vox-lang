@@ -2299,25 +2299,81 @@ fn load_files(paths: Vec[String]) -> Vec[ld.SourceFile] {
   return out;
 }
 
-fn load_files_with_cached(paths: Vec[String], cached0: Vec[ld.SourceFile]) -> Vec[ld.SourceFile] {
+struct SourceFilePathIndexOrderResult {
+  cached: Vec[ld.SourceFile],
+  order: Vec[i32],
+}
+
+struct CachedSourceLookupResult {
+  ok: bool,
+  text: String,
+}
+
+fn source_file_path_index_order(cached0: Vec[ld.SourceFile]) -> SourceFilePathIndexOrderResult {
   let cached: Vec[ld.SourceFile] = cached0;
+  let mut order: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < cached.len() {
+    order.push(i);
+    i = i + 1;
+  }
+
+  let mut gap: i32 = order.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < order.len() {
+      let keep: i32 = order.get(oi);
+      let keep_path: String = cached.get(keep).path;
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: i32 = order.get(j - gap);
+        if cached.get(prev).path <= keep_path { break; }
+        order.set(j, prev);
+        j = j - gap;
+      }
+      order.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return SourceFilePathIndexOrderResult { cached: cached, order: order };
+}
+
+fn find_cached_source_text(cached0: Vec[ld.SourceFile], order0: Vec[i32], path: String) -> CachedSourceLookupResult {
+  let cached: Vec[ld.SourceFile] = cached0;
+  let order: Vec[i32] = order0;
+  let mut lo: i32 = 0;
+  let mut hi: i32 = order.len();
+  while lo < hi {
+    let mid: i32 = lo + (hi - lo) / 2;
+    let sf: ld.SourceFile = cached.get(order.get(mid));
+    if sf.path < path {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  if lo < order.len() {
+    let sf: ld.SourceFile = cached.get(order.get(lo));
+    if sf.path == path {
+      return CachedSourceLookupResult { ok: true, text: sf.text };
+    }
+  }
+  return CachedSourceLookupResult { ok: false, text: "" };
+}
+
+fn load_files_with_cached(paths: Vec[String], cached0: Vec[ld.SourceFile]) -> Vec[ld.SourceFile] {
+  let ordered: SourceFilePathIndexOrderResult = source_file_path_index_order(cached0);
+  let cached: Vec[ld.SourceFile] = ordered.cached;
+  let order: Vec[i32] = ordered.order;
   let mut out: Vec[ld.SourceFile] = Vec();
   let mut i: i32 = 0;
   while i < paths.len() {
     let p: String = paths.get(i);
-    let mut hit: bool = false;
-    let mut j: i32 = 0;
-    while j < cached.len() {
-      let sf: ld.SourceFile = cached.get(j);
-      if sf.path == p {
-        out.push(ld.SourceFile { path: p, text: sf.text });
-        hit = true;
-        j = cached.len();
-      } else {
-        j = j + 1;
-      }
-    }
-    if !hit {
+    let hit: CachedSourceLookupResult = find_cached_source_text(cached, order, p);
+    if hit.ok {
+      out.push(ld.SourceFile { path: p, text: hit.text });
+    } else {
       out.push(ld.SourceFile { path: p, text: fs.read_to_string(p) });
     }
     i = i + 1;
