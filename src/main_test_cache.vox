@@ -2,46 +2,10 @@ import "std/fs" as fs
 import "vox/loader" as ld
 import "vox/internal/text" as txt
 
-struct SourceFileOrderResult {
-  files: Vec[ld.SourceFile],
-  order: Vec[i32],
-}
-
 struct SourceFilePkgOrderResult {
   files: Vec[ld.SourceFile],
   pkgs: Vec[String],
   order: Vec[i32],
-}
-
-fn source_file_order_by_path_with_files(files0: Vec[ld.SourceFile]) -> SourceFileOrderResult {
-  let files: Vec[ld.SourceFile] = files0;
-  let mut order: Vec[i32] = Vec();
-  let mut i: i32 = 0;
-  while i < files.len() {
-    order.push(i);
-    i = i + 1;
-  }
-
-  let mut gap: i32 = order.len() / 2;
-  while gap > 0 {
-    let mut oi: i32 = gap;
-    while oi < order.len() {
-      let keep: i32 = order.get(oi);
-      let keep_path: String = files.get(keep).path;
-      let mut j: i32 = oi;
-      while j >= gap {
-        let prev: i32 = order.get(j - gap);
-        if files.get(prev).path <= keep_path { break; }
-        order.set(j, prev);
-        j = j - gap;
-      }
-      order.set(j, keep);
-      oi = oi + 1;
-    }
-    gap = gap / 2;
-  }
-
-  return SourceFileOrderResult { files: files, order: order };
 }
 
 struct StringCopyResult {
@@ -100,27 +64,75 @@ struct TestBuildCacheKeyResult {
   key: String,
 }
 
+struct TestBuildSemKeysKeep {
+  keys: Vec[BuildCachePkgKey],
+  test_key: String,
+  sem_key: String,
+}
+
 fn test_build_cache_key_with_files(files0: Vec[ld.SourceFile], mode: String) -> TestBuildCacheKeyResult {
-  let ordered: SourceFileOrderResult = source_file_order_by_path_with_files(files0);
-  let files: Vec[ld.SourceFile] = ordered.files;
-  let order: Vec[i32] = ordered.order;
+  let pkg_source_keys_result: BuildCachePkgSourceKeysResult = build_cache_pkg_source_keys_with_files(files0);
+  let files: Vec[ld.SourceFile] = pkg_source_keys_result.files;
+  let key: String = test_build_cache_key_from_pkg_source_keys(pkg_source_keys_result.keys, mode);
+  return TestBuildCacheKeyResult { files: files, key: key };
+}
+
+fn test_build_cache_key_from_pkg_source_keys(pkg_source_keys0: Vec[BuildCachePkgKey], mode: String) -> String {
   let mut h: u64 = 1469598103934665603 as u64;
-  h = lock_hash_text(h, "test-build-cache-v4\n");
+  h = lock_hash_text(h, "test-build-cache-v5\n");
   h = lock_hash_text(h, if host_is_windows() { "windows\n" } else { "posix\n" });
   h = lock_hash_text(h, mode);
   h = lock_hash_text(h, "\n");
-
-  let mut oi: i32 = 0;
-  while oi < order.len() {
-    let f: ld.SourceFile = files.get(order.get(oi));
-    h = lock_hash_text(h, "F\n");
-    h = lock_hash_text(h, f.path);
+  let h0: u64 = build_cache_pkg_hash_for_mode_prefix("test-build\n".concat(mode));
+  let mut i: i32 = 0;
+  while i < pkg_source_keys0.len() {
+    let pk: BuildCachePkgKey = build_cache_pkg_key_from_source_hash_prefix(pkg_source_keys0.get(i), h0);
+    h = lock_hash_text(h, "P\n");
+    h = lock_hash_text(h, pk.pkg);
     h = lock_hash_text(h, "\n");
-    h = lock_hash_text(h, f.text);
+    h = lock_hash_text(h, pk.key);
     h = lock_hash_text(h, "\n");
-    oi = oi + 1;
+    i = i + 1;
   }
-  return TestBuildCacheKeyResult { files: files, key: h.to_string() };
+  return h.to_string();
+}
+
+fn test_build_sem_keys_from_pkg_source_keys_keep(pkg_source_keys0: Vec[BuildCachePkgKey], mode: String) -> TestBuildSemKeysKeep {
+  let pkg_source_keys: Vec[BuildCachePkgKey] = pkg_source_keys0;
+  let mut test_h: u64 = 1469598103934665603 as u64;
+  test_h = lock_hash_text(test_h, "test-build-cache-v5\n");
+  test_h = lock_hash_text(test_h, if host_is_windows() { "windows\n" } else { "posix\n" });
+  test_h = lock_hash_text(test_h, mode);
+  test_h = lock_hash_text(test_h, "\n");
+  let test_h0: u64 = build_cache_pkg_hash_for_mode_prefix("test-build\n".concat(mode));
+
+  let sem_mode: String = "sem\n".concat(mode);
+  let mut sem_h: u64 = build_cache_hash_for_mode_prefix(sem_mode);
+  let sem_h0: u64 = build_cache_pkg_hash_for_mode_prefix(sem_mode);
+
+  let mut i: i32 = 0;
+  while i < pkg_source_keys.len() {
+    let tpk: BuildCachePkgKey = build_cache_pkg_key_from_source_hash_prefix(pkg_source_keys.get(i), test_h0);
+    test_h = lock_hash_text(test_h, "P\n");
+    test_h = lock_hash_text(test_h, tpk.pkg);
+    test_h = lock_hash_text(test_h, "\n");
+    test_h = lock_hash_text(test_h, tpk.key);
+    test_h = lock_hash_text(test_h, "\n");
+
+    let spk: BuildCachePkgKey = build_cache_pkg_key_from_source_hash_prefix(pkg_source_keys.get(i), sem_h0);
+    sem_h = lock_hash_text(sem_h, "P\n");
+    sem_h = lock_hash_text(sem_h, spk.pkg);
+    sem_h = lock_hash_text(sem_h, "\n");
+    sem_h = lock_hash_text(sem_h, spk.key);
+    sem_h = lock_hash_text(sem_h, "\n");
+    i = i + 1;
+  }
+
+  return TestBuildSemKeysKeep {
+    keys: pkg_source_keys,
+    test_key: test_h.to_string(),
+    sem_key: sem_h.to_string(),
+  };
 }
 
 fn parse_test_build_cache_tests(text: String) -> Vec[String] {
