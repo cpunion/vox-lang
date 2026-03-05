@@ -416,8 +416,40 @@ fn build_cache_pkg_sem_source_keys_with_files(files0: Vec[ld.SourceFile]) -> Bui
 }
 
 fn build_cache_pkg_source_keys_with_files(files0: Vec[ld.SourceFile]) -> BuildCachePkgSourceKeysResult {
-  let split: BuildCachePkgSemSourceKeysResult = build_cache_pkg_sem_source_keys_with_files(files0);
-  return BuildCachePkgSourceKeysResult { files: split.files, keys: split.keys };
+  let ordered: SourceFilePkgOrderResult = source_file_order_by_pkg_path_with_files(files0);
+  let files: Vec[ld.SourceFile] = ordered.files;
+  let pkgs: Vec[String] = ordered.pkgs;
+  let order: Vec[i32] = ordered.order;
+
+  let mut out: Vec[BuildCachePkgKey] = Vec();
+  let mut has_cur: bool = false;
+  let mut cur_pkg: String = "";
+  let mut cur_h: u64 = 0 as u64;
+  let mut oi: i32 = 0;
+  while oi < order.len() {
+    let idx: i32 = order.get(oi);
+    let f: ld.SourceFile = files.get(idx);
+    let pkg: String = pkgs.get(idx);
+    if !has_cur || pkg != cur_pkg {
+      if has_cur {
+        out.push(BuildCachePkgKey { pkg: cur_pkg, key: cur_h.to_string() });
+      }
+      let d: BuildCachePkgDigest = build_cache_pkg_digest_init(pkg);
+      cur_pkg = d.pkg;
+      cur_h = d.h;
+      has_cur = true;
+    }
+    cur_h = lock_hash_text(cur_h, "F\n");
+    cur_h = lock_hash_text(cur_h, f.path);
+    cur_h = lock_hash_text(cur_h, "\n");
+    cur_h = lock_hash_text(cur_h, f.text);
+    cur_h = lock_hash_text(cur_h, "\n");
+    oi = oi + 1;
+  }
+  if has_cur {
+    out.push(BuildCachePkgKey { pkg: cur_pkg, key: cur_h.to_string() });
+  }
+  return BuildCachePkgSourceKeysResult { files: files, keys: out };
 }
 
 fn build_cache_hash_for_mode_prefix(mode: String) -> u64 {
