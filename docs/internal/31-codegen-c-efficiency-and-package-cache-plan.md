@@ -167,6 +167,7 @@ Invalidate unit on any of:
 - 2026-03-05: `source_file_path_index_order` now short-circuits when cached file paths are already non-decreasing, skipping shell-sort work on the common discover-key preloaded path set.
 - 2026-03-05: cache string normalization paths now use `sort_strings_if_needed` (already-sorted fast path) for parse/format/key-derivation helpers in `src/main_test_cache.vox`, avoiding redundant sorts on canonical cache files while preserving deterministic ordering when input is unsorted.
 - 2026-03-05: `load_files_with_cached` now uses a linear merge fast path when both selected `paths` and cached source paths are already sorted, reducing cached lookup matching from O(n log m) to O(n+m) on common warm test runs; it falls back to binary-search lookup when either side is unsorted.
+- 2026-03-05: cache-hit parse helpers (`parse_test_build_cache_tests`, `parse_discover_tests_cache_list`) now preserve file order directly (no read-time sorting); deterministic sortedness remains enforced on cache-write path via `format_*_with_tests`.
 
 ## 5. Validation Gates
 
