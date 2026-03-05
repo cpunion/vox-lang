@@ -166,6 +166,7 @@ Invalidate unit on any of:
 - 2026-03-05: on test-discovery cache hit (`discover_tests_cached_with_paths`), preloaded file texts from discover-key hashing are now returned via `cached_files` instead of dropped, removing one redundant read of selected test sources in subsequent load phase.
 - 2026-03-05: `source_file_path_index_order` now short-circuits when cached file paths are already non-decreasing, skipping shell-sort work on the common discover-key preloaded path set.
 - 2026-03-05: cache string normalization paths now use `sort_strings_if_needed` (already-sorted fast path) for parse/format/key-derivation helpers in `src/main_test_cache.vox`, avoiding redundant sorts on canonical cache files while preserving deterministic ordering when input is unsorted.
+- 2026-03-05: `load_files_with_cached` now uses a linear merge fast path when both selected `paths` and cached source paths are already sorted, reducing cached lookup matching from O(n log m) to O(n+m) on common warm test runs; it falls back to binary-search lookup when either side is unsorted.
 
 ## 5. Validation Gates
 
