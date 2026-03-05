@@ -669,21 +669,33 @@ fn discover_tests_cache_list_path() -> String {
   return "target/debug/.vox_test_discover.list";
 }
 
-fn discover_tests_cache_key_from_test_paths(paths0: Vec[String]) -> String {
+struct DiscoverTestsCacheKeyFromTestPathsKeep {
+  key: String,
+  test_files: Vec[ld.SourceFile],
+}
+
+fn discover_tests_cache_key_from_test_paths_keep(paths0: Vec[String]) -> DiscoverTestsCacheKeyFromTestPathsKeep {
   let mut h: u64 = 1469598103934665603 as u64;
   h = lock_hash_text(h, "discover-tests-cache-v1\n");
   let paths: Vec[String] = sort_strings(paths0);
+  let mut test_files: Vec[ld.SourceFile] = Vec();
   let mut j: i32 = 0;
   while j < paths.len() {
     let pth: String = paths.get(j);
+    let text: String = fs.read_to_string(pth);
+    test_files.push(ld.SourceFile { path: pth, text: text });
     h = lock_hash_text(h, "P\n");
     h = lock_hash_text(h, pth);
     h = lock_hash_text(h, "\n");
-    h = lock_hash_text(h, fs.read_to_string(pth));
+    h = lock_hash_text(h, text);
     h = lock_hash_text(h, "\n");
     j = j + 1;
   }
-  return h.to_string();
+  return DiscoverTestsCacheKeyFromTestPathsKeep { key: h.to_string(), test_files: test_files };
+}
+
+fn discover_tests_cache_key_from_test_paths(paths0: Vec[String]) -> String {
+  return discover_tests_cache_key_from_test_paths_keep(paths0).key;
 }
 
 fn parse_discover_tests_cache_list(text: String) -> Vec[String] {
@@ -733,7 +745,8 @@ fn discover_tests_cached_with_paths(paths0: Vec[String]) -> DiscoverTestsResult 
     if is_test_file_for_discovery(p) { test_paths.push(p); }
     pi = pi + 1;
   }
-  let key: String = discover_tests_cache_key_from_test_paths(test_paths);
+  let key_result: DiscoverTestsCacheKeyFromTestPathsKeep = discover_tests_cache_key_from_test_paths_keep(test_paths);
+  let key: String = key_result.key;
   let key_path: String = discover_tests_cache_key_path();
   let list_path: String = discover_tests_cache_list_path();
   if fs.exists(key_path) && fs.exists(list_path) {
@@ -742,7 +755,7 @@ fn discover_tests_cached_with_paths(paths0: Vec[String]) -> DiscoverTestsResult 
       return DiscoverTestsResult { paths: paths, tests: parse_discover_tests_cache_list(fs.read_to_string(list_path)), cached_files: Vec() };
     }
   }
-  let discovered: DiscoverTestsResult = discover_tests_with_paths(paths);
+  let discovered: DiscoverTestsResult = discover_tests_from_cached_test_files(paths, key_result.test_files);
   let paths_out: Vec[String] = discovered.paths;
   let tests: Vec[String] = discovered.tests;
   let tests_out: Vec[String] = write_discover_tests_cache_with_tests(key, tests);

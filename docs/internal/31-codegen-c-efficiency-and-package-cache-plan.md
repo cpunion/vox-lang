@@ -161,6 +161,7 @@ Invalidate unit on any of:
 - 2026-03-05: non-test source collection now uses compiler-internal `walk_src_non_test_vox_files` (`src/**` minus `*_test.vox`) across `vox build`, stage1 preload, dependency source load, and lock digest walk, removing unnecessary `src/*_test.vox` participation from non-test paths.
 - 2026-03-05: `write_lockfile` now writes `vox.lock` only when content changes (`write_string_if_changed`), so repeated build/test runs with stable dependency graph no longer rewrite lockfile on every invocation.
 - 2026-03-05: lock verification now returns computed `lock_deps` and build/test write path reuses them (`write_lockfile_from_lock_deps`), removing the second dependency digest pass that previously happened in `verify_lockfile_or_ok` + `write_lockfile`.
+- 2026-03-05: test discovery cache miss path now reuses test-file text loaded during discover-key hashing (`discover_tests_cache_key_from_test_paths_keep`) for parse/discovery (`discover_tests_from_cached_test_files`), avoiding one redundant full read of every discovered test file on miss path.
 
 ## 5. Validation Gates
 
