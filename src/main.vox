@@ -748,6 +748,7 @@ struct SrcPresenceResult {
 struct DiscoverTestsResult {
   paths: Vec[String],
   tests: Vec[String],
+  cached_files: Vec[ld.SourceFile],
 }
 
 fn detect_src_presence(paths0: Vec[String]) -> SrcPresenceResult {
@@ -928,11 +929,13 @@ fn discover_tests(paths: Vec[String]) -> Vec[String] {
 fn discover_tests_with_paths(paths0: Vec[String]) -> DiscoverTestsResult {
   let paths: Vec[String] = paths0;
   let mut out: Vec[String] = Vec();
+  let mut cached_files: Vec[ld.SourceFile] = Vec();
   let mut i: i32 = 0;
   while i < paths.len() {
     let pth: String = paths.get(i);
     if is_test_file_for_discovery(pth) {
       let txt: String = fs.read_to_string(pth);
+      cached_files.push(ld.SourceFile { path: pth, text: txt });
       let r: p.ParseResult = p.parse_text_with_path(pth, txt);
       if r.err != p.ParseError.None {
         // Fail fast: discovery should not ignore syntax errors.
@@ -950,7 +953,7 @@ fn discover_tests_with_paths(paths0: Vec[String]) -> DiscoverTestsResult {
     }
     i = i + 1;
   }
-  return DiscoverTestsResult { paths: paths, tests: sort_strings(out) };
+  return DiscoverTestsResult { paths: paths, tests: sort_strings(out), cached_files: cached_files };
 }
 
 fn text_contains(s: String, part: String) -> bool {
@@ -2283,6 +2286,32 @@ fn load_files(paths: Vec[String]) -> Vec[ld.SourceFile] {
   return out;
 }
 
+fn load_files_with_cached(paths: Vec[String], cached0: Vec[ld.SourceFile]) -> Vec[ld.SourceFile] {
+  let cached: Vec[ld.SourceFile] = cached0;
+  let mut out: Vec[ld.SourceFile] = Vec();
+  let mut i: i32 = 0;
+  while i < paths.len() {
+    let p: String = paths.get(i);
+    let mut hit: bool = false;
+    let mut j: i32 = 0;
+    while j < cached.len() {
+      let sf: ld.SourceFile = cached.get(j);
+      if sf.path == p {
+        out.push(ld.SourceFile { path: p, text: sf.text });
+        hit = true;
+        j = cached.len();
+      } else {
+        j = j + 1;
+      }
+    }
+    if !hit {
+      out.push(ld.SourceFile { path: p, text: fs.read_to_string(p) });
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
 fn load_stage1_std_from_repo_root(root: String) -> Vec[ld.SourceFile] {
   let rels: Vec[String] = srcw.walk_src_non_test_vox_files(root);
   let mut out: Vec[ld.SourceFile] = Vec();
@@ -3558,6 +3587,7 @@ fn main() -> i32 {
     }
     let discovered_result: DiscoverTestsResult = if test_list_only { discover_tests_cached_fast_with_paths(paths) } else { discover_tests_cached_with_paths(paths) };
     let discovered: Vec[String] = discovered_result.tests;
+    let cached_discovery_files: Vec[ld.SourceFile] = discovered_result.cached_files;
     paths = discovered_result.paths;
     let discovered_count: i32 = discovered.len();
     let prev_failed_count: i32 = prev_failed.len();
@@ -3608,7 +3638,7 @@ fn main() -> i32 {
     write_lockfile_from_lock_deps(vr.lock_deps);
     let mut di: i32 = 0;
     while di < dr.files.len() { files.push(dr.files.get(di)); di = di + 1; }
-    let user: Vec[ld.SourceFile] = load_files(paths);
+    let user: Vec[ld.SourceFile] = load_files_with_cached(paths, cached_discovery_files);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
     let c_all_test: Vec[String] = filter_pkg_c_sources(srcw.walk_c_files("."));
