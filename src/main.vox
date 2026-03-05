@@ -1232,23 +1232,6 @@ fn query_dep_hashes_from_pkg_keys(keys0: Vec[BuildCachePkgKey]) -> Vec[c.Compile
   return out;
 }
 
-struct PkgKeysCopyResult {
-  keys: Vec[BuildCachePkgKey],
-  copy: Vec[BuildCachePkgKey],
-}
-
-fn copy_pkg_keys_keep(keys0: Vec[BuildCachePkgKey]) -> PkgKeysCopyResult {
-  let keys: Vec[BuildCachePkgKey] = keys0;
-  let mut out: Vec[BuildCachePkgKey] = Vec();
-  let mut i: i32 = 0;
-  while i < keys.len() {
-    let k: BuildCachePkgKey = keys.get(i);
-    out.push(BuildCachePkgKey { pkg: k.pkg, key: k.key });
-    i = i + 1;
-  }
-  return PkgKeysCopyResult { keys: keys, copy: out };
-}
-
 fn print_compile_profile(label: String, p: c.CompilePhaseProfile) -> () {
   let total_ns: i64 = c.compile_profile_total_ns(p);
   let load_ns: i64 = c.compile_profile_load_ns(p);
@@ -3256,20 +3239,11 @@ fn main() -> i32 {
     let cc_target_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
     let obj_ext: String = cc_object_ext(cc_is_msvc_cmd(cc_target_cmd));
     let mut query_shadow_state: c.CompileQueryShadowState = c.CompileQueryShadowState { key: "", predicted_hit: false };
-    let mut query_pkg_keys: Vec[BuildCachePkgKey] = Vec();
-    let mut cache_pkg_keys: Vec[BuildCachePkgKey] = Vec();
+    let mut pkg_keys: Vec[BuildCachePkgKey] = Vec();
     if query_shadow_on || cache_enabled {
       let pkg_keys_result: BuildCachePkgSourceKeysResult = build_cache_pkg_source_keys_with_files(files);
       files = pkg_keys_result.files;
-      if query_shadow_on && cache_enabled {
-        let copied: PkgKeysCopyResult = copy_pkg_keys_keep(pkg_keys_result.keys);
-        query_pkg_keys = copied.keys;
-        cache_pkg_keys = copied.copy;
-      } else if query_shadow_on {
-        query_pkg_keys = pkg_keys_result.keys;
-      } else {
-        cache_pkg_keys = pkg_keys_result.keys;
-      }
+      pkg_keys = pkg_keys_result.keys;
     }
     let mut compile_key: String = "";
     let mut link_key: String = "";
@@ -3281,12 +3255,15 @@ fn main() -> i32 {
     let mut link_cache_hit: bool = false;
     let mut sem_cache_hit: bool = false;
     if cache_enabled {
-      let cache_keys: BuildCacheKeyTriple = build_cache_key_triple_from_pkg_source_keys(
-        cache_pkg_keys,
-        compile_mode,
-        link_mode,
-        "sem\n".concat(compile_mode),
-      );
+      let cache_keys_kept: BuildCacheKeyTripleKeep =
+        build_cache_key_triple_from_pkg_source_keys_keep(
+          pkg_keys,
+          compile_mode,
+          link_mode,
+          "sem\n".concat(compile_mode),
+        );
+      pkg_keys = cache_keys_kept.keys;
+      let cache_keys: BuildCacheKeyTriple = cache_keys_kept.triple;
       compile_key = cache_keys.compile_key;
       link_key = cache_keys.link_key;
       sem_key = cache_keys.sem_key;
@@ -3299,7 +3276,7 @@ fn main() -> i32 {
     }
     let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, sem_cache_hit, query_shadow_trace);
     if query_shadow_on && !skip_query_shadow_prepare {
-      let dep_hashes: Vec[c.CompileQueryDepHash] = query_dep_hashes_from_pkg_keys(query_pkg_keys);
+      let dep_hashes: Vec[c.CompileQueryDepHash] = query_dep_hashes_from_pkg_keys(pkg_keys);
       let mut qswitches: Vec[String] = Vec();
       qswitches.push("compile_mode=".concat(compile_mode));
       qswitches.push("link_mode=".concat(link_mode));

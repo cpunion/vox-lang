@@ -137,6 +137,7 @@ Invalidate unit on any of:
 - 2026-03-05: build-mode cache key derivation now computes compile/link/sem keys in a single pass (`build_cache_key_triple_from_pkg_source_keys`) instead of separate pair+single derivations, reducing duplicated package-key hashing in cache bookkeeping paths.
 - 2026-03-05: build mode now short-circuits `compile_query_shadow_prepare_for_target_with_files` when semantic cache (`pkg-sem`) already hits and query-shadow trace is off, avoiding one redundant query-shadow prepare pass on warm semantic-cache runs.
 - 2026-03-05: test mode now also short-circuits `compile_query_shadow_prepare_for_target_with_files` when test-build cache already hits and query-shadow trace is off, avoiding redundant query-shadow prepare on warm test-cache runs.
+- 2026-03-05: build mode cache/query key plumbing now reuses one `pkg keys` vector through cache-key derivation (`build_cache_key_triple_from_pkg_source_keys_keep`) and only consumes it for query dep hashes when needed, removing unconditional dual-copy (`query/cache`) bookkeeping in the combined cache+query-shadow path.
 
 ## 5. Validation Gates
 
