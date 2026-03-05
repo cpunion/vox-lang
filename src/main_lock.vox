@@ -17,13 +17,11 @@ struct LockDep {
 
 struct ParseLockResult { ok: bool, err: String, deps: Vec[LockDep] }
 
-struct LockVerifyResult { ok: bool, err: String }
+struct LockVerifyResult { ok: bool, err: String, lock_deps: Vec[LockDep] }
 
-struct LockFindDepResult { found: bool, dep: LockDep }
+fn lock_ok(lock_deps: Vec[LockDep]) -> LockVerifyResult { return LockVerifyResult { ok: true, err: "", lock_deps: lock_deps }; }
 
-fn lock_ok() -> LockVerifyResult { return LockVerifyResult { ok: true, err: "" }; }
-
-fn lock_err(msg: String) -> LockVerifyResult { return LockVerifyResult { ok: false, err: msg }; }
+fn lock_err(msg: String) -> LockVerifyResult { return LockVerifyResult { ok: false, err: msg, lock_deps: Vec() }; }
 
 fn empty_lock_dep() -> LockDep {
   return LockDep {
@@ -144,16 +142,15 @@ fn lock_dep_of(d: mf.Dependency) -> LockDep {
   };
 }
 
-fn lock_find_dep_by_name(deps: Vec[LockDep], name: String) -> LockFindDepResult {
+fn lock_deps_from_manifest_deps(deps0: Vec[mf.Dependency]) -> Vec[LockDep] {
+  let deps: Vec[mf.Dependency] = deps0;
+  let mut out: Vec[LockDep] = Vec();
   let mut i: i32 = 0;
   while i < deps.len() {
-    let d: LockDep = deps.get(i);
-    if d.name == name {
-      return LockFindDepResult { found: true, dep: d };
-    }
+    out.push(lock_dep_of(deps.get(i)));
     i = i + 1;
   }
-  return LockFindDepResult { found: false, dep: empty_lock_dep() };
+  return out;
 }
 
 fn lock_quote_value(v: String) -> String {
@@ -198,20 +195,14 @@ fn lock_dep_mismatch_detail(expected: LockDep, actual: LockDep) -> String {
 }
 
 fn verify_lockfile_or_ok(deps: Vec[mf.Dependency]) -> LockVerifyResult {
+  let expected: Vec[LockDep] = lock_deps_from_manifest_deps(deps);
   if !fs.exists("vox.lock") {
-    return lock_ok();
+    return lock_ok(expected);
   }
   let txt: String = fs.read_to_string("vox.lock");
   let pr: ParseLockResult = parse_lockfile(txt);
   if !pr.ok {
     return lock_err(pr.err);
-  }
-
-  let mut expected: Vec[LockDep] = Vec();
-  let mut i: i32 = 0;
-  while i < deps.len() {
-    expected.push(lock_dep_of(deps.get(i)));
-    i = i + 1;
   }
 
   if pr.deps.len() != expected.len() {
@@ -224,11 +215,23 @@ fn verify_lockfile_or_ok(deps: Vec[mf.Dependency]) -> LockVerifyResult {
   let mut ei: i32 = 0;
   while ei < expected.len() {
     let e: LockDep = expected.get(ei);
-    let fr: LockFindDepResult = lock_find_dep_by_name(pr.deps, e.name);
-    if !fr.found {
+    let mut found: bool = false;
+    let mut found_dep: LockDep = empty_lock_dep();
+    let mut pi: i32 = 0;
+    while pi < pr.deps.len() {
+      let p: LockDep = pr.deps.get(pi);
+      if p.name == e.name {
+        found = true;
+        found_dep = p;
+        pi = pr.deps.len();
+      } else {
+        pi = pi + 1;
+      }
+    }
+    if !found {
       return lock_err("missing dependency in vox.lock: ".concat(e.name));
     }
-    let mismatch: String = lock_dep_mismatch_detail(e, fr.dep);
+    let mismatch: String = lock_dep_mismatch_detail(e, found_dep);
     if mismatch != "" {
       return lock_err(mismatch);
     }
@@ -238,11 +241,20 @@ fn verify_lockfile_or_ok(deps: Vec[mf.Dependency]) -> LockVerifyResult {
   let mut ai: i32 = 0;
   while ai < pr.deps.len() {
     let a: LockDep = pr.deps.get(ai);
-    let fr: LockFindDepResult = lock_find_dep_by_name(expected, a.name);
-    if !fr.found {
+    let mut found: bool = false;
+    let mut ei2: i32 = 0;
+    while ei2 < expected.len() {
+      if expected.get(ei2).name == a.name {
+        found = true;
+        ei2 = expected.len();
+      } else {
+        ei2 = ei2 + 1;
+      }
+    }
+    if !found {
       return lock_err("unexpected dependency in vox.lock: ".concat(a.name));
     }
     ai = ai + 1;
   }
-  return lock_ok();
+  return lock_ok(expected);
 }
