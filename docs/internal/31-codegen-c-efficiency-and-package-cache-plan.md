@@ -170,6 +170,7 @@ Invalidate unit on any of:
 - 2026-03-05: cache-hit parse helpers (`parse_test_build_cache_tests`, `parse_discover_tests_cache_list`) now preserve file order directly (no read-time sorting); deterministic sortedness remains enforced on cache-write path via `format_*_with_tests`.
 - 2026-03-05: package source ordering helper (`source_file_order_by_pkg_path_with_files`) now short-circuits when source files are already non-decreasing by `(pkg,path)`, skipping shell-sort work on common preordered source lists while preserving the existing sort fallback for unsorted input.
 - 2026-03-05: sem-key derivation/stamping is now gated by `query-shadow + build-cache` (`should_use_sem_cache`), so default cache-enabled runs reuse keys-only pkg hashing and avoid sem-key/meta work when query shadow is off.
+- 2026-03-05: package owner classification for cache key scans now fast-paths common non-`pkg/*` roots (`src/`, `dep/`, `tests/`, `std/`, `examples/`, `target/`) to `main`, avoiding unnecessary `mod_path_from_file_path` work on most build/test source lists.
 
 ## 5. Validation Gates
 
