@@ -173,6 +173,7 @@ Invalidate unit on any of:
 - 2026-03-05: package owner classification for cache key scans now fast-paths common non-`pkg/*` roots (`src/`, `dep/`, `tests/`, `std/`, `examples/`, `target/`) to `main`, avoiding unnecessary `mod_path_from_file_path` work on most build/test source lists.
 - 2026-03-05: package owner classification now also fast-paths dependency virtual paths (`<dep_name>/src/...`) to `pkg/<dep_name>`, so dependency-source cache scans avoid per-file `mod_path_from_file_path` for the common dep layout.
 - 2026-03-05: cache metadata/list writers now use `write_string_if_changed` (`build/test cache key sidecars`, `discover-tests cache list/key`, and `test-build cache list/key`) to avoid rewriting unchanged cache files on hot runs.
+- 2026-03-05: moved test-only triple-key derivation helper/types (`BuildCacheKeyTriple*` + `build_cache_key_triple_from_pkg_source_keys_keep`) out of production cache helper module into cache tests (`BuildCacheTestKeyTriple*`), further shrinking runtime cache surface and generated forwarding noise.
 
 ## 5. Validation Gates
 
