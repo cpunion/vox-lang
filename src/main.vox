@@ -1207,6 +1207,13 @@ fn query_shadow_trace_enabled(trace_exec: bool) -> bool {
   return trace_exec || env_truthy(proc.getenv("VOX_QUERY_SHADOW_TRACE"));
 }
 
+fn should_skip_query_shadow_prepare(cache_enabled: bool, sem_cache_hit: bool, query_shadow_trace: bool) -> bool {
+  if !cache_enabled { return false; }
+  if !sem_cache_hit { return false; }
+  if query_shadow_trace { return false; }
+  return true;
+}
+
 fn query_dep_hashes_from_pkg_keys(keys0: Vec[BuildCachePkgKey]) -> Vec[c.CompileQueryDepHash] {
   let mut out: Vec[c.CompileQueryDepHash] = Vec();
   let mut i: i32 = 0;
@@ -3246,6 +3253,8 @@ fn main() -> i32 {
     let query_shadow_on: bool = query_shadow_enabled();
     let query_shadow_trace: bool = query_shadow_trace_enabled(trace_exec);
     let cache_enabled: bool = build_cache_enabled();
+    let cc_target_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
+    let obj_ext: String = cc_object_ext(cc_is_msvc_cmd(cc_target_cmd));
     let mut query_shadow_state: c.CompileQueryShadowState = c.CompileQueryShadowState { key: "", predicted_hit: false };
     let mut query_pkg_keys: Vec[BuildCachePkgKey] = Vec();
     let mut cache_pkg_keys: Vec[BuildCachePkgKey] = Vec();
@@ -3262,7 +3271,34 @@ fn main() -> i32 {
         cache_pkg_keys = pkg_keys_result.keys;
       }
     }
-    if query_shadow_on {
+    let mut compile_key: String = "";
+    let mut link_key: String = "";
+    let mut sem_key: String = "";
+    let mut cache_cpath: String = out_cpath;
+    let mut cache_obj: String = out.concat(obj_ext);
+    let mut cache_bin: String = out;
+    let mut compile_cache_hit: bool = false;
+    let mut link_cache_hit: bool = false;
+    let mut sem_cache_hit: bool = false;
+    if cache_enabled {
+      let cache_keys: BuildCacheKeyTriple = build_cache_key_triple_from_pkg_source_keys(
+        cache_pkg_keys,
+        compile_mode,
+        link_mode,
+        "sem\n".concat(compile_mode),
+      );
+      compile_key = cache_keys.compile_key;
+      link_key = cache_keys.link_key;
+      sem_key = cache_keys.sem_key;
+      cache_cpath = build_cache_cpath_for_key(compile_key);
+      cache_obj = build_cache_obj_path_for_key(compile_key, obj_ext);
+      cache_bin = build_cache_bin_for_key(link_key, target_os);
+      compile_cache_hit = build_cache_obj_hit(compile_key, cache_cpath, cache_obj);
+      link_cache_hit = build_link_cache_hit(link_key, cache_bin);
+      sem_cache_hit = build_sem_cache_hit(sem_key);
+    }
+    let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, sem_cache_hit, query_shadow_trace);
+    if query_shadow_on && !skip_query_shadow_prepare {
       let dep_hashes: Vec[c.CompileQueryDepHash] = query_dep_hashes_from_pkg_keys(query_pkg_keys);
       let mut qswitches: Vec[String] = Vec();
       qswitches.push("compile_mode=".concat(compile_mode));
@@ -3292,34 +3328,6 @@ fn main() -> i32 {
       if query_shadow_trace {
         print(c.compile_query_shadow_trace_line("build", query_shadow_state).concat("\n"));
       }
-    }
-    let cc_target_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
-    let obj_ext: String = cc_object_ext(cc_is_msvc_cmd(cc_target_cmd));
-    let mut compile_key: String = "";
-    let mut link_key: String = "";
-    let mut sem_key: String = "";
-    let mut cache_cpath: String = out_cpath;
-    let mut cache_obj: String = out.concat(obj_ext);
-    let mut cache_bin: String = out;
-    let mut compile_cache_hit: bool = false;
-    let mut link_cache_hit: bool = false;
-    let mut sem_cache_hit: bool = false;
-    if cache_enabled {
-      let cache_keys: BuildCacheKeyTriple = build_cache_key_triple_from_pkg_source_keys(
-        cache_pkg_keys,
-        compile_mode,
-        link_mode,
-        "sem\n".concat(compile_mode),
-      );
-      compile_key = cache_keys.compile_key;
-      link_key = cache_keys.link_key;
-      sem_key = cache_keys.sem_key;
-      cache_cpath = build_cache_cpath_for_key(compile_key);
-      cache_obj = build_cache_obj_path_for_key(compile_key, obj_ext);
-      cache_bin = build_cache_bin_for_key(link_key, target_os);
-      compile_cache_hit = build_cache_obj_hit(compile_key, cache_cpath, cache_obj);
-      link_cache_hit = build_link_cache_hit(link_key, cache_bin);
-      sem_cache_hit = build_sem_cache_hit(sem_key);
     }
     if !compile_cache_hit {
       let cp: c.CompileProfileResult =
