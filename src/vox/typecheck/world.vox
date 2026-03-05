@@ -2,6 +2,7 @@ import "vox/ast" as ast
 import "vox/internal/text" as txt
 
 struct FindModResult { found: bool, idx: i32 }
+struct FindTwoModIdxsResult { left_idx: i32, right_idx: i32 }
 
 fn find_mod(w: World, path: String) -> FindModResult {
   let ms: Vec[WorldModule] = w.mods;
@@ -13,6 +14,20 @@ fn find_mod(w: World, path: String) -> FindModResult {
     i = i + 1;
   }
   return FindModResult { found: false, idx: -1 };
+}
+
+fn find_two_mod_idxs(w: World, left: String, right: String) -> FindTwoModIdxsResult {
+  let ms: Vec[WorldModule] = w.mods;
+  let mut out: FindTwoModIdxsResult = FindTwoModIdxsResult { left_idx: -1, right_idx: -1 };
+  let mut i: i32 = 0;
+  while i < ms.len() {
+    let p: String = ms.get(i).path;
+    if out.left_idx == -1 && p == left { out.left_idx = i; }
+    if out.right_idx == -1 && p == right { out.right_idx = i; }
+    if out.left_idx != -1 && out.right_idx != -1 { return out; }
+    i = i + 1;
+  }
+  return out;
 }
 
 pub struct ImportAlias {
@@ -170,13 +185,12 @@ fn resolve_import_path(w: World, file: String, path: String, sp: ast.Span) -> Re
 
   let local: String = join_base(base, path);
   let pkg: String = "pkg/".concat(path);
-  let local_fm: FindModResult = find_mod(w, local);
-  let pkg_fm: FindModResult = find_mod(w, pkg);
-  if local_fm.found && pkg_fm.found {
+  let pair: FindTwoModIdxsResult = find_two_mod_idxs(w, local, pkg);
+  if pair.left_idx != -1 && pair.right_idx != -1 {
     return err_path_at_code(sp, "ambiguous import: ".concat(path).concat(" (use pkg: or mod:)"), diag_code_import_ambiguous_module());
   }
-  if local_fm.found { return ok_path_with_idx(local, local_fm.idx); }
-  if pkg_fm.found { return ok_path_with_idx(pkg, pkg_fm.idx); }
+  if pair.left_idx != -1 { return ok_path_with_idx(local, pair.left_idx); }
+  if pair.right_idx != -1 { return ok_path_with_idx(pkg, pair.right_idx); }
   // Unknown: keep the local candidate, so the caller can produce a good error.
   return ok_path(local);
 }
