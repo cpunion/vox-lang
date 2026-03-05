@@ -145,6 +145,7 @@ Invalidate unit on any of:
 - 2026-03-05: test-build cache key derivation switched from per-file full-text re-hash (`test-build-cache-v4`) to package-source-key folding (`test-build-cache-v5`) and now computes test-cache key + sem key from one shared pkg-key pass in `vox test`, reducing duplicate cache hashing work on warm paths.
 - 2026-03-05: removed now-unused `test_build_cache_key_with_files` wrapper and switched cache tests to direct `build_cache_pkg_source_keys_with_files(...).keys` + `test_build_cache_key_from_pkg_source_keys(...)`, continuing cache-helper wrapper shrink.
 - 2026-03-05: test-cache subset check now treats cached compiled-test list as pre-sorted and avoids re-sorting `hay` on every state check (`test_build_cache_contains_all_sorted_hay_with_need`), trimming one redundant sort from warm-cache test selection.
+- 2026-03-05: removed additional unused/forwarding test-cache helpers (`test_build_cache_load_tests`, `test_build_cache_hit_with_tests`) and switched remaining tests to `test_build_cache_state_with_tests`, further shrinking cache utility surface.
 
 ## 5. Validation Gates
 
