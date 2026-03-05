@@ -147,6 +147,7 @@ Invalidate unit on any of:
 - 2026-03-05: test-cache subset check now treats cached compiled-test list as pre-sorted and avoids re-sorting `hay` on every state check (`test_build_cache_contains_all_sorted_hay_with_need`), trimming one redundant sort from warm-cache test selection.
 - 2026-03-05: removed additional unused/forwarding test-cache helpers (`test_build_cache_load_tests`, `test_build_cache_hit_with_tests`) and switched remaining tests to `test_build_cache_state_with_tests`, further shrinking cache utility surface.
 - 2026-03-05: removed additional test-only cache key wrappers (`BuildCacheKeyPair`, `build_cache_key_pair_from_pkg_source_keys`, `build_cache_key_triple_from_pkg_source_keys`) and switched tests to `build_cache_key_triple_from_pkg_source_keys_keep(...).triple`.
+- 2026-03-05: moved test-only helpers (`build_cache_pkg_keys`, `build_cache_obj_hit`) out of main cache helper module; tests now use local equivalents (`build_cache_test_pkg_keys_with_mode`, `build_cache_test_obj_hit`) so production cache surface keeps only runtime-used helpers.
 
 ## 5. Validation Gates
 
