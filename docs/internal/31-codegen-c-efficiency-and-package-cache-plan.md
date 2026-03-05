@@ -140,6 +140,7 @@ Invalidate unit on any of:
 - 2026-03-05: build mode cache/query key plumbing now reuses one `pkg keys` vector through cache-key derivation (`build_cache_key_triple_from_pkg_source_keys_keep`) and only consumes it for query dep hashes when needed, removing unconditional dual-copy (`query/cache`) bookkeeping in the combined cache+query-shadow path.
 - 2026-03-05: build/test mode cache keys now include compiler revision (`version@channel`) in mode text, so compiler upgrades invalidate stale `pkg-sem`/`pkg-obj`/`link` cache entries instead of cross-version reusing old artifacts.
 - 2026-03-05: build path now distinguishes `pkg-obj` full hit (`meta + .c + .o`) from C-source-only hit (`meta + .c`); when only `.o` is missing it reuses cached `.c` and recompiles object directly, skipping one full compile/typecheck/codegen pass.
+- 2026-03-05: test path now adds the same partial-hit behavior: when test cache has valid `meta + .c + test-list` but the test binary is missing, it skips compile/typecheck and only re-runs `cc` from cached `.c` to rebuild the test executable.
 
 ## 5. Validation Gates
 
