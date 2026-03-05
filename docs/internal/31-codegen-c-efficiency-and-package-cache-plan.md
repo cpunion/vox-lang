@@ -152,6 +152,7 @@ Invalidate unit on any of:
 - 2026-03-05: int-cast codegen now uses a pointer-width helper for `u32 -> isize` upper-bound checks (`vox_u32_exceeds_intptr_max`) so 64-bit targets compile the check away via preprocessor guard while 32-bit targets keep runtime overflow protection.
 - 2026-03-05: int-cast codegen now also uses a pointer-width helper for `usize -> i64` upper-bound checks (`vox_uptr_exceeds_i64_max`) so 32-bit targets compile this check away while 64-bit targets keep the overflow guard.
 - 2026-03-05: int-cast codegen now also uses a pointer-width helper for `isize -> u32` upper-bound checks (`vox_iptr_exceeds_u32_max`) so 32-bit targets compile this check away while 64-bit targets keep the overflow guard.
+- 2026-03-05: semantic cache key derivation in build/test paths now hashes only `.vox` sources (`build_cache_sem_key_from_files`) while compile/link/test-build keys still hash mixed sources, so C-source-only edits no longer invalidate `pkg-sem` warm-path decisions.
 
 ## 5. Validation Gates
 
