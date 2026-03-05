@@ -1,6 +1,7 @@
 import "vox/ir" as ir
 
 struct IdTy { id: i32, ty: String }
+struct IdTySeq { id: i32, ty: String, seq: i32 }
 
 fn idty_add(v0: Vec[IdTy], id: i32, ty: String) -> Vec[IdTy] {
   let mut v: Vec[IdTy] = v0;
@@ -10,17 +11,43 @@ fn idty_add(v0: Vec[IdTy], id: i32, ty: String) -> Vec[IdTy] {
   return v;
 }
 
-fn idty_table(v: Vec[IdTy], max_id: i32) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+fn idty_unique_sorted_last_wins(v0: Vec[IdTy]) -> Vec[IdTy] {
+  let mut ws: Vec[IdTySeq] = Vec();
   let mut i: i32 = 0;
-  while i <= max_id {
-    out.push("");
+  while i < v0.len() {
+    let it: IdTy = v0.get(i);
+    ws.push(IdTySeq { id: it.id, ty: it.ty, seq: i });
     i = i + 1;
   }
+
+  let mut gap: i32 = ws.len() / 2;
+  while gap > 0 {
+    let mut wi: i32 = gap;
+    while wi < ws.len() {
+      let keep: IdTySeq = ws.get(wi);
+      let mut j: i32 = wi;
+      while j >= gap {
+        let prev: IdTySeq = ws.get(j - gap);
+        if prev.id < keep.id { break; }
+        if prev.id == keep.id && prev.seq <= keep.seq { break; }
+        ws.set(j, prev);
+        j = j - gap;
+      }
+      ws.set(j, keep);
+      wi = wi + 1;
+    }
+    gap = gap / 2;
+  }
+
+  let mut out: Vec[IdTy] = Vec();
   i = 0;
-  while i < v.len() {
-    let it: IdTy = v.get(i);
-    if it.id >= 0 && it.id < out.len() { out.set(it.id, it.ty); }
+  while i < ws.len() {
+    let mut keep: IdTySeq = ws.get(i);
+    while i + 1 < ws.len() && ws.get(i + 1).id == keep.id {
+      i = i + 1;
+      keep = ws.get(i);
+    }
+    if keep.id >= 0 { out.push(IdTy { id: keep.id, ty: keep.ty }); }
     i = i + 1;
   }
   return out;
@@ -1665,8 +1692,8 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]
   // reuse it directly to avoid an extra full-function scan.
   let read_temps: Vec[bool] = live_temps;
   let locals: LocalsResult = collect_locals(pool, f, live_temps, live_slots, read_temps);
-  let slot_types: Vec[String] = idty_table(locals.slots, locals.max_slot);
-  let temp_types: Vec[String] = idty_table(locals.temps, locals.max_temp);
+  let slot_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.slots);
+  let temp_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.temps);
   let mut out: Vec[String] = Vec();
 
   // Signature
@@ -1699,21 +1726,21 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]
   if is_main || f.params.len() != 0 { out.push(""); }
 
   // Slots
-  let mut sid: i32 = 0;
-  while sid <= locals.max_slot {
-    let ty: String = slot_types.get(sid);
-    if ty != "" { out.push("  ".concat(ty).concat(" ").concat(c_slot_name(sid)).concat(";")); }
-    sid = sid + 1;
+  let mut si: i32 = 0;
+  while si < slot_locals.len() {
+    let it: IdTy = slot_locals.get(si);
+    out.push("  ".concat(it.ty).concat(" ").concat(c_slot_name(it.id)).concat(";"));
+    si = si + 1;
   }
 
   // Temps
-  let mut tid: i32 = 0;
-  while tid <= locals.max_temp {
-    let ty: String = temp_types.get(tid);
-    if ty != "" { out.push("  ".concat(ty).concat(" ").concat(c_temp_name(tid)).concat(";")); }
-    tid = tid + 1;
+  let mut ti0: i32 = 0;
+  while ti0 < temp_locals.len() {
+    let it: IdTy = temp_locals.get(ti0);
+    out.push("  ".concat(it.ty).concat(" ").concat(c_temp_name(it.id)).concat(";"));
+    ti0 = ti0 + 1;
   }
-  if locals.max_slot != -1 || locals.max_temp != -1 { out.push(""); }
+  if slot_locals.len() != 0 || temp_locals.len() != 0 { out.push(""); }
 
   // Blocks
   let block_order: Vec[i32] = block_name_order(f.blocks);
