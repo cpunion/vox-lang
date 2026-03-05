@@ -163,6 +163,7 @@ Invalidate unit on any of:
 - 2026-03-05: lock verification now returns computed `lock_deps` and build/test write path reuses them (`write_lockfile_from_lock_deps`), removing the second dependency digest pass that previously happened in `verify_lockfile_or_ok` + `write_lockfile`.
 - 2026-03-05: test discovery cache miss path now reuses test-file text loaded during discover-key hashing (`discover_tests_cache_key_from_test_paths_keep`) for parse/discovery (`discover_tests_from_cached_test_files`), avoiding one redundant full read of every discovered test file on miss path.
 - 2026-03-05: `load_files_with_cached` lookup switched from per-path linear scan of cached files to sorted-index + binary search (`source_file_path_index_order` + `find_cached_source_text`), reducing warm test-load matching from O(n*m) to O((n+m)log m) for large selected test sets.
+- 2026-03-05: on test-discovery cache hit (`discover_tests_cached_with_paths`), preloaded file texts from discover-key hashing are now returned via `cached_files` instead of dropped, removing one redundant read of selected test sources in subsequent load phase.
 
 ## 5. Validation Gates
 
