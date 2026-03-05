@@ -3594,14 +3594,32 @@ fn main() -> i32 {
     let query_shadow_trace: bool = query_shadow_trace_enabled(trace_exec);
     let mut query_shadow_state: c.CompileQueryShadowState = c.CompileQueryShadowState { key: "", predicted_hit: false };
     let cache_enabled: bool = build_cache_enabled();
+    let mut pkg_keys: Vec[BuildCachePkgKey] = Vec();
+    if query_shadow_on || cache_enabled {
+      let pkg_keys_result: BuildCachePkgSourceKeysResult = build_cache_pkg_source_keys_with_files(files);
+      files = pkg_keys_result.files;
+      pkg_keys = pkg_keys_result.keys;
+    }
     let mut test_build_key: String = "";
+    let mut sem_key: String = "";
     let mut test_cache_out: String = "";
     let mut cpath: String = "";
     let mut bin: String = "";
+    let mut sem_cache_hit: bool = false;
     if cache_enabled {
       let test_build_key_result: TestBuildCacheKeyResult = test_build_cache_key_with_files(files, test_mode);
       files = test_build_key_result.files;
       test_build_key = test_build_key_result.key;
+      let sem_keys_kept: BuildCacheKeyTripleKeep =
+        build_cache_key_triple_from_pkg_source_keys_keep(
+          pkg_keys,
+          test_mode,
+          test_mode,
+          "sem\n".concat(test_mode),
+        );
+      pkg_keys = sem_keys_kept.keys;
+      sem_key = sem_keys_kept.triple.sem_key;
+      sem_cache_hit = build_sem_cache_hit(sem_key);
       test_cache_out = test_build_cache_out_for_key(test_build_key);
       cpath = test_build_cache_cpath_for_key(test_build_key);
       bin = test_cache_out;
@@ -3628,11 +3646,9 @@ fn main() -> i32 {
       cache_c_hit = cache_state_result.c_hit;
       cache_hit = cache_state_result.hit;
     }
-    let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, cache_c_hit, query_shadow_trace);
+    let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, cache_c_hit || sem_cache_hit, query_shadow_trace);
     if query_shadow_on && !skip_query_shadow_prepare {
-      let keys_result: BuildCachePkgSourceKeysResult = build_cache_pkg_source_keys_with_files(files);
-      files = keys_result.files;
-      let dep_hashes: Vec[c.CompileQueryDepHash] = query_dep_hashes_from_pkg_keys(keys_result.keys);
+      let dep_hashes: Vec[c.CompileQueryDepHash] = query_dep_hashes_from_pkg_keys(pkg_keys);
       let mut qswitches: Vec[String] = Vec();
       qswitches.push("test_mode=".concat(test_mode));
       qswitches.push("target_triple=".concat(target_triple));
@@ -3709,6 +3725,9 @@ fn main() -> i32 {
     }
     if cache_hit || cache_c_hit {
       copy_emit_c_from_file(emit_c_enabled, emit_c_path, cpath);
+    }
+    if cache_enabled && !sem_cache_hit && sem_key != "" {
+      write_build_sem_cache(sem_key);
     }
     if query_shadow_on {
       c.compile_query_shadow_write(query_shadow_state);
