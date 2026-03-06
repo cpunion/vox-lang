@@ -206,6 +206,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed compile-layer one-hop trace wrapper (`compile_query_shadow_trace_line`) and switched `main` to call `q.parse_load_shadow_trace_line` directly, trimming one forwarding API while keeping trace output unchanged.
 - 2026-03-06: `compile_query_shadow_prepare_for_target` now reuses `compile_query_shadow_prepare_for_target_with_files` and returns only `.state`, removing duplicate trace/no-trace switch and parse-load switch-construction logic while preserving external API behavior.
 - 2026-03-06: `compile_query_shadow_prepare_for_target_with_files` now builds `ParseLoadKeySwitches` once via shared helper (`compile_query_shadow_switches`) and reuses it in trace/no-trace branches, trimming duplicated switch-construction code while preserving query-shadow behavior.
+- 2026-03-06: narrowed `compile_query_shadow_switches` inputs to only switch-related fields (instead of whole `CompileQueryShadowOptions`), avoiding potential by-value carry/copy of unused `dep_hashes` while keeping query-shadow key material unchanged.
 
 ## 5. Validation Gates
 
