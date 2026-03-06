@@ -180,6 +180,7 @@ Invalidate unit on any of:
 - 2026-03-05: inlined two additional single-use cache helpers (`test_build_cache_load_tests_for_c`, `write_discover_tests_cache_with_tests`) into their callers, keeping behavior unchanged while trimming production helper/function count.
 - 2026-03-05: folded `strings_are_non_decreasing` into `sort_strings_if_needed` (single caller), removing one extra helper while preserving sorted-fast-path behavior.
 - 2026-03-05: inlined package-digest initializer helper (`build_cache_pkg_digest_init` + `BuildCachePkgDigest`) at the two package-key accumulation sites, removing another helper/type pair from production cache utilities.
+- 2026-03-05: removed shared string-copy helper/type (`StringCopyResult`, `copy_strings_keep`) and inlined copy loops at the three use sites (`format_test_build_cache_tests_with_tests`, `test_build_cache_contains_all_sorted_hay_with_need`, `format_discover_tests_cache_list_with_tests`), reducing helper surface without behavior change.
 
 ## 5. Validation Gates
 
