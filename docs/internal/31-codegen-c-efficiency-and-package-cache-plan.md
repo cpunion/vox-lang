@@ -198,6 +198,7 @@ Invalidate unit on any of:
 - 2026-03-06: in `vox/query`, added sorted-fast-paths for dependency/file hashing in `parse_load_key`: when `deps`/`files` are already in canonical order, hash directly without building index-order vectors or running shell-sort; unsorted inputs still use the same deterministic fallback ordering.
 - 2026-03-06: removed full `SourceFile` copy in compile query-shadow prepare path: added `parse_load_shadow_prepare_keep_files` in `vox/query` and switched `compile_query_shadow_prepare_for_target_with_files` to consume+return the original `files` vector while deriving the parse-load key, avoiding duplicate source-text copy when query-shadow prepare runs.
 - 2026-03-06: unified query-shadow dependency hash type across `main`/`compile` to `q.ParseLoadDepHash` and removed compile-side conversion loop (`CompileQueryDepHash` -> `ParseLoadDepHash`), trimming one per-prepare vector remap on build/test query-shadow paths.
+- 2026-03-06: query-shadow prepare now skips parse-load shadow-hit metadata I/O when trace is off (`trace_predicted_hit=false`): build/test paths set this from `query_shadow_trace`, so default runs derive key without `fs.exists/read_to_string` hit-probe cost while trace-on behavior remains unchanged.
 
 ## 5. Validation Gates
 
