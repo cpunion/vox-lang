@@ -184,6 +184,7 @@ Invalidate unit on any of:
 - 2026-03-05: inlined test-build cache path wrappers (`test_build_cache_meta_path`, `test_build_cache_tests_path`, `test_build_cache_root_for_key`) into direct callers (`test_build_cache_out_for_key`, `test_build_cache_cpath_for_key`, cache state/write paths), further reducing one-hop helper surface.
 - 2026-03-06: removed single-use test-list fast wrapper (`discover_tests_cached_fast_with_paths`) and inlined the same key/list cache hit path directly at the `vox test --list` call site in `main.vox`, keeping behavior unchanged while shrinking cache helper surface.
 - 2026-03-06: in `vox/query`, inlined single-use shadow-root helper (`parse_load_shadow_root`) into `parse_load_shadow_meta_path`, removing one extra helper frame in query-shadow cache path utilities.
+- 2026-03-06: in `vox/query`, removed single-use byte-hash helper (`hash_byte`) and inlined the same FNV step directly in `hash_text`, trimming one helper frame from parse-load key hashing utilities.
 
 ## 5. Validation Gates
 
