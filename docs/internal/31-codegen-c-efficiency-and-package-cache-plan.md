@@ -223,6 +223,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed compile target-wrapper entry (`compile_main_text_to_c_for_target`) and inlined its default-target behavior into `compile_main_text_to_c` (`64/"unknown"/"unknown"`), reducing wrapper surface without changing existing call-site behavior.
 - 2026-03-06: removed compile profile default-target wrapper (`compile_files_to_c_profile`) and switched remaining internal/test callers to `compile_files_to_c_profile_for_target(..., 64, "unknown", "unknown")`, reducing one-hop wrapper surface with unchanged behavior.
 - 2026-03-06: removed test no-cache path wrapper/type (`TestBuildNoCachePaths`, `test_build_no_cache_paths`) from production cache helpers; `vox test` now computes the same no-cache paths inline and cache tests assert the equivalent path formula directly.
+- 2026-03-06: removed link-cache path wrapper (`build_cache_link_out_for_key`) from production cache helpers and inlined equivalent `target/cache/link-v1/<key>` path construction in metadata/binary path helpers, trimming one-hop helper surface without behavior change.
 
 ## 5. Validation Gates
 
