@@ -222,6 +222,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed compile profile getter wrappers (`compile_profile_*_ns`, `compile_profile_total_ns`) and switched CLI profile rendering to read `CompilePhaseProfile` public fields directly, trimming one-hop API surface without changing profile output semantics.
 - 2026-03-06: removed compile target-wrapper entry (`compile_main_text_to_c_for_target`) and inlined its default-target behavior into `compile_main_text_to_c` (`64/"unknown"/"unknown"`), reducing wrapper surface without changing existing call-site behavior.
 - 2026-03-06: removed compile profile default-target wrapper (`compile_files_to_c_profile`) and switched remaining internal/test callers to `compile_files_to_c_profile_for_target(..., 64, "unknown", "unknown")`, reducing one-hop wrapper surface with unchanged behavior.
+- 2026-03-06: removed test no-cache path wrapper/type (`TestBuildNoCachePaths`, `test_build_no_cache_paths`) from production cache helpers; `vox test` now computes the same no-cache paths inline and cache tests assert the equivalent path formula directly.
 
 ## 5. Validation Gates
 
