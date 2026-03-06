@@ -228,6 +228,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed discover-tests cache-path wrappers (`discover_tests_cache_key_path` / `discover_tests_cache_list_path`) and inlined their constant `target/debug/.vox_test_discover.*` paths at call sites in `main`, cache helpers, and cache tests, trimming dead one-hop helper surface without behavior change.
 - 2026-03-06: removed pkg-obj root wrapper (`build_cache_obj_out_for_key`) and switched remaining call sites to direct `target/cache/pkg-obj-v1/<key>` construction (or `build_cache_obj_path_for_key(..., ext)` in tests), shrinking one-hop cache helper surface without behavior change.
 - 2026-03-06: removed link metadata-path wrapper (`build_cache_meta_path_for_key`) and inlined equivalent `target/cache/link-v1/<key>.build.cache.key` construction at link-cache hit/write sites (and cache path assertion), trimming one-hop helper surface without behavior change.
+- 2026-03-06: removed pkg-obj/pkg-sem metadata-path wrappers (`build_cache_obj_meta_path_for_key`, `build_cache_sem_meta_path_for_key`) and inlined equivalent `<root>/<key>.build.cache.key` construction in hit/write sites and cache path assertions, reducing one-hop helper surface with unchanged behavior.
 
 ## 5. Validation Gates
 
