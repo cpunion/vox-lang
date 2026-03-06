@@ -235,6 +235,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed output-copy cache-key write wrapper (`write_build_cache_output_copy_key`) and inlined equivalent `out_path + ".build.copy.key"` update blocks in build and cache-test call sites, preserving output-copy hit semantics while trimming another one-hop helper.
 - 2026-03-06: removed single-use test compile wrapper (`cc_cmdline_for_target`) and switched the `vox test` compile step to direct `cc_cmdline_for_target_artifact(..., "exe", ...)`, trimming one more one-hop helper frame in CLI build flow.
 - 2026-03-06: removed additional dead `main` helpers with no in-repo callers (`cc_link_flags`, `cc_cmd`, `cc_common_flags`, `filter_pkg_sources`, `discover_tests`, `write_lockfile`, `maybe_handle_local_dev_selfhost`), shrinking stale helper surface without behavior change.
+- 2026-03-06: build/compile toolchain fingerprints now include compiler/archiver version first-lines (`cc_version`, `ar_version`, with `--version` then `-v` fallback), reducing stale cache reuse risk when tool binaries change under stable command names/flags.
 
 ## 5. Validation Gates
 
