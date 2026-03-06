@@ -186,6 +186,7 @@ Invalidate unit on any of:
 - 2026-03-06: in `vox/query`, inlined single-use shadow-root helper (`parse_load_shadow_root`) into `parse_load_shadow_meta_path`, removing one extra helper frame in query-shadow cache path utilities.
 - 2026-03-06: in `vox/query`, removed single-use byte-hash helper (`hash_byte`) and inlined the same FNV step directly in `hash_text`, trimming one helper frame from parse-load key hashing utilities.
 - 2026-03-06: in `vox/query`, inlined single-use file-order helper (`file_indices_by_path`) into `hash_parse_load_files`, keeping deterministic file hashing while reducing one-hop helper indirection.
+- 2026-03-06: in `vox/query`, removed local dep comparator helper (`dep_less`) and inlined equivalent comparison in `dep_indices_sorted`, reducing helper calls in parse-load dependency sort while preserving key order semantics.
 
 ## 5. Validation Gates
 
