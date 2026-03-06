@@ -1168,10 +1168,6 @@ fn env_truthy(raw0: String) -> bool {
   return s == "1" || s == "true" || s == "yes" || s == "on";
 }
 
-fn compile_profile_enabled() -> bool {
-  return env_truthy(proc.getenv("VOX_PROFILE"));
-}
-
 fn build_cache_enabled_from_env(raw: String) -> bool {
   return !env_truthy(raw);
 }
@@ -2534,18 +2530,6 @@ fn normalize_cli_version(v0: String) -> String {
   return v;
 }
 
-fn embedded_version() -> String {
-  return normalize_cli_version(bi.version());
-}
-
-fn embedded_channel() -> String {
-  return txt.trim_space(bi.channel());
-}
-
-fn build_version_override() -> String {
-  return normalize_cli_version(proc.getenv("VOX_BUILD_VERSION"));
-}
-
 fn run_git_capture(root: String, suffix: String, subcmd: String) -> String {
   if !fs.exists(path_join(root, ".git")) { return ""; }
   fs.mkdir_p("target/debug");
@@ -2553,10 +2537,6 @@ fn run_git_capture(root: String, suffix: String, subcmd: String) -> String {
   let cmd: String = "git -C ".concat(shell_quote(root)).concat(" ").concat(subcmd).concat(" > ").concat(shell_quote(out)).concat(" 2>&1");
   if proc.exec(cmd) != 0 { return ""; }
   return txt.trim_space(fs.read_to_string(out));
-}
-
-fn git_head_short(root: String) -> String {
-  return run_git_capture(root, "head_short", "rev-parse --short=12 HEAD");
 }
 
 fn git_dirty(root: String) -> bool {
@@ -2568,10 +2548,6 @@ fn git_count_since_base_tag(root: String, base: String) -> String {
   if base == "" { return ""; }
   let tag: String = "v".concat(base);
   return run_git_capture(root, "count_since_tag", "rev-list --count ".concat(shell_quote(tag).concat("..HEAD")));
-}
-
-fn git_count_total(root: String) -> String {
-  return run_git_capture(root, "count_total", "rev-list --count HEAD");
 }
 
 fn git_exact_base_tag(root: String, base: String) -> bool {
@@ -2681,26 +2657,26 @@ fn maybe_handle_local_dev_selfhost_with_args(args0: Vec[String], trace_exec: boo
 }
 
 fn resolve_cli_version() -> String {
-  let override: String = build_version_override();
+  let override: String = normalize_cli_version(proc.getenv("VOX_BUILD_VERSION"));
   if override != "" { return override; }
 
-  let base0: String = embedded_version();
+  let base0: String = normalize_cli_version(bi.version());
   let base: String = if base0 != "" { base0 } else { "0.0.0" };
   let root: String = stage1_root();
-  let sha: String = git_head_short(root);
+  let sha: String = run_git_capture(root, "head_short", "rev-parse --short=12 HEAD");
   if sha != "" {
     let dirty: bool = git_dirty(root);
     if !dirty && git_exact_base_tag(root, base) { return base; }
 
     let mut n: String = git_count_since_base_tag(root, base);
-    if n == "" { n = git_count_total(root); }
+    if n == "" { n = run_git_capture(root, "count_total", "rev-list --count HEAD"); }
     if n == "" { n = "0"; }
 
     if dirty { return base.concat("-dirty-").concat(n).concat("+g").concat(sha); }
     return base.concat("-").concat(n).concat("+g").concat(sha);
   }
 
-  if embedded_channel() == "release" { return base; }
+  if txt.trim_space(bi.channel()) == "release" { return base; }
   if base != "" { return base.concat("+src"); }
   return "unknown";
 }
@@ -3236,7 +3212,7 @@ fn main() -> i32 {
     return 1;
   }
   let artifact: String = ar.kind;
-  let profile_on: bool = compile_profile_enabled();
+  let profile_on: bool = env_truthy(proc.getenv("VOX_PROFILE"));
 
   if target_os == "wasm" {
     if cmd == "test" && target_abi != "wasi" {
