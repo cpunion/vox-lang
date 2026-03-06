@@ -194,6 +194,7 @@ Invalidate unit on any of:
 - 2026-03-06: in `vox/query`, removed local bool-string helper (`bool_text`) and inlined boolean-text selection in `parse_load_key`, keeping key material unchanged while trimming another helper indirection.
 - 2026-03-06: in `vox/query` parse-load key hashing, file ordering now sorts file indices directly by `files[i].path` (shell-sort over index vector) instead of building a separate copied `file_paths` vector first, reducing one allocation/copy pass while preserving deterministic order.
 - 2026-03-06: in `vox/query`, removed single-use feature-order helper (`sort_string_indices`) and inlined deterministic feature-switch sorting directly in `parse_load_key`, preserving key schema while reducing helper layering.
+- 2026-03-06: in `vox/query`, added a sorted-fast-path for `feature_switches` in `parse_load_key`: when switches are already non-decreasing, hash directly in-place and skip index allocation/sort; unsorted input still falls back to the same deterministic shell-sort order.
 
 ## 5. Validation Gates
 
