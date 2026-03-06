@@ -179,6 +179,7 @@ Invalidate unit on any of:
 - 2026-03-05: inlined single-use `build_cache_sem_out_for_key` into `build_cache_sem_meta_path_for_key`, removing another one-hop helper from production cache utilities.
 - 2026-03-05: inlined two additional single-use cache helpers (`test_build_cache_load_tests_for_c`, `write_discover_tests_cache_with_tests`) into their callers, keeping behavior unchanged while trimming production helper/function count.
 - 2026-03-05: folded `strings_are_non_decreasing` into `sort_strings_if_needed` (single caller), removing one extra helper while preserving sorted-fast-path behavior.
+- 2026-03-05: inlined package-digest initializer helper (`build_cache_pkg_digest_init` + `BuildCachePkgDigest`) at the two package-key accumulation sites, removing another helper/type pair from production cache utilities.
 
 ## 5. Validation Gates
 
