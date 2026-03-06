@@ -196,6 +196,7 @@ Invalidate unit on any of:
 - 2026-03-06: in `vox/query`, removed single-use feature-order helper (`sort_string_indices`) and inlined deterministic feature-switch sorting directly in `parse_load_key`, preserving key schema while reducing helper layering.
 - 2026-03-06: in `vox/query`, added a sorted-fast-path for `feature_switches` in `parse_load_key`: when switches are already non-decreasing, hash directly in-place and skip index allocation/sort; unsorted input still falls back to the same deterministic shell-sort order.
 - 2026-03-06: in `vox/query`, added sorted-fast-paths for dependency/file hashing in `parse_load_key`: when `deps`/`files` are already in canonical order, hash directly without building index-order vectors or running shell-sort; unsorted inputs still use the same deterministic fallback ordering.
+- 2026-03-06: removed full `SourceFile` copy in compile query-shadow prepare path: added `parse_load_shadow_prepare_keep_files` in `vox/query` and switched `compile_query_shadow_prepare_for_target_with_files` to consume+return the original `files` vector while deriving the parse-load key, avoiding duplicate source-text copy when query-shadow prepare runs.
 
 ## 5. Validation Gates
 
