@@ -176,6 +176,7 @@ Invalidate unit on any of:
 - 2026-03-05: moved test-only triple-key derivation helper/types (`BuildCacheKeyTriple*` + `build_cache_key_triple_from_pkg_source_keys_keep`) out of production cache helper module into cache tests (`BuildCacheTestKeyTriple*`), further shrinking runtime cache surface and generated forwarding noise.
 - 2026-03-05: moved additional test-only wrappers/derivers out of production cache helper module (`build_cache_sem_key_from_files*`, `discover_tests_cache_key_from_test_paths`); cache tests now use local helpers over existing keep-APIs, further trimming production helper surface.
 - 2026-03-05: moved test-only `test_build_sem_keys_from_pkg_source_keys_keep` (`TestBuildSemKeysKeep`) out of production cache helper module and into cache tests, keeping test-sem-key derivation coverage while reducing production helper count.
+- 2026-03-05: inlined single-use `build_cache_sem_out_for_key` into `build_cache_sem_meta_path_for_key`, removing another one-hop helper from production cache utilities.
 
 ## 5. Validation Gates
 
