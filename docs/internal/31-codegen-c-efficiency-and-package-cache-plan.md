@@ -237,6 +237,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed additional dead `main` helpers with no in-repo callers (`cc_link_flags`, `cc_cmd`, `cc_common_flags`, `filter_pkg_sources`, `discover_tests`, `write_lockfile`, `maybe_handle_local_dev_selfhost`), shrinking stale helper surface without behavior change.
 - 2026-03-06: build/compile toolchain fingerprints now include compiler/archiver version first-lines (`cc_version`, `ar_version`, with `--version` then `-v` fallback), reducing stale cache reuse risk when tool binaries change under stable command names/flags.
 - 2026-03-06: removed two more dead test-discovery helpers from `main` (`is_test_path`, `discover_tests_with_paths`) after cache-path refactors, keeping only active discovery entrypoints and reducing stale helper surface.
+- 2026-03-06: removed dead basename helper (`path_base_name`) and inlined parse wrapper use (`parse_exit_code_file` -> direct `parse_i32_decimal`) in test worker loop, trimming another tiny layer of stale helper indirection.
 
 ## 5. Validation Gates
 
