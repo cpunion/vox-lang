@@ -239,6 +239,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed two more dead test-discovery helpers from `main` (`is_test_path`, `discover_tests_with_paths`) after cache-path refactors, keeping only active discovery entrypoints and reducing stale helper surface.
 - 2026-03-06: removed dead basename helper (`path_base_name`) and inlined parse wrapper use (`parse_exit_code_file` -> direct `parse_i32_decimal`) in test worker loop, trimming another tiny layer of stale helper indirection.
 - 2026-03-06: inlined single-use version/profile wrappers in `main` (`compile_profile_enabled`, `build_version_override`, `embedded_version`, `embedded_channel`, `git_head_short`, `git_count_total`) directly at call sites (`main` + `resolve_cli_version`), reducing one-hop helper surface with unchanged CLI version/profile semantics.
+- 2026-03-06: removed two dead toolchain routing helpers (`tc_route_no`, `maybe_handle_toolchain_or_reroute`) in `main_toolchain` after migration to the active `ToolchainRouteWithArgsResult` path (`maybe_handle_toolchain_or_reroute_with_args`), trimming stale helper surface without behavior change.
 
 ## 5. Validation Gates
 
