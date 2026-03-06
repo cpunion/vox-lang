@@ -182,6 +182,7 @@ Invalidate unit on any of:
 - 2026-03-05: inlined package-digest initializer helper (`build_cache_pkg_digest_init` + `BuildCachePkgDigest`) at the two package-key accumulation sites, removing another helper/type pair from production cache utilities.
 - 2026-03-05: removed shared string-copy helper/type (`StringCopyResult`, `copy_strings_keep`) and inlined copy loops at the three use sites (`format_test_build_cache_tests_with_tests`, `test_build_cache_contains_all_sorted_hay_with_need`, `format_discover_tests_cache_list_with_tests`), reducing helper surface without behavior change.
 - 2026-03-05: inlined test-build cache path wrappers (`test_build_cache_meta_path`, `test_build_cache_tests_path`, `test_build_cache_root_for_key`) into direct callers (`test_build_cache_out_for_key`, `test_build_cache_cpath_for_key`, cache state/write paths), further reducing one-hop helper surface.
+- 2026-03-06: removed single-use test-list fast wrapper (`discover_tests_cached_fast_with_paths`) and inlined the same key/list cache hit path directly at the `vox test --list` call site in `main.vox`, keeping behavior unchanged while shrinking cache helper surface.
 
 ## 5. Validation Gates
 
