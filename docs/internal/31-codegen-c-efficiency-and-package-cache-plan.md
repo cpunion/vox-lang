@@ -209,6 +209,7 @@ Invalidate unit on any of:
 - 2026-03-06: narrowed `compile_query_shadow_switches` inputs to only switch-related fields (instead of whole `CompileQueryShadowOptions`), avoiding potential by-value carry/copy of unused `dep_hashes` while keeping query-shadow key material unchanged.
 - 2026-03-06: `parse_load_shadow_prepare` now computes key+predicted-hit directly from `parse_load_key` instead of routing through `parse_load_shadow_prepare_keep_files`, avoiding unnecessary keep-files result packing on state-only callers.
 - 2026-03-06: removed compile-layer one-hop write wrapper (`compile_query_shadow_write`) and switched `main` build/test write points to direct `q.parse_load_shadow_write` with existing empty-key guard, trimming another forwarding API without behavior change.
+- 2026-03-06: removed unused state-only query-shadow prepare APIs (`parse_load_shadow_prepare`, `parse_load_shadow_prepare_no_hit`) and kept `parse_load_shadow_prepare_keep_files*` as the single active prepare surface, reducing dead exported helper surface in `vox/query`.
 
 ## 5. Validation Gates
 
