@@ -238,6 +238,7 @@ Invalidate unit on any of:
 - 2026-03-06: build/compile toolchain fingerprints now include compiler/archiver version first-lines (`cc_version`, `ar_version`, with `--version` then `-v` fallback), reducing stale cache reuse risk when tool binaries change under stable command names/flags.
 - 2026-03-06: removed two more dead test-discovery helpers from `main` (`is_test_path`, `discover_tests_with_paths`) after cache-path refactors, keeping only active discovery entrypoints and reducing stale helper surface.
 - 2026-03-06: removed dead basename helper (`path_base_name`) and inlined parse wrapper use (`parse_exit_code_file` -> direct `parse_i32_decimal`) in test worker loop, trimming another tiny layer of stale helper indirection.
+- 2026-03-06: inlined single-use version/profile wrappers in `main` (`compile_profile_enabled`, `build_version_override`, `embedded_version`, `embedded_channel`, `git_head_short`, `git_count_total`) directly at call sites (`main` + `resolve_cli_version`), reducing one-hop helper surface with unchanged CLI version/profile semantics.
 
 ## 5. Validation Gates
 
