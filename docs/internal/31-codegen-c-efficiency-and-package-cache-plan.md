@@ -200,6 +200,7 @@ Invalidate unit on any of:
 - 2026-03-06: unified query-shadow dependency hash type across `main`/`compile` to `q.ParseLoadDepHash` and removed compile-side conversion loop (`CompileQueryDepHash` -> `ParseLoadDepHash`), trimming one per-prepare vector remap on build/test query-shadow paths.
 - 2026-03-06: query-shadow prepare now skips parse-load shadow-hit metadata I/O when trace is off (`trace_predicted_hit=false`): build/test paths set this from `query_shadow_trace`, so default runs derive key without `fs.exists/read_to_string` hit-probe cost while trace-on behavior remains unchanged.
 - 2026-03-06: cached loop bounds (`len()`) in `vox/query` parse-load key hot loops (`hash_text`, feature/dep/file scans) to avoid repeated `len()` calls inside tight loops while preserving key material and ordering.
+- 2026-03-06: unified compile-layer query-shadow state type to `q.ParseLoadShadowState` and removed compile-side state remap/copy (`CompileQueryShadowState`), so prepare/trace/write paths now pass query state through directly.
 
 ## 5. Validation Gates
 
