@@ -233,6 +233,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed test-build path wrappers (`test_build_cache_out_for_key`, `test_build_cache_cpath_for_key`) and inlined equivalent `target/cache/test-link-v1/<key>` / `target/cache/test-pkg-obj-v1/<key>.c` construction in `vox test` and cache tests, trimming one-hop helper surface without behavior change.
 - 2026-03-06: removed cache-key write wrappers (`write_build_obj_cache`, `write_build_sem_cache`, `write_build_cache`) and inlined equivalent `<root>/<key>.build.cache.key` write/update blocks at build/test call sites, reducing one-hop helper surface with unchanged cache semantics.
 - 2026-03-06: removed output-copy cache-key write wrapper (`write_build_cache_output_copy_key`) and inlined equivalent `out_path + ".build.copy.key"` update blocks in build and cache-test call sites, preserving output-copy hit semantics while trimming another one-hop helper.
+- 2026-03-06: removed single-use test compile wrapper (`cc_cmdline_for_target`) and switched the `vox test` compile step to direct `cc_cmdline_for_target_artifact(..., "exe", ...)`, trimming one more one-hop helper frame in CLI build flow.
 
 ## 5. Validation Gates
 
