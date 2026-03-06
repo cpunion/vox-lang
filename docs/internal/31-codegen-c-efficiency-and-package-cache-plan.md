@@ -175,6 +175,7 @@ Invalidate unit on any of:
 - 2026-03-05: cache metadata/list writers now use `write_string_if_changed` (`build/test cache key sidecars`, `discover-tests cache list/key`, and `test-build cache list/key`) to avoid rewriting unchanged cache files on hot runs.
 - 2026-03-05: moved test-only triple-key derivation helper/types (`BuildCacheKeyTriple*` + `build_cache_key_triple_from_pkg_source_keys_keep`) out of production cache helper module into cache tests (`BuildCacheTestKeyTriple*`), further shrinking runtime cache surface and generated forwarding noise.
 - 2026-03-05: moved additional test-only wrappers/derivers out of production cache helper module (`build_cache_sem_key_from_files*`, `discover_tests_cache_key_from_test_paths`); cache tests now use local helpers over existing keep-APIs, further trimming production helper surface.
+- 2026-03-05: moved test-only `test_build_sem_keys_from_pkg_source_keys_keep` (`TestBuildSemKeysKeep`) out of production cache helper module and into cache tests, keeping test-sem-key derivation coverage while reducing production helper count.
 
 ## 5. Validation Gates
 
