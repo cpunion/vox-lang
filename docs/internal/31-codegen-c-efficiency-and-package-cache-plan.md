@@ -178,6 +178,7 @@ Invalidate unit on any of:
 - 2026-03-05: moved test-only `test_build_sem_keys_from_pkg_source_keys_keep` (`TestBuildSemKeysKeep`) out of production cache helper module and into cache tests, keeping test-sem-key derivation coverage while reducing production helper count.
 - 2026-03-05: inlined single-use `build_cache_sem_out_for_key` into `build_cache_sem_meta_path_for_key`, removing another one-hop helper from production cache utilities.
 - 2026-03-05: inlined two additional single-use cache helpers (`test_build_cache_load_tests_for_c`, `write_discover_tests_cache_with_tests`) into their callers, keeping behavior unchanged while trimming production helper/function count.
+- 2026-03-05: folded `strings_are_non_decreasing` into `sort_strings_if_needed` (single caller), removing one extra helper while preserving sorted-fast-path behavior.
 
 ## 5. Validation Gates
 
