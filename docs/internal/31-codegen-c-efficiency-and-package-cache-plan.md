@@ -241,6 +241,7 @@ Invalidate unit on any of:
 - 2026-03-06: inlined single-use version/profile wrappers in `main` (`compile_profile_enabled`, `build_version_override`, `embedded_version`, `embedded_channel`, `git_head_short`, `git_count_total`) directly at call sites (`main` + `resolve_cli_version`), reducing one-hop helper surface with unchanged CLI version/profile semantics.
 - 2026-03-06: removed two dead toolchain routing helpers (`tc_route_no`, `maybe_handle_toolchain_or_reroute`) in `main_toolchain` after migration to the active `ToolchainRouteWithArgsResult` path (`maybe_handle_toolchain_or_reroute_with_args`), trimming stale helper surface without behavior change.
 - 2026-03-06: removed three more single-use `main` wrappers (`print_version`, `default_pkg_out_base`, `default_install_bin_dir`) and inlined their exact expressions at the only call sites (`version` command, default `out`, install target dir), keeping CLI behavior unchanged while reducing one-hop helper surface.
+- 2026-03-06: removed two one-shot result-constructor wrappers in dependency loading (`deps_ok`, `reg_root_err`) and inlined equivalent `DepsResult`/`ResolveRegistryRootResult` literals at call sites, preserving dep-resolution behavior while trimming stale helper surface.
 
 ## 5. Validation Gates
 
