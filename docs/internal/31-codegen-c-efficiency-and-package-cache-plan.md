@@ -202,6 +202,7 @@ Invalidate unit on any of:
 - 2026-03-06: cached loop bounds (`len()`) in `vox/query` parse-load key hot loops (`hash_text`, feature/dep/file scans) to avoid repeated `len()` calls inside tight loops while preserving key material and ordering.
 - 2026-03-06: unified compile-layer query-shadow state type to `q.ParseLoadShadowState` and removed compile-side state remap/copy (`CompileQueryShadowState`), so prepare/trace/write paths now pass query state through directly.
 - 2026-03-06: cached shell-sort loop bounds in `vox/query` parse-load key fallback ordering (`feature_order`/`dep_order`/`file_order`) by reusing precomputed `feature_n`/`dep_n`/`file_n`, removing repeated `Vec.len()` calls in hot-key derivation loops while preserving deterministic order.
+- 2026-03-06: build-mode query-shadow prepare skip now aligns with test mode and treats compile-C cache hit as a skip condition (`compile_c_cache_hit || sem_cache_hit`) when trace is off, avoiding unnecessary parse-load key/hash work on warm C-cache builds.
 
 ## 5. Validation Gates
 
