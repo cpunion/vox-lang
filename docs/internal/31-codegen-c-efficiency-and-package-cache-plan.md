@@ -192,6 +192,7 @@ Invalidate unit on any of:
 - 2026-03-06: in `vox/query`, removed single-use dep-hash helper (`hash_parse_load_deps`) and inlined its deterministic dependency ordering + hash fold directly in `parse_load_key`, preserving parse-load key semantics while reducing helper layering.
 - 2026-03-06: in `vox/query`, removed single-use file-hash helper (`hash_parse_load_files`) and inlined its deterministic file ordering + hash fold directly in `parse_load_key`, further shrinking parse-load key helper layering without changing key schema.
 - 2026-03-06: in `vox/query`, removed local bool-string helper (`bool_text`) and inlined boolean-text selection in `parse_load_key`, keeping key material unchanged while trimming another helper indirection.
+- 2026-03-06: in `vox/query` parse-load key hashing, file ordering now sorts file indices directly by `files[i].path` (shell-sort over index vector) instead of building a separate copied `file_paths` vector first, reducing one allocation/copy pass while preserving deterministic order.
 
 ## 5. Validation Gates
 
