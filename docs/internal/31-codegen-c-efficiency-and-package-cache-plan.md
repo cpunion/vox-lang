@@ -203,6 +203,7 @@ Invalidate unit on any of:
 - 2026-03-06: unified compile-layer query-shadow state type to `q.ParseLoadShadowState` and removed compile-side state remap/copy (`CompileQueryShadowState`), so prepare/trace/write paths now pass query state through directly.
 - 2026-03-06: cached shell-sort loop bounds in `vox/query` parse-load key fallback ordering (`feature_order`/`dep_order`/`file_order`) by reusing precomputed `feature_n`/`dep_n`/`file_n`, removing repeated `Vec.len()` calls in hot-key derivation loops while preserving deterministic order.
 - 2026-03-06: build-mode query-shadow prepare skip now aligns with test mode and treats compile-C cache hit as a skip condition (`compile_c_cache_hit || sem_cache_hit`) when trace is off, avoiding unnecessary parse-load key/hash work on warm C-cache builds.
+- 2026-03-06: removed compile-layer one-hop trace wrapper (`compile_query_shadow_trace_line`) and switched `main` to call `q.parse_load_shadow_trace_line` directly, trimming one forwarding API while keeping trace output unchanged.
 
 ## 5. Validation Gates
 
