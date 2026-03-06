@@ -212,6 +212,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed unused state-only query-shadow prepare APIs (`parse_load_shadow_prepare`, `parse_load_shadow_prepare_no_hit`) and kept `parse_load_shadow_prepare_keep_files*` as the single active prepare surface, reducing dead exported helper surface in `vox/query`.
 - 2026-03-06: removed compile-layer state-only query-shadow prepare wrapper (`compile_query_shadow_prepare_for_target`) and switched compile tests to consume `.state` from `compile_query_shadow_prepare_for_target_with_files`, keeping behavior while shrinking dead forwarding API surface.
 - 2026-03-06: inlined compile-layer single-use query-shadow switch builder (`compile_query_shadow_switches`) and its local driver-kind text helper directly into `compile_query_shadow_prepare_for_target_with_files`, reducing one-hop helper surface while preserving key-material construction.
+- 2026-03-06: removed `vox/query` single-hop key wrapper (`parse_load_key`) and switched query tests to read `.key` from `parse_load_key_keep_files`, keeping deterministic key assertions while shrinking dead exported helper surface.
 
 ## 5. Validation Gates
 
