@@ -189,6 +189,7 @@ Invalidate unit on any of:
 - 2026-03-06: in `vox/query`, removed local dep comparator helper (`dep_less`) and inlined equivalent comparison in `dep_indices_sorted`, reducing helper calls in parse-load dependency sort while preserving key order semantics.
 - 2026-03-06: in `vox/query`, removed single-use dep-order helper (`dep_indices_sorted`) and inlined its deterministic sort logic directly in `hash_parse_load_deps`, further shrinking parse-load hash helper surface.
 - 2026-03-06: in `vox/query`, removed single-use switch-hash helper (`hash_parse_load_switches`) and inlined its hashing sequence directly in `parse_load_key`, keeping key schema unchanged while reducing helper indirection.
+- 2026-03-06: in `vox/query`, removed single-use dep-hash helper (`hash_parse_load_deps`) and inlined its deterministic dependency ordering + hash fold directly in `parse_load_key`, preserving parse-load key semantics while reducing helper layering.
 
 ## 5. Validation Gates
 
