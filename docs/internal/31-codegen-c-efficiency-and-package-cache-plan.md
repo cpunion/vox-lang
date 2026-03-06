@@ -225,6 +225,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed test no-cache path wrapper/type (`TestBuildNoCachePaths`, `test_build_no_cache_paths`) from production cache helpers; `vox test` now computes the same no-cache paths inline and cache tests assert the equivalent path formula directly.
 - 2026-03-06: removed link-cache path wrapper (`build_cache_link_out_for_key`) from production cache helpers and inlined equivalent `target/cache/link-v1/<key>` path construction in metadata/binary path helpers, trimming one-hop helper surface without behavior change.
 - 2026-03-06: removed output-copy metadata-path wrapper (`build_cache_output_copy_meta_path`) from production cache helpers and inlined the equivalent `out_path + ".build.copy.key"` expression at hit/write call sites (plus cache test helper), reducing one-hop helper surface with unchanged behavior.
+- 2026-03-06: removed discover-tests cache-path wrappers (`discover_tests_cache_key_path` / `discover_tests_cache_list_path`) and inlined their constant `target/debug/.vox_test_discover.*` paths at call sites in `main`, cache helpers, and cache tests, trimming dead one-hop helper surface without behavior change.
 
 ## 5. Validation Gates
 
