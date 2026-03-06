@@ -217,6 +217,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed two dead ptr-bits wrapper APIs in `vox/compile` (`compile_main_text_to_c_for_ptr_bits`, `compile_files_to_c_for_ptr_bits`) that had no in-repo callers; canonical target/profile entrypoints remain unchanged.
 - 2026-03-06: removed compile-layer profile ptr-bits wrapper (`compile_files_to_c_profile_for_ptr_bits`) and switched compile profile test to call `compile_files_to_c_profile_for_target(..., \"unknown\", \"unknown\")` directly, reducing one-hop wrapper surface.
 - 2026-03-06: in `vox/query`, removed single-use `parse_load_shadow_meta_path` helper and inlined equivalent cache meta-path construction in `parse_load_shadow_predict_hit` / `parse_load_shadow_write`, trimming helper surface without behavior change.
+- 2026-03-06: removed compile-layer target wrapper (`compile_files_to_c_for_target`) and switched remaining compile tests to use `compile_files_to_c_profile_for_target(...).r` directly, reducing one-hop wrapper surface while keeping behavior unchanged.
 
 ## 5. Validation Gates
 
