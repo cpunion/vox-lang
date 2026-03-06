@@ -231,6 +231,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed pkg-obj/pkg-sem metadata-path wrappers (`build_cache_obj_meta_path_for_key`, `build_cache_sem_meta_path_for_key`) and inlined equivalent `<root>/<key>.build.cache.key` construction in hit/write sites and cache path assertions, reducing one-hop helper surface with unchanged behavior.
 - 2026-03-06: removed pkg-obj C-path wrapper (`build_cache_cpath_for_key`) and switched build/test call sites to canonical `build_cache_obj_path_for_key(key, ".c")`, trimming one-hop helper surface while preserving cache path layout.
 - 2026-03-06: removed test-build path wrappers (`test_build_cache_out_for_key`, `test_build_cache_cpath_for_key`) and inlined equivalent `target/cache/test-link-v1/<key>` / `target/cache/test-pkg-obj-v1/<key>.c` construction in `vox test` and cache tests, trimming one-hop helper surface without behavior change.
+- 2026-03-06: removed cache-key write wrappers (`write_build_obj_cache`, `write_build_sem_cache`, `write_build_cache`) and inlined equivalent `<root>/<key>.build.cache.key` write/update blocks at build/test call sites, reducing one-hop helper surface with unchanged cache semantics.
 
 ## 5. Validation Gates
 
