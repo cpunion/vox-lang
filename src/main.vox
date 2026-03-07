@@ -2199,41 +2199,6 @@ fn maybe_handle_local_dev_selfhost_with_args(args0: Vec[String], trace_exec: boo
   return tc_route_yes_with_args(rc);
 }
 
-fn resolve_cli_version() -> String {
-  let override: String = normalize_cli_version(proc.getenv("VOX_BUILD_VERSION"));
-  if override != "" { return override; }
-
-  let base0: String = normalize_cli_version(bi.version());
-  let base: String = if base0 != "" { base0 } else { "0.0.0" };
-  let root: String = stage1_root();
-  let sha: String = run_git_capture(root, "head_short", "rev-parse --short=12 HEAD");
-  if sha != "" {
-    let dirty: bool = run_git_capture(root, "status_porcelain", "status --porcelain") != "";
-    let mut exact_base_tag: bool = false;
-    if base != "" {
-      let tag: String = "v".concat(base);
-      let got: String = run_git_capture(root, "exact_tag", "describe --tags --exact-match --match ".concat(shell_quote(tag)));
-      exact_base_tag = got == tag;
-    }
-    if !dirty && exact_base_tag { return base; }
-
-    let mut n: String = "";
-    if base != "" {
-      let tag: String = "v".concat(base);
-      n = run_git_capture(root, "count_since_tag", "rev-list --count ".concat(shell_quote(tag).concat("..HEAD")));
-    }
-    if n == "" { n = run_git_capture(root, "count_total", "rev-list --count HEAD"); }
-    if n == "" { n = "0"; }
-
-    if dirty { return base.concat("-dirty-").concat(n).concat("+g").concat(sha); }
-    return base.concat("-").concat(n).concat("+g").concat(sha);
-  }
-
-  if txt.trim_space(bi.channel()) == "release" { return base; }
-  if base != "" { return base.concat("+src"); }
-  return "unknown";
-}
-
 fn default_pkg_name() -> String {
   if !fs.exists("vox.toml") { return "app"; }
   let mr: mf.ParseResult = mf.parse(fs.read_to_string("vox.toml"));
@@ -2385,7 +2350,50 @@ fn main() -> i32 {
   }
   let cmd_in: String = args.get(0);
   if cmd_in == "version" || cmd_in == "--version" || cmd_in == "-V" {
-    print("vox ".concat(resolve_cli_version()).concat("\n"));
+    let override: String = normalize_cli_version(proc.getenv("VOX_BUILD_VERSION"));
+    let mut cli_version: String = "";
+    if override != "" {
+      cli_version = override;
+    } else {
+      let base0: String = normalize_cli_version(bi.version());
+      let base: String = if base0 != "" { base0 } else { "0.0.0" };
+      let root: String = stage1_root();
+      let sha: String = run_git_capture(root, "head_short", "rev-parse --short=12 HEAD");
+      if sha != "" {
+        let dirty: bool = run_git_capture(root, "status_porcelain", "status --porcelain") != "";
+        let mut exact_base_tag: bool = false;
+        if base != "" {
+          let tag: String = "v".concat(base);
+          let got: String = run_git_capture(root, "exact_tag", "describe --tags --exact-match --match ".concat(shell_quote(tag)));
+          exact_base_tag = got == tag;
+        }
+        if !dirty && exact_base_tag {
+          cli_version = base;
+        } else {
+          let mut n: String = "";
+          if base != "" {
+            let tag: String = "v".concat(base);
+            n = run_git_capture(root, "count_since_tag", "rev-list --count ".concat(shell_quote(tag).concat("..HEAD")));
+          }
+          if n == "" { n = run_git_capture(root, "count_total", "rev-list --count HEAD"); }
+          if n == "" { n = "0"; }
+          if dirty {
+            cli_version = base.concat("-dirty-").concat(n).concat("+g").concat(sha);
+          } else {
+            cli_version = base.concat("-").concat(n).concat("+g").concat(sha);
+          }
+        }
+      } else {
+        if txt.trim_space(bi.channel()) == "release" {
+          cli_version = base;
+        } else if base != "" {
+          cli_version = base.concat("+src");
+        } else {
+          cli_version = "unknown";
+        }
+      }
+    }
+    print("vox ".concat(cli_version).concat("\n"));
     return 0;
   }
   let mut cmd: String = cmd_in;

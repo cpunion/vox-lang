@@ -304,6 +304,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use local selfhost print-bin helper (`local_selfhost_print_bin`) plus its transient result struct and inlined equivalent `rolling-selfhost.sh print-bin` resolution/error handling directly in `maybe_handle_local_dev_selfhost_with_args`, preserving local selfhost reroute semantics while trimming helper indirection.
 - 2026-03-07: removed single-use registry-root helper (`resolve_registry_root`) plus its transient result struct and inlined equivalent registry/local-path/git-registry resolution directly in `resolve_dep_source`, preserving dependency resolution semantics while trimming helper indirection.
 - 2026-03-07: removed single-use failed-test reader helper (`read_failed_tests`) and inlined equivalent failed-test cache parse (`tests`/`failed_tests` JSON fallback + line-based legacy format) directly at `vox test --rerun-failed` selection setup, preserving rerun input normalization semantics while trimming helper indirection.
+- 2026-03-07: removed single-use CLI version helper (`resolve_cli_version`) and inlined equivalent version derivation (override/git describe/count fallback/release+src fallback) directly in the `version` command branch, preserving CLI version string semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
