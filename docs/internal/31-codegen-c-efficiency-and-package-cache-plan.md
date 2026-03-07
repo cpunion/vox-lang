@@ -246,6 +246,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed two additional single-use `main` helpers (`bool_key`, `strip_git_plus_prefix`) by inlining their exact logic at call sites (`test_rerun_failed` query-switch encoding and registry git-source normalization), preserving behavior while reducing one-hop helper surface.
 - 2026-03-06: removed three single-use target-validation helpers (`target_os_supported`, `target_arch_supported`, `target_pair_supported`) and inlined equivalent checks directly into `parse_cli_target_spec`, preserving target error semantics while reducing one-hop helper surface.
 - 2026-03-06: removed two additional single-use `main` helpers (`short_test_name`, `slice_vec`) and inlined equivalent logic at call sites (`filter_tests_run_pattern` and argv `-x` tail extraction in `main`), preserving test-selection/CLI behavior while reducing one-hop helper surface.
+- 2026-03-06: removed two more single-use helpers (`build_rerun_hint`, `dep_source_kind`) and inlined equivalent logic at call sites (`main` test summary rerun hint + `main_lock` dependency source derivation), preserving CLI/lockfile semantics while reducing cross-file helper coupling.
 
 ## 5. Validation Gates
 
