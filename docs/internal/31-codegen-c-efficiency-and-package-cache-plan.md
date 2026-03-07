@@ -310,6 +310,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use test-result JSON helper (`json_of_results`) and inlined equivalent test-result JSON array assembly directly in `print_json_report` (`!list_only` branch), preserving per-test status/error/log rendering semantics while trimming helper indirection.
 - 2026-03-07: removed single-use module-detail JSON helper (`json_of_module_details`) and inlined equivalent module-detail JSON array assembly directly in `print_json_report`, preserving module detail ordering/field semantics while trimming helper indirection.
 - 2026-03-07: removed single-use local-selfhost output helper (`last_non_empty_line`) and inlined equivalent tail non-empty line scan directly in `maybe_handle_local_dev_selfhost_with_args`, preserving `rolling-selfhost.sh print-bin` path extraction semantics while trimming helper indirection.
+- 2026-03-07: removed single-use test discovery qualified-name helper (`qname`) and inlined equivalent module-path slash-to-dot + `::` join logic directly in `discover_tests_from_cached_test_files`, preserving discovered test naming semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
