@@ -244,6 +244,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed two one-shot result-constructor wrappers in dependency loading (`deps_ok`, `reg_root_err`) and inlined equivalent `DepsResult`/`ResolveRegistryRootResult` literals at call sites, preserving dep-resolution behavior while trimming stale helper surface.
 - 2026-03-06: removed three additional single-use `main` wrappers (`cli_artifact_spec_ok`, `cli_artifact_spec_err`, `is_version_cmd`) and inlined their exact literals/predicate at call sites (`parse_cli_artifact`, command dispatch), preserving CLI semantics while reducing one-hop helper surface.
 - 2026-03-06: removed two additional single-use `main` helpers (`bool_key`, `strip_git_plus_prefix`) by inlining their exact logic at call sites (`test_rerun_failed` query-switch encoding and registry git-source normalization), preserving behavior while reducing one-hop helper surface.
+- 2026-03-06: removed three single-use target-validation helpers (`target_os_supported`, `target_arch_supported`, `target_pair_supported`) and inlined equivalent checks directly into `parse_cli_target_spec`, preserving target error semantics while reducing one-hop helper surface.
 
 ## 5. Validation Gates
 
