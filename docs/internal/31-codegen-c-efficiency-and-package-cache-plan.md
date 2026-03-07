@@ -248,6 +248,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed two additional single-use `main` helpers (`short_test_name`, `slice_vec`) and inlined equivalent logic at call sites (`filter_tests_run_pattern` and argv `-x` tail extraction in `main`), preserving test-selection/CLI behavior while reducing one-hop helper surface.
 - 2026-03-06: removed two more single-use helpers (`build_rerun_hint`, `dep_source_kind`) and inlined equivalent logic at call sites (`main` test summary rerun hint + `main_lock` dependency source derivation), preserving CLI/lockfile semantics while reducing cross-file helper coupling.
 - 2026-03-06: removed two stage1 source-loading wrappers (`load_stage1_std_from_repo_root`, `load_stage1_vox_from_repo_root`) and inlined equivalent repo-root scans directly into `load_stage1_std_from_root` / `load_stage1_vox_from_root`, preserving stage1 source discovery semantics while reducing one-hop helper surface.
+- 2026-03-06: removed single-use lockfile mapping wrapper (`lock_deps_from_manifest_deps`) and inlined its dependency-to-lock loop directly in `verify_lockfile_or_ok`, preserving lock verification semantics while reducing one-hop helper surface.
 
 ## 5. Validation Gates
 
