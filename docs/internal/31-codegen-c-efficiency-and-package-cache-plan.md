@@ -267,6 +267,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use discover-cache list parser helper (`parse_discover_tests_cache_list`) and reused `parse_test_build_cache_tests` at discover-cache hit path, preserving newline/trim parsing semantics while trimming helper duplication.
 - 2026-03-07: removed single-use discover-cache list formatter helper (`format_discover_tests_cache_list_with_tests`) and reused `format_test_build_cache_tests_with_tests` at discover-cache write path/tests, preserving sort+newline rendering semantics while trimming helper duplication.
 - 2026-03-07: removed single-use discover-cache key+file precompute helper (`discover_tests_cache_key_from_test_paths_keep`) and inlined equivalent key hashing/file-snapshot loop directly in `discover_tests_cached_with_paths`; cache-hit test now validates the hit path by warming once then re-reading.
+- 2026-03-07: removed single-use test-selection containment helper (`test_build_cache_contains_all_sorted_hay_with_need`) and inlined equivalent sorted-subset check directly in `test_build_cache_state_with_tests`; cache unit test now validates the same algorithm via a test-local helper.
 
 ## 5. Validation Gates
 
