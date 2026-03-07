@@ -250,6 +250,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed two stage1 source-loading wrappers (`load_stage1_std_from_repo_root`, `load_stage1_vox_from_repo_root`) and inlined equivalent repo-root scans directly into `load_stage1_std_from_root` / `load_stage1_vox_from_root`, preserving stage1 source discovery semantics while reducing one-hop helper surface.
 - 2026-03-06: removed single-use lockfile mapping wrapper (`lock_deps_from_manifest_deps`) and inlined its dependency-to-lock loop directly in `verify_lockfile_or_ok`, preserving lock verification semantics while reducing one-hop helper surface.
 - 2026-03-06: removed single-use lock dependency constructor wrapper (`lock_dep_of`) and inlined equivalent lock-entry construction directly in `verify_lockfile_or_ok`, preserving lock semantics while reducing one-hop helper surface.
+- 2026-03-07: removed single-use lock hash-byte helper (`lock_hash_byte`) and inlined the same FNV step directly in `lock_hash_text`, preserving lock digest semantics while trimming one helper frame.
 
 ## 5. Validation Gates
 
