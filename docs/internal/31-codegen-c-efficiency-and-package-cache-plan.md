@@ -277,6 +277,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use tool-version text helper (`first_non_empty_line`) and inlined equivalent first-non-empty-line scan directly in `tool_version_fingerprint_line`, preserving tool fingerprint line extraction semantics while trimming helper indirection.
 - 2026-03-07: removed single-use failed-test JSON parser helper (`parse_failed_tests_json`) and inlined equivalent `"tests"`/`"failed_tests"` fallback parse directly in `read_failed_tests`, preserving rerun-failed input normalization semantics while trimming helper indirection.
 - 2026-03-07: removed single-use target ABI parser helper (`target_abi_from_text`) and inlined equivalent ABI token detection (`msvc`/`gnu`/`wasi`/`emscripten`) directly in `parse_cli_target_spec`, preserving target canonicalization semantics while trimming helper indirection.
+- 2026-03-07: removed single-use target OS parser helper (`target_os_from_text`) and inlined equivalent OS token detection (`windows`/`darwin`/`linux`/`wasm`) directly in `parse_cli_target_spec`, preserving target canonicalization semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
