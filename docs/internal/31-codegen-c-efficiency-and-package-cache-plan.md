@@ -251,6 +251,7 @@ Invalidate unit on any of:
 - 2026-03-06: removed single-use lockfile mapping wrapper (`lock_deps_from_manifest_deps`) and inlined its dependency-to-lock loop directly in `verify_lockfile_or_ok`, preserving lock verification semantics while reducing one-hop helper surface.
 - 2026-03-06: removed single-use lock dependency constructor wrapper (`lock_dep_of`) and inlined equivalent lock-entry construction directly in `verify_lockfile_or_ok`, preserving lock semantics while reducing one-hop helper surface.
 - 2026-03-07: removed single-use lock hash-byte helper (`lock_hash_byte`) and inlined the same FNV step directly in `lock_hash_text`, preserving lock digest semantics while trimming one helper frame.
+- 2026-03-07: removed lock verify result wrappers (`lock_ok`, `lock_err`) and inlined the same `LockVerifyResult` literals at `verify_lockfile_or_ok` return sites, preserving lock check semantics while trimming one-hop helper surface.
 
 ## 5. Validation Gates
 
