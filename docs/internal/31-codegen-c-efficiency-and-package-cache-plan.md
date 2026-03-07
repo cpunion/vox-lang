@@ -266,6 +266,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use package-source classification helper (`build_cache_pkg_from_source_path`) in `main_test_cache` and inlined equivalent package derivation logic into `source_file_order_by_pkg_path_with_files`, preserving pkg-key grouping semantics while trimming helper indirection.
 - 2026-03-07: removed single-use discover-cache list parser helper (`parse_discover_tests_cache_list`) and reused `parse_test_build_cache_tests` at discover-cache hit path, preserving newline/trim parsing semantics while trimming helper duplication.
 - 2026-03-07: removed single-use discover-cache list formatter helper (`format_discover_tests_cache_list_with_tests`) and reused `format_test_build_cache_tests_with_tests` at discover-cache write path/tests, preserving sort+newline rendering semantics while trimming helper duplication.
+- 2026-03-07: removed single-use discover-cache key+file precompute helper (`discover_tests_cache_key_from_test_paths_keep`) and inlined equivalent key hashing/file-snapshot loop directly in `discover_tests_cached_with_paths`; cache-hit test now validates the hit path by warming once then re-reading.
 
 ## 5. Validation Gates
 
