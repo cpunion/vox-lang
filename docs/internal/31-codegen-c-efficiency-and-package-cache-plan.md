@@ -275,6 +275,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use cached-source lookup helper (`find_cached_source_text`) and inlined equivalent binary-search lookup directly in `load_files_with_cached` fallback branch, preserving cache-hit/miss file load semantics while trimming helper struct/function indirection.
 - 2026-03-07: removed single-use path-order helper (`strings_are_non_decreasing_main_keep`) and inlined equivalent non-decreasing check directly in `load_files_with_cached`, preserving sorted-fast-path selection semantics while trimming helper struct/function indirection.
 - 2026-03-07: removed single-use tool-version text helper (`first_non_empty_line`) and inlined equivalent first-non-empty-line scan directly in `tool_version_fingerprint_line`, preserving tool fingerprint line extraction semantics while trimming helper indirection.
+- 2026-03-07: removed single-use failed-test JSON parser helper (`parse_failed_tests_json`) and inlined equivalent `"tests"`/`"failed_tests"` fallback parse directly in `read_failed_tests`, preserving rerun-failed input normalization semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
