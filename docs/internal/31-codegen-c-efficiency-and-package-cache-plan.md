@@ -285,6 +285,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use test-module glob filter helper (`filter_tests_module_pattern`) and inlined equivalent module-name `glob_match` selection directly in the `vox test` filter pipeline, preserving `--module` selection semantics while trimming helper indirection.
 - 2026-03-07: removed single-use test-name glob filter helper (`filter_tests_run_pattern`) and inlined equivalent full-name/short-name `glob_match` selection directly in the `vox test` filter pipeline, preserving `--run` selection semantics while trimming helper indirection.
 - 2026-03-07: removed single-use fmt path-normalization helper (`fmt_args_paths`) and inlined equivalent non-empty/default-path selection (`src`, optional `tests`/`examples`) directly in `cmd_fmt`, preserving formatter file discovery semantics while trimming helper indirection.
+- 2026-03-07: removed single-use test-set intersection helper (`intersect_tests`) and inlined equivalent rerun-failed intersection (`contains_str(prev_failed, name)`) directly in the `vox test` selection pipeline, preserving rerun subset semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
