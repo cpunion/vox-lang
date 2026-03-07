@@ -290,6 +290,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use local selfhost env wrapper (`exec_cmd_with_env_once`) and inlined equivalent platform-specific env-prefix command construction directly in `maybe_handle_local_dev_selfhost_with_args`, preserving local reroute execution semantics while trimming helper indirection.
 - 2026-03-07: removed two single-use test-summary print helpers (`print_module_summaries`, `print_slowest`) and inlined equivalent summary/slowest loops directly at the `vox test` report site, preserving output semantics while trimming helper indirection.
 - 2026-03-07: removed single-use test-selection print helper (`print_test_selection`) and inlined equivalent selection summary logging directly in the `vox test` selection branch, preserving displayed flags/counts while trimming helper indirection.
+- 2026-03-07: removed two single-use module-order insertion helpers (`module_summary_insert_sorted`, `module_detail_insert_sorted`) and inlined equivalent insertion loops directly in `sort_module_summaries`/`sort_module_details`, preserving module-name sort semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
