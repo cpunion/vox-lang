@@ -289,6 +289,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed three single-use git version helpers (`git_dirty`, `git_exact_base_tag`, `git_count_since_base_tag`) and inlined equivalent status/exact-tag/commit-count checks directly in `resolve_cli_version`, preserving CLI version string semantics while trimming helper indirection.
 - 2026-03-07: removed single-use local selfhost env wrapper (`exec_cmd_with_env_once`) and inlined equivalent platform-specific env-prefix command construction directly in `maybe_handle_local_dev_selfhost_with_args`, preserving local reroute execution semantics while trimming helper indirection.
 - 2026-03-07: removed two single-use test-summary print helpers (`print_module_summaries`, `print_slowest`) and inlined equivalent summary/slowest loops directly at the `vox test` report site, preserving output semantics while trimming helper indirection.
+- 2026-03-07: removed single-use test-selection print helper (`print_test_selection`) and inlined equivalent selection summary logging directly in the `vox test` selection branch, preserving displayed flags/counts while trimming helper indirection.
 
 ## 5. Validation Gates
 
