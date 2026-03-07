@@ -308,6 +308,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use slowest-list JSON helper (`json_of_slowest`) and inlined equivalent JSON array assembly directly in `print_json_report` (`!list_only` branch), preserving slowest-entry ordering/rendering semantics while trimming helper indirection.
 - 2026-03-07: removed single-use module-summary JSON helper (`json_of_modules`) and inlined equivalent module summary JSON array assembly directly in `print_json_report` (`!list_only` branch), preserving module summary ordering/field semantics while trimming helper indirection.
 - 2026-03-07: removed single-use test-result JSON helper (`json_of_results`) and inlined equivalent test-result JSON array assembly directly in `print_json_report` (`!list_only` branch), preserving per-test status/error/log rendering semantics while trimming helper indirection.
+- 2026-03-07: removed single-use module-detail JSON helper (`json_of_module_details`) and inlined equivalent module-detail JSON array assembly directly in `print_json_report`, preserving module detail ordering/field semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
