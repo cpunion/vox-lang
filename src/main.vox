@@ -1331,49 +1331,6 @@ fn set_module_queue_next(qs0: Vec[ModuleQueue], idx: i32, next: i32) -> Vec[Modu
   return qs;
 }
 
-fn launch_test_job(bin: String, run_dir: String, module_idx: i32, seq: i32, test_name: String, runner_cmd: String, trace: bool) -> RunningJob {
-  let tag: String = module_idx.to_string().concat("_").concat(seq.to_string());
-  let rc_file: String = path_join(run_dir, "job_".concat(tag).concat(".rc"));
-  let log_file: String = path_join(run_dir, "job_".concat(tag).concat(".log"));
-  let bin_exec: String = shell_exec_path(bin);
-
-  let mut cmd_head: String = shell_quote(bin_exec).concat(" ").concat(shell_quote(test_name));
-  let mut cmd_head_win: String = bin_exec.concat(" ").concat(test_name);
-  let trimmed_runner_cmd: String = txt.trim_space(runner_cmd);
-  if trimmed_runner_cmd != "" {
-    let re: String = shell_exec_path(trimmed_runner_cmd);
-    cmd_head = shell_quote(re).concat(" ").concat(shell_quote(bin_exec)).concat(" ").concat(shell_quote(test_name));
-    cmd_head_win = re.concat(" ").concat(bin_exec).concat(" ").concat(test_name);
-  }
-
-  let log_redir: String = " > ".concat(shell_quote(shell_exec_path(log_file))).concat(" 2>&1");
-  if host_is_windows() {
-    let run_cmd_win: String = cmd_head_win.concat(" > ").concat(shell_exec_path(log_file)).concat(" 2>&1");
-    let rc: i32 = exec_cmd(run_cmd_win, trace);
-    fs.write_string(rc_file, if rc == 0 { "0" } else { "1" });
-    return RunningJob {
-      module_idx: module_idx,
-      name: test_name,
-      rc_file: rc_file,
-      log_file: log_file,
-      start_ns: tm.now_ns(),
-    };
-  }
-  let run_cmd: String =
-    cmd_head.concat(log_redir)
-      .concat(" && echo 0 > ").concat(shell_quote(shell_exec_path(rc_file)))
-      .concat(" || echo 1 > ").concat(shell_quote(shell_exec_path(rc_file)));
-  let bg_cmd: String = "( ".concat(run_cmd).concat(" ) &");
-  let _rc: i32 = exec_cmd(bg_cmd, trace);
-  return RunningJob {
-    module_idx: module_idx,
-    name: test_name,
-    rc_file: rc_file,
-    log_file: log_file,
-    start_ns: tm.now_ns(),
-  };
-}
-
 fn json_quote(s: String) -> String {
   let mut out: String = "\"";
   let mut i: i32 = 0;
@@ -3753,7 +3710,38 @@ fn main() -> i32 {
         let q: ModuleQueue = queues.get(qi);
         let name: String = q.tests.get(q.next);
         queues = set_module_queue_next(queues, qi, q.next + 1);
-        let job: RunningJob = launch_test_job(bin, run_dir, qi, launch_seq, name, test_runner_cmd, trace_exec);
+        let tag: String = qi.to_string().concat("_").concat(launch_seq.to_string());
+        let rc_file: String = path_join(run_dir, "job_".concat(tag).concat(".rc"));
+        let log_file: String = path_join(run_dir, "job_".concat(tag).concat(".log"));
+        let bin_exec: String = shell_exec_path(bin);
+        let mut cmd_head: String = shell_quote(bin_exec).concat(" ").concat(shell_quote(name));
+        let mut cmd_head_win: String = bin_exec.concat(" ").concat(name);
+        let trimmed_runner_cmd: String = txt.trim_space(test_runner_cmd);
+        if trimmed_runner_cmd != "" {
+          let re: String = shell_exec_path(trimmed_runner_cmd);
+          cmd_head = shell_quote(re).concat(" ").concat(shell_quote(bin_exec)).concat(" ").concat(shell_quote(name));
+          cmd_head_win = re.concat(" ").concat(bin_exec).concat(" ").concat(name);
+        }
+        let log_redir: String = " > ".concat(shell_quote(shell_exec_path(log_file))).concat(" 2>&1");
+        if host_is_windows() {
+          let run_cmd_win: String = cmd_head_win.concat(" > ").concat(shell_exec_path(log_file)).concat(" 2>&1");
+          let rc: i32 = exec_cmd(run_cmd_win, trace_exec);
+          fs.write_string(rc_file, if rc == 0 { "0" } else { "1" });
+        } else {
+          let run_cmd: String =
+            cmd_head.concat(log_redir)
+              .concat(" && echo 0 > ").concat(shell_quote(shell_exec_path(rc_file)))
+              .concat(" || echo 1 > ").concat(shell_quote(shell_exec_path(rc_file)));
+          let bg_cmd: String = "( ".concat(run_cmd).concat(" ) &");
+          let _rc: i32 = exec_cmd(bg_cmd, trace_exec);
+        }
+        let job: RunningJob = RunningJob {
+          module_idx: qi,
+          name: name,
+          rc_file: rc_file,
+          log_file: log_file,
+          start_ns: tm.now_ns(),
+        };
         running.push(job);
         launch_seq = launch_seq + 1;
       }
