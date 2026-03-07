@@ -299,6 +299,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use module-summary sort helper (`sort_module_summaries`) and inlined equivalent module-name insertion-sort loop directly at test-run aggregation, preserving summary order semantics while trimming helper indirection.
 - 2026-03-07: removed single-use list-report module builder helper (`module_details_from_tests`) and inlined equivalent test-sort/module-queue->module-detail expansion directly in `print_json_report` (`list_only` branch), preserving JSON module-details semantics while trimming helper indirection.
 - 2026-03-07: removed single-use plain list printer helper (`print_test_list`) and inlined equivalent module-grouped test-list rendering directly in the `vox test --list` non-JSON branch, preserving list output order/count semantics while trimming helper indirection.
+- 2026-03-07: removed single-use stage1 Vox source loader helper (`load_stage1_vox_from_root`) and inlined equivalent `VOX_ROOT` scan logic directly in `load_stage1_vox`, preserving stage1 `src/vox/**` preload semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
