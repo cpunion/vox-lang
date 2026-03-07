@@ -254,6 +254,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed lock verify result wrappers (`lock_ok`, `lock_err`) and inlined the same `LockVerifyResult` literals at `verify_lockfile_or_ok` return sites, preserving lock check semantics while trimming one-hop helper surface.
 - 2026-03-07: removed single-use lock quote helper (`lock_quote_value`) and inlined equivalent `<empty>`/quoted rendering directly in `lock_field_mismatch`, preserving mismatch text semantics while trimming one helper frame.
 - 2026-03-07: removed two query-shadow wrapper helpers in `main` (`query_shadow_enabled`, `query_shadow_trace_enabled`) and inlined equivalent env/trace predicates at build/test call sites, preserving query-shadow gating semantics while trimming one-hop helper surface.
+- 2026-03-07: removed two CLI flag support wrappers in `main` (`cmd_supports_target`, `cmd_supports_emit_c`) and inlined equivalent command predicates at argument-parse call sites, preserving CLI flag acceptance semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
