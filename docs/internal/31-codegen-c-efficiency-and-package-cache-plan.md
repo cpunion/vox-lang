@@ -281,6 +281,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use target arch parser helper (`target_arch_from_text`) and inlined equivalent arch token detection (`wasm32`/`amd64`/`arm64`/`x86`) directly in `parse_cli_target_spec`, preserving target canonicalization semantics while trimming helper indirection.
 - 2026-03-07: removed single-use target pointer-width helper (`target_ptr_bits`) and inlined equivalent `x86|wasm32 -> 32 else 64` selection at CLI compile option construction, preserving target ptr-bits semantics while trimming helper indirection.
 - 2026-03-07: removed single-use object-extension helper (`cc_object_ext`) and inlined equivalent `msvc -> .obj else .o` selection at build object-path construction, preserving object artifact naming semantics while trimming helper indirection.
+- 2026-03-07: removed single-use test-name substring filter helper (`filter_tests_contains`) and inlined equivalent `text_contains` selection directly in the `vox test` filter pipeline, preserving `--filter` selection semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
