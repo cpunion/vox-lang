@@ -287,6 +287,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use fmt path-normalization helper (`fmt_args_paths`) and inlined equivalent non-empty/default-path selection (`src`, optional `tests`/`examples`) directly in `cmd_fmt`, preserving formatter file discovery semantics while trimming helper indirection.
 - 2026-03-07: removed single-use test-set intersection helper (`intersect_tests`) and inlined equivalent rerun-failed intersection (`contains_str(prev_failed, name)`) directly in the `vox test` selection pipeline, preserving rerun subset semantics while trimming helper indirection.
 - 2026-03-07: removed three single-use git version helpers (`git_dirty`, `git_exact_base_tag`, `git_count_since_base_tag`) and inlined equivalent status/exact-tag/commit-count checks directly in `resolve_cli_version`, preserving CLI version string semantics while trimming helper indirection.
+- 2026-03-07: removed single-use local selfhost env wrapper (`exec_cmd_with_env_once`) and inlined equivalent platform-specific env-prefix command construction directly in `maybe_handle_local_dev_selfhost_with_args`, preserving local reroute execution semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
