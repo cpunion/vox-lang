@@ -294,6 +294,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use failed-test log printer helper (`print_failed_test_log`) and inlined equivalent log-file existence/read/trim printing directly in the `vox test` failure branch, preserving failure log rendering semantics while trimming helper indirection.
 - 2026-03-07: removed single-use failed-tests JSON-field parser helper (`parse_json_string_array_field`) and inlined equivalent `"tests"`/`"failed_tests"` array extraction directly in `read_failed_tests`, preserving rerun-failed compatibility semantics while trimming helper indirection.
 - 2026-03-07: removed single-use test-launch helper (`launch_test_job`) and inlined equivalent per-job command construction (`rc/log paths`, optional runner wrapping, windows sync vs posix background dispatch) directly in the test scheduler loop, preserving module-queue execution semantics while trimming helper indirection.
+- 2026-03-07: removed single-use module-queue cursor update helper (`set_module_queue_next`) and inlined equivalent `queues.set(...)` update directly in the scheduler launch path, preserving queue advancement semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
