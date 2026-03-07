@@ -282,6 +282,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use target pointer-width helper (`target_ptr_bits`) and inlined equivalent `x86|wasm32 -> 32 else 64` selection at CLI compile option construction, preserving target ptr-bits semantics while trimming helper indirection.
 - 2026-03-07: removed single-use object-extension helper (`cc_object_ext`) and inlined equivalent `msvc -> .obj else .o` selection at build object-path construction, preserving object artifact naming semantics while trimming helper indirection.
 - 2026-03-07: removed single-use test-name substring filter helper (`filter_tests_contains`) and inlined equivalent `text_contains` selection directly in the `vox test` filter pipeline, preserving `--filter` selection semantics while trimming helper indirection.
+- 2026-03-07: removed single-use test-module glob filter helper (`filter_tests_module_pattern`) and inlined equivalent module-name `glob_match` selection directly in the `vox test` filter pipeline, preserving `--module` selection semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
