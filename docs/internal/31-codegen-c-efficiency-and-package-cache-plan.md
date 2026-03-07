@@ -273,6 +273,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use test key-pair helper (`test_build_sem_keys_from_pkg_source_keys_keep`) and reused existing keep-APIs (`test_build_key_from_pkg_source_keys_keep` + `build_cache_test_key_triple_from_pkg_source_keys_keep`) in `test_test_build_sem_keys_keep_matches_direct_derivation_smoke`, preserving direct-derivation assertions while trimming duplicate key-derivation helper logic.
 - 2026-03-07: removed single-use host-platform split helpers (`platform_os_part` / `platform_arch_part`) and inlined equivalent `tc_detect_platform` split logic at CLI target parse call site, preserving host default/`os-arch` derivation semantics while trimming helper indirection and redundant string copy (`slice(0, len)`).
 - 2026-03-07: removed single-use cached-source lookup helper (`find_cached_source_text`) and inlined equivalent binary-search lookup directly in `load_files_with_cached` fallback branch, preserving cache-hit/miss file load semantics while trimming helper struct/function indirection.
+- 2026-03-07: removed single-use path-order helper (`strings_are_non_decreasing_main_keep`) and inlined equivalent non-decreasing check directly in `load_files_with_cached`, preserving sorted-fast-path selection semantics while trimming helper struct/function indirection.
 
 ## 5. Validation Gates
 
