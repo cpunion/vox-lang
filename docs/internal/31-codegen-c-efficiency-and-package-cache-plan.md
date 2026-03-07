@@ -265,6 +265,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed two dependency-resolution success wrappers (`dep_res_ok`, `reg_root_ok`) and inlined equivalent success literals (`ResolveDepResult` / `ResolveRegistryRootResult`) at call sites, preserving dependency source/registry resolution semantics while trimming helper indirection.
 - 2026-03-07: removed single-use package-source classification helper (`build_cache_pkg_from_source_path`) in `main_test_cache` and inlined equivalent package derivation logic into `source_file_order_by_pkg_path_with_files`, preserving pkg-key grouping semantics while trimming helper indirection.
 - 2026-03-07: removed single-use discover-cache list parser helper (`parse_discover_tests_cache_list`) and reused `parse_test_build_cache_tests` at discover-cache hit path, preserving newline/trim parsing semantics while trimming helper duplication.
+- 2026-03-07: removed single-use discover-cache list formatter helper (`format_discover_tests_cache_list_with_tests`) and reused `format_test_build_cache_tests_with_tests` at discover-cache write path/tests, preserving sort+newline rendering semantics while trimming helper duplication.
 
 ## 5. Validation Gates
 
