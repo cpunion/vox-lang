@@ -312,6 +312,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use local-selfhost output helper (`last_non_empty_line`) and inlined equivalent tail non-empty line scan directly in `maybe_handle_local_dev_selfhost_with_args`, preserving `rolling-selfhost.sh print-bin` path extraction semantics while trimming helper indirection.
 - 2026-03-07: removed single-use test discovery qualified-name helper (`qname`) and inlined equivalent module-path slash-to-dot + `::` join logic directly in `discover_tests_from_cached_test_files`, preserving discovered test naming semantics while trimming helper indirection.
 - 2026-03-07: removed single-use path-sanitize character predicate helper (`is_alnum`) and inlined equivalent ASCII alnum checks directly in `sanitize_path_part`, preserving dependency cache path sanitization semantics while trimming helper indirection.
+- 2026-03-07: removed two single-use static object-link cmdline helpers (`cc_link_obj_cmdline_static_msvc`, `cc_link_obj_cmdline_static_gnu`) and inlined equivalent `ar` command assembly directly in `cc_link_obj_cmdline_for_target_artifact`, preserving static object-link command semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
