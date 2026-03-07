@@ -257,6 +257,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed two CLI flag support wrappers in `main` (`cmd_supports_target`, `cmd_supports_emit_c`) and inlined equivalent command predicates at argument-parse call sites, preserving CLI flag acceptance semantics while trimming helper indirection.
 - 2026-03-07: removed CLI artifact-support wrapper (`cmd_supports_artifact`) and inlined equivalent command predicates at artifact flag parse and wasm artifact validation sites, preserving CLI artifact semantics while trimming helper indirection.
 - 2026-03-07: removed target-parse result wrappers (`cli_target_spec_ok`, `cli_target_spec_err`) and inlined equivalent `CliTargetSpec` literals directly in `parse_cli_target_spec`, preserving target-parse diagnostics and canonical target/triple construction semantics while trimming helper indirection.
+- 2026-03-07: removed cache-toggle wrapper (`build_cache_enabled`) and inlined equivalent env-derived predicate (`build_cache_enabled_from_env(proc.getenv("VOX_BUILD_CACHE_DISABLE"))`) at build/test cache enable call sites, preserving cache gate semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
