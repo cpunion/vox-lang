@@ -261,6 +261,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed test-discovery predicate wrapper (`is_test_file_for_discovery`) and inlined equivalent `tests/**` or `src/*_test.vox` condition directly in `discover_tests_cached_with_paths`, preserving discovery file-selection semantics while trimming helper indirection.
 - 2026-03-07: removed single-use home-directory helper (`home_dir_main`) and inlined equivalent HOME/USERPROFILE/HOMEDRIVE+HOMEPATH fallback logic directly in install path derivation, preserving install destination semantics while trimming helper indirection.
 - 2026-03-07: removed single-use LSP script probe helper (`lsp_server_script`) and inlined equivalent tools-path fallback probe directly in `cmd_lsp`, preserving CLI LSP startup semantics while trimming helper indirection.
+- 2026-03-07: removed two single-use local-selfhost predicate wrappers (`local_dev_selfhost_cmd`, `is_local_selfhost_bin`) and inlined equivalent command/exe checks directly in `maybe_handle_local_dev_selfhost_with_args`, preserving local selfhost reroute semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
