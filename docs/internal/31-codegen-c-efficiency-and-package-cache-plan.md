@@ -263,6 +263,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use LSP script probe helper (`lsp_server_script`) and inlined equivalent tools-path fallback probe directly in `cmd_lsp`, preserving CLI LSP startup semantics while trimming helper indirection.
 - 2026-03-07: removed two single-use local-selfhost predicate wrappers (`local_dev_selfhost_cmd`, `is_local_selfhost_bin`) and inlined equivalent command/exe checks directly in `maybe_handle_local_dev_selfhost_with_args`, preserving local selfhost reroute semantics while trimming helper indirection.
 - 2026-03-07: removed two dependency-resolution success wrappers (`dep_res_ok`, `reg_root_ok`) and inlined equivalent success literals (`ResolveDepResult` / `ResolveRegistryRootResult`) at call sites, preserving dependency source/registry resolution semantics while trimming helper indirection.
+- 2026-03-07: removed single-use package-source classification helper (`build_cache_pkg_from_source_path`) in `main_test_cache` and inlined equivalent package derivation logic into `source_file_order_by_pkg_path_with_files`, preserving pkg-key grouping semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
