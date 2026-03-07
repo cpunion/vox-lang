@@ -270,6 +270,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use test-selection containment helper (`test_build_cache_contains_all_sorted_hay_with_need`) and inlined equivalent sorted-subset check directly in `test_build_cache_state_with_tests`; cache unit test now validates the same algorithm via a test-local helper.
 - 2026-03-07: removed single-use test-local sorted-subset helper (`cache_test_contains_all_sorted_hay_with_need`) and inlined equivalent sorted-subset checks directly in `test_test_build_cache_contains_all_sorted_hay_with_need_smoke`, keeping cache subset semantics while trimming one extra helper symbol in test build.
 - 2026-03-07: removed single-use test fixture helper (`build_cache_test_files_ba`) and inlined equivalent reversed source-file fixture directly in `test_build_cache_key_is_order_stable`, preserving order-stability assertion semantics while trimming one extra test helper symbol.
+- 2026-03-07: removed single-use test key-pair helper (`test_build_sem_keys_from_pkg_source_keys_keep`) and reused existing keep-APIs (`test_build_key_from_pkg_source_keys_keep` + `build_cache_test_key_triple_from_pkg_source_keys_keep`) in `test_test_build_sem_keys_keep_matches_direct_derivation_smoke`, preserving direct-derivation assertions while trimming duplicate key-derivation helper logic.
 
 ## 5. Validation Gates
 
