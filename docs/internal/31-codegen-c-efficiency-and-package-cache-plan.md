@@ -292,6 +292,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use test-selection print helper (`print_test_selection`) and inlined equivalent selection summary logging directly in the `vox test` selection branch, preserving displayed flags/counts while trimming helper indirection.
 - 2026-03-07: removed two single-use module-order insertion helpers (`module_summary_insert_sorted`, `module_detail_insert_sorted`) and inlined equivalent insertion loops directly in `sort_module_summaries`/`sort_module_details`, preserving module-name sort semantics while trimming helper indirection.
 - 2026-03-07: removed single-use failed-test log printer helper (`print_failed_test_log`) and inlined equivalent log-file existence/read/trim printing directly in the `vox test` failure branch, preserving failure log rendering semantics while trimming helper indirection.
+- 2026-03-07: removed single-use failed-tests JSON-field parser helper (`parse_json_string_array_field`) and inlined equivalent `"tests"`/`"failed_tests"` array extraction directly in `read_failed_tests`, preserving rerun-failed compatibility semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
