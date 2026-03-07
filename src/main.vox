@@ -2157,8 +2157,6 @@ fn run_git_capture(root: String, suffix: String, subcmd: String) -> String {
   return txt.trim_space(fs.read_to_string(out));
 }
 
-struct LocalSelfhostPrintBinResult { ok: bool, err: String, bin: String }
-
 fn local_dev_repo_has_selfhost() -> bool {
   if !fs.exists("vox.toml") { return false; }
   if !fs.exists("src/main.vox") { return false; }
@@ -2176,37 +2174,6 @@ fn last_non_empty_line(text: String) -> String {
     i = i - 1;
   }
   return "";
-}
-
-fn local_selfhost_print_bin(trace_exec: bool) -> LocalSelfhostPrintBinResult {
-  if !local_dev_repo_has_selfhost() {
-    return LocalSelfhostPrintBinResult { ok: false, err: "not in vox-lang repo root", bin: "" };
-  }
-  fs.mkdir_p("target/debug");
-  let out: String = "target/debug/.vox_local_selfhost_print_bin.log";
-  let script: String = shell_exec_path("scripts/ci/rolling-selfhost.sh");
-  let cmd: String =
-    "bash "
-      .concat(shell_quote(script))
-      .concat(" print-bin > ")
-      .concat(shell_quote(shell_exec_path(out)))
-      .concat(" 2>&1");
-  let rc: i32 = exec_cmd(cmd, trace_exec);
-  let txt: String = if fs.exists(out) { fs.read_to_string(out) } else { "" };
-  if rc != 0 {
-    if txt != "" {
-      return LocalSelfhostPrintBinResult { ok: false, err: txt, bin: "" };
-    }
-    return LocalSelfhostPrintBinResult { ok: false, err: "rolling selfhost build failed", bin: "" };
-  }
-  let bin: String = last_non_empty_line(txt);
-  if bin == "" {
-    return LocalSelfhostPrintBinResult { ok: false, err: "rolling selfhost did not print compiler path", bin: "" };
-  }
-  if !fs.exists(bin) {
-    return LocalSelfhostPrintBinResult { ok: false, err: "rolling selfhost binary missing: ".concat(bin), bin: "" };
-  }
-  return LocalSelfhostPrintBinResult { ok: true, err: "", bin: bin };
 }
 
 fn maybe_handle_local_dev_selfhost_with_args(args0: Vec[String], trace_exec: bool) -> ToolchainRouteWithArgsResult {
@@ -2228,13 +2195,49 @@ fn maybe_handle_local_dev_selfhost_with_args(args0: Vec[String], trace_exec: boo
     return tc_route_no_with_args(args);
   }
 
-  let pr: LocalSelfhostPrintBinResult = local_selfhost_print_bin(trace_exec);
-  if !pr.ok {
+  let mut pr_ok: bool = false;
+  let mut pr_err: String = "";
+  let mut pr_bin: String = "";
+  if !local_dev_repo_has_selfhost() {
+    pr_err = "not in vox-lang repo root";
+  } else {
+    fs.mkdir_p("target/debug");
+    let out: String = "target/debug/.vox_local_selfhost_print_bin.log";
+    let script: String = shell_exec_path("scripts/ci/rolling-selfhost.sh");
+    let print_bin_cmd: String =
+      "bash "
+        .concat(shell_quote(script))
+        .concat(" print-bin > ")
+        .concat(shell_quote(shell_exec_path(out)))
+        .concat(" 2>&1");
+    let print_bin_rc: i32 = exec_cmd(print_bin_cmd, trace_exec);
+    let print_bin_txt: String = if fs.exists(out) { fs.read_to_string(out) } else { "" };
+    if print_bin_rc != 0 {
+      if print_bin_txt != "" {
+        pr_err = print_bin_txt;
+      } else {
+        pr_err = "rolling selfhost build failed";
+      }
+    } else {
+      let bin: String = last_non_empty_line(print_bin_txt);
+      if bin == "" {
+        pr_err = "rolling selfhost did not print compiler path";
+      } else {
+        if !fs.exists(bin) {
+          pr_err = "rolling selfhost binary missing: ".concat(bin);
+        } else {
+          pr_bin = bin;
+          pr_ok = true;
+        }
+      }
+    }
+  }
+  if !pr_ok {
     print("local selfhost failed\n");
-    if pr.err != "" { print(pr.err.concat("\n")); }
+    if pr_err != "" { print(pr_err.concat("\n")); }
     return tc_route_yes_with_args(1);
   }
-  let mut cmdline: String = tc_build_exec_cmd(pr.bin, args);
+  let mut cmdline: String = tc_build_exec_cmd(pr_bin, args);
   if trace_exec { cmdline = cmdline.concat(" ").concat(shell_quote("-x")); }
   let mut rc: i32 = 0;
   if host_is_windows() {

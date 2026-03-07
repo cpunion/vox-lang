@@ -301,6 +301,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use plain list printer helper (`print_test_list`) and inlined equivalent module-grouped test-list rendering directly in the `vox test --list` non-JSON branch, preserving list output order/count semantics while trimming helper indirection.
 - 2026-03-07: removed single-use stage1 Vox source loader helper (`load_stage1_vox_from_root`) and inlined equivalent `VOX_ROOT` scan logic directly in `load_stage1_vox`, preserving stage1 `src/vox/**` preload semantics while trimming helper indirection.
 - 2026-03-07: removed single-use build compile-mode helper (`build_compile_mode_text`) and inlined equivalent compile-mode line assembly directly at build-mode key construction, preserving cache/query mode-key semantics while trimming helper indirection.
+- 2026-03-07: removed single-use local selfhost print-bin helper (`local_selfhost_print_bin`) plus its transient result struct and inlined equivalent `rolling-selfhost.sh print-bin` resolution/error handling directly in `maybe_handle_local_dev_selfhost_with_args`, preserving local selfhost reroute semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
