@@ -297,6 +297,7 @@ Invalidate unit on any of:
 - 2026-03-07: removed single-use module-queue cursor update helper (`set_module_queue_next`) and inlined equivalent `queues.set(...)` update directly in the scheduler launch path, preserving queue advancement semantics while trimming helper indirection.
 - 2026-03-07: removed single-use test-result merge helper (`merge_test_results_by_name`) and inlined equivalent merge loops directly in `sort_test_results`, preserving name-order stable merge-sort semantics while trimming helper indirection.
 - 2026-03-07: removed single-use module-summary sort helper (`sort_module_summaries`) and inlined equivalent module-name insertion-sort loop directly at test-run aggregation, preserving summary order semantics while trimming helper indirection.
+- 2026-03-07: removed single-use list-report module builder helper (`module_details_from_tests`) and inlined equivalent test-sort/module-queue->module-detail expansion directly in `print_json_report` (`list_only` branch), preserving JSON module-details semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
