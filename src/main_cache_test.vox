@@ -182,6 +182,22 @@ fn build_cache_test_unused_output_copy_path(prefix: String) -> String {
   panic("build_cache_test_unused_output_copy_path: no unused path for prefix '".concat(prefix).concat("' after 2048 attempts"));
 }
 
+fn build_cache_test_unused_key_for_test_cache(prefix: String) -> String {
+  let mut i: i32 = 0;
+  while i < 2048 {
+    let key: String = prefix.concat("-").concat(i.to_string());
+    let cpath: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".c");
+    let obj_o: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".o");
+    let obj_obj: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".obj");
+    let out: String = path_join(path_join(path_join("target", "cache"), "test-link-v1"), key);
+    if !fs.exists(cpath) && !fs.exists(obj_o) && !fs.exists(obj_obj) && !fs.exists(out) && !fs.exists(out.concat(".exe")) {
+      return key;
+    }
+    i = i + 1;
+  }
+  panic("build_cache_test_unused_key_for_test_cache: no unused key for prefix '".concat(prefix).concat("' after 2048 attempts"));
+}
+
 fn test_build_cache_enabled_from_env_smoke() -> () {
   t.assert(build_cache_enabled_from_env(""));
   t.assert(build_cache_enabled_from_env("0"));
@@ -782,10 +798,12 @@ fn test_test_build_cache_hit_subset_smoke() -> () {
   let key: String = "test-key-1";
   let out: String = path_join(path_join(path_join("target", "cache"), "test-link-v1"), key);
   let cpath: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".c");
+  let obj: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".o");
   let bin: String = out;
   fs.mkdir_p(dir_name(cpath));
   fs.mkdir_p(dir_name(bin));
   fs.write_string(cpath, "/*c*/");
+  fs.write_string(obj, "obj");
   fs.write_string(bin, "bin");
   let mut compiled: Vec[String] = Vec();
   compiled.push("root.test_a");
@@ -794,11 +812,14 @@ fn test_test_build_cache_hit_subset_smoke() -> () {
 
   let mut need_a: Vec[String] = Vec();
   need_a.push("root.test_a");
-  t.assert(test_build_cache_state_with_tests(out, key, cpath, bin, need_a).hit);
+  let hit_a: TestBuildCacheStateResult = test_build_cache_state_with_tests(out, key, cpath, obj, bin, need_a);
+  t.assert(hit_a.c_hit);
+  t.assert(hit_a.obj_hit);
+  t.assert(hit_a.hit);
 
   let mut need_c: Vec[String] = Vec();
   need_c.push("root.test_c");
-  t.assert(!test_build_cache_state_with_tests(out, key, cpath, bin, need_c).hit);
+  t.assert(!test_build_cache_state_with_tests(out, key, cpath, obj, bin, need_c).hit);
 }
 
 fn test_test_build_cache_state_c_hit_without_bin_smoke() -> () {
@@ -806,7 +827,7 @@ fn test_test_build_cache_state_c_hit_without_bin_smoke() -> () {
   let mut i: i32 = 0;
   while i < 2048 {
     let cand: String = "test-key-c-hit-no-bin-".concat(i.to_string());
-    if !fs.exists(path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), cand).concat(".c")) && !fs.exists(path_join(path_join(path_join("target", "cache"), "test-link-v1"), cand)) {
+    if !fs.exists(path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), cand).concat(".c")) && !fs.exists(path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), cand).concat(".o")) && !fs.exists(path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), cand).concat(".obj")) && !fs.exists(path_join(path_join(path_join("target", "cache"), "test-link-v1"), cand)) {
       key = cand;
       i = 2048;
     } else {
@@ -815,9 +836,11 @@ fn test_test_build_cache_state_c_hit_without_bin_smoke() -> () {
   }
   let out: String = path_join(path_join(path_join("target", "cache"), "test-link-v1"), key);
   let cpath: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".c");
+  let obj: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".o");
   let bin: String = out;
   fs.mkdir_p(dir_name(cpath));
   fs.write_string(cpath, "/*c*/");
+  fs.write_string(obj, "obj");
   let mut compiled: Vec[String] = Vec();
   compiled.push("root.test_a");
   compiled = write_test_build_cache_with_tests(out, key, compiled);
@@ -825,8 +848,9 @@ fn test_test_build_cache_state_c_hit_without_bin_smoke() -> () {
 
   let mut need_a: Vec[String] = Vec();
   need_a.push("root.test_a");
-  let st: TestBuildCacheStateResult = test_build_cache_state_with_tests(out, key, cpath, bin, need_a);
+  let st: TestBuildCacheStateResult = test_build_cache_state_with_tests(out, key, cpath, obj, bin, need_a);
   t.assert(st.c_hit);
+  t.assert(st.obj_hit);
   t.assert(!st.hit);
   t.assert_eq(st.selected.len(), 1);
 }
@@ -835,6 +859,26 @@ fn test_test_build_cache_paths_use_split_link_and_obj_roots() -> () {
   let key: String = "k";
   t.assert(text_contains(path_join(path_join(path_join("target", "cache"), "test-link-v1"), key), "test-link-v1"));
   t.assert(text_contains(path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".c"), "test-pkg-obj-v1"));
+  t.assert(text_contains(path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".o"), "test-pkg-obj-v1"));
+}
+
+fn test_test_build_cache_state_c_hit_without_obj_and_bin_smoke() -> () {
+  let key: String = build_cache_test_unused_key_for_test_cache("test-key-c-hit-no-obj-no-bin");
+  let out: String = path_join(path_join(path_join("target", "cache"), "test-link-v1"), key);
+  let cpath: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".c");
+  let obj: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".o");
+  let bin: String = out;
+  fs.mkdir_p(dir_name(cpath));
+  fs.write_string(cpath, "/*c*/");
+  let mut compiled: Vec[String] = Vec();
+  compiled.push("root.test_a");
+  compiled = write_test_build_cache_with_tests(out, key, compiled);
+  let mut need: Vec[String] = Vec();
+  need.push("root.test_a");
+  let st: TestBuildCacheStateResult = test_build_cache_state_with_tests(out, key, cpath, obj, bin, need);
+  t.assert(st.c_hit);
+  t.assert(!st.obj_hit);
+  t.assert(!st.hit);
 }
 
 fn test_test_build_no_cache_paths_smoke() -> () {
