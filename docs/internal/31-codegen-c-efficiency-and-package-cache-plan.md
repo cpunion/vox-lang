@@ -323,6 +323,7 @@ Invalidate unit on any of:
 - 2026-03-08: removed single-use lockfile formatter helper (`format_lockfile_from_lock_deps`) and inlined equivalent lock TOML assembly directly in `write_lockfile_from_lock_deps`, preserving lockfile render semantics while trimming helper indirection.
 - 2026-03-08: removed single-use source-file index-order helper (`source_file_path_index_order`) plus its transient result struct and inlined equivalent cached-path ordering logic directly in `load_files_with_cached`, preserving cached file lookup semantics while trimming helper indirection.
 - 2026-03-08: removed dead test-discovery helper (`discover_tests_from_cached_test_files`) after production call sites converged on `discover_tests_cached_with_paths`; updated cache tests to assert through the canonical discovery path, preserving discovered test/cached-file semantics while trimming helper surface.
+- 2026-03-08: removed single-use compile toolchain fingerprint helper (`build_compile_toolchain_fingerprint`) and inlined equivalent compile-only toolchain key assembly directly in the `build` compile-mode path, preserving compile-cache key semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
