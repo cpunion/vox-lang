@@ -1536,165 +1536,11 @@ fn dep_cache_root(base: String) -> String {
   return path_join(base, ".vox/deps");
 }
 
-struct ResolveDepResult { ok: bool, err: String, dep_root: String, dep: mf.Dependency }
-
-fn dep_res_err(msg: String) -> ResolveDepResult {
-  return ResolveDepResult {
-    ok: false,
-    err: msg,
-    dep_root: "",
-    dep: mf.Dependency {
-      name: "",
-      path: "",
-      has_path: false,
-      git: "",
-      has_git: false,
-      rev: "",
-      has_rev: false,
-      registry: "",
-      has_registry: false,
-      version: "",
-      has_version: false,
-    },
-  };
-}
-
 fn is_git_like_remote_src(src: String) -> bool {
   if txt.has_prefix(src, "http://") || txt.has_prefix(src, "https://") || txt.has_prefix(src, "ssh://") || txt.has_prefix(src, "git@") || txt.has_prefix(src, "file://") {
     return true;
   }
   return has_suffix(src, ".git");
-}
-
-fn resolve_dep_source(base: String, d: mf.Dependency) -> ResolveDepResult {
-  if d.has_path {
-    let dep_root: String = resolve_dep_root(base, d.path);
-    if !fs.exists(path_join(dep_root, "vox.toml")) {
-      return dep_res_err("dependency missing vox.toml: ".concat(d.name));
-    }
-    return ResolveDepResult { ok: true, err: "", dep_root: dep_root, dep: mf.Dependency {
-        name: d.name,
-        path: dep_root,
-        has_path: true,
-        git: d.git,
-        has_git: d.has_git,
-        rev: d.rev,
-        has_rev: d.has_rev,
-        registry: d.registry,
-        has_registry: d.has_registry,
-        version: d.version,
-        has_version: d.has_version,
-      } };
-  }
-
-  if d.has_git {
-    let mut git_src: String = d.git;
-    if !is_abs_path(git_src) && !txt.has_prefix(git_src, "http://") && !txt.has_prefix(git_src, "https://") && !txt.has_prefix(git_src, "ssh://") && !txt.has_prefix(git_src, "git@") {
-      git_src = resolve_dep_root(base, git_src);
-    }
-    let cache_base: String = path_join(path_join(dep_cache_root(base), "git"), sanitize_path_part(d.name).concat("-").concat(sanitize_path_part(git_src)));
-    fs.mkdir_p(path_join(dep_cache_root(base), "git"));
-    if !fs.exists(path_join(cache_base, ".git")) {
-      let clone_cmd: String = "git clone ".concat(shell_quote(git_src)).concat(" ").concat(shell_quote(cache_base));
-      if proc.exec(clone_cmd) != 0 {
-        return dep_res_err("git clone failed: ".concat(d.name));
-      }
-    } else {
-      let fetch_cmd: String = "git -C ".concat(shell_quote(cache_base)).concat(" fetch --all --tags --prune");
-      proc.exec(fetch_cmd);
-    }
-    let mut target: String = "";
-    if d.has_rev { target = d.rev; } else if d.has_version { target = d.version; }
-    if target != "" {
-      let checkout_cmd: String = "git -C ".concat(shell_quote(cache_base)).concat(" checkout ").concat(shell_quote(target));
-      if proc.exec(checkout_cmd) != 0 {
-        return dep_res_err("git checkout failed: ".concat(d.name));
-      }
-    }
-    let rev_file: String = path_join(cache_base, ".vox_resolved_rev");
-    let rev_cmd: String = "git -C ".concat(shell_quote(cache_base)).concat(" rev-parse HEAD > ").concat(shell_quote(rev_file));
-    let mut resolved_rev: String = d.rev;
-    let mut has_resolved_rev: bool = d.has_rev;
-    if proc.exec(rev_cmd) == 0 {
-      resolved_rev = txt.trim_space(fs.read_to_string(rev_file));
-      has_resolved_rev = resolved_rev != "";
-    }
-    if !fs.exists(path_join(cache_base, "vox.toml")) {
-      return dep_res_err("dependency missing vox.toml: ".concat(d.name));
-    }
-    return ResolveDepResult { ok: true, err: "", dep_root: cache_base, dep: mf.Dependency {
-        name: d.name,
-        path: cache_base,
-        has_path: true,
-        git: git_src,
-        has_git: true,
-        rev: resolved_rev,
-        has_rev: has_resolved_rev,
-        registry: d.registry,
-        has_registry: d.has_registry,
-        version: d.version,
-        has_version: d.has_version,
-      } };
-  }
-
-  if !d.has_version {
-    return dep_res_err("dependency requires path/git/version: ".concat(d.name));
-  }
-  let mut reg_ok: bool = true;
-  let mut reg_err: String = "";
-  let mut reg_root: String = "";
-  if !d.has_registry {
-    reg_root = path_join(dep_cache_root(base), "registry");
-  } else {
-    let raw: String = d.registry;
-    let mut git_src: String = raw;
-    if txt.has_prefix(raw, "git+") && raw.len() > 4 {
-      git_src = raw.slice(4, raw.len());
-    }
-    let as_git: bool = txt.has_prefix(raw, "git+") || is_git_like_remote_src(git_src);
-    if !as_git {
-      reg_root = resolve_dep_root(base, raw);
-    } else {
-      if !is_abs_path(git_src) && !is_git_like_remote_src(git_src) {
-        git_src = resolve_dep_root(base, git_src);
-      }
-      let cache_base: String = path_join(path_join(dep_cache_root(base), "registry_remote"), sanitize_path_part(git_src));
-      fs.mkdir_p(path_join(dep_cache_root(base), "registry_remote"));
-      if !fs.exists(path_join(cache_base, ".git")) {
-        let clone_cmd: String = "git clone ".concat(shell_quote(git_src)).concat(" ").concat(shell_quote(cache_base));
-        if proc.exec(clone_cmd) != 0 {
-          reg_ok = false;
-          reg_err = "registry git clone failed: ".concat(raw);
-        }
-      } else {
-        let fetch_cmd: String = "git -C ".concat(shell_quote(cache_base)).concat(" fetch --all --tags --prune");
-        proc.exec(fetch_cmd);
-      }
-      if reg_ok {
-        reg_root = cache_base;
-      }
-    }
-  }
-  if !reg_ok {
-    return dep_res_err(reg_err);
-  }
-  let dep_root: String = path_join(path_join(reg_root, d.name), d.version);
-  if !fs.exists(path_join(dep_root, "vox.toml")) {
-    return dep_res_err("registry dependency not found: ".concat(d.name).concat("@").concat(d.version));
-  }
-  return ResolveDepResult { ok: true, err: "", dep_root: dep_root, dep: mf.Dependency {
-      name: d.name,
-      path: dep_root,
-      has_path: true,
-      git: d.git,
-      has_git: d.has_git,
-      rev: d.rev,
-      has_rev: d.has_rev,
-      registry: d.registry,
-      has_registry: d.has_registry,
-      version: d.version,
-      has_version: d.has_version,
-    } };
 }
 
 fn load_deps_from_manifest_at(base: String, files0: Vec[ld.SourceFile], seen0: Vec[String], resolved0: Vec[mf.Dependency]) -> DepsResult {
@@ -1719,20 +1565,145 @@ fn load_deps_from_manifest_at(base: String, files0: Vec[ld.SourceFile], seen0: V
     seen.push(d.name);
 
     let dep_name: String = d.name.slice(0, d.name.len());
-    let rr0: ResolveDepResult = resolve_dep_source(base, d);
-    if !rr0.ok { return deps_err(rr0.err); }
-    resolved.push(rr0.dep);
-    let rels: Vec[String] = srcw.walk_src_non_test_vox_files(rr0.dep_root);
+    let mut dep_root: String = "";
+    if d.has_path {
+      dep_root = resolve_dep_root(base, d.path);
+      if !fs.exists(path_join(dep_root, "vox.toml")) {
+        return deps_err("dependency missing vox.toml: ".concat(d.name));
+      }
+      resolved.push(mf.Dependency {
+        name: d.name,
+        path: dep_root,
+        has_path: true,
+        git: d.git,
+        has_git: d.has_git,
+        rev: d.rev,
+        has_rev: d.has_rev,
+        registry: d.registry,
+        has_registry: d.has_registry,
+        version: d.version,
+        has_version: d.has_version,
+      });
+    } else if d.has_git {
+      let mut git_src: String = d.git;
+      if !is_abs_path(git_src) && !txt.has_prefix(git_src, "http://") && !txt.has_prefix(git_src, "https://") && !txt.has_prefix(git_src, "ssh://") && !txt.has_prefix(git_src, "git@") {
+        git_src = resolve_dep_root(base, git_src);
+      }
+      let cache_base: String = path_join(path_join(dep_cache_root(base), "git"), sanitize_path_part(d.name).concat("-").concat(sanitize_path_part(git_src)));
+      fs.mkdir_p(path_join(dep_cache_root(base), "git"));
+      if !fs.exists(path_join(cache_base, ".git")) {
+        let clone_cmd: String = "git clone ".concat(shell_quote(git_src)).concat(" ").concat(shell_quote(cache_base));
+        if proc.exec(clone_cmd) != 0 {
+          return deps_err("git clone failed: ".concat(d.name));
+        }
+      } else {
+        let fetch_cmd: String = "git -C ".concat(shell_quote(cache_base)).concat(" fetch --all --tags --prune");
+        proc.exec(fetch_cmd);
+      }
+      let mut target: String = "";
+      if d.has_rev { target = d.rev; } else if d.has_version { target = d.version; }
+      if target != "" {
+        let checkout_cmd: String = "git -C ".concat(shell_quote(cache_base)).concat(" checkout ").concat(shell_quote(target));
+        if proc.exec(checkout_cmd) != 0 {
+          return deps_err("git checkout failed: ".concat(d.name));
+        }
+      }
+      let rev_file: String = path_join(cache_base, ".vox_resolved_rev");
+      let rev_cmd: String = "git -C ".concat(shell_quote(cache_base)).concat(" rev-parse HEAD > ").concat(shell_quote(rev_file));
+      let mut resolved_rev: String = d.rev;
+      let mut has_resolved_rev: bool = d.has_rev;
+      if proc.exec(rev_cmd) == 0 {
+        resolved_rev = txt.trim_space(fs.read_to_string(rev_file));
+        has_resolved_rev = resolved_rev != "";
+      }
+      if !fs.exists(path_join(cache_base, "vox.toml")) {
+        return deps_err("dependency missing vox.toml: ".concat(d.name));
+      }
+      dep_root = cache_base;
+      resolved.push(mf.Dependency {
+        name: d.name,
+        path: dep_root,
+        has_path: true,
+        git: git_src,
+        has_git: true,
+        rev: resolved_rev,
+        has_rev: has_resolved_rev,
+        registry: d.registry,
+        has_registry: d.has_registry,
+        version: d.version,
+        has_version: d.has_version,
+      });
+    } else {
+      if !d.has_version {
+        return deps_err("dependency requires path/git/version: ".concat(d.name));
+      }
+      let mut reg_ok: bool = true;
+      let mut reg_err: String = "";
+      let mut reg_root: String = "";
+      if !d.has_registry {
+        reg_root = path_join(dep_cache_root(base), "registry");
+      } else {
+        let raw: String = d.registry;
+        let mut git_src: String = raw;
+        if txt.has_prefix(raw, "git+") && raw.len() > 4 {
+          git_src = raw.slice(4, raw.len());
+        }
+        let as_git: bool = txt.has_prefix(raw, "git+") || is_git_like_remote_src(git_src);
+        if !as_git {
+          reg_root = resolve_dep_root(base, raw);
+        } else {
+          if !is_abs_path(git_src) && !is_git_like_remote_src(git_src) {
+            git_src = resolve_dep_root(base, git_src);
+          }
+          let cache_base: String = path_join(path_join(dep_cache_root(base), "registry_remote"), sanitize_path_part(git_src));
+          fs.mkdir_p(path_join(dep_cache_root(base), "registry_remote"));
+          if !fs.exists(path_join(cache_base, ".git")) {
+            let clone_cmd: String = "git clone ".concat(shell_quote(git_src)).concat(" ").concat(shell_quote(cache_base));
+            if proc.exec(clone_cmd) != 0 {
+              reg_ok = false;
+              reg_err = "registry git clone failed: ".concat(raw);
+            }
+          } else {
+            let fetch_cmd: String = "git -C ".concat(shell_quote(cache_base)).concat(" fetch --all --tags --prune");
+            proc.exec(fetch_cmd);
+          }
+          if reg_ok {
+            reg_root = cache_base;
+          }
+        }
+      }
+      if !reg_ok {
+        return deps_err(reg_err);
+      }
+      dep_root = path_join(path_join(reg_root, d.name), d.version);
+      if !fs.exists(path_join(dep_root, "vox.toml")) {
+        return deps_err("registry dependency not found: ".concat(d.name).concat("@").concat(d.version));
+      }
+      resolved.push(mf.Dependency {
+        name: d.name,
+        path: dep_root,
+        has_path: true,
+        git: d.git,
+        has_git: d.has_git,
+        rev: d.rev,
+        has_rev: d.has_rev,
+        registry: d.registry,
+        has_registry: d.has_registry,
+        version: d.version,
+        has_version: d.has_version,
+      });
+    }
+    let rels: Vec[String] = srcw.walk_src_non_test_vox_files(dep_root);
     let mut dep_files: Vec[ld.SourceFile] = Vec();
     let mut j: i32 = 0;
     while j < rels.len() {
       let rel: String = rels.get(j);
-      let full: String = path_join(rr0.dep_root, rel);
+      let full: String = path_join(dep_root, rel);
       let virt: String = dep_name.concat("/").concat(rel);
       dep_files.push(ld.SourceFile { path: virt, text: fs.read_to_string(full) });
       j = j + 1;
     }
-    let c_rels: Vec[String] = srcw.walk_c_files(rr0.dep_root);
+    let c_rels: Vec[String] = srcw.walk_c_files(dep_root);
     let include_legacy_runtime_c: bool = legacy_runtime_c_enabled();
     let mut ci: i32 = 0;
     while ci < c_rels.len() {
@@ -1742,7 +1713,7 @@ fn load_deps_from_manifest_at(base: String, files0: Vec[ld.SourceFile], seen0: V
           ci = ci + 1;
           continue;
         }
-        let c_full: String = path_join(rr0.dep_root, c_rel);
+        let c_full: String = path_join(dep_root, c_rel);
         let c_virt: String = dep_name.concat("/").concat(c_rel);
         dep_files.push(ld.SourceFile { path: c_virt, text: fs.read_to_string(c_full) });
       }
@@ -1751,7 +1722,7 @@ fn load_deps_from_manifest_at(base: String, files0: Vec[ld.SourceFile], seen0: V
     let mut di: i32 = 0;
     while di < dep_files.len() { files.push(dep_files.get(di)); di = di + 1; }
 
-    let rr: DepsResult = load_deps_from_manifest_at(rr0.dep_root, files, seen, resolved);
+    let rr: DepsResult = load_deps_from_manifest_at(dep_root, files, seen, resolved);
     if !rr.ok { return rr; }
     files = rr.files;
     seen = rr.seen;
