@@ -540,6 +540,7 @@ fn usage() -> () {
   print("  VOX_CC_DEBUG=1      enable C compiler debug symbols (-g / /Zi)\n");
   print("  VOX_PROFILE=1       print compile/cc phase timings for build commands\n");
   print("  VOX_BUILD_CACHE_DISABLE=1  disable build/test/list cache key/hash and always rebuild\n");
+  print("  VOX_CACHE_TRACE=1   print cache hit/miss traces for build/test/list\n");
   print("  VOX_QUERY_SHADOW=1  enable parse/load shadow cache (predict+write, no read)\n");
   print("  VOX_QUERY_SHADOW_TRACE=1  print parse/load shadow cache hit prediction logs\n");
   print("  VOX_ROOT=<path>     source root override for loading src/std and src/vox\n");
@@ -804,6 +805,14 @@ fn should_skip_query_shadow_prepare(cache_enabled: bool, sem_cache_hit: bool, qu
   if !sem_cache_hit { return false; }
   if query_shadow_trace { return false; }
   return true;
+}
+
+fn cache_on_off(v: bool) -> String {
+  return if v { "on" } else { "off" };
+}
+
+fn cache_hit_miss(v: bool) -> String {
+  return if v { "hit" } else { "miss" };
 }
 
 fn duration_us(ns0: i64) -> i64 {
@@ -2518,11 +2527,13 @@ fn main() -> i32 {
     while cui < c_user.len() { files.push(c_user.get(cui)); cui = cui + 1; }
 
     let cache_enabled: bool = build_cache_enabled_from_env(proc.getenv("VOX_BUILD_CACHE_DISABLE"));
+    let cache_trace: bool = env_truthy(proc.getenv("VOX_CACHE_TRACE"));
     let use_sem_cache: bool = should_use_sem_cache(cache_enabled, false);
     let compiler_rev: String = bi.version().concat("@").concat(bi.channel());
     let mut sem_key: String = "";
     let mut sem_dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
     let mut list_cache_out: String = "";
+    let mut sem_cache_hit: bool = false;
     if use_sem_cache {
       let pkg_keys_result: BuildCachePkgSemSourceKeysResult = build_cache_pkg_sem_source_keys_with_files(files);
       files = pkg_keys_result.files;
@@ -2542,7 +2553,7 @@ fn main() -> i32 {
       sem_dep_hashes = sem_keep.dep_hashes;
       list_cache_out = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), sem_key).concat(if test_json { ".list.json" } else { ".list.txt" });
       let sem_read: BuildSemCacheReadResult = build_sem_cache_read_with_deps(sem_key);
-      let mut sem_cache_hit: bool = sem_read.hit;
+      sem_cache_hit = sem_read.hit;
       if sem_cache_hit {
         if sem_read.deps.len() != sem_dep_hashes.len() {
           sem_cache_hit = false;
@@ -2561,9 +2572,29 @@ fn main() -> i32 {
         }
       }
       if sem_cache_hit && fs.exists(list_cache_out) {
+        if cache_trace {
+          print(
+            "[cache] mode=list cache="
+              .concat(cache_on_off(cache_enabled))
+              .concat(" sem=").concat(cache_hit_miss(sem_cache_hit))
+              .concat(" output=").concat(cache_hit_miss(true))
+              .concat(" key=").concat(sem_key)
+              .concat("\n"),
+          );
+        }
         print(fs.read_to_string(list_cache_out));
         return 0;
       }
+    }
+    if cache_trace {
+      print(
+        "[cache] mode=list cache="
+          .concat(cache_on_off(cache_enabled))
+          .concat(" sem=").concat(cache_hit_miss(sem_cache_hit))
+          .concat(" output=").concat(cache_hit_miss(false))
+          .concat(" key=").concat(sem_key)
+          .concat("\n"),
+      );
     }
 
     let opts: lst.GraphOptions = lst.GraphOptions {
@@ -2667,6 +2698,7 @@ fn main() -> i32 {
     let query_shadow_on: bool = env_truthy(proc.getenv("VOX_QUERY_SHADOW"));
     let query_shadow_trace: bool = trace_exec || env_truthy(proc.getenv("VOX_QUERY_SHADOW_TRACE"));
     let cache_enabled: bool = build_cache_enabled_from_env(proc.getenv("VOX_BUILD_CACHE_DISABLE"));
+    let cache_trace: bool = env_truthy(proc.getenv("VOX_CACHE_TRACE"));
     let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
     let cc_target_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
     let obj_ext: String = if cc_is_msvc_cmd(cc_target_cmd) { ".obj" } else { ".o" };
@@ -2741,6 +2773,18 @@ fn main() -> i32 {
       }
     }
     let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, compile_c_cache_hit || sem_cache_hit, query_shadow_trace);
+    if cache_trace {
+      print(
+        "[cache] mode=build cache="
+          .concat(cache_on_off(cache_enabled))
+          .concat(" sem=").concat(cache_hit_miss(sem_cache_hit))
+          .concat(" c=").concat(cache_hit_miss(compile_c_cache_hit))
+          .concat(" obj=").concat(cache_hit_miss(compile_cache_hit))
+          .concat(" link=").concat(cache_hit_miss(link_cache_hit))
+          .concat(" qshadow_skip=").concat(cache_hit_miss(skip_query_shadow_prepare))
+          .concat("\n"),
+      );
+    }
     if query_shadow_on && !skip_query_shadow_prepare {
       let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
       if use_sem_cache && sem_dep_hashes.len() > 0 {
@@ -3421,6 +3465,7 @@ fn main() -> i32 {
     let query_shadow_trace: bool = trace_exec || env_truthy(proc.getenv("VOX_QUERY_SHADOW_TRACE"));
     let mut query_shadow_state: q.ParseLoadShadowState = q.ParseLoadShadowState { key: "", predicted_hit: false };
     let cache_enabled: bool = build_cache_enabled_from_env(proc.getenv("VOX_BUILD_CACHE_DISABLE"));
+    let cache_trace: bool = env_truthy(proc.getenv("VOX_CACHE_TRACE"));
     let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
     let cc_test_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
     let cc_test_use_msvc: bool = cc_is_msvc_cmd(cc_test_cmd);
@@ -3506,6 +3551,18 @@ fn main() -> i32 {
       cache_hit = cache_state_result.hit;
     }
     let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, cache_c_hit || sem_cache_hit, query_shadow_trace);
+    if cache_trace {
+      print(
+        "[cache] mode=test cache="
+          .concat(cache_on_off(cache_enabled))
+          .concat(" sem=").concat(cache_hit_miss(sem_cache_hit))
+          .concat(" c=").concat(cache_hit_miss(cache_c_hit))
+          .concat(" obj=").concat(cache_hit_miss(cache_obj_hit))
+          .concat(" bin=").concat(cache_hit_miss(cache_hit))
+          .concat(" qshadow_skip=").concat(cache_hit_miss(skip_query_shadow_prepare))
+          .concat("\n"),
+      );
+    }
     if query_shadow_on && !skip_query_shadow_prepare {
       let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
       if use_sem_cache && sem_dep_hashes.len() > 0 {
