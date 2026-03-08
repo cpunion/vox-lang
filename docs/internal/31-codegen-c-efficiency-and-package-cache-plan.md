@@ -336,6 +336,7 @@ Invalidate unit on any of:
 - 2026-03-08: `vox test` compile path switched from single-step `C -> exe` to split `C -> obj` + `obj -> exe`; cache state now tracks `obj_hit` so bin-miss/object-hit cases relink only, avoiding redundant C recompilation on warm test-cache paths.
 - 2026-03-08: `vox build` now records last successful compile-C cache key per semantic key (`target/cache/pkg-sem-v1/<sem-key>.build.cache.c-key`) and can reuse that cached generated C when `pkg-sem` hits but current `pkg-obj` C entry misses (for example C-source-only key churn), skipping compile/typecheck/codegen and proceeding with object rebuild + relink.
 - 2026-03-08: `vox test` now uses the same sem-key C-key sidecar and can reuse cached test-generated C (`test-pkg-obj-v1/<old-key>.c`) on sem-hit/C-miss when cached compiled-test set still covers current selected tests, skipping compile/typecheck/codegen and continuing with object rebuild + relink.
+- 2026-03-08: `build_cache_pkg_sem_source_keys_with_files` sem-hash path now uses a no-non-vox fast path (sem hash directly tracks full pkg hash until first non-`.vox` input) and only runs separate sem-hash updates after divergence, reducing duplicated per-file hash work on all-vox/common package sets while preserving sem-key equivalence.
 
 ## 5. Validation Gates
 
