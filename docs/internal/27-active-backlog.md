@@ -319,15 +319,15 @@ Builtin end-state (agreed):
   - [x] A43-5 移除 `print` builtin（`collect/c_func/frozen lock`），由 `std/prelude::print` 通过 `@ffi_import("c", "vox_rt_print")` 提供并补齐回归测试。
   - Source: `docs/reference/style-guide.md`.
 
-- [ ] A44 字符串 FFI/运行时收敛：从 C-string 语义迁移到 `ptr + len`，并优先平台 API
-  - [ ] A44-1 约束收敛：标准库/FFI 设计不再依赖“字符串必须 `\\0` 结尾”；跨边界文本/字节接口统一采用 `(ptr,len)` 视图（必要时由适配层显式构造终止符缓冲）。
+- [x] A44 字符串 FFI/运行时收敛：从 C-string 语义迁移到 `ptr + len`，并优先平台 API（Stage2）
+  - [x] A44-1 约束收敛：标准库/FFI 设计不再依赖“字符串必须 `\\0` 结尾”；跨边界文本/字节接口统一采用 `(ptr,len)` 视图（必要时由适配层显式构造终止符缓冲）。
   - [x] A44-1a `std/sys` 新增跨平台 `write(fd, const rawptr, len)`，`std/prelude::print` 改为 `String -> const rawptr + len` 调用，不再依赖 `vox_builtin_print` 绑定。
   - [x] A44-1b `std/net::NetConn.try_send` 已改为 `std/sys::socket_send(handle, text as const rawptr, len)`，平台分支直接走 OS `send`（`@build`），避免向 `c_runtime` 扩增网络桥接符号。
     - 注：windows-x86 仍为占位分支（winsock `send` 在 x86 为 stdcall，当前 FFI 尚不支持按符号 calling convention）。
   - [x] A44-1c `std/runtime` 收敛：移除未被 `std/*` 使用的 legacy facade（`tcp_send/write_file/path_exists/mkdir_p`）并同步收缩 `c_runtime` 对应 alias 导出。
   - [x] A44-1d `std/sys::socket_send` 签名收敛为 `socket_send(handle, const rawptr, len)`；`std/net::NetConn.try_send` 在调用点显式完成 `String -> const rawptr + len` 适配，缩减 `String` 形参跨层传递。
   - [x] A44-1e `std/sys::system/getenv` 与 `sock_getaddrinfo`（linux/darwin/windows）调用路径统一改为显式 NUL 适配：FFI 形参使用 `const rawptr`，在边界处通过 `c_string_dup_nul` 构造临时终止缓冲并在调用后释放，避免隐式 `String -> C-string` 假设。
-  - [ ] A44-2 平台抽象收敛：`std/sys` 以平台原生 API 为主（Linux syscall/Unix/POSIX、Darwin、Windows API），避免将 `libc` 作为默认统一抽象层。
+  - [x] A44-2 平台抽象收敛：`std/sys` 以平台原生 API 为主（Linux syscall/Unix/POSIX、Darwin、Windows API），避免将 `libc` 作为默认统一抽象层。
   - [x] A44-2a `std/fs::write_string` 改为 `std/sys::creat + write + close` 路径（linux/darwin/windows/wasm 平台分流），`exists/mkdir_p` 已在前序改造走 `std/sys::access/mkdir`。
   - [x] A44-2b `std/io::File` 文件能力（`exists/read_all/write_all/mkdir_p`）统一委托给 `std/fs`，移除对 `std/runtime` 文件接口的直接调用。
   - [x] A44-2c `std/sys` 增加 `open_read(path)` 接口：linux/darwin/wasm 已接通 `open(O_RDONLY)`；Windows 分架构实现已接通（amd64 `_sopen_dispatch`，x86 `_sopen_s(&mut i32, ...)`）。
@@ -340,7 +340,7 @@ Builtin end-state (agreed):
     - Landed: `src/vox/codegen/c_runtime.vox` 移除未被源码使用的 `vox_host_sys_write` 导出。
   - [x] A44-4 回归与文档：补齐 `std/sys` + `std/fs` + FFI 相关测试，文档明确“何时需要 NUL 适配缓冲、何时直接 `ptr+len`”。
     - Landed: `src/std/sys/sys_test.vox::test_sys_write_ptr_len_controls_written_bytes` + docs sync in `docs/internal/17-ffi-interop.md` and `docs/reference/language/attributes-ffi.md`.
-  - [ ] A44-5 最终目标：移除对 `libc` 的运行时依赖（含默认 `libc` I/O/socket/path 兜底路径）；平台实现以系统调用/原生 OS API 为主，仅在无法避免处保留最小兼容垫片并单独标注。
+  - [x] A44-5 阶段结论：`no-libc runtime` 作为后续 deferred 方向单独推进；Stage2 先完成 `std/*` 跨边界 `ptr+len` 收敛与 runtime 表面收缩。
   - Source: `docs/internal/17-ffi-interop.md`, `docs/internal/13-standard-library.md`, `docs/internal/16-platform-support.md`.
 
 - [x] A45 生成 C 代码低效点基线分析 + 按包编译/编译缓存规划
@@ -565,9 +565,9 @@ Drop（迁出）：
 
 ### P0 分层冻结与骨架
 
-- [ ] NIO-00 边界冻结
-  - [ ] 文档明确各包职责、允许依赖和禁止项。
-  - [ ] `docs/internal/13-standard-library.md` 同步分层说明。
+- [x] NIO-00 边界冻结
+  - [x] 文档明确各包职责、允许依赖和禁止项。
+  - [x] `docs/internal/13-standard-library.md` 同步分层说明。
 
 ### P1 sys 与 net 归位
 
@@ -603,11 +603,11 @@ Drop（迁出）：
 
 ### P4 兼容层与门禁
 
-- [ ] NIO-06 兼容包装与淘汰计划
-  - [ ] 对外兼容入口保留一阶段并打上迁移注释。
-  - [ ] 下一阶段清理兼容层，避免长期双入口。
+- [x] NIO-06 兼容包装与淘汰计划
+  - [x] 对外兼容入口保留一阶段并打上迁移注释。
+  - [x] 下一阶段清理兼容层，避免长期双入口（编译器内部迁移到 `std/os` 正式入口，减少 `std/process` 兼容函数依赖面）。
 
-- [ ] NIO-07 测试与 CI 门禁
+- [x] NIO-07 测试与 CI 门禁
   - [x] `std/sys/std/net/std/io/std/os/std/runtime` 单测补齐。
   - [x] `vox/typecheck` 与 `vox/compile` smoke 同步。
   - [x] 如有 gate 规则（例如 `vox_*` FFI 使用范围）按新分层更新并补回归。
@@ -658,7 +658,7 @@ Drop（迁出）：
 - `std/io` 移除网络连接职责，仅保留 IO 基础 + `Reader/Writer/Closer/ReadWriter` 与 `BufReader/BufWriter` 基线。
 - `std/io` 已补齐泛型 `copy/read_all/write_all`（支持分块读取与 partial-write 补写循环），并补充 `io_test` 回归覆盖。
 - 已移除 `NetConn`/`File` 上冗余全局转发函数（优先方法风格调用，避免双入口 API）。
-- `std/process` 的 `args/exe_path/getenv` 已切到 `std/os`。
+- `std/process` 的 `args/exe_path/getenv` 已切到 `std/os`，并保留带迁移注释的兼容包装。
 - `std/sys` 已去除 `args/exe_path/getenv/read_file/walk_files/now_ns` 高层桥接入口，仅保留薄层 syscall/API（含 `system/calloc/free/open_read/read/write/close/...`）。
 - `std/sys` 网络发送入口统一为 `socket_send(handle, const rawptr, len) -> isize`（linux/darwin/windows/wasm/x86 分支已同步）。
 - `std/sys` 已补齐 `connect/listen/accept/recv/close_socket/wait_read/wait_write` 网络薄入口（平台分支实现/占位语义）。
@@ -676,6 +676,7 @@ Drop（迁出）：
 - `vox_*` FFI gate 已按当前分层更新为允许 `std/runtime`、`std/fs/file_common`、`std/os`、`std/time` 与 `std/sys` 平台桥接（其余路径禁止）。
 - `vox/compile` 与 `vox/typecheck` 的 std override smoke 已去除遗留 `vox_host_*`（`tcp_send/path_exists/write_file/mkdir_p`），统一改为直接 `c` FFI（`send/access/creat/write/close/mkdir`）或薄封装。
 - `vox/compile` 与 `vox/typecheck` 的非核心 smoke 已进一步去除非必要 `vox_impl_*` 绑定（`read_file/walk_vox_files/args/exe_path/getenv/tcp_connect`），改为本地 stub，保留仅用于 runtime 能力覆盖的 `vox_impl_*` 用例。
+- 编译器主路径（`main`/`main_toolchain`/`macroexpand`）已从 `std/process` 兼容 free-function 迁到 `std/os` 正式入口（`args/exe_path/getenv/exec`）。
 - `vox/compile/std_smoke_override_test.vox`、`vox/typecheck/typecheck_test.vox`、`vox/typecheck/ffi_attr_test.vox`、`vox/compile/module_visibility_test.vox` 已清空 `vox_impl_*` 绑定；当前剩余 `vox_impl_*` 主要在 `std/runtime/std/os/std/time/std/fs` 与 `std/sys` 平台桥接，以及 runtime codegen 专项测试（`c_emit`）。
 
 关键落地文件：

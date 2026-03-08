@@ -19,6 +19,30 @@
 - `std::dotenv`：`.env` 读取与键查找（供 CLI/agent 配置加载）
 - `std::testing`：测试断言入口（`t.assert*` 兼容层 + 模块化断言扩展）
 
+## 分层冻结（NIO-00）
+
+包职责（冻结）：
+
+- `std::sys`：平台薄层（文件/FD、内存、进程、网络基础调用），不承载业务语义。
+- `std::net`：连接生命周期与协议侧抽象（`SocketAddr`/`NetConn`/`TcpListener`）。
+- `std::io`：流抽象与组合（`Reader/Writer/...` + `copy/read_all/write_all`），不拥有网络连接建立职责。
+- `std::os`：OS 语义（参数、环境、可执行路径、命令执行）。
+- `std::runtime`：编译器必需的最小能力边界（intrinsic probe、wake、atomic），不承载文件/网络/进程业务 API。
+
+允许依赖（冻结）：
+
+- `std::sys` 不依赖 `std::net/std::io/std::os/std::runtime`。
+- `std::net` 依赖 `std::sys`；可选依赖 `std::io` trait，但不反向耦合。
+- `std::io` 核心抽象不依赖 `std::net`；文件能力经 `std::fs`/`std::sys`。
+- `std::os` 依赖 `std::sys`，不反向依赖 `std::net/std::io`。
+- `std::runtime` 只暴露编译器基础能力，不回流业务语义。
+
+禁止项（冻结）：
+
+- `std::io` 中禁止新增 `connect/listen/accept`。
+- `std::runtime` 中禁止回流 `tcp_*`/文件/进程/时间等已迁出能力。
+- 标准库生产代码禁止 `@cfg(...)`；平台分流统一使用文件级 `@build(...)`。
+
 当前实现落地：
 
 - `std::prelude` 已提供默认 trait：`Eq`、`Ord`、`Show`、`Clone`、`Release`、`Into`（用于 `Result` 的 `?` 传播时 `Err` 转换）。
@@ -70,8 +94,8 @@
     - trait：`FS`（读/存在/枚举）与 `WritableFS`（写/建目录）
     - 实现：`OsFS`（系统文件系统包装）与 `MemFS`（内存文件系统）
     - 泛型 helper：`fs_read_to_string/fs_write_string/fs_exists/fs_walk_files/fs_mkdir_p`
-  - `std::process` 新增 `Command` 方法式 API：`command(prog)` + `Command.env/env_remove/clear_env/cwd/arg/args/render/run`。
-  - `std::process` 仍保留 free-function 入口：`exec/args/exe_path/getenv`（`exec` 可直接执行 `Command.render()` 结果）。
+- `std::process` 新增 `Command` 方法式 API：`command(prog)` + `Command.env/env_remove/clear_env/cwd/arg/args/render/run`。
+  - `std::process` 当前仍保留兼容 free-function 入口：`exec/args/exe_path/getenv`（迁移目标为 `std/os` 正式入口；后续阶段清理）。
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`。
   - 文件 API：`file(path)` + `File.exists/read_all/write_all/mkdir_p`。
