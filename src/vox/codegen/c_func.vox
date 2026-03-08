@@ -1494,9 +1494,60 @@ fn block_index_by_name_ordered(blocks: Vec[ir.Block], order: Vec[i32], name: Str
   return -1;
 }
 
+fn block_trivial_br_target_index(blocks: Vec[ir.Block], order: Vec[i32], bi: i32) -> i32 {
+  if bi < 0 || bi >= blocks.len() { return -1; }
+  let b: ir.Block = blocks.get(bi);
+  if b.instrs.len() != 0 { return -1; }
+  if !b.has_term { return -1; }
+  let target: String = match b.term {
+    ir.Term.Br(t) => t,
+    _ => "",
+  };
+  if target == "" { return -1; }
+  return block_index_by_name_ordered(blocks, order, target);
+}
+
+fn path_index_of(path: Vec[i32], v: i32) -> i32 {
+  let mut i: i32 = 0;
+  while i < path.len() {
+    if path.get(i) == v { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+fn resolve_trivial_br_redirect(blocks: Vec[ir.Block], order: Vec[i32], start: i32) -> i32 {
+  if start < 0 || start >= blocks.len() { return start; }
+  let mut path: Vec[i32] = Vec();
+  let mut cur: i32 = start;
+  while true {
+    let seen_at: i32 = path_index_of(path, cur);
+    if seen_at >= 0 {
+      // Cycle of trivial branch-only blocks: keep the cycle representative stable.
+      return path.get(seen_at);
+    }
+    path.push(cur);
+    let tgt: i32 = block_trivial_br_target_index(blocks, order, cur);
+    if tgt < 0 || tgt >= blocks.len() { return cur; }
+    if tgt == cur { return cur; }
+    cur = tgt;
+  }
+  return start;
+}
+
+fn build_trivial_br_redirects(blocks: Vec[ir.Block], order: Vec[i32]) -> Vec[i32] {
+  let mut out: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < blocks.len() {
+    out.push(resolve_trivial_br_redirect(blocks, order, i));
+    i = i + 1;
+  }
+  return out;
+}
+
 struct BlockJumpTables { next_a: Vec[i32], next_b: Vec[i32] }
 
-fn build_block_jump_tables(blocks: Vec[ir.Block], order: Vec[i32]) -> BlockJumpTables {
+fn build_block_jump_tables(blocks: Vec[ir.Block], order: Vec[i32], redirects: Vec[i32]) -> BlockJumpTables {
   let mut next_a: Vec[i32] = Vec();
   let mut next_b: Vec[i32] = Vec();
   let mut i: i32 = 0;
@@ -1515,14 +1566,18 @@ fn build_block_jump_tables(blocks: Vec[ir.Block], order: Vec[i32]) -> BlockJumpT
         _ => "",
       };
       if edge_a != "" {
-        next_a.set(bi, block_index_by_name_ordered(blocks, order, edge_a));
+        let idx_a0: i32 = block_index_by_name_ordered(blocks, order, edge_a);
+        let idx_a: i32 = if idx_a0 >= 0 && idx_a0 < redirects.len() { redirects.get(idx_a0) } else { idx_a0 };
+        next_a.set(bi, idx_a);
       }
       let edge_b: String = match b.term {
         ir.Term.CondBr(_cond, _t, e) => e,
         _ => "",
       };
       if edge_b != "" {
-        next_b.set(bi, block_index_by_name_ordered(blocks, order, edge_b));
+        let idx_b0: i32 = block_index_by_name_ordered(blocks, order, edge_b);
+        let idx_b: i32 = if idx_b0 >= 0 && idx_b0 < redirects.len() { redirects.get(idx_b0) } else { idx_b0 };
+        next_b.set(bi, idx_b);
       }
     }
     bi = bi + 1;
@@ -1530,7 +1585,7 @@ fn build_block_jump_tables(blocks: Vec[ir.Block], order: Vec[i32]) -> BlockJumpT
   return BlockJumpTables { next_a: next_a, next_b: next_b };
 }
 
-fn collect_reachable_block_indices(blocks: Vec[ir.Block], jumps: BlockJumpTables) -> Vec[i32] {
+fn collect_reachable_block_indices(blocks: Vec[ir.Block], jumps: BlockJumpTables, entry_idx: i32) -> Vec[i32] {
   if blocks.len() == 0 { return Vec(); }
 
   let mut queue: Vec[i32] = Vec();
@@ -1542,8 +1597,9 @@ fn collect_reachable_block_indices(blocks: Vec[ir.Block], jumps: BlockJumpTables
     queued.push(false);
     i0 = i0 + 1;
   }
-  queue.push(0);
-  queued.set(0, true);
+  let entry: i32 = if entry_idx >= 0 && entry_idx < blocks.len() { entry_idx } else { 0 };
+  queue.push(entry);
+  queued.set(entry, true);
 
   let mut qi: i32 = 0;
   while qi < queue.len() {
@@ -1753,8 +1809,10 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]
 
   // Blocks
   let block_order: Vec[i32] = block_name_order(f.blocks);
-  let block_jumps: BlockJumpTables = build_block_jump_tables(f.blocks, block_order);
-  let block_indices: Vec[i32] = collect_reachable_block_indices(f.blocks, block_jumps);
+  let block_redirects: Vec[i32] = build_trivial_br_redirects(f.blocks, block_order);
+  let block_jumps: BlockJumpTables = build_block_jump_tables(f.blocks, block_order, block_redirects);
+  let entry_idx: i32 = if block_redirects.len() > 0 { block_redirects.get(0) } else { 0 };
+  let block_indices: Vec[i32] = collect_reachable_block_indices(f.blocks, block_jumps, entry_idx);
   let jump_target_flags: Vec[bool] = collect_jump_target_flags(f.blocks, block_jumps, block_indices);
   let mut ri: i32 = 0;
   while ri < block_indices.len() {
@@ -1775,7 +1833,24 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]
     }
     if !b.has_term { panic("block missing terminator"); }
     let fallthrough: String = if ri + 1 < block_indices.len() { f.blocks.get(block_indices.get(ri + 1)).name } else { "" };
-    let term_lines: Vec[String] = emit_term(b.term, fallthrough);
+    let idx_a0: i32 = block_jumps.next_a.get(bi);
+    let idx_b0: i32 = block_jumps.next_b.get(bi);
+    let target_a: String = if idx_a0 >= 0 && idx_a0 < f.blocks.len() {
+      f.blocks.get(idx_a0).name
+    } else {
+      match b.term { ir.Term.Br(t) => t, ir.Term.CondBr(_cond, t, _e) => t, _ => "" }
+    };
+    let target_b: String = if idx_b0 >= 0 && idx_b0 < f.blocks.len() {
+      f.blocks.get(idx_b0).name
+    } else {
+      match b.term { ir.Term.CondBr(_cond, _t, e) => e, _ => "" }
+    };
+    let term_resolved: ir.Term = match b.term {
+      ir.Term.Br(_target) => ir.Term.Br(target_a),
+      ir.Term.CondBr(cond, _t, _e) => ir.Term.CondBr(cond, target_a, target_b),
+      _ => b.term,
+    };
+    let term_lines: Vec[String] = emit_term(term_resolved, fallthrough);
     let mut ti: i32 = 0;
     while ti < term_lines.len() { out.push(term_lines.get(ti)); ti = ti + 1; }
     out.push("");
