@@ -571,12 +571,12 @@ Drop（迁出）：
 
 ### P1 sys 与 net 归位
 
-- [ ] NIO-01 `std/sys` 网络最薄接口统一
-  - [ ] 统一 `connect/listen/accept/send/recv/close_socket/wait_read/wait_write` 入口。
+- [x] NIO-01 `std/sys` 网络最薄接口统一
+  - [x] 统一 `connect/listen/accept/send/recv/close_socket/wait_read/wait_write` 入口。
   - [x] `send` 已先收敛为 `socket_send(handle, ptr, len) -> isize`（全平台分支同步）。
-  - [x] `connect/recv/close_socket/wait_read/wait_write` 已收敛到 `std/sys` 入口，`std/net` 不再直接绑定 `vox_impl_tcp_*`。
-  - [ ] linux/darwin/windows/wasm 分支补齐，无法支持项明确 panic/stub 语义。
-  - [ ] `std/sys` 测试补齐接口 smoke 与失败语义。
+  - [x] `connect/listen/accept/recv/close_socket/wait_read/wait_write` 已收敛到 `std/sys` 入口，`std/net` 不再直接绑定 `vox_impl_tcp_*`。
+  - [x] linux/darwin/windows/wasm 分支补齐；无法支持项明确 panic/stub 语义（wasm、windows-x86）。
+  - [x] `std/sys` 测试补齐接口 smoke 与失败语义（含 invalid-handle `socket_send` 与 `close_socket`）。
 
 - [x] NIO-02 `std/net` 承载连接生命周期
   - [x] `NetConn`/连接方法迁入并在 `net` 作为主入口。
@@ -661,7 +661,8 @@ Drop（迁出）：
 - `std/process` 的 `args/exe_path/getenv` 已切到 `std/os`。
 - `std/sys` 已去除 `args/exe_path/getenv/read_file/walk_files/now_ns` 高层桥接入口，仅保留薄层 syscall/API（含 `system/calloc/free/open_read/read/write/close/...`）。
 - `std/sys` 网络发送入口统一为 `socket_send(handle, const rawptr, len) -> isize`（linux/darwin/windows/wasm/x86 分支已同步）。
-- `std/sys` 已补齐 `connect/recv/close_socket/wait_read/wait_write` 网络薄入口（平台分支实现/占位语义）。
+- `std/sys` 已补齐 `connect/listen/accept/recv/close_socket/wait_read/wait_write` 网络薄入口（平台分支实现/占位语义）。
+- `std/sys` 已补充网络失败语义回归：`socket_send(-1, ...)` 返回负值、`close_socket(-1)` no-op（host 平台）。
 - `std/net` 当前 `connect/send/recv/close/wait_*` 全部经 `std/sys` 路径，不再在 `std/net` 直接绑定 `vox_impl_tcp_*`。
 - `std/os` 当前仅承载 `args/exe_path/getenv`（通过 `vox_impl_*` FFI）；文件语义 `read_file/walk_files` 已下沉到 `std/fs` 内部；`std/time::now_ns` 当前通过 `vox_impl_now_ns`。
 - `std/time::yield_now` 已从 `c_runtime` 特殊实现下沉到各平台 `std/sys` 直接 FFI（linux/darwin/wasm: `sched_yield`，windows: `usleep(0)`），并删除 `c_runtime` 中 `vox_impl_yield_now`。
@@ -691,9 +692,7 @@ Drop（迁出）：
 
 仍待完成（下一批）：
 
-- `NIO-01`：`sys.accept` 与各平台 listen/accept 语义补齐。
 - `NIO-04`（延伸）：`walk_vox_files` 语义继续从标准库边界收敛到编译器内部实现（`vox/internal/*`），标准库仅保留通用文件遍历语义。
-- `NIO-03`：`io.copy/read_all/write_all`。
 - `NIO-LANG-01`：`time` 数值后缀糖（`3.seconds`）目前在 typecheck 报 `invalid member access`，需编译器新增“数值字面量成员单位糖”支持后才能启用。
 - `NIO-LANG-02`：支持 Go 风格 `3 * time.s -> time.Duration`（不依赖操作符重载）：单位常量为 `Duration`，并补齐常量/字面量到 `Duration` 的二元算术类型规则。
 - `NIO-LANG-03`：操作符重载能力（如 trait/协议驱动的 `+ - * / ==`）单独立项；当前 `time.Duration` 方案不依赖该能力。
