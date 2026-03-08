@@ -326,6 +326,7 @@ Builtin end-state (agreed):
     - 注：windows-x86 仍为占位分支（winsock `send` 在 x86 为 stdcall，当前 FFI 尚不支持按符号 calling convention）。
   - [x] A44-1c `std/runtime` 收敛：移除未被 `std/*` 使用的 legacy facade（`tcp_send/write_file/path_exists/mkdir_p`）并同步收缩 `c_runtime` 对应 alias 导出。
   - [x] A44-1d `std/sys::socket_send` 签名收敛为 `socket_send(handle, const rawptr, len)`；`std/net::NetConn.try_send` 在调用点显式完成 `String -> const rawptr + len` 适配，缩减 `String` 形参跨层传递。
+  - [x] A44-1e `std/sys::system/getenv` 与 `sock_getaddrinfo`（linux/darwin/windows）调用路径统一改为显式 NUL 适配：FFI 形参使用 `const rawptr`，在边界处通过 `c_string_dup_nul` 构造临时终止缓冲并在调用后释放，避免隐式 `String -> C-string` 假设。
   - [ ] A44-2 平台抽象收敛：`std/sys` 以平台原生 API 为主（Linux syscall/Unix/POSIX、Darwin、Windows API），避免将 `libc` 作为默认统一抽象层。
   - [x] A44-2a `std/fs::write_string` 改为 `std/sys::creat + write + close` 路径（linux/darwin/windows/wasm 平台分流），`exists/mkdir_p` 已在前序改造走 `std/sys::access/mkdir`。
   - [x] A44-2b `std/io::File` 文件能力（`exists/read_all/write_all/mkdir_p`）统一委托给 `std/fs`，移除对 `std/runtime` 文件接口的直接调用。
