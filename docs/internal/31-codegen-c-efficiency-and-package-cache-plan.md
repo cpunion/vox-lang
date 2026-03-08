@@ -321,6 +321,7 @@ Invalidate unit on any of:
 - 2026-03-08: removed single-use formatter command helper (`cmd_fmt`) and inlined equivalent fmt argument/file processing directly in the `main` `fmt` branch, preserving CLI fmt behavior while trimming helper indirection.
 - 2026-03-08: removed single-use dependency source resolver helper (`resolve_dep_source`) plus its private result/error wrappers and inlined equivalent path/git/registry dependency resolution directly in `load_deps_from_manifest_at`, preserving dependency resolution semantics while trimming helper indirection.
 - 2026-03-08: removed single-use lockfile formatter helper (`format_lockfile_from_lock_deps`) and inlined equivalent lock TOML assembly directly in `write_lockfile_from_lock_deps`, preserving lockfile render semantics while trimming helper indirection.
+- 2026-03-08: removed single-use source-file index-order helper (`source_file_path_index_order`) plus its transient result struct and inlined equivalent cached-path ordering logic directly in `load_files_with_cached`, preserving cached file lookup semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
