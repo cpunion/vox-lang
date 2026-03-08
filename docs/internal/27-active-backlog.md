@@ -635,10 +635,10 @@ Drop（迁出）：
 
 ## 6. Atomic Deferred Backlog
 
-- [ ] NIO-AT1 Atomic 从函数调用迁移为 IR/指令语义（Deferred）
-  - [ ] 目标：`std/sync` 原子操作最终不依赖 `vox_host_atomic_*` 函数调用表面。
-  - [ ] 前提：IR 指令语义与跨平台 lowering 方案稳定。
-  - [ ] 风险：大概率触发编译器能力变更，需按发布两阶段执行。
+- [x] NIO-AT1 Atomic 从函数调用迁移为 IR/指令语义
+  - [x] 目标：`std` 原子操作不依赖 `vox_host_atomic_*`/`rt_atomic_*` 函数调用表面。
+  - [x] 落地：`std/runtime` 与 `std/async/wake` 已切换为 `@atomic_load/store/cas/fetch_add`。
+  - [x] 结果：标准库原子路径统一走 IR 原子指令语义与后端 lowering。
 
 ## 7. 完成标准
 
@@ -667,6 +667,7 @@ Drop（迁出）：
 - `std/os` 当前仅承载 `args/exe_path/getenv`（通过 `vox_impl_*` FFI）；文件语义 `read_file/walk_files` 已下沉到 `std/fs` 内部；`std/time::now_ns` 当前通过 `vox_impl_now_ns`。
 - `std/time::yield_now` 已从 `c_runtime` 特殊实现下沉到各平台 `std/sys` 直接 FFI（linux/darwin/wasm: `sched_yield`，windows: `usleep(0)`），并删除 `c_runtime` 中 `vox_impl_yield_now`。
 - `std/runtime` 已去除 `args/exe/getenv/time/os/tcp/mutex` 入口，仅保留 intrinsic/wake/atomic。
+- `std/runtime` 与 `std/async/wake` 的原子读写/CAS/fetch_add 已切到 `@atomic_*` 内建，不再直接 FFI 绑定 `rt_atomic_*`。
 - `std/sync::Mutex` 底层改为复用 atomic 句柄；`std/os` 已移除 `mutex_i32/i64_*`；`c_runtime` 已删除 `vox_impl/vox_host_mutex_i32/i64_*` 实现与导出。
 - `c_runtime` 已删除 `vox_host_{args,exe_path,getenv,now_ns,yield_now,exec,walk_vox_files,read_file,tcp_*}` alias 导出（保留 wake/atomic host 兼容面）。
 - `c_runtime` 已移除未再使用的 `vox_impl_exec`；`std/process` 语义继续通过 `sys.system`。
