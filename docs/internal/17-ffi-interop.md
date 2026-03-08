@@ -93,6 +93,11 @@ pub fn add(a: i32, b: i32) -> i32 {
   - `std/sys::{open/access/mkdir/creat/system}` 及其平台分支。
   - `std/runtime::{read_file/write_file/path_exists/mkdir_p/exec/walk_files/getenv}`。
 
+最新收敛进展（2026-03-08）：
+
+- `std/sys::system/getenv` 不再把 `String` 直接当作 C 字符串传入；调用前统一显式构造 NUL 终止临时缓冲（`c_string_dup_nul`），调用后释放。
+- `std/sys::{sock_linux,sock_darwin,sock_windows}::sock_getaddrinfo` 同步改为 `const rawptr` FFI 形参并走同一 NUL 适配路径，避免隐式 `String -> const char*` 假设。
+
 说明：
 
 - 以上“暂时保留”并不代表最终形态；仅用于在当前 bootstrap 约束下维持可发布链路。
