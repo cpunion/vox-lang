@@ -1,6 +1,7 @@
 import "std/testing" as t
 import "std/fs" as fs
 import "vox/loader" as ld
+import "vox/query" as q
 
 fn build_cache_test_files_ab() -> Vec[ld.SourceFile] {
   let mut xs: Vec[ld.SourceFile] = Vec();
@@ -21,6 +22,13 @@ fn build_cache_test_files_with_mixed_sources(vox_text: String, c_text: String) -
   xs.push(ld.SourceFile { path: "src/main.vox", text: vox_text });
   xs.push(ld.SourceFile { path: "src/runtime/helper.c", text: c_text });
   return xs;
+}
+
+fn build_cache_test_sem_deps_main_dep() -> Vec[q.ParseLoadDepHash] {
+  let mut out: Vec[q.ParseLoadDepHash] = Vec();
+  out.push(q.ParseLoadDepHash { pkg: "main", export_sig_hash: "101", type_sig_hash: "101", impl_sig_hash: "101" });
+  out.push(q.ParseLoadDepHash { pkg: "pkg/dep", export_sig_hash: "202", type_sig_hash: "202", impl_sig_hash: "202" });
+  return out;
 }
 
 fn pkg_key_for_pkg(xs: Vec[BuildCachePkgKey], pkg: String) -> String {
@@ -214,7 +222,7 @@ fn test_should_skip_query_shadow_prepare_smoke() -> () {
 fn test_should_use_sem_cache_smoke() -> () {
   t.assert(!should_use_sem_cache(false, false));
   t.assert(!should_use_sem_cache(false, true));
-  t.assert(!should_use_sem_cache(true, false));
+  t.assert(should_use_sem_cache(true, false));
   t.assert(should_use_sem_cache(true, true));
 }
 
@@ -336,7 +344,7 @@ fn test_discover_tests_cached_with_paths_smoke() -> () {
   paths.push("tests/tmp/discover_cached_parse_test.vox");
   let discovered: DiscoverTestsResult = discover_tests_cached_with_paths(paths);
   t.assert_eq(discovered.tests.len(), 1);
-  t.assert_eq(discovered.tests.get(0), "tmp.discover_cached_parse_test::test_cached_discovery");
+  t.assert_eq(discovered.tests.get(0), "tests.tmp::test_cached_discovery");
   t.assert_eq(discovered.cached_files.len(), 1);
   t.assert_eq(discovered.cached_files.get(0).path, "tests/tmp/discover_cached_parse_test.vox");
 }
@@ -456,6 +464,26 @@ fn test_build_cache_key_triple_keep_preserves_keys_and_derivation_smoke() -> () 
   t.assert_eq(kept.triple.sem_key, sem_direct);
 }
 
+fn test_build_cache_sem_key_dep_hashes_keep_matches_direct_smoke() -> () {
+  let sem_mode: String = "sem\ncmd=build\ntarget=linux-amd64";
+  let split: BuildCachePkgSemSourceKeysResult = build_cache_pkg_sem_source_keys_with_files(build_cache_test_files_main_and_dep());
+  let kept: BuildCacheSemKeyDepsKeep = build_cache_sem_key_dep_hashes_from_pkg_source_keys_keep(split.sem_keys, sem_mode);
+  let sem_direct: String = build_cache_test_sem_key_from_files(build_cache_test_files_main_and_dep(), "sem\ncmd=build\ntarget=linux-amd64");
+  t.assert_eq(kept.sem_key, sem_direct);
+  t.assert_eq(kept.dep_hashes.len(), kept.keys.len());
+  let h0: u64 = build_cache_pkg_hash_for_mode_prefix("sem\ncmd=build\ntarget=linux-amd64");
+  let mut i: i32 = 0;
+  while i < kept.keys.len() {
+    let pk: BuildCachePkgKey = build_cache_pkg_key_from_source_hash_prefix(kept.keys.get(i), h0);
+    let d: q.ParseLoadDepHash = kept.dep_hashes.get(i);
+    t.assert_eq(d.pkg, pk.pkg);
+    t.assert_eq(d.export_sig_hash, pk.key);
+    t.assert_eq(d.type_sig_hash, pk.key);
+    t.assert_eq(d.impl_sig_hash, pk.key);
+    i = i + 1;
+  }
+}
+
 fn test_build_cache_pkg_keys_group_by_owner_smoke() -> () {
   let keys: Vec[BuildCachePkgKey] = build_cache_test_pkg_keys_with_mode(build_cache_test_files_main_and_dep(), "cmd=build");
   t.assert_eq(keys.len(), 2);
@@ -503,6 +531,25 @@ fn test_build_cache_hit_roundtrip_smoke() -> () {
   t.assert(!build_cache_c_hit("key-2", cpath));
   t.assert(!build_cache_test_obj_hit("key-2", cpath, obj));
   t.assert(!build_sem_cache_hit("key-2"));
+}
+
+fn test_build_sem_cache_read_with_deps_roundtrip_smoke() -> () {
+  let key: String = build_cache_test_unused_key("sem-read-roundtrip");
+  let deps_write: Vec[q.ParseLoadDepHash] = build_cache_test_sem_deps_main_dep();
+  write_build_sem_cache_with_deps(key, deps_write);
+  let read: BuildSemCacheReadResult = build_sem_cache_read_with_deps(key);
+  let deps_expected: Vec[q.ParseLoadDepHash] = build_cache_test_sem_deps_main_dep();
+  t.assert(read.hit);
+  t.assert(build_cache_sem_dep_hashes_equal(read.deps, deps_expected));
+}
+
+fn test_build_sem_cache_read_with_deps_requires_deps_file_smoke() -> () {
+  let key: String = build_cache_test_unused_key("sem-read-requires-deps");
+  let meta: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.key");
+  fs.mkdir_p(dir_name(meta));
+  let _: bool = write_string_if_changed(meta, key.concat("\n"));
+  let read: BuildSemCacheReadResult = build_sem_cache_read_with_deps(key);
+  t.assert(!read.hit);
 }
 
 fn test_build_cache_c_hit_without_obj_smoke() -> () {
