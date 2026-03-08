@@ -334,6 +334,7 @@ Invalidate unit on any of:
 - 2026-03-08: `build`/`test` semantic-cache derivation now uses a shared keep-helper (`build_cache_sem_key_dep_hashes_from_pkg_source_keys_keep`) so sem-key and query-shadow dep-hashes are produced from one canonical package-key pass.
 - 2026-03-08: `vox list` now participates in `pkg-sem` caching (text/json output sidecars under `target/cache/pkg-sem-v1/<sem-key>.list.*`) and reuses the same sem-key + dep-hash validity check as build/test before serving cached graph output.
 - 2026-03-08: `vox test` compile path switched from single-step `C -> exe` to split `C -> obj` + `obj -> exe`; cache state now tracks `obj_hit` so bin-miss/object-hit cases relink only, avoiding redundant C recompilation on warm test-cache paths.
+- 2026-03-08: `vox build` now records last successful compile-C cache key per semantic key (`target/cache/pkg-sem-v1/<sem-key>.build.cache.c-key`) and can reuse that cached generated C when `pkg-sem` hits but current `pkg-obj` C entry misses (for example C-source-only key churn), skipping compile/typecheck/codegen and proceeding with object rebuild + relink.
 
 ## 5. Validation Gates
 
