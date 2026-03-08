@@ -332,6 +332,7 @@ Builtin end-state (agreed):
   - [x] A44-2b `std/io::File` 文件能力（`exists/read_all/write_all/mkdir_p`）统一委托给 `std/fs`，移除对 `std/runtime` 文件接口的直接调用。
   - [x] A44-2c `std/sys` 增加 `open_read(path)` 接口：linux/darwin/wasm 已接通 `open(O_RDONLY)`；Windows 分架构实现已接通（amd64 `_sopen_dispatch`，x86 `_sopen_s(&mut i32, ...)`）。
     - Landed: `src/std/sys/sys_windows.vox`, `src/std/sys/sys_windows_x86.vox`, `src/std/sys/sys_test.vox`.
+  - [x] A44-2d `std/fs` 源码扫描在 unix 平台（linux/darwin）改为 `opendir/readdir/closedir` 原生递归，不再依赖 `sys.system(find/rm)` shell 管线；windows/wasm 先保留 shell fallback，后续再逐平台收敛。
   - [x] A44-3 编译器与标准库边界收敛：新增/迁移后不引入新的 `vox_builtin_*` / `vox_rt_*` 功能面；同等能力优先通过 `@ffi_import + @build` 在 `std/*` 实现（`@cfg` 仅保留测试）。
     - Landed: runtime-alias gate + builtin-alias gate (`scripts/ci/check-no-vox-rt-in-src.sh`, `scripts/ci/check-no-vox-builtin-in-src.sh`) wired in `make test`.
     - Landed: `src/vox/codegen/c_runtime.vox` 移除未被源码使用的 `vox_builtin_* -> vox_host_*` 兼容别名导出。
