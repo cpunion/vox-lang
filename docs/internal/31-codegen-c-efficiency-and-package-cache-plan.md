@@ -325,6 +325,7 @@ Invalidate unit on any of:
 - 2026-03-08: removed dead test-discovery helper (`discover_tests_from_cached_test_files`) after production call sites converged on `discover_tests_cached_with_paths`; updated cache tests to assert through the canonical discovery path, preserving discovered test/cached-file semantics while trimming helper surface.
 - 2026-03-08: removed single-use compile toolchain fingerprint helper (`build_compile_toolchain_fingerprint`) and inlined equivalent compile-only toolchain key assembly directly in the `build` compile-mode path, preserving compile-cache key semantics while trimming helper indirection.
 - 2026-03-08: removed single-use link toolchain fingerprint helper (`build_toolchain_fingerprint`) and inlined equivalent link/tool fingerprint key assembly directly in `build_mode_text`, preserving build-mode cache key semantics while trimming helper indirection.
+- 2026-03-08: removed single-use run-alias helper (`rewrite_run_alias`) and inlined equivalent local-selfhost `run fmt -> fmt` normalization directly in `main` before toolchain routing, preserving CLI alias semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
