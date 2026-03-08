@@ -3422,6 +3422,9 @@ fn main() -> i32 {
     let mut query_shadow_state: q.ParseLoadShadowState = q.ParseLoadShadowState { key: "", predicted_hit: false };
     let cache_enabled: bool = build_cache_enabled_from_env(proc.getenv("VOX_BUILD_CACHE_DISABLE"));
     let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
+    let cc_test_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
+    let cc_test_use_msvc: bool = cc_is_msvc_cmd(cc_test_cmd);
+    let test_obj_ext: String = if cc_test_use_msvc { ".obj" } else { ".o" };
     let mut pkg_keys: Vec[BuildCachePkgKey] = Vec();
     let mut sem_pkg_keys: Vec[BuildCachePkgKey] = Vec();
     if query_shadow_on || cache_enabled {
@@ -3440,6 +3443,7 @@ fn main() -> i32 {
     let mut sem_key: String = "";
     let mut test_cache_out: String = "";
     let mut cpath: String = "";
+    let mut obj: String = "";
     let mut bin: String = "";
     let mut sem_cache_hit: bool = false;
     let mut sem_dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
@@ -3474,10 +3478,12 @@ fn main() -> i32 {
       }
       test_cache_out = path_join(path_join(path_join("target", "cache"), "test-link-v1"), test_build_key);
       cpath = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), test_build_key).concat(".c");
+      obj = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), test_build_key).concat(test_obj_ext);
       bin = test_cache_out;
     } else {
       test_cache_out = out.concat(".test.nocache");
       cpath = test_cache_out.concat(".c");
+      obj = test_cache_out.concat(test_obj_ext);
       bin = test_cache_out;
     }
     let total_tests: i32 = tests.len();
@@ -3490,11 +3496,13 @@ fn main() -> i32 {
       }
     }
     let mut cache_c_hit: bool = false;
+    let mut cache_obj_hit: bool = false;
     let mut cache_hit: bool = false;
     if cache_enabled {
-      let cache_state_result: TestBuildCacheStateResult = test_build_cache_state_with_tests(test_cache_out, test_build_key, cpath, bin, tests);
+      let cache_state_result: TestBuildCacheStateResult = test_build_cache_state_with_tests(test_cache_out, test_build_key, cpath, obj, bin, tests);
       tests = cache_state_result.selected;
       cache_c_hit = cache_state_result.c_hit;
+      cache_obj_hit = cache_state_result.obj_hit;
       cache_hit = cache_state_result.hit;
     }
     let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, cache_c_hit || sem_cache_hit, query_shadow_trace);
@@ -3552,72 +3560,144 @@ fn main() -> i32 {
       }
     }
     if !cache_hit {
-      if !cache_c_hit {
-        tests_for_compile = Vec();
-        let mut tco: i32 = 0;
-        while tco < tests.len() {
-          tests_for_compile.push(tests.get(tco));
-          tco = tco + 1;
-        }
-        let cp: c.CompileProfileResult =
-          c.compile_files_to_c_profile_for_target(
-            files,
-            cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile, c_sources: Vec() },
-            target_ptr,
-            target_os,
-            target_arch,
-          );
-        let r: c.CompileResult = cp.r;
-        if !r.ok {
-          print("compile failed: ".concat(r.err).concat("\n"));
-          return 1;
-        }
-        let mut wi: i32 = 0;
-        while wi < r.warnings.len() {
-          print("[warn] ".concat(r.warnings.get(wi)).concat("\n"));
-          wi = wi + 1;
-        }
-        if profile_on {
-          let load_ns: i64 = cp.p.load_ns;
-          let macroexpand_ns: i64 = cp.p.macroexpand_ns;
-          let rewrite_async_ns: i64 = cp.p.rewrite_async_ns;
-          let typecheck_ns: i64 = cp.p.typecheck_ns;
-          let typecheck_build_ctx_ns: i64 = cp.p.typecheck_build_ctx_ns;
-          let typecheck_filter_world_ns: i64 = cp.p.typecheck_filter_world_ns;
-          let typecheck_core_ns: i64 = cp.p.typecheck_core_ns;
-          let irgen_ns: i64 = cp.p.irgen_ns;
-          let ir_verify_ns: i64 = cp.p.ir_verify_ns;
-          let codegen_ns: i64 = cp.p.codegen_ns;
-          let total_ns: i64 = load_ns + macroexpand_ns + rewrite_async_ns + typecheck_ns + irgen_ns + ir_verify_ns + codegen_ns;
-          print("[profile] test-compile total: ".concat(format_duration_ns(total_ns)).concat("\n"));
-          print("[profile] test-compile load: ".concat(format_duration_ns(load_ns)).concat("\n"));
-          print("[profile] test-compile macroexpand: ".concat(format_duration_ns(macroexpand_ns)).concat("\n"));
-          print("[profile] test-compile rewrite-async: ".concat(format_duration_ns(rewrite_async_ns)).concat("\n"));
-          print("[profile] test-compile typecheck: ".concat(format_duration_ns(typecheck_ns)).concat("\n"));
-          print("[profile] test-compile typecheck/build-ctx: ".concat(format_duration_ns(typecheck_build_ctx_ns)).concat("\n"));
-          print("[profile] test-compile typecheck/filter-world: ".concat(format_duration_ns(typecheck_filter_world_ns)).concat("\n"));
-          print("[profile] test-compile typecheck/core: ".concat(format_duration_ns(typecheck_core_ns)).concat("\n"));
-          print("[profile] test-compile irgen: ".concat(format_duration_ns(irgen_ns)).concat("\n"));
-          print("[profile] test-compile ir-verify: ".concat(format_duration_ns(ir_verify_ns)).concat("\n"));
-          print("[profile] test-compile codegen: ".concat(format_duration_ns(codegen_ns)).concat("\n"));
+      if !cache_obj_hit {
+        if !cache_c_hit {
+          tests_for_compile = Vec();
+          let mut tco: i32 = 0;
+          while tco < tests.len() {
+            tests_for_compile.push(tests.get(tco));
+            tco = tco + 1;
+          }
+          let cp: c.CompileProfileResult =
+            c.compile_files_to_c_profile_for_target(
+              files,
+              cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile, c_sources: Vec() },
+              target_ptr,
+              target_os,
+              target_arch,
+            );
+          let r: c.CompileResult = cp.r;
+          if !r.ok {
+            print("compile failed: ".concat(r.err).concat("\n"));
+            return 1;
+          }
+          let mut wi: i32 = 0;
+          while wi < r.warnings.len() {
+            print("[warn] ".concat(r.warnings.get(wi)).concat("\n"));
+            wi = wi + 1;
+          }
+          if profile_on {
+            let load_ns: i64 = cp.p.load_ns;
+            let macroexpand_ns: i64 = cp.p.macroexpand_ns;
+            let rewrite_async_ns: i64 = cp.p.rewrite_async_ns;
+            let typecheck_ns: i64 = cp.p.typecheck_ns;
+            let typecheck_build_ctx_ns: i64 = cp.p.typecheck_build_ctx_ns;
+            let typecheck_filter_world_ns: i64 = cp.p.typecheck_filter_world_ns;
+            let typecheck_core_ns: i64 = cp.p.typecheck_core_ns;
+            let irgen_ns: i64 = cp.p.irgen_ns;
+            let ir_verify_ns: i64 = cp.p.ir_verify_ns;
+            let codegen_ns: i64 = cp.p.codegen_ns;
+            let total_ns: i64 = load_ns + macroexpand_ns + rewrite_async_ns + typecheck_ns + irgen_ns + ir_verify_ns + codegen_ns;
+            print("[profile] test-compile total: ".concat(format_duration_ns(total_ns)).concat("\n"));
+            print("[profile] test-compile load: ".concat(format_duration_ns(load_ns)).concat("\n"));
+            print("[profile] test-compile macroexpand: ".concat(format_duration_ns(macroexpand_ns)).concat("\n"));
+            print("[profile] test-compile rewrite-async: ".concat(format_duration_ns(rewrite_async_ns)).concat("\n"));
+            print("[profile] test-compile typecheck: ".concat(format_duration_ns(typecheck_ns)).concat("\n"));
+            print("[profile] test-compile typecheck/build-ctx: ".concat(format_duration_ns(typecheck_build_ctx_ns)).concat("\n"));
+            print("[profile] test-compile typecheck/filter-world: ".concat(format_duration_ns(typecheck_filter_world_ns)).concat("\n"));
+            print("[profile] test-compile typecheck/core: ".concat(format_duration_ns(typecheck_core_ns)).concat("\n"));
+            print("[profile] test-compile irgen: ".concat(format_duration_ns(irgen_ns)).concat("\n"));
+            print("[profile] test-compile ir-verify: ".concat(format_duration_ns(ir_verify_ns)).concat("\n"));
+            print("[profile] test-compile codegen: ".concat(format_duration_ns(codegen_ns)).concat("\n"));
+          }
+
+          fs.mkdir_p(dir_name(cpath));
+          fs.write_string(cpath, r.c);
+          if emit_c_enabled && emit_c_path != "" && emit_c_path != cpath {
+            fs.mkdir_p(dir_name(emit_c_path));
+            fs.write_string(emit_c_path, r.c);
+          }
         }
 
-        fs.mkdir_p(dir_name(cpath));
-        fs.write_string(cpath, r.c);
-        if emit_c_enabled && emit_c_path != "" && emit_c_path != cpath {
-          fs.mkdir_p(dir_name(emit_c_path));
-          fs.write_string(emit_c_path, r.c);
+        fs.mkdir_p(dir_name(obj));
+        let cc_obj_tflags: String =
+          cc_target_flags_for_target(
+            cc_test_cmd,
+            host_os.slice(0, host_os.len()),
+            host_arch.slice(0, host_arch.len()),
+            target_os.slice(0, target_os.len()),
+            target_arch.slice(0, target_arch.len()),
+            target_triple.slice(0, target_triple.len()),
+          );
+        let cc_obj_cmdline: String =
+          if cc_test_use_msvc {
+            let mut cmd: String = cc_test_cmd;
+            cmd = cmd.concat(" /nologo /TC /std:c11 /Od");
+            cmd = cmd.concat(cc_debug_flags(true));
+            cmd = cmd.concat(" /c ");
+            cmd = cmd.concat(cpath);
+            cmd = cmd.concat(" /Fo:");
+            cmd = cmd.concat(obj);
+            cmd
+          } else {
+            let mut cmd: String = cc_test_cmd;
+            cmd = cmd.concat(cc_obj_tflags);
+            cmd = cmd.concat(" -std=c11 -O0");
+            cmd = cmd.concat(cc_debug_flags(false));
+            cmd = cmd.concat(cc_common_flags_for_target(target_os.slice(0, target_os.len()), false));
+            cmd = cmd.concat(" -c ");
+            cmd = cmd.concat(cpath);
+            cmd = cmd.concat(" -o ");
+            cmd = cmd.concat(obj);
+            cmd
+          };
+        let cc_obj_t0: i64 = tm.now_ns();
+        let cc_obj_code: i32 = exec_cmd(cc_obj_cmdline, trace_exec);
+        let cc_obj_ns: i64 = dur_nonneg_ns(cc_obj_t0, tm.now_ns());
+        if profile_on { print("[profile] test-cc-obj: ".concat(format_duration_ns(cc_obj_ns)).concat("\n")); }
+        if cc_obj_code != 0 {
+          print("cc failed: ".concat(cc_obj_cmdline).concat("\n"));
+          print("cc exit: ".concat(cc_obj_code.to_string()).concat("\n"));
+          return 1;
         }
       }
+
       fs.mkdir_p(dir_name(bin));
-      let cmdline: String = cc_cmdline_for_target_artifact(host_os.slice(0, host_os.len()), host_arch.slice(0, host_arch.len()), target_os.slice(0, target_os.len()), target_arch.slice(0, target_arch.len()), target_triple.slice(0, target_triple.len()), target_abi.slice(0, target_abi.len()), "exe", cpath, bin);
-      let cc_t0: i64 = tm.now_ns();
-      let code: i32 = exec_cmd(cmdline, trace_exec);
-      let cc_ns: i64 = dur_nonneg_ns(cc_t0, tm.now_ns());
-      if profile_on { print("[profile] test-cc: ".concat(format_duration_ns(cc_ns)).concat("\n")); }
-      if code != 0 {
-        print("cc failed: ".concat(cmdline).concat("\n"));
-        print("cc exit: ".concat(code.to_string()).concat("\n"));
+      let link_tflags: String =
+        cc_target_flags_for_target(
+          cc_test_cmd,
+          host_os.slice(0, host_os.len()),
+          host_arch.slice(0, host_arch.len()),
+          target_os.slice(0, target_os.len()),
+          target_arch.slice(0, target_arch.len()),
+          target_triple.slice(0, target_triple.len()),
+        );
+      let link_cmdline: String =
+        if cc_test_use_msvc {
+          let mut cmd: String = cc_test_cmd;
+          cmd = cmd.concat(" /nologo ");
+          cmd = cmd.concat(obj);
+          cmd = cmd.concat(" /Fe:");
+          cmd = cmd.concat(bin);
+          cmd = cmd.concat(cc_link_flags_for_target(target_os.slice(0, target_os.len()), target_abi.slice(0, target_abi.len()), true, "exe"));
+          cmd
+        } else {
+          let mut cmd: String = cc_test_cmd;
+          cmd = cmd.concat(link_tflags);
+          cmd = cmd.concat(" ");
+          cmd = cmd.concat(obj);
+          cmd = cmd.concat(" -o ");
+          cmd = cmd.concat(bin);
+          cmd = cmd.concat(cc_link_flags_for_target(target_os.slice(0, target_os.len()), target_abi.slice(0, target_abi.len()), false, "exe"));
+          cmd
+        };
+      let link_t0: i64 = tm.now_ns();
+      let link_code: i32 = exec_cmd(link_cmdline, trace_exec);
+      let link_ns: i64 = dur_nonneg_ns(link_t0, tm.now_ns());
+      if profile_on { print("[profile] test-link: ".concat(format_duration_ns(link_ns)).concat("\n")); }
+      if link_code != 0 {
+        print("link failed: ".concat(link_cmdline).concat("\n"));
+        print("link exit: ".concat(link_code.to_string()).concat("\n"));
         return 1;
       }
       if cache_enabled && !cache_c_hit {
