@@ -585,10 +585,10 @@ Drop（迁出）：
 
 ### P2 io 抽象化
 
-- [ ] NIO-03 `std/io` 去网络职责
+- [x] NIO-03 `std/io` 去网络职责
   - [x] 删除或转发连接建立 API，保留仅兼容包装。
   - [x] 新增 `Reader/Writer/Closer/ReadWriter` trait 基线。
-  - [ ] `BufReader/BufWriter` 与 `copy/read_all/write_all` 分批落地。
+  - [x] `BufReader/BufWriter` 与 `copy/read_all/write_all` 分批落地。
 
 ### P3 os 与 runtime 收缩
 
@@ -656,6 +656,7 @@ Drop（迁出）：
 
 - `std/net` 接管连接生命周期（`NetConn/Net*Result/TcpListener/SocketAddr.tcp_connect/listen/bind_udp`）。
 - `std/io` 移除网络连接职责，仅保留 IO 基础 + `Reader/Writer/Closer/ReadWriter` 与 `BufReader/BufWriter` 基线。
+- `std/io` 已补齐泛型 `copy/read_all/write_all`（支持分块读取与 partial-write 补写循环），并补充 `io_test` 回归覆盖。
 - 已移除 `NetConn`/`File` 上冗余全局转发函数（优先方法风格调用，避免双入口 API）。
 - `std/process` 的 `args/exe_path/getenv` 已切到 `std/os`。
 - `std/sys` 已去除 `args/exe_path/getenv/read_file/walk_files/now_ns` 高层桥接入口，仅保留薄层 syscall/API（含 `system/calloc/free/open_read/read/write/close/...`）。

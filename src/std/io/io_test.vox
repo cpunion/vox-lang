@@ -2,6 +2,56 @@ import "std/io" as io
 import "std/testing" as t
 import "std/time" as tm
 
+struct ChunkReader {
+  chunks: Vec[String],
+  idx: Atomic[i32],
+}
+
+fn chunk_reader(parts: Vec[String]) -> ChunkReader {
+  return ChunkReader { chunks: parts, idx: Atomic(0) };
+}
+
+impl io.Reader for ChunkReader {
+  fn read(x: &ChunkReader, max_n: i32) -> String {
+    if max_n <= 0 { return ""; }
+    let i: i32 = x.idx.load();
+    if i >= x.chunks.len() { return ""; }
+    let part: String = x.chunks.get(i);
+    x.idx.store(i + 1);
+    if part.len() <= max_n { return part; }
+    return part.slice(0, max_n);
+  }
+}
+
+struct StepWriter {
+  step: i32,
+  total: Atomic[i32],
+}
+
+fn step_writer(step: i32) -> StepWriter {
+  let mut n: i32 = step;
+  if n <= 0 { n = 1; }
+  return StepWriter { step: n, total: Atomic(0) };
+}
+
+impl io.Writer for StepWriter {
+  fn write(x: &StepWriter, text: String) -> i32 {
+    let n: i32 = text.len();
+    if n <= 0 { return 0; }
+    let mut wrote: i32 = x.step;
+    if wrote > n { wrote = n; }
+    let cur: i32 = x.total.load();
+    x.total.store(cur + wrote);
+    return wrote;
+  }
+}
+
+impl StepWriter {
+  fn written(x: &StepWriter) -> i32 {
+    return x.total.load();
+  }
+}
+
 fn tmp_file_path(prefix: String) -> String {
   io.mkdir_p("target/tmp");
   return "target/tmp/"
@@ -38,4 +88,32 @@ fn test_io_buffer_helpers_smoke() -> () {
   let bw: io.BufWriter = io.buf_writer(16);
   t.assert_eq(bw.capacity(), 16);
   t.assert_eq(bw.buffered(), 0);
+}
+
+fn test_io_read_all_generic_smoke() -> () {
+  let mut parts: Vec[String] = Vec();
+  parts.push("ab");
+  parts.push("cd");
+  parts.push("ef");
+  let r: ChunkReader = chunk_reader(parts);
+  t.assert_eq(io.read_all(r, 4), "abcdef");
+}
+
+fn test_io_write_all_generic_handles_partial_writes() -> () {
+  let w: StepWriter = step_writer(2);
+  let n: i32 = io.write_all(w, "hello");
+  t.assert_eq(n, 5);
+  t.assert_eq(w.written(), 5);
+}
+
+fn test_io_copy_generic_smoke() -> () {
+  let mut parts: Vec[String] = Vec();
+  parts.push("hello");
+  parts.push("-");
+  parts.push("vox");
+  let src: ChunkReader = chunk_reader(parts);
+  let dst: StepWriter = step_writer(3);
+  let n: i32 = io.copy(src, dst, 8);
+  t.assert_eq(n, 9);
+  t.assert_eq(dst.written(), 9);
 }

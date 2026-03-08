@@ -75,7 +75,8 @@
 - `std::time` 已提供 `now_ns() -> i64`（wall-clock 纳秒时间戳，解释器与 C 后端均可用）。
 - `std::io` 已提供：`out`、`out_ln`、`fail`。
   - 文件 API：`file(path)` + `File.exists/read_all/write_all/mkdir_p`。
-  - 流抽象：`Reader/Writer/Closer/ReadWriter` 与 `BufReader/BufWriter` 基线（后续补充完整 bufio 能力）。
+  - 流抽象：`Reader/Writer/Closer/ReadWriter` 与 `BufReader/BufWriter` 基线。
+  - 泛型流 helper：`copy/read_all/write_all`（支持分块读取与 partial-write 补写循环）。
 - `std::runtime` 已收缩为编译器基础能力边界：
   - 保留：`intrinsic_abi/has_intrinsic`、`wake_notify/wake_wait/wake_wait_any`、`atomic_i32_*`、`atomic_i64_*`。
   - 已迁出：进程/环境、时间、文件、TCP、mutex 等业务语义入口。
