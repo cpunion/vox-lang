@@ -2,6 +2,7 @@ import "std/fs" as fs
 import "vox/loader" as ld
 import "vox/parse" as p
 import "vox/ast" as ast
+import "vox/query" as q
 import "vox/internal/text" as txt
 
 struct SourceFilePkgOrderResult {
@@ -178,6 +179,12 @@ struct BuildCacheKeyPair {
 struct BuildCacheKeyPairKeep {
   keys: Vec[BuildCachePkgKey],
   pair: BuildCacheKeyPair,
+}
+
+struct BuildCacheSemKeyDepsKeep {
+  keys: Vec[BuildCachePkgKey],
+  sem_key: String,
+  dep_hashes: Vec[q.ParseLoadDepHash],
 }
 
 struct BuildCachePkgSourceKeysResult {
@@ -402,6 +409,162 @@ fn build_cache_sem_key_from_pkg_source_keys(pkg_source_keys0: Vec[BuildCachePkgK
     i = i + 1;
   }
   return sem_h.to_string();
+}
+
+fn build_cache_sem_key_dep_hashes_from_pkg_source_keys_keep(pkg_source_keys0: Vec[BuildCachePkgKey], sem_mode: String) -> BuildCacheSemKeyDepsKeep {
+  let pkg_source_keys: Vec[BuildCachePkgKey] = pkg_source_keys0;
+  let mut sem_h: u64 = build_cache_hash_for_mode_prefix(sem_mode);
+  let sem_h0: u64 = build_cache_pkg_hash_for_mode_prefix(sem_mode);
+  let mut deps: Vec[q.ParseLoadDepHash] = Vec();
+  let mut i: i32 = 0;
+  while i < pkg_source_keys.len() {
+    let spk: BuildCachePkgKey = build_cache_pkg_key_from_source_hash_prefix(pkg_source_keys.get(i), sem_h0);
+    sem_h = lock_hash_text(sem_h, "P\n");
+    sem_h = lock_hash_text(sem_h, spk.pkg);
+    sem_h = lock_hash_text(sem_h, "\n");
+    sem_h = lock_hash_text(sem_h, spk.key);
+    sem_h = lock_hash_text(sem_h, "\n");
+    deps.push(q.ParseLoadDepHash {
+      pkg: spk.pkg,
+      export_sig_hash: spk.key,
+      type_sig_hash: spk.key,
+      impl_sig_hash: spk.key,
+    });
+    i = i + 1;
+  }
+  return BuildCacheSemKeyDepsKeep {
+    keys: pkg_source_keys,
+    sem_key: sem_h.to_string(),
+    dep_hashes: deps,
+  };
+}
+
+fn build_cache_sem_dep_hashes_equal(a: Vec[q.ParseLoadDepHash], b: Vec[q.ParseLoadDepHash]) -> bool {
+  if a.len() != b.len() { return false; }
+  let mut i: i32 = 0;
+  while i < a.len() {
+    let da: q.ParseLoadDepHash = a.get(i);
+    let db: q.ParseLoadDepHash = b.get(i);
+    if da.pkg != db.pkg { return false; }
+    if da.export_sig_hash != db.export_sig_hash { return false; }
+    if da.type_sig_hash != db.type_sig_hash { return false; }
+    if da.impl_sig_hash != db.impl_sig_hash { return false; }
+    i = i + 1;
+  }
+  return true;
+}
+
+fn build_cache_sem_dep_hash_before(a: q.ParseLoadDepHash, b: q.ParseLoadDepHash) -> bool {
+  if a.pkg != b.pkg { return a.pkg < b.pkg; }
+  if a.export_sig_hash != b.export_sig_hash { return a.export_sig_hash < b.export_sig_hash; }
+  if a.type_sig_hash != b.type_sig_hash { return a.type_sig_hash < b.type_sig_hash; }
+  return a.impl_sig_hash < b.impl_sig_hash;
+}
+
+fn build_cache_sem_dep_hashes_sorted_unique(deps: Vec[q.ParseLoadDepHash]) -> bool {
+  if deps.len() <= 1 { return true; }
+  let mut i: i32 = 1;
+  while i < deps.len() {
+    let prev: q.ParseLoadDepHash = deps.get(i - 1);
+    let cur: q.ParseLoadDepHash = deps.get(i);
+    if !build_cache_sem_dep_hash_before(prev, cur) {
+      return false;
+    }
+    i = i + 1;
+  }
+  return true;
+}
+
+struct BuildSemCacheDepParseResult {
+  ok: bool,
+  dep: q.ParseLoadDepHash,
+}
+
+fn parse_build_sem_cache_dep_line(line: String) -> BuildSemCacheDepParseResult {
+  let mut t0: i32 = -1;
+  let mut t1: i32 = -1;
+  let mut t2: i32 = -1;
+  let mut i: i32 = 0;
+  while i < line.len() {
+    if line.byte_at(i) == 9 {
+      if t0 < 0 {
+        t0 = i;
+      } else if t1 < 0 {
+        t1 = i;
+      } else if t2 < 0 {
+        t2 = i;
+      } else {
+        return BuildSemCacheDepParseResult { ok: false, dep: q.ParseLoadDepHash { pkg: "", export_sig_hash: "", type_sig_hash: "", impl_sig_hash: "" } };
+      }
+    }
+    i = i + 1;
+  }
+  if t0 <= 0 || t1 <= t0 + 1 || t2 <= t1 + 1 || t2 + 1 >= line.len() {
+    return BuildSemCacheDepParseResult { ok: false, dep: q.ParseLoadDepHash { pkg: "", export_sig_hash: "", type_sig_hash: "", impl_sig_hash: "" } };
+  }
+  let dep: q.ParseLoadDepHash = q.ParseLoadDepHash {
+    pkg: line.slice(0, t0),
+    export_sig_hash: line.slice(t0 + 1, t1),
+    type_sig_hash: line.slice(t1 + 1, t2),
+    impl_sig_hash: line.slice(t2 + 1, line.len()),
+  };
+  return BuildSemCacheDepParseResult { ok: true, dep: dep };
+}
+
+struct BuildSemCacheReadResult {
+  hit: bool,
+  deps: Vec[q.ParseLoadDepHash],
+}
+
+fn build_sem_cache_read_with_deps(key: String) -> BuildSemCacheReadResult {
+  let meta: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.key");
+  if !fs.exists(meta) { return BuildSemCacheReadResult { hit: false, deps: Vec() }; }
+  let cur: String = txt.trim_space(fs.read_to_string(meta));
+  if cur != key { return BuildSemCacheReadResult { hit: false, deps: Vec() }; }
+  let deps_path: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.deps");
+  if !fs.exists(deps_path) { return BuildSemCacheReadResult { hit: false, deps: Vec() }; }
+  let lines: Vec[String] = txt.split_lines(fs.read_to_string(deps_path));
+  if lines.len() == 0 { return BuildSemCacheReadResult { hit: false, deps: Vec() }; }
+  if txt.trim_space(lines.get(0)) != "v1" { return BuildSemCacheReadResult { hit: false, deps: Vec() }; }
+  let mut deps: Vec[q.ParseLoadDepHash] = Vec();
+  let mut i: i32 = 1;
+  while i < lines.len() {
+    let line: String = txt.trim_space(lines.get(i));
+    if line != "" {
+      let parsed: BuildSemCacheDepParseResult = parse_build_sem_cache_dep_line(line);
+      if !parsed.ok { return BuildSemCacheReadResult { hit: false, deps: Vec() }; }
+      deps.push(parsed.dep);
+    }
+    i = i + 1;
+  }
+  if !build_cache_sem_dep_hashes_sorted_unique(deps) {
+    return BuildSemCacheReadResult { hit: false, deps: Vec() };
+  }
+  return BuildSemCacheReadResult { hit: true, deps: deps };
+}
+
+fn write_build_sem_cache_with_deps(key: String, deps0: Vec[q.ParseLoadDepHash]) -> () {
+  let deps: Vec[q.ParseLoadDepHash] = deps0;
+  let meta: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.key");
+  fs.mkdir_p(dir_name(meta));
+  let _: bool = write_string_if_changed(meta, key.concat("\n"));
+  let deps_path: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.deps");
+  let mut out: String = "v1\n";
+  let mut i: i32 = 0;
+  while i < deps.len() {
+    let d: q.ParseLoadDepHash = deps.get(i);
+    out = out
+      .concat(d.pkg)
+      .concat("\t")
+      .concat(d.export_sig_hash)
+      .concat("\t")
+      .concat(d.type_sig_hash)
+      .concat("\t")
+      .concat(d.impl_sig_hash)
+      .concat("\n");
+    i = i + 1;
+  }
+  let _: bool = write_string_if_changed(deps_path, out);
 }
 
 fn build_cache_key_pair_from_pkg_source_keys_keep(
