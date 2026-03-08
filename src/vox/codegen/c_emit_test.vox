@@ -233,8 +233,9 @@ fn test_codegen_non_fallthrough_br_keeps_goto_and_label() -> () {
     test_funcs: Vec(),
     c_sources: Vec(),
   });
-  t.assert(contains(c, "goto vox_blk_end;"));
-  t.assert(contains(c, "vox_blk_end:"));
+  // Unreachable middle block is pruned from layout; entry -> end becomes fallthrough.
+  t.assert_with(!contains(c, "goto vox_blk_end;"), "expected no goto after reachable-block pruning");
+  t.assert_with(!contains(c, "vox_blk_end:"), "expected no label when end is pure fallthrough");
 }
 
 fn test_codegen_fallthrough_condbr_uses_single_branch_goto() -> () {
@@ -298,9 +299,70 @@ fn test_codegen_condbr_same_target_simplifies_to_single_goto() -> () {
     test_funcs: Vec(),
     c_sources: Vec(),
   });
-  t.assert(contains(c, "goto vox_blk_done;"));
-  t.assert(!contains(c, "if (p0) goto vox_blk_done; else goto vox_blk_done;"));
-  t.assert(contains(c, "vox_blk_done:"));
+  t.assert_with(!contains(c, "goto vox_blk_done;"), "expected same-target condbr to fold to fallthrough when target is next block");
+  t.assert_with(!contains(c, "if (p0) goto vox_blk_done; else goto vox_blk_done;"), "expected no redundant if/else for same-target condbr");
+  t.assert_with(!contains(c, "vox_blk_done:"), "expected no done label when there is no jump to it");
+}
+
+fn test_codegen_trivial_br_chain_is_redirected_from_entry() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r_i32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r_i32.pool;
+  let ty_i32: i32 = r_i32.idx;
+  let mut p0: ir.Program = ir.program(pool);
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(ir.Block { name: "entry", instrs: Vec(), has_term: true, term: ir.Term.Br("hop") });
+  blocks.push(ir.Block { name: "hop", instrs: Vec(), has_term: true, term: ir.Term.Br("done") });
+  blocks.push(ir.Block { name: "done", instrs: Vec(), has_term: true, term: ir.Term.Ret(true, ir.v_int(0)) });
+  p0.funcs.push(ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks });
+  let c: String = cg.emit_c(p0, cg.EmitOptions {
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+    c_sources: Vec(),
+  });
+  t.assert(!contains(c, "goto vox_blk_hop;"));
+  t.assert(!contains(c, "goto vox_blk_done;"));
+  t.assert(!contains(c, "vox_blk_hop:"));
+  t.assert(!contains(c, "vox_blk_done:"));
+}
+
+fn test_codegen_condbr_redirects_through_trivial_bridge_blocks() -> () {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r_i32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r_i32.pool;
+  let ty_i32: i32 = r_i32.idx;
+  let r_bool: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_bool());
+  pool = r_bool.pool;
+  let ty_bool: i32 = r_bool.idx;
+  let mut p0: ir.Program = ir.program(pool);
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(ir.Block {
+    name: "entry",
+    instrs: Vec(),
+    has_term: true,
+    term: ir.Term.CondBr(ir.v_param(0), "then_bridge", "else_bridge"),
+  });
+  blocks.push(ir.Block { name: "then_bridge", instrs: Vec(), has_term: true, term: ir.Term.Br("then_done") });
+  blocks.push(ir.Block { name: "else_bridge", instrs: Vec(), has_term: true, term: ir.Term.Br("else_done") });
+  blocks.push(ir.Block { name: "then_done", instrs: Vec(), has_term: true, term: ir.Term.Ret(true, ir.v_int(1)) });
+  blocks.push(ir.Block { name: "else_done", instrs: Vec(), has_term: true, term: ir.Term.Ret(true, ir.v_int(0)) });
+  let mut params: Vec[ir.Param] = Vec();
+  params.push(ir.Param { name: "flag", ty: ty_bool });
+  p0.funcs.push(ir.Func { name: "main", params: params, ret: ty_i32, blocks: blocks });
+  let c: String = cg.emit_c(p0, cg.EmitOptions {
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+    c_sources: Vec(),
+  });
+  t.assert(contains(c, "if (!(p0)) goto vox_blk_else_done;"));
+  t.assert(!contains(c, "goto vox_blk_then_bridge;"));
+  t.assert(!contains(c, "goto vox_blk_else_bridge;"));
+  t.assert(!contains(c, "vox_blk_then_bridge:"));
+  t.assert(!contains(c, "vox_blk_else_bridge:"));
 }
 
 fn test_codegen_drops_dead_pure_temps() -> () {
@@ -561,27 +623,19 @@ fn test_codegen_event_loop_uses_runtime_helpers() -> () {
     test_funcs: Vec(),
     c_sources: Vec(),
   });
-  // Event loop infrastructure must be present in generated C.
-  t.assert(contains(c, "#define VOX_EL_SLOTS 256"));
-  t.assert(contains(c, "static intptr_t vox_el_token_h[VOX_EL_SLOTS];"));
-  t.assert(contains(c, "static intptr_t vox_el_pending_h[VOX_EL_SLOTS];"));
-  t.assert(contains(c, "void vox_impl_el_init(void) {"));
-  t.assert(contains(c, "void vox_impl_el_poller_wake(void) {"));
-  t.assert(contains(c, "void vox_impl_el_poller_wait(int32_t timeout_ms) {"));
-  t.assert(contains(c, "int32_t vox_impl_el_n_slots(void)"));
-  t.assert(contains(c, "intptr_t vox_impl_el_token_handle(int32_t i)"));
-  t.assert(contains(c, "intptr_t vox_impl_el_pending_handle(int32_t i)"));
-  // Old wake infrastructure must not be present.
-  t.assert(!contains(c, "vox_wake_slots["));
-  t.assert(!contains(c, "vox_impl_wake_notify("));
-  t.assert(!contains(c, "vox_impl_wake_wait("));
-  // Platform init branches in event loop.
-  t.assert(contains(c, "#if defined(__linux__)"));
-  t.assert(contains(c, "eventfd(0, VOX_EFD_NONBLOCK | VOX_EFD_CLOEXEC)"));
-  t.assert(contains(c, "vox_kev_set(ev, 1, VOX_EVFILT_USER,"));
-  t.assert(contains(c, "vox_impl_el_init("));
-  t.assert(contains(c, "vox_impl_el_poller_wake("));
-  t.assert(contains(c, "vox_impl_el_poller_wait("));
+  // FFI imports should stay direct (no codegen-injected helper bodies).
+  t.assert_with(contains(c, "extern void vox_impl_el_init("), "expected extern decl for vox_impl_el_init");
+  t.assert_with(contains(c, "extern void vox_impl_el_poller_wake("), "expected extern decl for vox_impl_el_poller_wake");
+  t.assert_with(contains(c, "extern void vox_impl_el_poller_wait("), "expected extern decl for vox_impl_el_poller_wait");
+  t.assert_with(contains(c, "vox_impl_el_init();"), "expected direct call to vox_impl_el_init");
+  t.assert_with(contains(c, "vox_impl_el_poller_wake();"), "expected direct call to vox_impl_el_poller_wake");
+  t.assert_with(contains(c, "vox_impl_el_poller_wait("), "expected direct call to vox_impl_el_poller_wait");
+  t.assert_with(!contains(c, "void vox_impl_el_init(void) {"), "expected no injected event-loop init helper body");
+  t.assert_with(!contains(c, "void vox_impl_el_poller_wake(void) {"), "expected no injected event-loop wake helper body");
+  t.assert_with(!contains(c, "void vox_impl_el_poller_wait(int32_t timeout_ms) {"), "expected no injected event-loop wait helper body");
+  t.assert_with(!contains(c, "vox_wake_slots["), "expected old wake slots to be removed");
+  t.assert_with(!contains(c, "vox_impl_wake_notify("), "expected old wake notify helper removed");
+  t.assert_with(!contains(c, "vox_impl_wake_wait("), "expected old wake wait helper removed");
 }
 
 fn test_codegen_sync_drop_intrinsics_use_runtime_helpers() -> () {
@@ -625,15 +679,19 @@ fn test_codegen_sync_drop_intrinsics_use_runtime_helpers() -> () {
   t.assert_with(gr.ok, gr.err);
   t.assert(gr.ok);
   let c: String = cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() });
-  t.assert(contains(c, "static void vox_sync_handle_add(intptr_t h)"));
-  t.assert(contains(c, "static bool vox_sync_handle_live(intptr_t h)"));
-  t.assert(contains(c, "static bool vox_sync_handle_remove(intptr_t h)"));
-  t.assert(contains(c, "vox_sync_handle_node* n = (vox_sync_handle_node*)malloc(sizeof(vox_sync_handle_node));"));
-  t.assert(contains(c, "free(n);"));
-  t.assert(contains(c, "if (!vox_sync_handle_live(h)) { vox_host_panic(\"invalid or dropped atomic handle\"); }"));
-  t.assert(contains(c, "if (!vox_sync_handle_remove(h)) return;"));
-  t.assert(contains(c, "vox_impl_atomic_i32_drop("));
-  t.assert(contains(c, "vox_impl_atomic_i64_drop("));
+  t.assert_with(contains(c, "extern intptr_t vox_impl_atomic_i32_new("), "expected i32 atomic extern new");
+  t.assert_with(contains(c, "extern int32_t vox_impl_atomic_i32_load("), "expected i32 atomic extern load");
+  t.assert_with(contains(c, "extern void vox_impl_atomic_i32_store("), "expected i32 atomic extern store");
+  t.assert_with(contains(c, "extern void vox_impl_atomic_i32_drop("), "expected i32 atomic extern drop");
+  t.assert_with(contains(c, "extern intptr_t vox_impl_atomic_i64_new("), "expected i64 atomic extern new");
+  t.assert_with(contains(c, "extern int64_t vox_impl_atomic_i64_load("), "expected i64 atomic extern load");
+  t.assert_with(contains(c, "extern void vox_impl_atomic_i64_store("), "expected i64 atomic extern store");
+  t.assert_with(contains(c, "extern void vox_impl_atomic_i64_drop("), "expected i64 atomic extern drop");
+  t.assert_with(!contains(c, "vox_sync_handle_add("), "expected no injected sync handle add helper");
+  t.assert_with(!contains(c, "vox_sync_handle_live("), "expected no injected sync handle live helper");
+  t.assert_with(!contains(c, "vox_sync_handle_remove("), "expected no injected sync handle remove helper");
+  t.assert_with(contains(c, "vox_impl_atomic_i32_drop("), "expected i32 atomic drop calls");
+  t.assert_with(contains(c, "vox_impl_atomic_i64_drop("), "expected i64 atomic drop calls");
 }
 
 fn test_codegen_vec_is_empty_uses_runtime_len() -> () {
