@@ -329,6 +329,7 @@ Invalidate unit on any of:
 - 2026-03-08: removed single-use CLI version normalization helper (`normalize_cli_version`) and inlined equivalent trim/leading-`v` normalization directly at `version` override/base derivation call sites, preserving CLI version text semantics while trimming helper indirection.
 - 2026-03-08: removed single-use object compile cmdline helper (`cc_compile_obj_cmdline_for_target_artifact`) and inlined equivalent target-aware compile cmdline assembly directly at the pkg-object cache compile site, preserving object compile semantics while trimming helper indirection.
 - 2026-03-08: removed single-use object link cmdline helper (`cc_link_obj_cmdline_for_target_artifact`) and inlined equivalent target-aware link/archive cmdline assembly directly at the link cache build site, preserving link/static archive semantics while trimming helper indirection.
+- 2026-03-08: removed single-use invalid-lock printer helper (`print_invalid_lock_error`) and inlined equivalent lock-error/hint output directly at both lock verification failure sites in `main`, preserving lock diagnostics semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
