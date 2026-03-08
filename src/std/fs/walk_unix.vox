@@ -1,0 +1,112 @@
+@build(unix)
+
+import "std/sys" as sys
+
+@ffi_import("c", "opendir")
+fn fs_unix_opendir(path: const rawptr) -> rawptr;
+
+@ffi_import("c", "readdir")
+fn fs_unix_readdir(dir: rawptr) -> rawptr;
+
+@ffi_import("c", "closedir")
+fn fs_unix_closedir(dir: rawptr) -> i32;
+
+fn fs_unix_dt_unknown() -> u8 { return 0 as u8; }
+fn fs_unix_dt_dir() -> u8 { return 4 as u8; }
+
+fn fs_unix_dirent_name_offset() -> isize {
+  if @target_os() == "darwin" { return 21 as isize; }
+  return 19 as isize;
+}
+
+fn fs_unix_dirent_type_offset() -> isize {
+  if @target_os() == "darwin" { return 20 as isize; }
+  return 18 as isize;
+}
+
+fn fs_unix_try_open_dir(path: String) -> rawptr {
+  let c_path: rawptr = sys.c_string_dup_nul(path);
+  if (c_path as isize) == (0 as isize) { return sys.null_rawptr(); }
+  let d: rawptr = fs_unix_opendir(c_path as const rawptr);
+  sys.free(c_path);
+  return d;
+}
+
+fn fs_unix_dirent_name(entry: rawptr) -> String {
+  if (entry as isize) == (0 as isize) { return ""; }
+  let name_p: rawptr = @ptr_offset(entry, fs_unix_dirent_name_offset());
+  let mut n: i32 = 0;
+  while n < 4096 {
+    let b: u8 = @ptr_read[u8](@ptr_offset(name_p, n as isize));
+    if b == (0 as u8) { break; }
+    n = n + 1;
+  }
+  if n <= 0 { return ""; }
+  let out: rawptr = sys.malloc((n as usize) + (1 as usize));
+  if (out as isize) == (0 as isize) { return ""; }
+  let _: rawptr = sys.memcpy(out, name_p as const rawptr, n as usize);
+  @ptr_write[u8](@ptr_offset(out, n as isize), 0 as u8);
+  return out as String;
+}
+
+fn fs_unix_walk_abs(root: String, rel: String) -> String {
+  if rel == "" { return root; }
+  return root.concat("/").concat(rel);
+}
+
+fn fs_unix_walk_collect_dir(root: String, rel_dir: String, ext: String, out0: Vec[String]) -> Vec[String] {
+  let mut out: Vec[String] = out0;
+  let abs_dir: String = fs_unix_walk_abs(root, rel_dir);
+  let d: rawptr = fs_unix_try_open_dir(abs_dir);
+  if (d as isize) == (0 as isize) { return out; }
+  while true {
+    let ent: rawptr = fs_unix_readdir(d);
+    if (ent as isize) == (0 as isize) { break; }
+    let name: String = fs_unix_dirent_name(ent);
+    if name == "" || name == "." || name == ".." { continue; }
+    let child_rel: String = if rel_dir == "" { name } else { rel_dir.concat("/").concat(name) };
+    let child_abs: String = fs_unix_walk_abs(root, child_rel);
+    let kind: u8 = @ptr_read[u8](@ptr_offset(ent, fs_unix_dirent_type_offset()));
+    if kind == fs_unix_dt_dir() {
+      out = fs_unix_walk_collect_dir(root, child_rel, ext, out);
+      continue;
+    }
+    if kind == fs_unix_dt_unknown() {
+      let child_dir: rawptr = fs_unix_try_open_dir(child_abs);
+      if (child_dir as isize) != (0 as isize) {
+        let _rc: i32 = fs_unix_closedir(child_dir);
+        _rc;
+        out = fs_unix_walk_collect_dir(root, child_rel, ext, out);
+        continue;
+      }
+    }
+    if name.ends_with(ext) { out.push(child_rel); }
+  }
+  let _rc: i32 = fs_unix_closedir(d);
+  _rc;
+  return out;
+}
+
+fn fs_unix_walk_collect_from_root(root: String, ext: String, include_tests: bool) -> Vec[String] {
+  let r: String = if root == "" { "." } else { root };
+  let mut out: Vec[String] = Vec();
+  out = fs_unix_walk_collect_dir(r, "src", ext, out);
+  if include_tests {
+    out = fs_unix_walk_collect_dir(r, "tests", ext, out);
+  }
+  fs_sort_strings(out);
+  return fs_dedupe_sorted_strings(out);
+}
+
+fn fs_walk_find(root: String, find_cmd: String) -> Vec[String] {
+  if find_cmd == "find src tests -type f -name '*.vox'" {
+    return fs_unix_walk_collect_from_root(root, ".vox", true);
+  }
+  if find_cmd == "find src -type f -name '*.vox'" {
+    return fs_unix_walk_collect_from_root(root, ".vox", false);
+  }
+  if find_cmd == "find src -type f -name '*.c'" {
+    return fs_unix_walk_collect_from_root(root, ".c", false);
+  }
+  return fs_walk_find_shell(root, find_cmd);
+}
