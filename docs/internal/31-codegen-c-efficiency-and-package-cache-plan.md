@@ -338,6 +338,7 @@ Invalidate unit on any of:
 - 2026-03-08: `vox test` now uses the same sem-key C-key sidecar and can reuse cached test-generated C (`test-pkg-obj-v1/<old-key>.c`) on sem-hit/C-miss when cached compiled-test set still covers current selected tests, skipping compile/typecheck/codegen and continuing with object rebuild + relink.
 - 2026-03-08: `build_cache_pkg_sem_source_keys_with_files` sem-hash path now uses a no-non-vox fast path (sem hash directly tracks full pkg hash until first non-`.vox` input) and only runs separate sem-hash updates after divergence, reducing duplicated per-file hash work on all-vox/common package sets while preserving sem-key equivalence.
 - 2026-03-08: test runner scheduling loop now tracks per-module running state via `module_busy` bitset instead of scanning `running` jobs for each queue candidate, reducing hot-loop scheduler overhead from O(queues * running) busy checks to O(queues) under parallel test execution while preserving module-serial execution semantics.
+- 2026-03-08: removed sem-key C-sidecar reuse path (`.build.cache.c-key` and sem-hit/C-miss C copy shortcut) from `vox build`/`vox test`. Reason: generated C embeds loaded `.c` sources (`emit_c_sources`), so sem-key (which intentionally excludes non-`.vox`) is insufficient to prove C-source freshness; reusing old C across compile-key churn can produce stale outputs.
 
 ## 5. Validation Gates
 
