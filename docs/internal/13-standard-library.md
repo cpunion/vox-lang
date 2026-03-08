@@ -12,7 +12,7 @@
 - `std::sync`：并发原语（`Mutex[T]/Atomic[T]` 泛型 API）
 - `std::async`：pull 模型异步核心（`Poll[T]`、`Future`、`Context`、`Waker`、`Runtime`、`pending_wait_with`）
 - `std::runtime`：低层 intrinsic 适配边界（标准库内部使用）
-- `std::sys`：平台 C API 直连（当前最小集：`read/close/access/mkdir/system/calloc/free`），不引入项目私有 runtime 符号
+- `std::sys`：平台 C API 直连（文件/FD、内存、进程与网络薄接口），不引入项目私有 runtime 符号
 - `std::collections`：`Vec`、`Map` 等
 - `std::io`：输出 + 文件抽象 + Reader/Writer 流 trait
 - `std::net`：TCP/UDP 基础封装 + URL/Query/HTTP 文本编解码
@@ -82,11 +82,13 @@
   - 已迁出：进程/环境、时间、文件、TCP、mutex 等业务语义入口。
   - 约定：`std` 其它模块不再直接调用 `__*`，统一经 `std::runtime` / `std::os` / `std::time` / `std::sys` 分层转发。
 - `std::sys` 已提供最小平台 FFI 绑定：
-  - 文件/FD：`read/close/access/mkdir`
+  - 文件/FD：`open_read/read/write/close/lseek/access/mkdir/creat`
   - 进程：`system`
   - 内存：`calloc/free`
+  - 网络：`connect/listen/accept/socket_send/recv/close_socket/wait_read/wait_write`
   - 约定：
     - `std::sys` 仅声明平台 API 差异与薄封装，不引入 `vox_builtin_*` / `vox_rt_*` 这类项目私有前缀符号。
+    - 对不支持网络的平台（如 wasm、windows-x86）使用显式 panic/stub 语义。
     - 平台分流统一使用文件级 `@build(...)`，不在标准库生产代码中使用 `@cfg(...)`（`@cfg` 仅保留给编译器语义测试）。
 - `std::net` 已提供：
   - 请求对象化入口：
