@@ -1,5 +1,7 @@
 import "std/fs" as fs
 import "vox/loader" as ld
+import "vox/parse" as p
+import "vox/ast" as ast
 import "vox/internal/text" as txt
 
 struct SourceFilePkgOrderResult {
@@ -469,8 +471,8 @@ fn discover_tests_cached_with_paths(paths0: Vec[String]) -> DiscoverTestsResult 
   let mut test_paths: Vec[String] = Vec();
   let mut pi: i32 = 0;
   while pi < paths.len() {
-    let p: String = paths.get(pi);
-    if txt.has_prefix(p, "tests/") || (txt.has_prefix(p, "src/") && txt.has_suffix(p, "_test.vox")) { test_paths.push(p); }
+    let pth: String = paths.get(pi);
+    if txt.has_prefix(pth, "tests/") || (txt.has_prefix(pth, "src/") && txt.has_suffix(pth, "_test.vox")) { test_paths.push(pth); }
     pi = pi + 1;
   }
   let mut h: u64 = 1469598103934665603 as u64;
@@ -498,13 +500,44 @@ fn discover_tests_cached_with_paths(paths0: Vec[String]) -> DiscoverTestsResult 
       return DiscoverTestsResult { paths: paths, tests: parse_test_build_cache_tests(fs.read_to_string(list_path)), cached_files: test_files };
     }
   }
-  let discovered: DiscoverTestsResult = discover_tests_from_cached_test_files(paths, test_files);
-  let paths_out: Vec[String] = discovered.paths;
-  let tests: Vec[String] = discovered.tests;
+  let mut tests: Vec[String] = Vec();
+  let mut ti: i32 = 0;
+  while ti < test_files.len() {
+    let sf: ld.SourceFile = test_files.get(ti);
+    let pth: String = sf.path;
+    let src_text: String = sf.text;
+    let r: p.ParseResult = p.parse_text_with_path(pth, src_text);
+    if r.err != p.ParseError.None {
+      panic(p.parse_error_to_string_with_source(pth, src_text, r.err));
+    }
+    let mp: String = ld.mod_path_from_file_path(pth);
+    let mut fi: i32 = 0;
+    while fi < r.prog.funcs.len() {
+      let fd: ast.FuncDecl = r.prog.funcs.get(fi);
+      if txt.has_prefix(fd.name, "test_") {
+        if mp == "" || mp == "main" {
+          tests.push(fd.name);
+        } else {
+          let mut s: String = mp;
+          let mut si: i32 = 0;
+          while si < s.len() {
+            if s.byte_at(si) == 47 {
+              s = s.slice(0, si).concat(".").concat(s.slice(si + 1, s.len()));
+            }
+            si = si + 1;
+          }
+          tests.push(s.concat("::").concat(fd.name));
+        }
+      }
+      fi = fi + 1;
+    }
+    ti = ti + 1;
+  }
+  tests = sort_strings(tests);
   fs.mkdir_p("target/debug");
   let formatted: FormatTestsResult = format_test_build_cache_tests_with_tests(tests);
   let _: bool = write_string_if_changed(key_path, key.concat("\n"));
   let _: bool = write_string_if_changed(list_path, formatted.text);
   let tests_out: Vec[String] = formatted.tests;
-  return DiscoverTestsResult { paths: paths_out, tests: tests_out, cached_files: discovered.cached_files };
+  return DiscoverTestsResult { paths: paths, tests: tests_out, cached_files: test_files };
 }
