@@ -317,6 +317,7 @@ Invalidate unit on any of:
 - 2026-03-08: removed two single-use object-compile cmdline helpers (`cc_compile_obj_cmdline_msvc`, `cc_compile_obj_cmdline_gnu`) and inlined equivalent compile command assembly directly in `cc_compile_obj_cmdline_for_target_artifact`, preserving object compile command semantics while trimming helper indirection.
 - 2026-03-08: removed two single-use non-static object-link cmdline helpers (`cc_link_obj_cmdline_non_static_msvc`, `cc_link_obj_cmdline_non_static_gnu`) and inlined equivalent executable/shared link command assembly directly in `cc_link_obj_cmdline_for_target_artifact`, preserving non-static object-link semantics while trimming helper indirection.
 - 2026-03-08: removed two single-use non-static full-build cmdline helpers (`cc_cmdline_non_static_msvc`, `cc_cmdline_non_static_gnu`) and inlined equivalent executable/shared build command assembly directly in `cc_cmdline_for_target_artifact`, preserving non-static build command semantics while trimming helper indirection.
+- 2026-03-08: removed single-use dependency source loader helper (`load_dep_sources`) and inlined equivalent dep source/C file materialization directly in `load_deps_from_manifest_at`, preserving dependency file loading semantics while trimming helper indirection.
 
 ## 5. Validation Gates
 
