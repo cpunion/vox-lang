@@ -655,6 +655,19 @@ fn sort_strings(xs0: Vec[String]) -> Vec[String] {
   return ss.sort(xs0);
 }
 
+fn sort_strings_if_needed(xs0: Vec[String]) -> Vec[String] {
+  let xs: Vec[String] = xs0;
+  if xs.len() <= 1 { return xs; }
+  let mut i: i32 = 1;
+  while i < xs.len() {
+    if xs.get(i - 1) > xs.get(i) {
+      return sort_strings(xs);
+    }
+    i = i + 1;
+  }
+  return xs;
+}
+
 fn text_contains(s: String, part: String) -> bool {
   if part.len() == 0 { return true; }
   if s.len() < part.len() { return false; }
@@ -865,31 +878,77 @@ fn sort_module_details(xs0: Vec[ModuleDetail]) -> Vec[ModuleDetail] {
   let mut i: i32 = 0;
   while i < xs0.len() {
     let d0: ModuleDetail = xs0.get(i);
-    let d1: ModuleDetail = ModuleDetail {
+    out.push(ModuleDetail {
       module: d0.module,
-      tests: sort_strings(d0.tests),
-      failed_tests: sort_strings(d0.failed_tests),
+      tests: sort_strings_if_needed(d0.tests),
+      failed_tests: sort_strings_if_needed(d0.failed_tests),
       passed: d0.passed,
       failed: d0.failed,
       dur_ns: d0.dur_ns,
-    };
-    let mut next: Vec[ModuleDetail] = Vec();
-    let mut inserted: bool = false;
-    let mut j: i32 = 0;
-    while j < out.len() {
-      let cur: ModuleDetail = out.get(j);
-      if !inserted && d1.module < cur.module {
-        next.push(d1);
-        inserted = true;
-      }
-      next.push(cur);
-      j = j + 1;
-    }
-    if !inserted { next.push(d1); }
-    out = next;
+    });
     i = i + 1;
   }
+  if out.len() <= 1 { return out; }
+  let mut sorted: bool = true;
+  i = 1;
+  while i < out.len() {
+    if out.get(i - 1).module > out.get(i).module {
+      sorted = false;
+      break;
+    }
+    i = i + 1;
+  }
+  if sorted { return out; }
+  let mut gap: i32 = out.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < out.len() {
+      let keep: ModuleDetail = out.get(oi);
+      let keep_module: String = keep.module;
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: ModuleDetail = out.get(j - gap);
+        if prev.module <= keep_module { break; }
+        out.set(j, prev);
+        j = j - gap;
+      }
+      out.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
   return out;
+}
+
+fn sort_module_summaries_if_needed(xs0: Vec[ModuleSummary]) -> Vec[ModuleSummary] {
+  let mut xs: Vec[ModuleSummary] = xs0;
+  if xs.len() <= 1 { return xs; }
+  let mut i: i32 = 1;
+  while i < xs.len() {
+    if xs.get(i - 1).module > xs.get(i).module {
+      let mut gap: i32 = xs.len() / 2;
+      while gap > 0 {
+        let mut oi: i32 = gap;
+        while oi < xs.len() {
+          let keep: ModuleSummary = xs.get(oi);
+          let keep_module: String = keep.module;
+          let mut j: i32 = oi;
+          while j >= gap {
+            let prev: ModuleSummary = xs.get(j - gap);
+            if prev.module <= keep_module { break; }
+            xs.set(j, prev);
+            j = j - gap;
+          }
+          xs.set(j, keep);
+          oi = oi + 1;
+        }
+        gap = gap / 2;
+      }
+      return xs;
+    }
+    i = i + 1;
+  }
+  return xs;
 }
 
 fn sort_test_results(xs0: Vec[TestRunResult]) -> Vec[TestRunResult] {
@@ -963,6 +1022,18 @@ struct ModuleQueue {
   next: i32,
 }
 
+struct ModuleQueueIndexEntry {
+  module: String,
+  queue_idx: i32,
+}
+
+struct ModuleQueueLookupKeepResult {
+  entries: Vec[ModuleQueueIndexEntry],
+  found: bool,
+  queue_idx: i32,
+  insert_at: i32,
+}
+
 struct RunningJob {
   module_idx: i32,
   name: String,
@@ -971,26 +1042,70 @@ struct RunningJob {
   start_ns: i64,
 }
 
+fn module_queue_lookup_keep(entries0: Vec[ModuleQueueIndexEntry], module: String) -> ModuleQueueLookupKeepResult {
+  let entries: Vec[ModuleQueueIndexEntry] = entries0;
+  let mut lo: i32 = 0;
+  let mut hi: i32 = entries.len();
+  while lo < hi {
+    let mid: i32 = lo + (hi - lo) / 2;
+    let cur: ModuleQueueIndexEntry = entries.get(mid);
+    if cur.module == module {
+      return ModuleQueueLookupKeepResult {
+        entries: entries,
+        found: true,
+        queue_idx: cur.queue_idx,
+        insert_at: mid,
+      };
+    }
+    if cur.module < module {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return ModuleQueueLookupKeepResult {
+    entries: entries,
+    found: false,
+    queue_idx: -1,
+    insert_at: lo,
+  };
+}
+
 fn build_module_queues(tests: Vec[String]) -> Vec[ModuleQueue] {
   let mut out: Vec[ModuleQueue] = Vec();
+  let mut module_index: Vec[ModuleQueueIndexEntry] = Vec();
+  let mut last_module: String = "";
+  let mut last_qi: i32 = -1;
   let mut i: i32 = 0;
   while i < tests.len() {
     let name: String = tests.get(i);
     let module: String = test_module_name(name);
-    let mut qi: i32 = -1;
-    let mut ofi: i32 = 0;
-    while ofi < out.len() {
-      if out.get(ofi).module == module {
-        qi = ofi;
-        ofi = out.len();
+    let mut qi: i32 = last_qi;
+    if qi < 0 || last_module != module {
+      let lookup_keep: ModuleQueueLookupKeepResult = module_queue_lookup_keep(module_index, module.slice(0, module.len()));
+      module_index = lookup_keep.entries;
+      if lookup_keep.found {
+        qi = lookup_keep.queue_idx;
       } else {
-        ofi = ofi + 1;
+        qi = out.len();
+        let mut next_index: Vec[ModuleQueueIndexEntry] = Vec();
+        let mut mii: i32 = 0;
+        while mii < lookup_keep.insert_at {
+          next_index.push(module_index.get(mii));
+          mii = mii + 1;
+        }
+        next_index.push(ModuleQueueIndexEntry { module: module.slice(0, module.len()), queue_idx: qi });
+        while mii < module_index.len() {
+          next_index.push(module_index.get(mii));
+          mii = mii + 1;
+        }
+        module_index = next_index;
       }
     }
-    if qi < 0 {
+    if qi == out.len() {
       let mut ts: Vec[String] = Vec();
       ts.push(name);
-      out.push(ModuleQueue { module: module, tests: ts, next: 0 });
+      out.push(ModuleQueue { module: module.slice(0, module.len()), tests: ts, next: 0 });
     } else {
       let q0: ModuleQueue = out.get(qi);
       let mut ts1: Vec[String] = q0.tests;
@@ -998,6 +1113,8 @@ fn build_module_queues(tests: Vec[String]) -> Vec[ModuleQueue] {
       let q1: ModuleQueue = ModuleQueue { module: q0.module, tests: ts1, next: q0.next };
       out.set(qi, q1);
     }
+    last_module = module;
+    last_qi = qi;
     i = i + 1;
   }
   return out;
@@ -1022,14 +1139,16 @@ fn json_quote(s: String) -> String {
 fn json_bool(v: bool) -> String { return if v { "true" } else { "false" }; }
 
 fn json_of_tests(tests: Vec[String]) -> String {
-  let mut out: String = "[";
+  let mut parts: Vec[String] = Vec();
+  parts.push("[");
   let mut i: i32 = 0;
   while i < tests.len() {
-    if i > 0 { out = out.concat(","); }
-    out = out.concat(json_quote(tests.get(i)));
+    if i > 0 { parts.push(","); }
+    parts.push(json_quote(tests.get(i)));
     i = i + 1;
   }
-  return out.concat("]");
+  parts.push("]");
+  return parts.join("");
 }
 
 fn print_json_report(
@@ -1110,74 +1229,97 @@ fn print_json_report(
   out = out.concat("}");
   out = out.concat(",\"list_only\":").concat(json_bool(list_only));
   out = out.concat(",\"selected_tests\":").concat(json_of_tests(selected_tests));
-  let mut module_details_json: String = "[";
+  let mut module_details_parts: Vec[String] = Vec();
+  module_details_parts.push("[");
   let mut mdi: i32 = 0;
   while mdi < list_module_details.len() {
-    if mdi > 0 { module_details_json = module_details_json.concat(","); }
+    if mdi > 0 { module_details_parts.push(","); }
     let d: ModuleDetail = list_module_details.get(mdi);
-    module_details_json = module_details_json
-      .concat("{\"module\":").concat(json_quote(d.module))
-      .concat(",\"tests\":").concat(json_of_tests(d.tests))
-      .concat(",\"failed_tests\":").concat(json_of_tests(d.failed_tests))
-      .concat(",\"passed\":").concat(d.passed.to_string())
-      .concat(",\"failed\":").concat(d.failed.to_string())
-      .concat(",\"duration_us\":").concat(duration_us(d.dur_ns).to_string())
-      .concat("}");
+    module_details_parts.push("{\"module\":");
+    module_details_parts.push(json_quote(d.module));
+    module_details_parts.push(",\"tests\":");
+    module_details_parts.push(json_of_tests(d.tests));
+    module_details_parts.push(",\"failed_tests\":");
+    module_details_parts.push(json_of_tests(d.failed_tests));
+    module_details_parts.push(",\"passed\":");
+    module_details_parts.push(d.passed.to_string());
+    module_details_parts.push(",\"failed\":");
+    module_details_parts.push(d.failed.to_string());
+    module_details_parts.push(",\"duration_us\":");
+    module_details_parts.push(duration_us(d.dur_ns).to_string());
+    module_details_parts.push("}");
     mdi = mdi + 1;
   }
-  module_details_json = module_details_json.concat("]");
+  module_details_parts.push("]");
+  let module_details_json: String = module_details_parts.join("");
   out = out.concat(",\"module_details\":").concat(module_details_json);
   if message != "" { out = out.concat(",\"message\":").concat(json_quote(message)); }
   if !list_only {
-    let mut results_json: String = "[";
+    let mut results_parts: Vec[String] = Vec();
+    results_parts.push("[");
     let mut ri: i32 = 0;
     while ri < results.len() {
-      if ri > 0 { results_json = results_json.concat(","); }
+      if ri > 0 { results_parts.push(","); }
       let r: TestRunResult = results.get(ri);
-      results_json = results_json
-        .concat("{\"name\":").concat(json_quote(r.name))
-        .concat(",\"module\":").concat(json_quote(r.module))
-        .concat(",\"status\":").concat(json_quote(if r.ok { "ok" } else { "fail" }))
-        .concat(",\"duration_us\":").concat(duration_us(r.dur_ns).to_string());
+      results_parts.push("{\"name\":");
+      results_parts.push(json_quote(r.name));
+      results_parts.push(",\"module\":");
+      results_parts.push(json_quote(r.module));
+      results_parts.push(",\"status\":");
+      results_parts.push(json_quote(if r.ok { "ok" } else { "fail" }));
+      results_parts.push(",\"duration_us\":");
+      results_parts.push(duration_us(r.dur_ns).to_string());
       if r.err != "" {
-        results_json = results_json.concat(",\"error\":").concat(json_quote(r.err));
+        results_parts.push(",\"error\":");
+        results_parts.push(json_quote(r.err));
       }
       if r.log_file != "" {
-        results_json = results_json.concat(",\"log_file\":").concat(json_quote(r.log_file));
+        results_parts.push(",\"log_file\":");
+        results_parts.push(json_quote(r.log_file));
       }
-      results_json = results_json.concat("}");
+      results_parts.push("}");
       ri = ri + 1;
     }
-    results_json = results_json.concat("]");
+    results_parts.push("]");
+    let results_json: String = results_parts.join("");
     out = out.concat(",\"results\":").concat(results_json);
-    let mut modules_json: String = "[";
+    let mut modules_parts: Vec[String] = Vec();
+    modules_parts.push("[");
     let mut mi: i32 = 0;
     while mi < modules.len() {
-      if mi > 0 { modules_json = modules_json.concat(","); }
+      if mi > 0 { modules_parts.push(","); }
       let m: ModuleSummary = modules.get(mi);
-      modules_json = modules_json
-        .concat("{\"module\":").concat(json_quote(m.module))
-        .concat(",\"passed\":").concat(m.passed.to_string())
-        .concat(",\"failed\":").concat(m.failed.to_string())
-        .concat(",\"duration_us\":").concat(duration_us(m.dur_ns).to_string())
-        .concat("}");
+      modules_parts.push("{\"module\":");
+      modules_parts.push(json_quote(m.module));
+      modules_parts.push(",\"passed\":");
+      modules_parts.push(m.passed.to_string());
+      modules_parts.push(",\"failed\":");
+      modules_parts.push(m.failed.to_string());
+      modules_parts.push(",\"duration_us\":");
+      modules_parts.push(duration_us(m.dur_ns).to_string());
+      modules_parts.push("}");
       mi = mi + 1;
     }
-    modules_json = modules_json.concat("]");
+    modules_parts.push("]");
+    let modules_json: String = modules_parts.join("");
     out = out.concat(",\"modules\":").concat(modules_json);
-    let mut slowest_json: String = "[";
+    let mut slowest_parts: Vec[String] = Vec();
+    slowest_parts.push("[");
     let mut si: i32 = 0;
     while si < slowest.len() {
-      if si > 0 { slowest_json = slowest_json.concat(","); }
+      if si > 0 { slowest_parts.push(","); }
       let x: NamedDuration = slowest.get(si);
-      slowest_json = slowest_json
-        .concat("{\"name\":").concat(json_quote(x.name))
-        .concat(",\"module\":").concat(json_quote(x.module))
-        .concat(",\"duration_us\":").concat(duration_us(x.dur_ns).to_string())
-        .concat("}");
+      slowest_parts.push("{\"name\":");
+      slowest_parts.push(json_quote(x.name));
+      slowest_parts.push(",\"module\":");
+      slowest_parts.push(json_quote(x.module));
+      slowest_parts.push(",\"duration_us\":");
+      slowest_parts.push(duration_us(x.dur_ns).to_string());
+      slowest_parts.push("}");
       si = si + 1;
     }
-    slowest_json = slowest_json.concat("]");
+    slowest_parts.push("]");
+    let slowest_json: String = slowest_parts.join("");
     out = out.concat(",\"slowest\":").concat(slowest_json);
     out = out.concat(",\"failed_tests\":").concat(json_of_tests(failed_tests));
     if hint != "" { out = out.concat(",\"hint\":").concat(json_quote(hint)); }
@@ -3939,26 +4081,7 @@ fn main() -> i32 {
     let total_ns: i64 = dur_nonneg_ns(run_start_ns, tm.now_ns());
     let skipped: i32 = total_tests - (passed + failed);
     let results_sorted: Vec[TestRunResult] = sort_test_results(results);
-    let mut module_summaries_sorted: Vec[ModuleSummary] = Vec();
-    let mut msi0: i32 = 0;
-    while msi0 < module_summaries.len() {
-      let x: ModuleSummary = module_summaries.get(msi0);
-      let mut next: Vec[ModuleSummary] = Vec();
-      let mut inserted: bool = false;
-      let mut msj: i32 = 0;
-      while msj < module_summaries_sorted.len() {
-        let cur: ModuleSummary = module_summaries_sorted.get(msj);
-        if !inserted && x.module < cur.module {
-          next.push(x);
-          inserted = true;
-        }
-        next.push(cur);
-        msj = msj + 1;
-      }
-      if !inserted { next.push(x); }
-      module_summaries_sorted = next;
-      msi0 = msi0 + 1;
-    }
+    let module_summaries_sorted: Vec[ModuleSummary] = sort_module_summaries_if_needed(module_summaries);
     let module_details_sorted: Vec[ModuleDetail] = sort_module_details(module_details);
     let failed_names_sorted: Vec[String] = write_failed_tests(failed_names);
     let hint: String = if failed != 0 {
