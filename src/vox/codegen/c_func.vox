@@ -292,6 +292,24 @@ fn int_cast_signed_to_unsigned_needs_upper_check(dst: ir.TyKind, src: ir.TyKind)
   return dmin < smax;
 }
 
+// Conservative literal-fit check used by codegen-only fast paths.
+// For pointer-sized ints, require fit across all supported targets (32/64-bit).
+fn int_literal_always_fits_dst_kind(dst: ir.TyKind, n: i64) -> bool {
+  return match dst {
+    ir.TyKind.I8 => n >= -128 && n <= 127,
+    ir.TyKind.U8 => n >= 0 && n <= 255,
+    ir.TyKind.I16 => n >= -32768 && n <= 32767,
+    ir.TyKind.U16 => n >= 0 && n <= 65535,
+    ir.TyKind.I32 => n >= -2147483648 && n <= 2147483647,
+    ir.TyKind.U32 => n >= 0 && n <= 4294967295,
+    ir.TyKind.I64 => true,
+    ir.TyKind.U64 => n >= 0,
+    ir.TyKind.ISize => n >= -2147483648 && n <= 2147483647,
+    ir.TyKind.USize => n >= 0 && n <= 4294967295,
+    _ => false,
+  };
+}
+
 fn unsigned_peer_c_type(k: ir.TyKind) -> String {
   return match k {
     ir.TyKind.I8 => "uint8_t",
@@ -968,8 +986,20 @@ fn emit_instr_int_cast_checked(pool: ir.TyPool, tid: i32, dst_ty: i32, src_ty: i
   let dst_is_unsigned: bool = is_unsigned_int_kind(dst.kind);
   let src_is_unsigned: bool = is_unsigned_int_kind(src.kind);
   let src_is_float: bool = src.kind == ir.TyKind.F32 || src.kind == ir.TyKind.F64;
+  let src_is_int_lit: bool = match v {
+    ir.Value.Int(_n) => true,
+    _ => false,
+  };
+  let src_int_lit: i64 = match v {
+    ir.Value.Int(n) => n,
+    _ => 0,
+  };
 
   let mut out: Vec[String] = Vec();
+  if !src_is_float && src_is_int_lit && int_literal_always_fits_dst_kind(dst.kind, src_int_lit) {
+    out.push("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, dst_ty)).concat(")").concat(v_text).concat(";"));
+    return out;
+  }
   if !src_is_float && !int_cast_needs_runtime_check(dst.kind, src.kind) {
     out.push("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, dst_ty)).concat(")").concat(v_text).concat(";"));
     return out;
