@@ -1032,6 +1032,14 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
   let dst_cty: String = c_type(pool, ty);
   let a_text: String = c_value(a);
   let b_text: String = c_value(b);
+  let b_is_int_lit: bool = match b {
+    ir.Value.Int(_n) => true,
+    _ => false,
+  };
+  let b_int_lit: i64 = match b {
+    ir.Value.Int(n) => n,
+    _ => 0,
+  };
 
   // + - * and bitwise ops: wrap on integer bit width. Avoid signed overflow UB by operating on unsigned peers.
   let is_mul: bool = match op { ir.BinOpKind.Mul => true, _ => false };
@@ -1060,20 +1068,39 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
   let is_shr: bool = match op { ir.BinOpKind.Shr => true, _ => false };
   if is_shl || is_shr {
     let bits_expr: String = int_bits_expr(t.kind);
+    let bits_const: i32 = int_bits(t.kind);
     let uty: String = unsigned_peer_c_type(t.kind);
     let bitcast_fn: String = signed_from_unsigned_bitcast_fn(t.kind);
     let mut out3: Vec[String] = Vec();
     out3.push("  {");
     out3.push("    ".concat(uty).concat(" ua = (").concat(uty).concat(")").concat(a_text).concat(";"));
     if is_signed_int_kind(t.kind) {
-      out3.push("    int64_t sh = (int64_t)".concat(b_text).concat(";"));
-      let lchk: String = "    if (sh < 0 || sh >= (int64_t)".concat(bits_expr).concat(") { vox_host_panic(\"shift count out of range\"); }");
-      out3.push(lchk);
-      out3.push("    uint64_t n = (uint64_t)sh;");
+      if b_is_int_lit && bits_const > 0 {
+        if b_int_lit < 0 || b_int_lit >= (bits_const as i64) {
+          out3.push("    vox_host_panic(\"shift count out of range\");");
+          out3.push("    uint64_t n = 0;");
+        } else {
+          out3.push("    uint64_t n = (uint64_t)".concat(b_int_lit.to_string()).concat(";"));
+        }
+      } else {
+        out3.push("    int64_t sh = (int64_t)".concat(b_text).concat(";"));
+        let lchk: String = "    if (sh < 0 || sh >= (int64_t)".concat(bits_expr).concat(") { vox_host_panic(\"shift count out of range\"); }");
+        out3.push(lchk);
+        out3.push("    uint64_t n = (uint64_t)sh;");
+      }
     } else {
-      out3.push("    uint64_t n = (uint64_t)".concat(b_text).concat(";"));
-      let lchk2: String = "    if (n >= (uint64_t)".concat(bits_expr).concat(") { vox_host_panic(\"shift count out of range\"); }");
-      out3.push(lchk2);
+      if b_is_int_lit && bits_const > 0 {
+        if b_int_lit < 0 || b_int_lit >= (bits_const as i64) {
+          out3.push("    vox_host_panic(\"shift count out of range\");");
+          out3.push("    uint64_t n = 0;");
+        } else {
+          out3.push("    uint64_t n = (uint64_t)".concat(b_int_lit.to_string()).concat(";"));
+        }
+      } else {
+        out3.push("    uint64_t n = (uint64_t)".concat(b_text).concat(";"));
+        let lchk2: String = "    if (n >= (uint64_t)".concat(bits_expr).concat(") { vox_host_panic(\"shift count out of range\"); }");
+        out3.push(lchk2);
+      }
     }
     if is_shl {
       out3.push("    ".concat(uty).concat(" ur = (").concat(uty).concat(")(ua << n);"));
@@ -1105,14 +1132,6 @@ fn emit_instr_binop_int(pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a:
   let is_div: bool = match op { ir.BinOpKind.Div => true, _ => false };
   let is_mod: bool = match op { ir.BinOpKind.Mod => true, _ => false };
   if is_div || is_mod {
-    let b_is_int_lit: bool = match b {
-      ir.Value.Int(_n) => true,
-      _ => false,
-    };
-    let b_int_lit: i64 = match b {
-      ir.Value.Int(n) => n,
-      _ => 0,
-    };
     let mut out2: Vec[String] = Vec();
     if b_is_int_lit {
       if b_int_lit == 0 {
