@@ -82,6 +82,10 @@ pub struct ImportsResult {
   pub imps: Imports,
 }
 
+struct ImportsCacheEntry { key: String, imps: Imports }
+
+struct FindImportsCachedResult { cache: Vec[ImportsCacheEntry], ar: ImportsResult }
+
 struct ResolveImportResult { ok: bool, err: TcError, path: String, mod_idx: i32 }
 
 fn ok_aliases(xs: Vec[ImportAlias]) -> ImportAliasesResult {
@@ -229,6 +233,37 @@ pub fn find_alias(aliases: Vec[ImportAlias], name: String) -> String {
 fn qname(mod_path: String, name: String) -> String {
   if mod_path == "" { return name; }
   return mod_path.concat("::").concat(name);
+}
+
+fn imports_cache_key(mod_path: String, file: String) -> String {
+  return mod_path.concat("\n").concat(file);
+}
+
+fn build_imports_cached(w: World, mod_path: String, mod_imports: Vec[ast.ImportDecl], file: String, cache0: Vec[ImportsCacheEntry]) -> FindImportsCachedResult {
+  let key: String = imports_cache_key(mod_path, file);
+  let mut lo: i32 = 0;
+  let mut hi: i32 = cache0.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let ce: ImportsCacheEntry = cache0.get(mid);
+    if ce.key == key {
+      return FindImportsCachedResult {
+        cache: cache0,
+        ar: ImportsResult { ok: true, err: TcError.None, imps: ce.imps },
+      };
+    }
+    if ce.key < key {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  let ar: ImportsResult = build_imports(w, mod_path, mod_imports, file);
+  if !ar.ok { return FindImportsCachedResult { cache: cache0, ar: ar }; }
+  let mut cache: Vec[ImportsCacheEntry] = cache0;
+  cache.insert(lo, ImportsCacheEntry { key: key, imps: ar.imps });
+  return FindImportsCachedResult { cache: cache, ar: ar };
 }
 
 fn contains_alias(aliases: Vec[ImportAlias], name: String) -> bool {
