@@ -360,6 +360,7 @@ fn find_imports_cached(w: tc.World, mod_path: String, mod_imports: Vec[ast.Impor
 }
 
 struct FindImplSigResult { found: bool, sig: tc.ImplSig }
+struct ImplSigIndexEntry { mod_path: String, decl_idx: i32, idx: i32 }
 
 fn empty_impl_sig() -> tc.ImplSig {
   return tc.ImplSig {
@@ -399,14 +400,64 @@ fn empty_irgen_func_sig(ret: i32) -> tc.FuncSig {
   };
 }
 
-fn find_impl_sig(ctx: tc.Ctx, mod_path: String, decl_idx: i32) -> FindImplSigResult {
+fn impl_sig_index_less(a: ImplSigIndexEntry, b: ImplSigIndexEntry) -> bool {
+  if a.mod_path < b.mod_path { return true; }
+  if a.mod_path > b.mod_path { return false; }
+  return a.decl_idx < b.decl_idx;
+}
+
+fn build_impl_sig_index(ctx: tc.Ctx) -> Vec[ImplSigIndexEntry] {
+  let mut out: Vec[ImplSigIndexEntry] = Vec();
   let mut i: i32 = 0;
   while i < ctx.impls.len() {
     let s: tc.ImplSig = ctx.impls.get(i);
-    if s.mod_path == mod_path && s.decl_idx == decl_idx {
-      return FindImplSigResult { found: true, sig: s };
-    }
+    out.push(ImplSigIndexEntry { mod_path: s.mod_path, decl_idx: s.decl_idx, idx: i });
     i = i + 1;
+  }
+  let mut sorted: bool = true;
+  let mut si: i32 = 1;
+  while si < out.len() {
+    if impl_sig_index_less(out.get(si), out.get(si - 1)) {
+      sorted = false;
+      break;
+    }
+    si = si + 1;
+  }
+  if sorted { return out; }
+  let mut gap: i32 = out.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < out.len() {
+      let keep: ImplSigIndexEntry = out.get(oi);
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: ImplSigIndexEntry = out.get(j - gap);
+        if !impl_sig_index_less(keep, prev) { break; }
+        out.set(j, prev);
+        j = j - gap;
+      }
+      out.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return out;
+}
+
+fn find_impl_sig_from_index(ctx: tc.Ctx, ix: Vec[ImplSigIndexEntry], mod_path: String, decl_idx: i32) -> FindImplSigResult {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = ix.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let it: ImplSigIndexEntry = ix.get(mid);
+    if it.mod_path == mod_path && it.decl_idx == decl_idx {
+      return FindImplSigResult { found: true, sig: ctx.impls.get(it.idx) };
+    }
+    if it.mod_path < mod_path || (it.mod_path == mod_path && it.decl_idx < decl_idx) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
   }
   return FindImplSigResult { found: false, sig: empty_impl_sig() };
 }
@@ -414,6 +465,7 @@ fn find_impl_sig(ctx: tc.Ctx, mod_path: String, decl_idx: i32) -> FindImplSigRes
 pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
   let mut ctx: tc.Ctx = ctx0;
   let mut p: ir.Program = ir.program(ctx.pool);
+  let impl_sig_index: Vec[ImplSigIndexEntry] = build_impl_sig_index(ctx);
 
   // Nominal defs from collected signatures.
   let mut si: i32 = 0;
@@ -550,7 +602,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
     let mut ii: i32 = 0;
     while ii < m.prog.impls.len() {
       let id: ast.ImplDecl = m.prog.impls.get(ii);
-      let ir0: FindImplSigResult = find_impl_sig(ctx, m.path, ii);
+      let ir0: FindImplSigResult = find_impl_sig_from_index(ctx, impl_sig_index, m.path, ii);
       if !ir0.found { return err0(p, "missing impl signature"); }
 
       let mut msi: i32 = 0;
