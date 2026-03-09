@@ -930,6 +930,28 @@ fn emit_instr_int_cast_checked(pool: ir.TyPool, tid: i32, dst_ty: i32, src_ty: i
   let src: ir.Ty = ir.ty_pool_get(pool, src_ty);
   let v_text: String = c_value(v);
 
+  let dst_is_unsigned: bool = is_unsigned_int_kind(dst.kind);
+  let src_is_unsigned: bool = is_unsigned_int_kind(src.kind);
+  let src_is_float: bool = src.kind == ir.TyKind.F32 || src.kind == ir.TyKind.F64;
+  let src_is_int_lit: bool = match v {
+    ir.Value.Int(_n) => true,
+    _ => false,
+  };
+  let src_int_lit: i64 = match v {
+    ir.Value.Int(n) => n,
+    _ => 0,
+  };
+
+  let mut out: Vec[String] = Vec();
+  if !src_is_float && src_is_int_lit && int_literal_always_fits_dst_kind(dst.kind, src_int_lit) {
+    out.push("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, dst_ty)).concat(")").concat(v_text).concat(";"));
+    return out;
+  }
+  if !src_is_float && !int_cast_needs_runtime_check(dst.kind, src.kind) {
+    out.push("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, dst_ty)).concat(")").concat(v_text).concat(";"));
+    return out;
+  }
+
   let src_name: String = match src.kind {
     ir.TyKind.I8 => "i8",
     ir.TyKind.U8 => "u8",
@@ -983,27 +1005,6 @@ fn emit_instr_int_cast_checked(pool: ir.TyPool, tid: i32, dst_ty: i32, src_ty: i
       _ => "0",
     };
 
-  let dst_is_unsigned: bool = is_unsigned_int_kind(dst.kind);
-  let src_is_unsigned: bool = is_unsigned_int_kind(src.kind);
-  let src_is_float: bool = src.kind == ir.TyKind.F32 || src.kind == ir.TyKind.F64;
-  let src_is_int_lit: bool = match v {
-    ir.Value.Int(_n) => true,
-    _ => false,
-  };
-  let src_int_lit: i64 = match v {
-    ir.Value.Int(n) => n,
-    _ => 0,
-  };
-
-  let mut out: Vec[String] = Vec();
-  if !src_is_float && src_is_int_lit && int_literal_always_fits_dst_kind(dst.kind, src_int_lit) {
-    out.push("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, dst_ty)).concat(")").concat(v_text).concat(";"));
-    return out;
-  }
-  if !src_is_float && !int_cast_needs_runtime_check(dst.kind, src.kind) {
-    out.push("  ".concat(c_temp_name(tid)).concat(" = (").concat(c_type(pool, dst_ty)).concat(")").concat(v_text).concat(";"));
-    return out;
-  }
   if src_is_float {
     if dst_is_unsigned {
       let line0: String = "  if (!isfinite((double)".concat(v_text)
