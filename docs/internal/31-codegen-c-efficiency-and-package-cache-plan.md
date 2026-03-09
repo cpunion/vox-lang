@@ -342,6 +342,7 @@ Invalidate unit on any of:
 - 2026-03-09: removed codegen-injected `rt_atomic_*` runtime-core C helpers from `emit_runtime_core`; std atomic paths now exclusively lower through IR atomic instructions (`@atomic_*` -> C11 `atomic_*` in instr lowering) instead of keeping an extra helper export surface.
 - 2026-03-09: codegen hot-path emission now caches per-instruction operand text once in `emit_instr_int_cast_checked` and `emit_instr_binop_int` (instead of repeatedly re-materializing `c_value(...)`); local no-build-cache profile on `vox build --driver=tool` shows compile `codegen` dropping from ~2.81s to ~2.75-2.76s with unchanged output semantics.
 - 2026-03-09: integer `Div`/`Mod` emission now special-cases literal divisors in `emit_instr_binop_int`: nonzero literals skip redundant `division by zero` guards, and signed literal divisors other than `-1` skip redundant `division overflow` guards. Added targeted codegen regressions (`test_codegen_int_div_const_*`) to keep constant-divisor guard semantics stable.
+- 2026-03-09: shift emission now also special-cases fixed-width literal shift counts in `emit_instr_binop_int`: in-range literals skip dynamic `shift count out of range` checks, while out-of-range literals emit a direct panic path. Added regressions `test_codegen_shift_const_in_range_skips_shift_guard` and `test_codegen_shift_const_out_of_range_keeps_shift_guard`.
 
 ## 5. Validation Gates
 
