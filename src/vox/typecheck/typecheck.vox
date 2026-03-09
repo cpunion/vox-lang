@@ -149,8 +149,7 @@ pub fn world_add(w: World, path: String, prog: ast.Program) -> World {
 }
 
 struct FindImplByDeclResult { found: bool, sig: ImplSig }
-struct ImplByDeclCacheEntry { mod_path: String, decl_idx: i32, r: FindImplByDeclResult }
-struct FindImplByDeclCachedResult { cache: Vec[ImplByDeclCacheEntry], r: FindImplByDeclResult }
+struct ImplByDeclIndexEntry { mod_path: String, decl_idx: i32, impl_idx: i32 }
 
 fn empty_impl_sig() -> ImplSig {
   return ImplSig {
@@ -169,47 +168,78 @@ fn empty_impl_sig() -> ImplSig {
   };
 }
 
-fn find_impl_by_decl(ctx: Ctx, mod_path: String, decl_idx: i32) -> FindImplByDeclResult {
+fn impl_by_decl_index_entry_less(a: ImplByDeclIndexEntry, b: ImplByDeclIndexEntry) -> bool {
+  if a.mod_path < b.mod_path { return true; }
+  if a.mod_path > b.mod_path { return false; }
+  if a.decl_idx < b.decl_idx { return true; }
+  if a.decl_idx > b.decl_idx { return false; }
+  return a.impl_idx < b.impl_idx;
+}
+
+fn impl_by_decl_index_entry_key_eq(a: ImplByDeclIndexEntry, b: ImplByDeclIndexEntry) -> bool {
+  return a.mod_path == b.mod_path && a.decl_idx == b.decl_idx;
+}
+
+fn build_impl_by_decl_index(entries0: Vec[ImplSig]) -> Vec[ImplByDeclIndexEntry] {
+  let mut entries: Vec[ImplByDeclIndexEntry] = Vec();
   let mut i: i32 = 0;
-  while i < ctx.impls.len() {
-    let s: ImplSig = ctx.impls.get(i);
-    if s.mod_path == mod_path && s.decl_idx == decl_idx {
-      return FindImplByDeclResult { found: true, sig: s };
-    }
+  while i < entries0.len() {
+    let s: ImplSig = entries0.get(i);
+    entries.push(ImplByDeclIndexEntry { mod_path: s.mod_path, decl_idx: s.decl_idx, impl_idx: i });
     i = i + 1;
   }
-  return FindImplByDeclResult { found: false, sig: empty_impl_sig() };
+  if entries.len() <= 1 { return entries; }
+
+  let mut gap: i32 = entries.len() / 2;
+  while gap > 0 {
+    let mut ei: i32 = gap;
+    while ei < entries.len() {
+      let keep: ImplByDeclIndexEntry = entries.get(ei);
+      let mut j: i32 = ei;
+      while j >= gap {
+        let prev: ImplByDeclIndexEntry = entries.get(j - gap);
+        if !impl_by_decl_index_entry_less(keep, prev) { break; }
+        entries.set(j, prev);
+        j = j - gap;
+      }
+      entries.set(j, keep);
+      ei = ei + 1;
+    }
+    gap = gap / 2;
+  }
+
+  let mut out: Vec[ImplByDeclIndexEntry] = Vec();
+  i = 0;
+  while i < entries.len() {
+    let keep: ImplByDeclIndexEntry = entries.get(i);
+    out.push(keep);
+    i = i + 1;
+    while i < entries.len() && impl_by_decl_index_entry_key_eq(entries.get(i), keep) {
+      i = i + 1;
+    }
+  }
+  return out;
 }
 
-fn impl_by_decl_cache_entry_eq(ce: ImplByDeclCacheEntry, mod_path: String, decl_idx: i32) -> bool {
-  return ce.mod_path == mod_path && ce.decl_idx == decl_idx;
-}
-
-fn impl_by_decl_cache_entry_less(ce: ImplByDeclCacheEntry, mod_path: String, decl_idx: i32) -> bool {
-  if ce.mod_path < mod_path { return true; }
-  if ce.mod_path > mod_path { return false; }
-  return ce.decl_idx < decl_idx;
-}
-
-fn find_impl_by_decl_cached(ctx: Ctx, mod_path: String, decl_idx: i32, cache0: Vec[ImplByDeclCacheEntry]) -> FindImplByDeclCachedResult {
+fn find_impl_by_decl_indexed(ctx: Ctx, index: Vec[ImplByDeclIndexEntry], mod_path: String, decl_idx: i32) -> FindImplByDeclResult {
   let mut lo: i32 = 0;
-  let mut hi: i32 = cache0.len();
+  let mut hi: i32 = index.len();
   while lo < hi {
     let mid: i32 = lo + ((hi - lo) / 2);
-    let ce: ImplByDeclCacheEntry = cache0.get(mid);
-    if impl_by_decl_cache_entry_eq(ce, mod_path, decl_idx) {
-      return FindImplByDeclCachedResult { cache: cache0, r: ce.r };
-    }
-    if impl_by_decl_cache_entry_less(ce, mod_path, decl_idx) {
+    let it: ImplByDeclIndexEntry = index.get(mid);
+    if it.mod_path < mod_path || (it.mod_path == mod_path && it.decl_idx < decl_idx) {
       lo = mid + 1;
     } else {
       hi = mid;
     }
   }
-  let r: FindImplByDeclResult = find_impl_by_decl(ctx, mod_path, decl_idx);
-  let mut cache: Vec[ImplByDeclCacheEntry] = cache0;
-  cache.insert(lo, ImplByDeclCacheEntry { mod_path: mod_path, decl_idx: decl_idx, r: r });
-  return FindImplByDeclCachedResult { cache: cache, r: r };
+  if lo < index.len() {
+    let hit: ImplByDeclIndexEntry = index.get(lo);
+    if hit.mod_path == mod_path && hit.decl_idx == decl_idx && hit.impl_idx >= 0 && hit.impl_idx < ctx.impls.len() {
+      return FindImplByDeclResult { found: true, sig: ctx.impls.get(hit.impl_idx) };
+    }
+  }
+  return FindImplByDeclResult { found: false, sig: empty_impl_sig() };
 }
 
 fn dummy_type_name() -> ast.TypeName {
@@ -231,7 +261,7 @@ fn synth_params(names: Vec[String]) -> Vec[ast.Param] {
 pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
   let w0: World = world_filter_by_file_build(c, w);
   let mut imports_cache: ImportsCache = imports_cache_empty();
-  let mut impl_by_decl_cache: Vec[ImplByDeclCacheEntry] = Vec();
+  let impl_by_decl_index: Vec[ImplByDeclIndexEntry] = build_impl_by_decl_index(c.impls);
   // Typecheck function/impl/default bodies (including generic bodies).
   let mut mi2: i32 = 0;
   while mi2 < w0.mods.len() {
@@ -256,9 +286,8 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
     let mut ii2: i32 = 0;
     while ii2 < m2.prog.impls.len() {
       let id: ast.ImplDecl = m2.prog.impls.get(ii2);
-      let fr0: FindImplByDeclCachedResult = find_impl_by_decl_cached(c, m2.path, ii2, impl_by_decl_cache);
-      impl_by_decl_cache = fr0.cache;
-      if !fr0.r.found { return TcResult { ok: false, err: type_error_at(id.sp, "missing impl sig") }; }
+      let fr0: FindImplByDeclResult = find_impl_by_decl_indexed(c, impl_by_decl_index, m2.path, ii2);
+      if !fr0.found { return TcResult { ok: false, err: type_error_at(id.sp, "missing impl sig") }; }
 
       let ir0: FindImportsCachedResult = build_imports_cached(w0, m2.path, m2.prog.imports, id.file, imports_cache);
       imports_cache = ir0.cache;
@@ -268,7 +297,7 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
       let mut mdi: i32 = 0;
       while mdi < id.methods.len() {
         let md: ast.FuncDecl = id.methods.get(mdi);
-        let mf: FindImplMethodResult = find_impl_method(fr0.r.sig, md.name);
+        let mf: FindImplMethodResult = find_impl_method(fr0.sig, md.name);
         if !mf.found { return TcResult { ok: false, err: type_error_at(md.sp, "missing impl method sig") }; }
         // Use lowered name for async methods so lowering metadata lookup is unambiguous.
         let md2: ast.FuncDecl = ast.FuncDecl {
@@ -301,12 +330,12 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
 
       // Typecheck synthesized default trait methods lowered into impl signatures.
       let mut mi3: i32 = 0;
-      while mi3 < fr0.r.sig.methods.len() {
-        let ms: ImplMethodSig = fr0.r.sig.methods.get(mi3);
+      while mi3 < fr0.sig.methods.len() {
+        let ms: ImplMethodSig = fr0.sig.methods.get(mi3);
         if ms.from_default {
           let mut is_async: bool = false;
-          if !fr0.r.sig.is_inherent {
-            let tf: FindTraitResult = find_trait(c, fr0.r.sig.trait_mod_path, fr0.r.sig.trait_name);
+          if !fr0.sig.is_inherent {
+            let tf: FindTraitResult = find_trait(c, fr0.sig.trait_mod_path, fr0.sig.trait_name);
             if tf.found {
               let tmf: FindTraitMethodResult = find_trait_method(tf.sig, ms.name);
               if tmf.found { is_async = tmf.m.is_async; }
