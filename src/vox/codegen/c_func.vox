@@ -709,16 +709,6 @@ fn mark_live_from_term(flags0: Vec[bool], t: ir.Term) -> Vec[bool] {
   };
 }
 
-fn temp_flags_true_count(flags: Vec[bool]) -> i32 {
-  let mut n: i32 = 0;
-  let mut i: i32 = 0;
-  while i < flags.len() {
-    if flags.get(i) { n = n + 1; }
-    i = i + 1;
-  }
-  return n;
-}
-
 fn bool_flags_equal(a: Vec[bool], b: Vec[bool]) -> bool {
   if a.len() != b.len() { return false; }
   let mut i: i32 = 0;
@@ -729,12 +719,93 @@ fn bool_flags_equal(a: Vec[bool], b: Vec[bool]) -> bool {
   return true;
 }
 
-struct ClosureInstrPos { bi: i32, ii: i32, dst: i32 }
+struct ClosureInstrDeps { next_same_dst: i32, deps: Vec[i32] }
+
+fn temp_ids_push_from_value(ids0: Vec[i32], v: ir.Value) -> Vec[i32] {
+  return match v {
+    ir.Value.Temp(tid) => {
+      let mut ids: Vec[i32] = ids0;
+      ids.push(tid);
+      ids
+    },
+    _ => ids0,
+  };
+}
+
+fn temp_ids_push_from_values(ids0: Vec[i32], vals: Vec[ir.Value]) -> Vec[i32] {
+  let mut ids: Vec[i32] = ids0;
+  let mut i: i32 = 0;
+  while i < vals.len() {
+    ids = temp_ids_push_from_value(ids, vals.get(i));
+    i = i + 1;
+  }
+  return ids;
+}
+
+fn collect_operand_temp_ids(ins: ir.Instr) -> Vec[i32] {
+  return match ins {
+    ir.Instr.Const(_tid, _ty, _v) => Vec(),
+    ir.Instr.BinOp(_tid, _op, _ty, a, b) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), a), b),
+    ir.Instr.Cmp(_tid, _op, _oty, a, b) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), a), b),
+    ir.Instr.And(_tid, a, b) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), a), b),
+    ir.Instr.Or(_tid, a, b) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), a), b),
+    ir.Instr.Not(_tid, a) => temp_ids_push_from_value(Vec(), a),
+    ir.Instr.IntCast(_tid, _dst_ty, _src_ty, v) => temp_ids_push_from_value(Vec(), v),
+    ir.Instr.IntCastChecked(_tid, _dst_ty, _src_ty, v) => temp_ids_push_from_value(Vec(), v),
+    ir.Instr.FloatCast(_tid, _dst_ty, _src_ty, v) => temp_ids_push_from_value(Vec(), v),
+    ir.Instr.RangeCheck(_ty, v, _lo, _hi) => temp_ids_push_from_value(Vec(), v),
+    ir.Instr.SlotDecl(_sid, _ty) => Vec(),
+    ir.Instr.Store(_sid, v) => temp_ids_push_from_value(Vec(), v),
+    ir.Instr.Load(_tid, _ty, _sid) => Vec(),
+    ir.Instr.GlobalLoad(_tid, _ty, _name) => Vec(),
+    ir.Instr.GlobalStore(_ty, _name, v) => temp_ids_push_from_value(Vec(), v),
+    ir.Instr.AddrOfSlot(_tid, _ty, _sid) => Vec(),
+    ir.Instr.AddrOfFieldChain(_tid, _ty, _sid, _fields) => Vec(),
+    ir.Instr.RefLoad(_tid, _ty, recv) => temp_ids_push_from_value(Vec(), recv),
+    ir.Instr.RefStore(_ty, recv, v) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), recv), v),
+    ir.Instr.PtrRead(_tid, _ty, ptr) => temp_ids_push_from_value(Vec(), ptr),
+    ir.Instr.PtrWrite(_ty, ptr, v) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), ptr), v),
+    ir.Instr.PtrOffset(_tid, ptr, off) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), ptr), off),
+    ir.Instr.StructInit(_tid, _ty, fields) => {
+      let mut ids: Vec[i32] = Vec();
+      let mut i: i32 = 0;
+      while i < fields.len() {
+        ids = temp_ids_push_from_value(ids, fields.get(i).val);
+        i = i + 1;
+      }
+      ids
+    },
+    ir.Instr.FieldGet(_tid, _ty, recv, _field) => temp_ids_push_from_value(Vec(), recv),
+    ir.Instr.StoreField(_sid, _field, v) => temp_ids_push_from_value(Vec(), v),
+    ir.Instr.EnumInit(_tid, _ty, _variant, payload) => temp_ids_push_from_values(Vec(), payload),
+    ir.Instr.EnumTag(_tid, recv) => temp_ids_push_from_value(Vec(), recv),
+    ir.Instr.EnumPayload(_tid, _ty, recv, _variant, _idx) => temp_ids_push_from_value(Vec(), recv),
+    ir.Instr.VecNew(_tid, _vty, _elem) => Vec(),
+    ir.Instr.VecPush(_recv_slot, _elem, v) => temp_ids_push_from_value(Vec(), v),
+    ir.Instr.VecInsert(_recv_slot, _elem, idx, v) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), idx), v),
+    ir.Instr.VecSet(_recv_slot, _elem, idx, v) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), idx), v),
+    ir.Instr.VecClear(_recv_slot) => Vec(),
+    ir.Instr.VecExtend(_recv_slot, _other_slot) => Vec(),
+    ir.Instr.VecPop(_tid, _elem, _recv_slot) => Vec(),
+    ir.Instr.VecRemove(_tid, _elem, _recv_slot, idx) => temp_ids_push_from_value(Vec(), idx),
+    ir.Instr.VecLen(_tid, _recv_slot) => Vec(),
+    ir.Instr.VecGet(_tid, _elem, _recv_slot, idx) => temp_ids_push_from_value(Vec(), idx),
+    ir.Instr.AtomicNew(_tid, _elem_ty, val) => temp_ids_push_from_value(Vec(), val),
+    ir.Instr.AtomicLoad(_tid, _elem_ty, h) => temp_ids_push_from_value(Vec(), h),
+    ir.Instr.AtomicStore(_elem_ty, h, val) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), h), val),
+    ir.Instr.AtomicFetchAdd(_tid, _elem_ty, h, delta) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), h), delta),
+    ir.Instr.AtomicSwap(_tid, _elem_ty, h, val) => temp_ids_push_from_value(temp_ids_push_from_value(Vec(), h), val),
+    ir.Instr.AtomicCAS(_tid, _elem_ty, h, expected, desired) => temp_ids_push_from_value(temp_ids_push_from_value(temp_ids_push_from_value(Vec(), h), expected), desired),
+    ir.Instr.AtomicDrop(_elem_ty, h) => temp_ids_push_from_value(Vec(), h),
+    ir.Instr.Call(_has_dst, _tid, _ret_ty, _name, args) => temp_ids_push_from_values(Vec(), args),
+  };
+}
 
 fn collect_live_temps(pool: ir.TyPool, f: ir.Func, live_slots: Vec[bool]) -> Vec[bool] {
   // Seed from always-kept instruction operands and terminators.
   let mut live: Vec[bool] = Vec();
-  let mut closure_instrs: Vec[ClosureInstrPos] = Vec();
+  let mut closure_instrs: Vec[ClosureInstrDeps] = Vec();
+  let mut closure_heads_by_dst: Vec[i32] = Vec();
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
     let b: ir.Block = f.blocks.get(bi);
@@ -746,7 +817,12 @@ fn collect_live_temps(pool: ir.TyPool, f: ir.Func, live_slots: Vec[bool]) -> Vec
         if dst == -1 || !instr_can_drop_when_dead(pool, ins) {
           live = mark_live_from_instr_operands(live, ins);
         } else {
-          closure_instrs.push(ClosureInstrPos { bi: bi, ii: ii, dst: dst });
+          while closure_heads_by_dst.len() <= dst { closure_heads_by_dst.push(-1); }
+          let next_same_dst: i32 = closure_heads_by_dst.get(dst);
+          let deps: Vec[i32] = collect_operand_temp_ids(ins);
+          let idx: i32 = closure_instrs.len();
+          closure_instrs.push(ClosureInstrDeps { next_same_dst: next_same_dst, deps: deps });
+          closure_heads_by_dst.set(dst, idx);
         }
       }
       ii = ii + 1;
@@ -755,21 +831,48 @@ fn collect_live_temps(pool: ir.TyPool, f: ir.Func, live_slots: Vec[bool]) -> Vec
     bi = bi + 1;
   }
 
-  // Close over temp defs that must be kept because their result is live.
-  let mut prev_live_count: i32 = -1;
-  let mut live_count: i32 = temp_flags_true_count(live);
-  while live_count != prev_live_count {
-    prev_live_count = live_count;
-    let mut i2: i32 = 0;
-    while i2 < closure_instrs.len() {
-      let pos: ClosureInstrPos = closure_instrs.get(i2);
-      if temp_flag_get(live, pos.dst) {
-        let ins2: ir.Instr = f.blocks.get(pos.bi).instrs.get(pos.ii);
-        live = mark_live_from_instr_operands(live, ins2);
-      }
-      i2 = i2 + 1;
+  // Close over drop-safe temp defs using a destination-indexed worklist.
+  let mut queue: Vec[i32] = Vec();
+  let mut queued: Vec[bool] = Vec();
+  let mut i0: i32 = 0;
+  while i0 < live.len() {
+    queued.push(false);
+    i0 = i0 + 1;
+  }
+  let mut tid0: i32 = 0;
+  while tid0 < live.len() {
+    if live.get(tid0) {
+      queue.push(tid0);
+      queued.set(tid0, true);
     }
-    live_count = temp_flags_true_count(live);
+    tid0 = tid0 + 1;
+  }
+  let mut qi: i32 = 0;
+  while qi < queue.len() {
+    let tid: i32 = queue.get(qi);
+    qi = qi + 1;
+    if tid < 0 || tid >= closure_heads_by_dst.len() { continue; }
+    let mut ci: i32 = closure_heads_by_dst.get(tid);
+    while ci >= 0 {
+      let c: ClosureInstrDeps = closure_instrs.get(ci);
+      let mut di: i32 = 0;
+      while di < c.deps.len() {
+        let dep: i32 = c.deps.get(di);
+        if dep >= 0 {
+          while live.len() <= dep { live.push(false); }
+          while queued.len() <= dep { queued.push(false); }
+          if !live.get(dep) {
+            live.set(dep, true);
+            if !queued.get(dep) {
+              queue.push(dep);
+              queued.set(dep, true);
+            }
+          }
+        }
+        di = di + 1;
+      }
+      ci = c.next_same_dst;
+    }
   }
   return live;
 }
