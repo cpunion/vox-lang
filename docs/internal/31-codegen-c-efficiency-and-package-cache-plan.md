@@ -363,6 +363,7 @@ Invalidate unit on any of:
 - 2026-03-09: async lowering collection now reuses the same import cache in `collect_async_fns` (both prepare/finalize phases for module async fns, impl async methods, and async default trait methods), so `collect_async_prepare_one` / `collect_async_finalize_one` no longer rebuild imports per function body.
 - 2026-03-09: impl-candidate diagnostics in typecheck no longer do full O(n²) insertion-sort for every matching impl. `impl_match_candidates_text` now keeps only sorted top-`k` (`k=8`) candidates plus a total match counter, preserving output semantics (`", ..."` truncation) while reducing candidate-list construction cost on large impl sets.
 - 2026-03-09: removed duplicate param normalization passes in hot signature collection paths (`collect_funcs` and trait-method collection in `collect_traits`) by reusing normalized param types for projection-bound checks. On same-host A/B runs against `97101c0` with `VOX_TEST_RUN='*async*'`, total test time improved from `56.89s` to `56.41s` (~0.48s, ~0.8%), with unchanged known failure set (pre-existing).
+- 2026-03-09: `irgen.find_generic_func` now prebuilds one module-local `decl_idx -> impl_sig_idx` map before impl-method probes, replacing nested `m.prog.impls × ctx.impls` scans in generic impl-method lookup. Local no-build-cache A/B (`vox build --driver=tool`) improved from ~`10.90-10.97s` to ~`10.78-10.86s` (~`1-2%`) with unchanged output/tests.
 
 ## 5. Validation Gates
 
