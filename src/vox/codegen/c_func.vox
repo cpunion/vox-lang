@@ -24,9 +24,59 @@ fn idty_is_strictly_increasing_non_negative(v: Vec[IdTy]) -> bool {
   return true;
 }
 
+fn idty_can_use_dense_last_wins(v: Vec[IdTy], max_id: i32) -> bool {
+  if max_id < 0 { return false; }
+  // Guard sparse/huge ids (e.g. synthetic large ids in tests) to avoid large
+  // temporary vectors; fall back to sort-based path in those cases.
+  if max_id > 262144 { return false; }
+  let n: i32 = v.len();
+  if n <= 0 { return false; }
+  if max_id > n * 64 { return false; }
+  return true;
+}
+
+fn idty_dense_last_wins_sorted(v0: Vec[IdTy], max_id: i32) -> Vec[IdTy] {
+  let mut seen: Vec[bool] = Vec();
+  let mut tys: Vec[String] = Vec();
+  let mut i0: i32 = 0;
+  while i0 <= max_id {
+    seen.push(false);
+    tys.push("");
+    i0 = i0 + 1;
+  }
+  let mut i: i32 = 0;
+  while i < v0.len() {
+    let it: IdTy = v0.get(i);
+    if it.id >= 0 && it.id <= max_id {
+      seen.set(it.id, true);
+      tys.set(it.id, it.ty);
+    }
+    i = i + 1;
+  }
+  let mut out: Vec[IdTy] = Vec();
+  let mut id: i32 = 0;
+  while id <= max_id {
+    if seen.get(id) {
+      out.push(IdTy { id: id, ty: tys.get(id) });
+    }
+    id = id + 1;
+  }
+  return out;
+}
+
 fn idty_unique_sorted_last_wins(v0: Vec[IdTy]) -> Vec[IdTy] {
   if v0.len() == 0 { return v0; }
   if idty_is_strictly_increasing_non_negative(v0) { return v0; }
+  let mut max_id: i32 = -1;
+  let mut mi: i32 = 0;
+  while mi < v0.len() {
+    let id: i32 = v0.get(mi).id;
+    if id > max_id { max_id = id; }
+    mi = mi + 1;
+  }
+  if idty_can_use_dense_last_wins(v0, max_id) {
+    return idty_dense_last_wins_sorted(v0, max_id);
+  }
   let mut ws: Vec[IdTySeq] = Vec();
   let mut i: i32 = 0;
   while i < v0.len() {
@@ -649,6 +699,16 @@ fn temp_flags_true_count(flags: Vec[bool]) -> i32 {
     i = i + 1;
   }
   return n;
+}
+
+fn bool_flags_equal(a: Vec[bool], b: Vec[bool]) -> bool {
+  if a.len() != b.len() { return false; }
+  let mut i: i32 = 0;
+  while i < a.len() {
+    if a.get(i) != b.get(i) { return false; }
+    i = i + 1;
+  }
+  return true;
 }
 
 struct ClosureInstrPos { bi: i32, ii: i32, dst: i32 }
@@ -1841,7 +1901,11 @@ pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, ffi_order: Vec[i32]
   let seed_slots: Vec[bool] = collect_live_slots_all_reads(f);
   let live_temps0: Vec[bool] = collect_live_temps(pool, f, seed_slots);
   let live_slots: Vec[bool] = collect_live_slots_filtered(pool, f, live_temps0, seed_slots);
-  let live_temps: Vec[bool] = collect_live_temps(pool, f, live_slots);
+  let live_temps: Vec[bool] = if bool_flags_equal(live_slots, seed_slots) {
+    live_temps0
+  } else {
+    collect_live_temps(pool, f, live_slots)
+  };
   // `live_temps` is already derived from read-use closure on kept instructions;
   // reuse it directly to avoid an extra full-function scan.
   let read_temps: Vec[bool] = live_temps;
