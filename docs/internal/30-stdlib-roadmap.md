@@ -24,7 +24,7 @@ Status: active.
   - 补 `std/io` 行为测试 + `vox/typecheck` / `vox/compile` smoke 回归
 - [x] `std/fs` 路径拼接与规范化 helper（避免调用方重复字符串拼接）
   - `Path.clean/join/base_name/dir_name/ext/stem/is_abs` + free-function 同名入口
-- [ ] A44-1 `String -> C` 边界收敛（先迁 payload，后收敛路径类接口）
+- [x] A44-1 `String -> C` 边界收敛（先迁 payload，后收敛路径类接口）
   - [x] 文档盘点当前边界（见 `docs/internal/17-ffi-interop.md` 3.2）
   - [x] `std/net::NetConn.try_send` 已切到 `std/sys::socket_send(handle, text as const rawptr, len)`，不新增 `c_runtime` 网络符号
     - windows-x86 目前为占位实现（FFI 缺少按符号 calling convention，无法安全声明 winsock `send` 的 stdcall 变体）
@@ -34,8 +34,8 @@ Status: active.
   - [x] `c_runtime` 已移除未被源码使用的 `vox_host_sys_write` 导出
   - [x] `std/sys::open_read` Windows x86 已从占位切为 `_sopen_s(&mut i32, ...)` 实现（amd64 保持 `_sopen_dispatch`）
   - [x] `std/sys::socket_send` 已收敛为 `socket_send(handle, const rawptr, len)`，`std/net::NetConn.try_send` 显式做 `String -> ptr+len` 适配
-  - [ ] 其余 payload 类接口继续迁移到 `ptr + len`
-  - [ ] 路径/命令类接口保留阶段性适配，等待更完整文本/指针模型后继续收敛
+  - [x] 其余 payload 类接口继续迁移到 `ptr + len`（当前 std 载荷边界已统一以 `rawptr + len` 为主）
+  - [x] 路径/命令类接口保留阶段性适配：`std/sys` 各平台 `open/access/mkdir/creat` 统一改为显式 `c_string_dup_nul` 适配（不再隐式依赖输入文本的 C-string 形态）
 
 ## S2 中期（P1）
 

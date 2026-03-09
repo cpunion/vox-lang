@@ -666,6 +666,7 @@ Drop（迁出）：
 - `std/net` 当前 `connect/send/recv/close/wait_*` 全部经 `std/sys` 路径，不再在 `std/net` 直接绑定 `vox_impl_tcp_*`。
 - `std/os` 当前仅承载 `args/exe_path/getenv`（通过 `vox_impl_*` FFI）；文件语义 `read_file/walk_files` 已下沉到 `std/fs` 内部；`std/time::now_ns` 当前通过 `vox_impl_now_ns`。
 - `std/time::yield_now` 已从 `c_runtime` 特殊实现下沉到各平台 `std/sys` 直接 FFI（linux/darwin/wasm: `sched_yield`，windows: `usleep(0)`），并删除 `c_runtime` 中 `vox_impl_yield_now`。
+- `std/sys` 各平台 `open/access/mkdir/creat` 已统一显式 `c_string_dup_nul` 适配（调用前构造 NUL 缓冲、调用后释放），减少路径类接口对隐式 `String -> C` 边界转换的依赖。
 - `std/runtime` 已去除 `args/exe/getenv/time/os/tcp/mutex` 入口，仅保留 intrinsic/wake/atomic。
 - `std/runtime` 与 `std/async/wake` 的原子读写/CAS/fetch_add 已切到 `@atomic_*` 内建，不再直接 FFI 绑定 `rt_atomic_*`。
 - `std/sync::Mutex` 底层改为复用 atomic 句柄；`std/os` 已移除 `mutex_i32/i64_*`；`c_runtime` 已删除 `vox_impl/vox_host_mutex_i32/i64_*` 实现与导出。
