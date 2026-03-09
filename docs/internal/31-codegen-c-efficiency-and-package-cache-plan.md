@@ -341,6 +341,7 @@ Invalidate unit on any of:
 - 2026-03-08: removed sem-key C-sidecar reuse path (`.build.cache.c-key` and sem-hit/C-miss C copy shortcut) from `vox build`/`vox test`. Reason: generated C embeds loaded `.c` sources (`emit_c_sources`), so sem-key (which intentionally excludes non-`.vox`) is insufficient to prove C-source freshness; reusing old C across compile-key churn can produce stale outputs.
 - 2026-03-09: removed codegen-injected `rt_atomic_*` runtime-core C helpers from `emit_runtime_core`; std atomic paths now exclusively lower through IR atomic instructions (`@atomic_*` -> C11 `atomic_*` in instr lowering) instead of keeping an extra helper export surface.
 - 2026-03-09: codegen hot-path emission now caches per-instruction operand text once in `emit_instr_int_cast_checked` and `emit_instr_binop_int` (instead of repeatedly re-materializing `c_value(...)`); local no-build-cache profile on `vox build --driver=tool` shows compile `codegen` dropping from ~2.81s to ~2.75-2.76s with unchanged output semantics.
+- 2026-03-09: integer `Div`/`Mod` emission now special-cases literal divisors in `emit_instr_binop_int`: nonzero literals skip redundant `division by zero` guards, and signed literal divisors other than `-1` skip redundant `division overflow` guards. Added targeted codegen regressions (`test_codegen_int_div_const_*`) to keep constant-divisor guard semantics stable.
 
 ## 5. Validation Gates
 
