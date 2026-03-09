@@ -129,16 +129,39 @@ selfhost_cache_key() {
   )
 }
 
+has_newer_selfhost_inputs() {
+  local cache_key_file="$1"
+  local bootstrap_bin="$2"
+  (
+    cd "$WORK_DIR"
+    if [[ -f "vox.toml" && "vox.toml" -nt "$cache_key_file" ]]; then return 0; fi
+    if find src -type f -name '*.vox' -newer "$cache_key_file" -print -quit | grep -q .; then return 0; fi
+    return 1
+  )
+  local newer_inputs_status=$?
+  if [[ "$newer_inputs_status" == "0" ]]; then return 0; fi
+  if ! is_self_bootstrap_path "$bootstrap_bin" && [[ "$bootstrap_bin" -nt "$cache_key_file" ]]; then return 0; fi
+  return 1
+}
+
 should_rebuild_selfhost() {
   local bootstrap_bin="$1"
   local out_path="$WORK_DIR/$OUT_REL"
   local cache_key_file="${out_path}.cache.key"
   if [[ "$FORCE_REBUILD" == "1" ]]; then return 0; fi
   if [[ ! -f "$out_path" && ! -f "${out_path}.exe" ]]; then return 0; fi
+  if [[ ! -f "$cache_key_file" ]]; then return 0; fi
+
+  # Fast path: when none of the key inputs are newer than the key stamp,
+  # the hash cannot change and we can skip the full-tree hash walk.
+  if ! has_newer_selfhost_inputs "$cache_key_file" "$bootstrap_bin"; then
+    return 1
+  fi
+
   local new_key
   local old_key=""
   new_key="$(selfhost_cache_key "$bootstrap_bin")"
-  if [[ -f "$cache_key_file" ]]; then old_key="$(cat "$cache_key_file")"; fi
+  old_key="$(cat "$cache_key_file")"
   if [[ "$new_key" != "$old_key" ]]; then
     return 0
   fi
