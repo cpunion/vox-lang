@@ -114,11 +114,57 @@ fn synth_params(names: Vec[String]) -> Vec[ast.Param] {
   return out;
 }
 
-fn find_impl_method_decl_idx(id: ast.ImplDecl, name: String) -> i32 {
+struct ImplMethodDeclIndexEntry { name: String, idx: i32 }
+
+fn build_impl_method_decl_index(id: ast.ImplDecl) -> Vec[ImplMethodDeclIndexEntry] {
+  let mut out: Vec[ImplMethodDeclIndexEntry] = Vec();
   let mut i: i32 = 0;
   while i < id.methods.len() {
-    if id.methods.get(i).name == name { return i; }
+    out.push(ImplMethodDeclIndexEntry { name: id.methods.get(i).name, idx: i });
     i = i + 1;
+  }
+  let mut sorted: bool = true;
+  let mut si: i32 = 1;
+  while si < out.len() {
+    if out.get(si - 1).name > out.get(si).name {
+      sorted = false;
+      break;
+    }
+    si = si + 1;
+  }
+  if sorted { return out; }
+  let mut gap: i32 = out.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < out.len() {
+      let keep: ImplMethodDeclIndexEntry = out.get(oi);
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: ImplMethodDeclIndexEntry = out.get(j - gap);
+        if prev.name <= keep.name { break; }
+        out.set(j, prev);
+        j = j - gap;
+      }
+      out.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return out;
+}
+
+fn find_impl_method_decl_idx_from_index(ix: Vec[ImplMethodDeclIndexEntry], name: String) -> i32 {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = ix.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let cur: ImplMethodDeclIndexEntry = ix.get(mid);
+    if cur.name == name { return cur.idx; }
+    if cur.name < name {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
   }
   return -1;
 }
@@ -216,6 +262,7 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
     let sig_idx: i32 = decl_impl_sig_idx.get(ii);
     if sig_idx != -1 {
       let id: ast.ImplDecl = m.prog.impls.get(ii);
+      let method_decl_index: Vec[ImplMethodDeclIndexEntry] = build_impl_method_decl_index(id);
       let isg: tc.ImplSig = ctx.impls.get(sig_idx);
       let mut mi: i32 = 0;
       while mi < isg.methods.len() {
@@ -248,7 +295,7 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
             };
             return FindFuncDeclResult { found: true, mod_path: ms.default_mod_path, fd: fd0 };
           } else {
-            let mdi: i32 = find_impl_method_decl_idx(id, ms.name);
+            let mdi: i32 = find_impl_method_decl_idx_from_index(method_decl_index, ms.name);
             if mdi != -1 {
               let md: ast.FuncDecl = id.methods.get(mdi);
               // `ms.sig.type_params` already includes impl-header + method generics.
@@ -602,6 +649,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
     let mut ii: i32 = 0;
     while ii < m.prog.impls.len() {
       let id: ast.ImplDecl = m.prog.impls.get(ii);
+      let method_decl_index: Vec[ImplMethodDeclIndexEntry] = build_impl_method_decl_index(id);
       let ir0: FindImplSigResult = find_impl_sig_from_index(ctx, impl_sig_index, m.path, ii);
       if !ir0.found { return err0(p, "missing impl signature"); }
 
@@ -614,7 +662,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         }
         let mut mdi: i32 = -1;
         if !mr0.from_default {
-          mdi = find_impl_method_decl_idx(id, mr0.name);
+          mdi = find_impl_method_decl_idx_from_index(method_decl_index, mr0.name);
           if mdi == -1 { return err0(p, "missing impl method decl"); }
         }
         tasks.push(FuncTask {
