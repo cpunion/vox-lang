@@ -4,27 +4,57 @@ import "vox/internal/text" as txt
 struct FindModResult { found: bool, idx: i32 }
 struct FindTwoModIdxsResult { left_idx: i32, right_idx: i32 }
 
-fn find_mod(w: World, path: String) -> FindModResult {
-  let ms: Vec[WorldModule] = w.mods;
+fn find_mod_idx_sorted(ms: Vec[WorldModule], path: String) -> i32 {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = ms.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let p: String = ms.get(mid).path;
+    if p == path { return mid; }
+    if p < path {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return -1;
+}
+
+fn find_mod_idx_linear(ms: Vec[WorldModule], path: String) -> i32 {
   let mut i: i32 = 0;
   while i < ms.len() {
-    if ms.get(i).path == path {
-      return FindModResult { found: true, idx: i };
-    }
+    if ms.get(i).path == path { return i; }
     i = i + 1;
   }
+  return -1;
+}
+
+fn find_mod(w: World, path: String) -> FindModResult {
+  let ms: Vec[WorldModule] = w.mods;
+  // Fast path: world modules are commonly path-ordered.
+  let idx_sorted: i32 = find_mod_idx_sorted(ms, path);
+  if idx_sorted != -1 { return FindModResult { found: true, idx: idx_sorted }; }
+  // Safety fallback: preserve behavior for any non-ordered input.
+  let idx_linear: i32 = find_mod_idx_linear(ms, path);
+  if idx_linear != -1 { return FindModResult { found: true, idx: idx_linear }; }
   return FindModResult { found: false, idx: -1 };
 }
 
 fn find_two_mod_idxs(w: World, left: String, right: String) -> FindTwoModIdxsResult {
   let ms: Vec[WorldModule] = w.mods;
-  let mut out: FindTwoModIdxsResult = FindTwoModIdxsResult { left_idx: -1, right_idx: -1 };
+  let mut out: FindTwoModIdxsResult = FindTwoModIdxsResult {
+    left_idx: find_mod_idx_sorted(ms, left),
+    right_idx: if left == right { -1 } else { find_mod_idx_sorted(ms, right) },
+  };
+  if left == right { out.right_idx = out.left_idx; }
+  if out.left_idx != -1 && out.right_idx != -1 { return out; }
+
+  // Preserve correctness on non-ordered inputs by only probing missing targets linearly.
   let mut i: i32 = 0;
-  while i < ms.len() {
+  while i < ms.len() && (out.left_idx == -1 || out.right_idx == -1) {
     let p: String = ms.get(i).path;
     if out.left_idx == -1 && p == left { out.left_idx = i; }
     if out.right_idx == -1 && p == right { out.right_idx = i; }
-    if out.left_idx != -1 && out.right_idx != -1 { return out; }
     i = i + 1;
   }
   return out;
