@@ -339,6 +339,7 @@ Invalidate unit on any of:
 - 2026-03-08: `build_cache_pkg_sem_source_keys_with_files` sem-hash path now uses a no-non-vox fast path (sem hash directly tracks full pkg hash until first non-`.vox` input) and only runs separate sem-hash updates after divergence, reducing duplicated per-file hash work on all-vox/common package sets while preserving sem-key equivalence.
 - 2026-03-08: test runner scheduling loop now tracks per-module running state via `module_busy` bitset instead of scanning `running` jobs for each queue candidate, reducing hot-loop scheduler overhead from O(queues * running) busy checks to O(queues) under parallel test execution while preserving module-serial execution semantics.
 - 2026-03-08: removed sem-key C-sidecar reuse path (`.build.cache.c-key` and sem-hit/C-miss C copy shortcut) from `vox build`/`vox test`. Reason: generated C embeds loaded `.c` sources (`emit_c_sources`), so sem-key (which intentionally excludes non-`.vox`) is insufficient to prove C-source freshness; reusing old C across compile-key churn can produce stale outputs.
+- 2026-03-09: removed codegen-injected `rt_atomic_*` runtime-core C helpers from `emit_runtime_core`; std atomic paths now exclusively lower through IR atomic instructions (`@atomic_*` -> C11 `atomic_*` in instr lowering) instead of keeping an extra helper export surface.
 
 ## 5. Validation Gates
 
