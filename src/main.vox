@@ -2552,25 +2552,13 @@ fn main() -> i32 {
       sem_key = sem_keep.sem_key;
       sem_dep_hashes = sem_keep.dep_hashes;
       list_cache_out = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), sem_key).concat(if test_json { ".list.json" } else { ".list.txt" });
-      let sem_read: BuildSemCacheReadResult = build_sem_cache_read_with_deps(sem_key);
-      sem_cache_hit = sem_read.hit;
-      if sem_cache_hit {
-        if sem_read.deps.len() != sem_dep_hashes.len() {
-          sem_cache_hit = false;
-        } else {
-          let mut sdi: i32 = 0;
-          while sdi < sem_dep_hashes.len() {
-            let a: q.ParseLoadDepHash = sem_read.deps.get(sdi);
-            let b: q.ParseLoadDepHash = sem_dep_hashes.get(sdi);
-            if a.pkg != b.pkg || a.export_sig_hash != b.export_sig_hash || a.type_sig_hash != b.type_sig_hash || a.impl_sig_hash != b.impl_sig_hash {
-              sem_cache_hit = false;
-              sdi = sem_dep_hashes.len();
-            } else {
-              sdi = sdi + 1;
-            }
-          }
-        }
+      let mut sem_dep_hashes_for_hit: Vec[q.ParseLoadDepHash] = Vec();
+      let mut sem_dep_i: i32 = 0;
+      while sem_dep_i < sem_dep_hashes.len() {
+        sem_dep_hashes_for_hit.push(sem_dep_hashes.get(sem_dep_i));
+        sem_dep_i = sem_dep_i + 1;
       }
+      sem_cache_hit = build_sem_cache_hit_with_deps(sem_key, sem_dep_hashes_for_hit);
       if sem_cache_hit && fs.exists(list_cache_out) {
         if cache_trace {
           print(
@@ -2705,6 +2693,7 @@ fn main() -> i32 {
     let mut query_shadow_state: q.ParseLoadShadowState = q.ParseLoadShadowState { key: "", predicted_hit: false };
     let mut pkg_keys: Vec[BuildCachePkgKey] = Vec();
     let mut sem_pkg_keys: Vec[BuildCachePkgKey] = Vec();
+    let mut source_sig: String = "";
     if query_shadow_on || cache_enabled {
       if use_sem_cache {
         let pkg_keys_result: BuildCachePkgSemSourceKeysResult = build_cache_pkg_sem_source_keys_with_files(files);
@@ -2716,6 +2705,15 @@ fn main() -> i32 {
         files = pkg_keys_result.files;
         pkg_keys = pkg_keys_result.keys;
       }
+      if cache_enabled {
+        let mut pkg_keys_for_source_sig: Vec[BuildCachePkgKey] = Vec();
+        let mut ksi: i32 = 0;
+        while ksi < pkg_keys.len() {
+          pkg_keys_for_source_sig.push(pkg_keys.get(ksi));
+          ksi = ksi + 1;
+        }
+        source_sig = build_cache_source_sig_from_pkg_source_keys(pkg_keys_for_source_sig);
+      }
     }
     let mut compile_key: String = "";
     let mut link_key: String = "";
@@ -2724,6 +2722,7 @@ fn main() -> i32 {
     let mut cache_obj: String = out.concat(obj_ext);
     let mut cache_bin: String = out;
     let mut compile_c_cache_hit: bool = false;
+    let mut compile_reused_sem_c: bool = false;
     let mut compile_cache_hit: bool = false;
     let mut link_cache_hit: bool = false;
     let mut sem_cache_hit: bool = false;
@@ -2750,25 +2749,19 @@ fn main() -> i32 {
         sem_pkg_keys = sem_keep.keys;
         sem_key = sem_keep.sem_key;
         sem_dep_hashes = sem_keep.dep_hashes;
-        let sem_read: BuildSemCacheReadResult = build_sem_cache_read_with_deps(sem_key);
-        sem_cache_hit = sem_read.hit;
-        if sem_cache_hit {
-          if sem_read.deps.len() != sem_dep_hashes.len() {
-            sem_cache_hit = false;
-          } else {
-            let mut sdi: i32 = 0;
-            while sdi < sem_dep_hashes.len() {
-              let a: q.ParseLoadDepHash = sem_read.deps.get(sdi);
-              let b: q.ParseLoadDepHash = sem_dep_hashes.get(sdi);
-              if a.pkg != b.pkg || a.export_sig_hash != b.export_sig_hash || a.type_sig_hash != b.type_sig_hash || a.impl_sig_hash != b.impl_sig_hash {
-                sem_cache_hit = false;
-                sdi = sem_dep_hashes.len();
-              } else {
-                sdi = sdi + 1;
-              }
-            }
-          }
+        let mut sem_dep_hashes_for_hit: Vec[q.ParseLoadDepHash] = Vec();
+        let mut sem_dep_i: i32 = 0;
+        while sem_dep_i < sem_dep_hashes.len() {
+          sem_dep_hashes_for_hit.push(sem_dep_hashes.get(sem_dep_i));
+          sem_dep_i = sem_dep_i + 1;
         }
+        sem_cache_hit = build_sem_cache_hit_with_deps(sem_key, sem_dep_hashes_for_hit);
+      }
+    }
+    if cache_enabled && use_sem_cache && sem_cache_hit && !compile_c_cache_hit && sem_key != "" && compile_key != "" && source_sig != "" {
+      if build_cache_try_reuse_sem_cached_c_with_source_sig(sem_key, compile_key, source_sig, cache_cpath, trace_exec) {
+        compile_c_cache_hit = true;
+        compile_reused_sem_c = true;
       }
     }
     let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, compile_c_cache_hit || sem_cache_hit, query_shadow_trace);
@@ -2780,6 +2773,7 @@ fn main() -> i32 {
           .concat(" c=").concat(cache_hit_miss(compile_c_cache_hit))
           .concat(" obj=").concat(cache_hit_miss(compile_cache_hit))
           .concat(" link=").concat(cache_hit_miss(link_cache_hit))
+          .concat(" sem_c_reuse=").concat(cache_hit_miss(compile_reused_sem_c))
           .concat(" qshadow_skip=").concat(cache_hit_miss(skip_query_shadow_prepare))
           .concat("\n"),
       );
@@ -3066,6 +3060,9 @@ fn main() -> i32 {
     }
     if use_sem_cache && !sem_cache_hit && sem_key != "" {
       write_build_sem_cache_with_deps(sem_key, sem_dep_hashes);
+    }
+    if cache_enabled && use_sem_cache && sem_key != "" && compile_key != "" && source_sig != "" && compile_c_cache_hit {
+      write_build_sem_cache_c_ref(sem_key, compile_key, source_sig);
     }
     if query_shadow_on && query_shadow_state.key != "" {
       q.parse_load_shadow_write(query_shadow_state.key);
@@ -3471,6 +3468,7 @@ fn main() -> i32 {
     let test_obj_ext: String = if cc_test_use_msvc { ".obj" } else { ".o" };
     let mut pkg_keys: Vec[BuildCachePkgKey] = Vec();
     let mut sem_pkg_keys: Vec[BuildCachePkgKey] = Vec();
+    let mut source_sig: String = "";
     if query_shadow_on || cache_enabled {
       if use_sem_cache {
         let pkg_keys_result: BuildCachePkgSemSourceKeysResult = build_cache_pkg_sem_source_keys_with_files(files);
@@ -3481,6 +3479,15 @@ fn main() -> i32 {
         let pkg_keys_result: BuildCachePkgSourceKeysResult = build_cache_pkg_source_keys_with_files(files);
         files = pkg_keys_result.files;
         pkg_keys = pkg_keys_result.keys;
+      }
+      if cache_enabled {
+        let mut pkg_keys_for_source_sig: Vec[BuildCachePkgKey] = Vec();
+        let mut ksi: i32 = 0;
+        while ksi < pkg_keys.len() {
+          pkg_keys_for_source_sig.push(pkg_keys.get(ksi));
+          ksi = ksi + 1;
+        }
+        source_sig = build_cache_source_sig_from_pkg_source_keys(pkg_keys_for_source_sig);
       }
     }
     let mut test_build_key: String = "";
@@ -3500,25 +3507,13 @@ fn main() -> i32 {
         sem_pkg_keys = sem_keep.keys;
         sem_key = sem_keep.sem_key;
         sem_dep_hashes = sem_keep.dep_hashes;
-        let sem_read: BuildSemCacheReadResult = build_sem_cache_read_with_deps(sem_key);
-        sem_cache_hit = sem_read.hit;
-        if sem_cache_hit {
-          if sem_read.deps.len() != sem_dep_hashes.len() {
-            sem_cache_hit = false;
-          } else {
-            let mut sdi: i32 = 0;
-            while sdi < sem_dep_hashes.len() {
-              let a: q.ParseLoadDepHash = sem_read.deps.get(sdi);
-              let b: q.ParseLoadDepHash = sem_dep_hashes.get(sdi);
-              if a.pkg != b.pkg || a.export_sig_hash != b.export_sig_hash || a.type_sig_hash != b.type_sig_hash || a.impl_sig_hash != b.impl_sig_hash {
-                sem_cache_hit = false;
-                sdi = sem_dep_hashes.len();
-              } else {
-                sdi = sdi + 1;
-              }
-            }
-          }
+        let mut sem_dep_hashes_for_hit: Vec[q.ParseLoadDepHash] = Vec();
+        let mut sem_dep_i: i32 = 0;
+        while sem_dep_i < sem_dep_hashes.len() {
+          sem_dep_hashes_for_hit.push(sem_dep_hashes.get(sem_dep_i));
+          sem_dep_i = sem_dep_i + 1;
         }
+        sem_cache_hit = build_sem_cache_hit_with_deps(sem_key, sem_dep_hashes_for_hit);
       }
       test_cache_out = path_join(path_join(path_join("target", "cache"), "test-link-v1"), test_build_key);
       cpath = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), test_build_key).concat(".c");
@@ -3542,12 +3537,27 @@ fn main() -> i32 {
     let mut cache_c_hit: bool = false;
     let mut cache_obj_hit: bool = false;
     let mut cache_hit: bool = false;
+    let mut cache_reused_sem_c: bool = false;
     if cache_enabled {
       let cache_state_result: TestBuildCacheStateResult = test_build_cache_state_with_tests(test_cache_out, test_build_key, cpath, obj, bin, tests);
       tests = cache_state_result.selected;
       cache_c_hit = cache_state_result.c_hit;
       cache_obj_hit = cache_state_result.obj_hit;
       cache_hit = cache_state_result.hit;
+      if use_sem_cache && sem_cache_hit && !cache_c_hit && sem_key != "" && test_build_key != "" && source_sig != "" {
+        if test_build_cache_try_reuse_sem_cached_c_with_source_sig(
+          sem_key,
+          test_build_key,
+          source_sig,
+          cpath,
+          test_obj_ext,
+          tests,
+          trace_exec,
+        ) {
+          cache_c_hit = true;
+          cache_reused_sem_c = true;
+        }
+      }
     }
     let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, cache_c_hit || sem_cache_hit, query_shadow_trace);
     if cache_trace {
@@ -3558,6 +3568,7 @@ fn main() -> i32 {
           .concat(" c=").concat(cache_hit_miss(cache_c_hit))
           .concat(" obj=").concat(cache_hit_miss(cache_obj_hit))
           .concat(" bin=").concat(cache_hit_miss(cache_hit))
+          .concat(" sem_c_reuse=").concat(cache_hit_miss(cache_reused_sem_c))
           .concat(" qshadow_skip=").concat(cache_hit_miss(skip_query_shadow_prepare))
           .concat("\n"),
       );
@@ -3756,7 +3767,7 @@ fn main() -> i32 {
         print("link exit: ".concat(link_code.to_string()).concat("\n"));
         return 1;
       }
-      if cache_enabled && !cache_c_hit {
+      if cache_enabled && (!cache_c_hit || cache_reused_sem_c) {
         tests = write_test_build_cache_with_tests(test_cache_out, test_build_key, tests);
       }
     }
@@ -3770,6 +3781,9 @@ fn main() -> i32 {
     }
     if use_sem_cache && !sem_cache_hit && sem_key != "" {
       write_build_sem_cache_with_deps(sem_key, sem_dep_hashes);
+    }
+    if cache_enabled && use_sem_cache && sem_key != "" && test_build_key != "" && source_sig != "" && cache_c_hit {
+      write_build_sem_cache_c_ref(sem_key, test_build_key, source_sig);
     }
     if query_shadow_on && query_shadow_state.key != "" {
       q.parse_load_shadow_write(query_shadow_state.key);

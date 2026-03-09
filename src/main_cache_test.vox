@@ -575,6 +575,116 @@ fn test_build_sem_cache_read_with_deps_requires_deps_file_smoke() -> () {
   t.assert(!read.hit);
 }
 
+fn test_build_cache_source_sig_tracks_c_source_changes_smoke() -> () {
+  let fs0: Vec[ld.SourceFile] = build_cache_test_files_with_mixed_sources("fn main() -> i32 { return 1; }", "int helper() { return 1; }");
+  let fs1: Vec[ld.SourceFile] = build_cache_test_files_with_mixed_sources("fn main() -> i32 { return 1; }", "int helper() { return 2; }");
+  let sig0: String = build_cache_source_sig_from_pkg_source_keys(build_cache_pkg_source_keys_with_files(fs0).keys);
+  let sig1: String = build_cache_source_sig_from_pkg_source_keys(build_cache_pkg_source_keys_with_files(fs1).keys);
+  t.assert(sig0 != sig1);
+}
+
+fn test_build_sem_cache_c_ref_roundtrip_smoke() -> () {
+  let sem_key: String = build_cache_test_unused_key("sem-c-ref-roundtrip");
+  write_build_sem_cache_c_ref(sem_key, "compile-key-1", "source-sig-1");
+  let read: BuildSemCacheCRefResult = build_sem_cache_read_c_ref(sem_key);
+  t.assert(read.hit);
+  t.assert_eq(read.c_key, "compile-key-1");
+  t.assert_eq(read.source_sig, "source-sig-1");
+}
+
+fn test_build_cache_try_reuse_sem_cached_c_with_source_sig_hit_smoke() -> () {
+  let sem_key: String = build_cache_test_unused_key("sem-reuse-build-hit-sem");
+  let cached_key: String = build_cache_test_unused_key("sem-reuse-build-hit-cached");
+  let out_key: String = build_cache_test_unused_key("sem-reuse-build-hit-out");
+  t.assert(cached_key != out_key);
+  let cached_cpath: String = build_cache_obj_path_for_key(cached_key, ".c");
+  fs.mkdir_p(dir_name(cached_cpath));
+  fs.write_string(cached_cpath, "/*sem cached c hit*/");
+  let source_sig: String = "source-sig-build-hit";
+  write_build_sem_cache_c_ref(sem_key, cached_key, source_sig);
+  let out_cpath: String = build_cache_obj_path_for_key(out_key, ".c");
+  t.assert(!fs.exists(out_cpath));
+  t.assert(build_cache_try_reuse_sem_cached_c_with_source_sig(sem_key, out_key, source_sig, out_cpath, false));
+  t.assert(fs.exists(out_cpath));
+  t.assert_eq(fs.read_to_string(out_cpath), "/*sem cached c hit*/");
+}
+
+fn test_build_cache_try_reuse_sem_cached_c_with_source_sig_mismatch_smoke() -> () {
+  let sem_key: String = build_cache_test_unused_key("sem-reuse-build-miss-sem");
+  let cached_key: String = build_cache_test_unused_key("sem-reuse-build-miss-cached");
+  let out_key: String = build_cache_test_unused_key("sem-reuse-build-miss-out");
+  let cached_cpath: String = build_cache_obj_path_for_key(cached_key, ".c");
+  fs.mkdir_p(dir_name(cached_cpath));
+  fs.write_string(cached_cpath, "/*sem cached c miss*/");
+  write_build_sem_cache_c_ref(sem_key, cached_key, "source-sig-build-miss-a");
+  let out_cpath: String = build_cache_obj_path_for_key(out_key, ".c");
+  t.assert(!build_cache_try_reuse_sem_cached_c_with_source_sig(sem_key, out_key, "source-sig-build-miss-b", out_cpath, false));
+  t.assert(!fs.exists(out_cpath));
+}
+
+fn test_test_build_cache_try_reuse_sem_cached_c_with_source_sig_hit_smoke() -> () {
+  let sem_key: String = build_cache_test_unused_key("sem-reuse-test-hit-sem");
+  let cached_key: String = build_cache_test_unused_key_for_test_cache("sem-reuse-test-hit-cached");
+  let out_key: String = build_cache_test_unused_key_for_test_cache("sem-reuse-test-hit-out");
+  t.assert(cached_key != out_key);
+  let cached_cpath: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), cached_key).concat(".c");
+  fs.mkdir_p(dir_name(cached_cpath));
+  fs.write_string(cached_cpath, "/*test sem cached c hit*/");
+  let cached_out: String = path_join(path_join(path_join("target", "cache"), "test-link-v1"), cached_key);
+  let mut compiled: Vec[String] = Vec();
+  compiled.push("root.test_a");
+  compiled.push("root.test_b");
+  compiled = write_test_build_cache_with_tests(cached_out, cached_key, compiled);
+  t.assert_eq(compiled.len(), 2);
+  write_build_sem_cache_c_ref(sem_key, cached_key, "source-sig-test-hit");
+  let out_cpath: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), out_key).concat(".c");
+  let mut selected: Vec[String] = Vec();
+  selected.push("root.test_a");
+  t.assert(
+    test_build_cache_try_reuse_sem_cached_c_with_source_sig(
+      sem_key,
+      out_key,
+      "source-sig-test-hit",
+      out_cpath,
+      ".o",
+      selected,
+      false,
+    ),
+  );
+  t.assert(fs.exists(out_cpath));
+  t.assert_eq(fs.read_to_string(out_cpath), "/*test sem cached c hit*/");
+}
+
+fn test_test_build_cache_try_reuse_sem_cached_c_with_source_sig_selected_miss_smoke() -> () {
+  let sem_key: String = build_cache_test_unused_key("sem-reuse-test-miss-sem");
+  let cached_key: String = build_cache_test_unused_key_for_test_cache("sem-reuse-test-miss-cached");
+  let out_key: String = build_cache_test_unused_key_for_test_cache("sem-reuse-test-miss-out");
+  let cached_cpath: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), cached_key).concat(".c");
+  fs.mkdir_p(dir_name(cached_cpath));
+  fs.write_string(cached_cpath, "/*test sem cached c miss*/");
+  let cached_out: String = path_join(path_join(path_join("target", "cache"), "test-link-v1"), cached_key);
+  let mut compiled: Vec[String] = Vec();
+  compiled.push("root.test_a");
+  compiled = write_test_build_cache_with_tests(cached_out, cached_key, compiled);
+  t.assert_eq(compiled.len(), 1);
+  write_build_sem_cache_c_ref(sem_key, cached_key, "source-sig-test-miss");
+  let out_cpath: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), out_key).concat(".c");
+  let mut selected: Vec[String] = Vec();
+  selected.push("root.test_missing");
+  t.assert(
+    !test_build_cache_try_reuse_sem_cached_c_with_source_sig(
+      sem_key,
+      out_key,
+      "source-sig-test-miss",
+      out_cpath,
+      ".o",
+      selected,
+      false,
+    ),
+  );
+  t.assert(!fs.exists(out_cpath));
+}
+
 fn test_build_cache_c_hit_without_obj_smoke() -> () {
   let key: String = build_cache_test_unused_key("key-c-hit-no-obj");
   let cpath: String = build_cache_obj_path_for_key(key, ".c");

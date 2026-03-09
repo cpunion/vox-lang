@@ -579,6 +579,109 @@ fn write_build_sem_cache_with_deps(key: String, deps0: Vec[q.ParseLoadDepHash]) 
   let _: bool = write_string_if_changed(deps_path, out);
 }
 
+fn build_sem_cache_hit_with_deps(key: String, deps: Vec[q.ParseLoadDepHash]) -> bool {
+  if key == "" { return false; }
+  let read: BuildSemCacheReadResult = build_sem_cache_read_with_deps(key);
+  if !read.hit { return false; }
+  return build_cache_sem_dep_hashes_equal(read.deps, deps);
+}
+
+fn build_cache_source_sig_from_pkg_source_keys(pkg_source_keys0: Vec[BuildCachePkgKey]) -> String {
+  let pkg_source_keys: Vec[BuildCachePkgKey] = pkg_source_keys0;
+  let mut h: u64 = 1469598103934665603 as u64;
+  h = lock_hash_text(h, "build-cache-source-sig-v1\n");
+  let mut i: i32 = 0;
+  while i < pkg_source_keys.len() {
+    let pk: BuildCachePkgKey = pkg_source_keys.get(i);
+    h = lock_hash_text(h, "P\n");
+    h = lock_hash_text(h, pk.pkg);
+    h = lock_hash_text(h, "\n");
+    h = lock_hash_text(h, pk.key);
+    h = lock_hash_text(h, "\n");
+    i = i + 1;
+  }
+  return h.to_string();
+}
+
+struct BuildSemCacheCRefResult {
+  hit: bool,
+  c_key: String,
+  source_sig: String,
+}
+
+fn build_sem_cache_read_c_ref(key: String) -> BuildSemCacheCRefResult {
+  let path: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.c-ref");
+  if !fs.exists(path) {
+    return BuildSemCacheCRefResult { hit: false, c_key: "", source_sig: "" };
+  }
+  let lines: Vec[String] = txt.split_lines(fs.read_to_string(path));
+  if lines.len() < 3 { return BuildSemCacheCRefResult { hit: false, c_key: "", source_sig: "" }; }
+  if txt.trim_space(lines.get(0)) != "v1" { return BuildSemCacheCRefResult { hit: false, c_key: "", source_sig: "" }; }
+  let c_key: String = txt.trim_space(lines.get(1));
+  let source_sig: String = txt.trim_space(lines.get(2));
+  if c_key == "" || source_sig == "" {
+    return BuildSemCacheCRefResult { hit: false, c_key: "", source_sig: "" };
+  }
+  return BuildSemCacheCRefResult { hit: true, c_key: c_key, source_sig: source_sig };
+}
+
+fn write_build_sem_cache_c_ref(key: String, c_key: String, source_sig: String) -> () {
+  let path: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.c-ref");
+  fs.mkdir_p(dir_name(path));
+  let out: String = "v1\n".concat(c_key).concat("\n").concat(source_sig).concat("\n");
+  let _: bool = write_string_if_changed(path, out);
+}
+
+fn build_cache_try_reuse_sem_cached_c_with_source_sig(sem_key: String, compile_key: String, source_sig: String, cache_cpath: String, trace_exec: bool) -> bool {
+  if sem_key == "" || compile_key == "" || source_sig == "" { return false; }
+  let ref0: BuildSemCacheCRefResult = build_sem_cache_read_c_ref(sem_key);
+  if !ref0.hit || ref0.c_key == "" || ref0.source_sig == "" { return false; }
+  if ref0.source_sig != source_sig { return false; }
+  if ref0.c_key == compile_key { return false; }
+  let sem_cached_cpath: String = build_cache_obj_path_for_key(ref0.c_key, ".c");
+  if !fs.exists(sem_cached_cpath) { return false; }
+  fs.mkdir_p(dir_name(cache_cpath));
+  if !copy_file_host(sem_cached_cpath, cache_cpath, trace_exec) {
+    fs.write_string(cache_cpath, fs.read_to_string(sem_cached_cpath));
+  }
+  return true;
+}
+
+fn test_build_cache_try_reuse_sem_cached_c_with_source_sig(
+  sem_key: String,
+  test_build_key: String,
+  source_sig: String,
+  cache_cpath: String,
+  obj_ext: String,
+  selected_tests: Vec[String],
+  trace_exec: bool,
+) -> bool {
+  if sem_key == "" || test_build_key == "" || source_sig == "" { return false; }
+  let ref0: BuildSemCacheCRefResult = build_sem_cache_read_c_ref(sem_key);
+  if !ref0.hit || ref0.c_key == "" || ref0.source_sig == "" { return false; }
+  if ref0.source_sig != source_sig { return false; }
+  if ref0.c_key == test_build_key { return false; }
+  let cached_out: String = path_join(path_join(path_join("target", "cache"), "test-link-v1"), ref0.c_key);
+  let cached_cpath: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), ref0.c_key).concat(".c");
+  let cached_obj: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), ref0.c_key).concat(obj_ext);
+  let cached_bin: String = cached_out;
+  let cached_state: TestBuildCacheStateResult =
+    test_build_cache_state_with_tests(
+      cached_out,
+      ref0.c_key,
+      cached_cpath,
+      cached_obj,
+      cached_bin,
+      selected_tests,
+    );
+  if !cached_state.c_hit || !fs.exists(cached_cpath) { return false; }
+  fs.mkdir_p(dir_name(cache_cpath));
+  if !copy_file_host(cached_cpath, cache_cpath, trace_exec) {
+    fs.write_string(cache_cpath, fs.read_to_string(cached_cpath));
+  }
+  return true;
+}
+
 fn build_cache_key_pair_from_pkg_source_keys_keep(
   pkg_source_keys0: Vec[BuildCachePkgKey],
   compile_mode: String,
