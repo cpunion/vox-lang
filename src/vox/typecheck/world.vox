@@ -114,7 +114,25 @@ pub struct ImportsResult {
 
 struct ImportsCacheEntry { mod_path: String, file: String, imps: Imports }
 
-struct FindImportsCachedResult { cache: Vec[ImportsCacheEntry], ar: ImportsResult }
+struct ImportsCache {
+  entries: Vec[ImportsCacheEntry],
+  last_mod_path: String,
+  last_file: String,
+  last_imps: Imports,
+  has_last: bool,
+}
+
+fn imports_cache_empty() -> ImportsCache {
+  return ImportsCache {
+    entries: Vec(),
+    last_mod_path: "",
+    last_file: "",
+    last_imps: Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() },
+    has_last: false,
+  };
+}
+
+struct FindImportsCachedResult { cache: ImportsCache, ar: ImportsResult }
 
 struct ResolveImportResult { ok: bool, err: TcError, path: String, mod_idx: i32 }
 
@@ -275,15 +293,27 @@ fn imports_cache_entry_less(ce: ImportsCacheEntry, mod_path: String, file: Strin
   return ce.file < file;
 }
 
-fn build_imports_cached(w: World, mod_path: String, mod_imports: Vec[ast.ImportDecl], file: String, cache0: Vec[ImportsCacheEntry]) -> FindImportsCachedResult {
+fn build_imports_cached(w: World, mod_path: String, mod_imports: Vec[ast.ImportDecl], file: String, cache0: ImportsCache) -> FindImportsCachedResult {
+  let mut cache: ImportsCache = cache0;
+  if cache.has_last && cache.last_mod_path == mod_path && cache.last_file == file {
+    return FindImportsCachedResult {
+      cache: cache,
+      ar: ImportsResult { ok: true, err: TcError.None, imps: cache.last_imps },
+    };
+  }
+
   let mut lo: i32 = 0;
-  let mut hi: i32 = cache0.len();
+  let mut hi: i32 = cache.entries.len();
   while lo < hi {
     let mid: i32 = lo + ((hi - lo) / 2);
-    let ce: ImportsCacheEntry = cache0.get(mid);
+    let ce: ImportsCacheEntry = cache.entries.get(mid);
     if imports_cache_entry_eq(ce, mod_path, file) {
+      cache.last_mod_path = mod_path;
+      cache.last_file = file;
+      cache.last_imps = ce.imps;
+      cache.has_last = true;
       return FindImportsCachedResult {
-        cache: cache0,
+        cache: cache,
         ar: ImportsResult { ok: true, err: TcError.None, imps: ce.imps },
       };
     }
@@ -295,9 +325,12 @@ fn build_imports_cached(w: World, mod_path: String, mod_imports: Vec[ast.ImportD
   }
 
   let ar: ImportsResult = build_imports(w, mod_path, mod_imports, file);
-  if !ar.ok { return FindImportsCachedResult { cache: cache0, ar: ar }; }
-  let mut cache: Vec[ImportsCacheEntry] = cache0;
-  cache.insert(lo, ImportsCacheEntry { mod_path: mod_path, file: file, imps: ar.imps });
+  if !ar.ok { return FindImportsCachedResult { cache: cache, ar: ar }; }
+  cache.entries.insert(lo, ImportsCacheEntry { mod_path: mod_path, file: file, imps: ar.imps });
+  cache.last_mod_path = mod_path;
+  cache.last_file = file;
+  cache.last_imps = ar.imps;
+  cache.has_last = true;
   return FindImportsCachedResult { cache: cache, ar: ar };
 }
 
