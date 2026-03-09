@@ -615,7 +615,7 @@ fn collect_async_prepare_one(
   w: World,
   sym_mod_path: String,
   body_mod_path: String,
-  body_imports: Vec[ast.ImportDecl],
+  base_imps: Imports,
   exprs_mod: ast.ExprPool,
   fd: ast.FuncDecl,
   lowered: String,
@@ -643,9 +643,6 @@ fn collect_async_prepare_one(
     pi0 = pi0 + 1;
   }
 
-  let ir0: ImportsResult = build_imports(w, body_mod_path, body_imports, fd.file);
-  if !ir0.ok { return CollectAsyncPrepareOneResult { ok: false, err: ir0.err, ctx: c, frame_name: "", frame_ty: c.ty_bad, poll_lowered: "", output_ty: c.ty_bad }; }
-  let base_imps: Imports = ir0.imps;
   let async_alias: String = fresh_internal_async_alias(base_imps);
   let imps2: Imports = imps_add_alias(base_imps, async_alias, "std/async");
 
@@ -749,7 +746,7 @@ fn collect_async_finalize_one(
   w: World,
   sym_mod_path: String,
   body_mod_path: String,
-  body_imports: Vec[ast.ImportDecl],
+  base_imps: Imports,
   exprs_mod: ast.ExprPool,
   fd: ast.FuncDecl,
   lowered: String,
@@ -767,10 +764,6 @@ fn collect_async_finalize_one(
     return CollectAsyncFinalizeOneResult { ok: false, err: type_error_at(fd.sp, "missing fn sig"), ctx: c };
   }
   let fsym0: FuncSym = c.funcs.get(fidx);
-
-  let ir0: ImportsResult = build_imports(w, body_mod_path, body_imports, fd.file);
-  if !ir0.ok { return CollectAsyncFinalizeOneResult { ok: false, err: ir0.err, ctx: c }; }
-  let base_imps: Imports = ir0.imps;
 
   // Locals environment used for typed async normalization + await operand typing.
   let mut locals: Vec[AsyncLocalDecl] = Vec();
@@ -865,6 +858,7 @@ fn collect_async_finalize_one(
 // - rewrite the async function's signature return type to the frame type
 fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
   let mut c: Ctx = ctx0;
+  let mut imports_cache: Vec[ImportsCacheEntry] = Vec();
 
   // Phase 1: prepare all async functions/methods so calls typecheck to frame future types
   // during finalize (await operand typing).
@@ -889,7 +883,10 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
           if !mf.found { return TcCtxResult { ok: false, err: type_error_at(md.sp, "missing impl method sig"), ctx: c }; }
           let lowered: String = mf.m.lowered_name;
 
-          let r: CollectAsyncPrepareOneResult = collect_async_prepare_one(c, w, m.path, m.path, m.prog.imports, exprs_mod, md, lowered);
+          let irp: FindImportsCachedResult = build_imports_cached(w, m.path, m.prog.imports, md.file, imports_cache);
+          imports_cache = irp.cache;
+          if !irp.ar.ok { return TcCtxResult { ok: false, err: irp.ar.err, ctx: c }; }
+          let r: CollectAsyncPrepareOneResult = collect_async_prepare_one(c, w, m.path, m.path, irp.ar.imps, exprs_mod, md, lowered);
           if !r.ok { return TcCtxResult { ok: false, err: r.err, ctx: r.ctx }; }
           c = r.ctx;
 
@@ -976,8 +973,11 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
                   body: msd0.default_body,
                 };
 
+                let irp0: FindImportsCachedResult = build_imports_cached(w, mdm0.path, mdm0.prog.imports, fd0.file, imports_cache);
+                imports_cache = irp0.cache;
+                if !irp0.ar.ok { return TcCtxResult { ok: false, err: irp0.ar.err, ctx: c }; }
                 let rdef0: CollectAsyncPrepareOneResult =
-                  collect_async_prepare_one(c, w, m.path, mdm0.path, mdm0.prog.imports, mdm0.prog.exprs, fd0, msd0.lowered_name);
+                  collect_async_prepare_one(c, w, m.path, mdm0.path, irp0.ar.imps, mdm0.prog.exprs, fd0, msd0.lowered_name);
                 if !rdef0.ok { return TcCtxResult { ok: false, err: rdef0.err, ctx: rdef0.ctx }; }
                 c = rdef0.ctx;
 
@@ -1028,7 +1028,10 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
         continue;
       }
       if fd.is_async {
-        let r0: CollectAsyncPrepareOneResult = collect_async_prepare_one(c, w, m.path, m.path, m.prog.imports, exprs_mod, fd, fd.name);
+        let irp1: FindImportsCachedResult = build_imports_cached(w, m.path, m.prog.imports, fd.file, imports_cache);
+        imports_cache = irp1.cache;
+        if !irp1.ar.ok { return TcCtxResult { ok: false, err: irp1.ar.err, ctx: c }; }
+        let r0: CollectAsyncPrepareOneResult = collect_async_prepare_one(c, w, m.path, m.path, irp1.ar.imps, exprs_mod, fd, fd.name);
         if !r0.ok { return TcCtxResult { ok: false, err: r0.err, ctx: r0.ctx }; }
         c = r0.ctx;
       }
@@ -1053,7 +1056,10 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
         continue;
       }
       if fd2.is_async {
-        let r2: CollectAsyncFinalizeOneResult = collect_async_finalize_one(c, w, m2.path, m2.path, m2.prog.imports, exprs_mod2, fd2, fd2.name);
+        let irf0: FindImportsCachedResult = build_imports_cached(w, m2.path, m2.prog.imports, fd2.file, imports_cache);
+        imports_cache = irf0.cache;
+        if !irf0.ar.ok { return TcCtxResult { ok: false, err: irf0.ar.err, ctx: c }; }
+        let r2: CollectAsyncFinalizeOneResult = collect_async_finalize_one(c, w, m2.path, m2.path, irf0.ar.imps, exprs_mod2, fd2, fd2.name);
         if !r2.ok { return TcCtxResult { ok: false, err: r2.err, ctx: r2.ctx }; }
         c = r2.ctx;
       }
@@ -1074,7 +1080,10 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
           let mf2: FindImplMethodResult = find_impl_method(isig, md2.name);
           if !mf2.found { return TcCtxResult { ok: false, err: type_error_at(md2.sp, "missing impl method sig"), ctx: c }; }
           let lowered2: String = mf2.m.lowered_name;
-          let r3: CollectAsyncFinalizeOneResult = collect_async_finalize_one(c, w, m2.path, m2.path, m2.prog.imports, exprs_mod2, md2, lowered2);
+          let irf1: FindImportsCachedResult = build_imports_cached(w, m2.path, m2.prog.imports, md2.file, imports_cache);
+          imports_cache = irf1.cache;
+          if !irf1.ar.ok { return TcCtxResult { ok: false, err: irf1.ar.err, ctx: c }; }
+          let r3: CollectAsyncFinalizeOneResult = collect_async_finalize_one(c, w, m2.path, m2.path, irf1.ar.imps, exprs_mod2, md2, lowered2);
           if !r3.ok { return TcCtxResult { ok: false, err: r3.err, ctx: r3.ctx }; }
           c = r3.ctx;
         }
@@ -1123,8 +1132,11 @@ fn collect_async_fns(ctx0: Ctx, w: World) -> TcCtxResult {
                   resources: Vec(),
                   body: msd2.default_body,
                 };
+                let irf2: FindImportsCachedResult = build_imports_cached(w, mdm2.path, mdm2.prog.imports, fd2d.file, imports_cache);
+                imports_cache = irf2.cache;
+                if !irf2.ar.ok { return TcCtxResult { ok: false, err: irf2.ar.err, ctx: c }; }
                 let rdef2: CollectAsyncFinalizeOneResult =
-                  collect_async_finalize_one(c, w, m2.path, mdm2.path, mdm2.prog.imports, mdm2.prog.exprs, fd2d, msd2.lowered_name);
+                  collect_async_finalize_one(c, w, m2.path, mdm2.path, irf2.ar.imps, mdm2.prog.exprs, fd2d, msd2.lowered_name);
                 if !rdef2.ok { return TcCtxResult { ok: false, err: rdef2.err, ctx: rdef2.ctx }; }
                 c = rdef2.ctx;
               }
