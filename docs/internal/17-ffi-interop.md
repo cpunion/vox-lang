@@ -86,7 +86,7 @@ pub fn add(a: i32, b: i32) -> i32 {
 为推进 `ptr + len` 收敛，当前按“可先迁移”和“暂时保留”分层：
 
 - 优先迁移（字节载荷）：
-  - `std/io::NetConn.try_send`：已落地为 `std/sys::socket_send_text(handle, text, len)`（平台 `@build` 分支直接绑定 OS `send`），不新增 `vox_host_*` 网络桥接符号。
+  - `std/io::NetConn.try_send`：已落地为 `std/sys::socket_send(handle, text as const rawptr, len)`（平台 `@build` 分支直接绑定 OS `send`），不新增 `vox_host_*` 网络桥接符号。
     - windows-x86 当前保留占位（winsock `send` 为 stdcall，现阶段 FFI 还不支持按符号 calling convention）。
   - 其它新增跨边界 payload API：默认禁止直接使用 `String` 作为 C ABI 文本载荷。
 - 暂时保留（路径/命令/环境）：
@@ -97,6 +97,11 @@ pub fn add(a: i32, b: i32) -> i32 {
 
 - `std/sys::system/getenv` 不再把 `String` 直接当作 C 字符串传入；调用前统一显式构造 NUL 终止临时缓冲（`c_string_dup_nul`），调用后释放。
 - `std/sys::{sock_linux,sock_darwin,sock_windows}::sock_getaddrinfo` 同步改为 `const rawptr` FFI 形参并走同一 NUL 适配路径，避免隐式 `String -> const char*` 假设。
+
+最新收敛进展（2026-03-09）：
+
+- `std/sys` 各平台分支的 `open/access/mkdir/creat` 统一为“显式 NUL 适配后调用 C 符号”路径：调用前使用 `c_string_dup_nul` 构造临时缓冲，调用后释放。
+- 上述路径保留 `String` 形参仅用于与系统头声明保持 ABI 一致（`char*`），不再把业务字符串直接传入 C 边界。
 
 说明：
 
