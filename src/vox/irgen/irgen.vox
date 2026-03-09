@@ -193,57 +193,72 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
   }
 
   // Generic impl methods are looked up by lowered impl symbol name.
+  // Build once: decl_idx -> impl sig idx for this module, then probe methods.
+  let mut decl_impl_sig_idx: Vec[i32] = Vec();
+  let mut di: i32 = 0;
+  while di < m.prog.impls.len() {
+    decl_impl_sig_idx.push(-1);
+    di = di + 1;
+  }
+  let mut si: i32 = 0;
+  while si < ctx.impls.len() {
+    let isg: tc.ImplSig = ctx.impls.get(si);
+    if isg.mod_path == m.path && isg.decl_idx >= 0 && isg.decl_idx < decl_impl_sig_idx.len() {
+      if decl_impl_sig_idx.get(isg.decl_idx) == -1 {
+        decl_impl_sig_idx.set(isg.decl_idx, si);
+      }
+    }
+    si = si + 1;
+  }
+
   let mut ii: i32 = 0;
   while ii < m.prog.impls.len() {
-    let id: ast.ImplDecl = m.prog.impls.get(ii);
-    let mut si: i32 = 0;
-    while si < ctx.impls.len() {
-      let isg: tc.ImplSig = ctx.impls.get(si);
-      if isg.mod_path == m.path && isg.decl_idx == ii {
-        let mut mi: i32 = 0;
-        while mi < isg.methods.len() {
-          let ms: tc.ImplMethodSig = isg.methods.get(mi);
-          if ms.lowered_name == name && (ms.sig.type_params.len() != 0 || ms.sig.const_params.len() != 0) {
-            if ms.from_default {
-              let ar0: tc.FindAsyncFnResult = tc.find_async_fn(ctx, m.path, ms.lowered_name);
-              let fd0: ast.FuncDecl = ast.FuncDecl {
-                file: ms.default_file,
-                sp: ast.span0(),
-                vis: ast.vis_private(),
-                is_pub: false,
-                is_async: ar0.found,
-                track_caller: false,
-                deprecated_message: "",
-                name: ms.lowered_name,
-                type_params: ms.sig.type_params,
-                type_param_packs: Vec(),
-                const_params: Vec(),
-                type_param_bounds: Vec(),
-                const_where_bounds: Vec(),
-                params: synth_params(ms.default_params),
-                ret: dummy_type_name(),
-                cfgs: Vec(),
-                ffi_imports: Vec(),
-                ffi_exports: Vec(),
-                effects: Vec(),
-                resources: Vec(),
-                body: ms.default_body,
-              };
-              return FindFuncDeclResult { found: true, mod_path: ms.default_mod_path, fd: fd0 };
-            } else {
-              let mdi: i32 = find_impl_method_decl_idx(id, ms.name);
-              if mdi != -1 {
-                let md: ast.FuncDecl = id.methods.get(mdi);
-                // `ms.sig.type_params` already includes impl-header + method generics.
-                // For `impl[T] Trait for ... { fn m(...) ... }`, method decl itself can be non-generic.
-                return FindFuncDeclResult { found: true, mod_path: m.path, fd: md };
-              }
+    let sig_idx: i32 = decl_impl_sig_idx.get(ii);
+    if sig_idx != -1 {
+      let id: ast.ImplDecl = m.prog.impls.get(ii);
+      let isg: tc.ImplSig = ctx.impls.get(sig_idx);
+      let mut mi: i32 = 0;
+      while mi < isg.methods.len() {
+        let ms: tc.ImplMethodSig = isg.methods.get(mi);
+        if ms.lowered_name == name && (ms.sig.type_params.len() != 0 || ms.sig.const_params.len() != 0) {
+          if ms.from_default {
+            let ar0: tc.FindAsyncFnResult = tc.find_async_fn(ctx, m.path, ms.lowered_name);
+            let fd0: ast.FuncDecl = ast.FuncDecl {
+              file: ms.default_file,
+              sp: ast.span0(),
+              vis: ast.vis_private(),
+              is_pub: false,
+              is_async: ar0.found,
+              track_caller: false,
+              deprecated_message: "",
+              name: ms.lowered_name,
+              type_params: ms.sig.type_params,
+              type_param_packs: Vec(),
+              const_params: Vec(),
+              type_param_bounds: Vec(),
+              const_where_bounds: Vec(),
+              params: synth_params(ms.default_params),
+              ret: dummy_type_name(),
+              cfgs: Vec(),
+              ffi_imports: Vec(),
+              ffi_exports: Vec(),
+              effects: Vec(),
+              resources: Vec(),
+              body: ms.default_body,
+            };
+            return FindFuncDeclResult { found: true, mod_path: ms.default_mod_path, fd: fd0 };
+          } else {
+            let mdi: i32 = find_impl_method_decl_idx(id, ms.name);
+            if mdi != -1 {
+              let md: ast.FuncDecl = id.methods.get(mdi);
+              // `ms.sig.type_params` already includes impl-header + method generics.
+              // For `impl[T] Trait for ... { fn m(...) ... }`, method decl itself can be non-generic.
+              return FindFuncDeclResult { found: true, mod_path: m.path, fd: md };
             }
           }
-          mi = mi + 1;
         }
+        mi = mi + 1;
       }
-      si = si + 1;
     }
     ii = ii + 1;
   }
