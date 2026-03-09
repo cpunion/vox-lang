@@ -215,14 +215,6 @@ bootstrap_candidates() {
   done
 }
 
-pick_bootstrap() {
-  local raw=""
-  raw="$(bootstrap_candidates)"
-  if [[ -z "$raw" ]]; then return 1; fi
-  printf '%s\n' "$raw" | awk '!seen[$0]++ { print; }' | head -n 1
-  return 0
-}
-
 pick_legacy_bootstrap() {
   local p
   if p="$(resolve_bin "$WORK_DIR/target/bootstrap/vox_prev" 2>/dev/null)"; then
@@ -299,14 +291,14 @@ case "$MODE" in
     ;;
 esac
 
-BOOTSTRAP_BIN=""
-if ! BOOTSTRAP_BIN="$(pick_bootstrap)"; then
+BOOTSTRAP_CANDIDATES_RAW="$(bootstrap_candidates)"
+BOOTSTRAP_CANDIDATES="$(printf '%s\n' "$BOOTSTRAP_CANDIDATES_RAW" | awk '!seen[$0]++ { print; }')"
+BOOTSTRAP_BIN="$(printf '%s\n' "$BOOTSTRAP_CANDIDATES" | head -n 1)"
+if [[ -z "$BOOTSTRAP_BIN" ]]; then
   echo "[selfhost] no bootstrap compiler binary found" >&2
   echo "[selfhost] set VOX_BOOTSTRAP or prepare target/bootstrap/vox_prev" >&2
   exit 1
 fi
-BOOTSTRAP_CANDIDATES_RAW="$(bootstrap_candidates)"
-BOOTSTRAP_CANDIDATES="$(printf '%s\n' "$BOOTSTRAP_CANDIDATES_RAW" | awk '!seen[$0]++ { print; }')"
 
 echo "[selfhost] bootstrap: $BOOTSTRAP_BIN"
 if should_rebuild_selfhost "$BOOTSTRAP_BIN"; then
