@@ -293,7 +293,12 @@ esac
 
 BOOTSTRAP_CANDIDATES_RAW="$(bootstrap_candidates)"
 BOOTSTRAP_CANDIDATES="$(printf '%s\n' "$BOOTSTRAP_CANDIDATES_RAW" | awk '!seen[$0]++ { print; }')"
-BOOTSTRAP_BIN="$(printf '%s\n' "$BOOTSTRAP_CANDIDATES" | head -n 1)"
+BOOTSTRAP_BIN=""
+while IFS= read -r CANDIDATE; do
+  [[ -z "$CANDIDATE" ]] && continue
+  BOOTSTRAP_BIN="$CANDIDATE"
+  break
+done <<< "$BOOTSTRAP_CANDIDATES"
 if [[ -z "$BOOTSTRAP_BIN" ]]; then
   echo "[selfhost] no bootstrap compiler binary found" >&2
   echo "[selfhost] set VOX_BOOTSTRAP or prepare target/bootstrap/vox_prev" >&2
