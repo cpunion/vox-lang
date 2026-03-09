@@ -65,38 +65,37 @@ struct FuncTask {
   const_subs: Vec[tc.ConstSub],
 }
 
-fn has_str_sorted(vs: Vec[String], s: String) -> bool {
+// Return >=0 when found (index), otherwise return -(insert_pos + 1).
+fn find_str_sorted_idx_or_insert(vs: Vec[String], s: String) -> i32 {
   let mut lo: i32 = 0;
   let mut hi: i32 = vs.len();
   while lo < hi {
     let mid: i32 = lo + ((hi - lo) / 2);
     let cur: String = vs.get(mid);
-    if cur == s { return true; }
+    if cur == s { return mid; }
     if cur < s {
       lo = mid + 1;
     } else {
       hi = mid;
     }
   }
-  return false;
+  return 0 - (lo + 1);
+}
+
+fn has_str_sorted(vs: Vec[String], s: String) -> bool {
+  return find_str_sorted_idx_or_insert(vs, s) >= 0;
+}
+
+fn insert_str_sorted_at(vs0: Vec[String], s: String, pos: i32) -> Vec[String] {
+  let mut vs: Vec[String] = vs0;
+  vs.insert(pos, s);
+  return vs;
 }
 
 fn insert_unique_str_sorted(vs0: Vec[String], s: String) -> Vec[String] {
-  let mut lo: i32 = 0;
-  let mut hi: i32 = vs0.len();
-  while lo < hi {
-    let mid: i32 = lo + ((hi - lo) / 2);
-    let cur: String = vs0.get(mid);
-    if cur == s { return vs0; }
-    if cur < s {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
-  }
-  let mut vs: Vec[String] = vs0;
-  vs.insert(lo, s);
-  return vs;
+  let idx_or_insert: i32 = find_str_sorted_idx_or_insert(vs0, s);
+  if idx_or_insert >= 0 { return vs0; }
+  return insert_str_sorted_at(vs0, s, 0 - (idx_or_insert + 1));
 }
 
 fn dummy_type_name() -> ast.TypeName {
@@ -601,6 +600,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
     let mut want_name: String = "";
     let mut imps: tc.Imports = tc.Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() };
     let mut r: GenFuncResult = GenFuncResult { ok: false, err: "", ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, extras: Vec(), pending: Vec() };
+    let mut want_insert_pos: i32 = -1;
     // Vox match arms only support single expressions (no block arms yet),
     // so branch on a structural invariant instead of matching on TaskKind.
     if t.func_idx != -1 {
@@ -611,7 +611,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       if !air.ar.ok { return err0(p, tc.tc_error_to_string(air.ar.err)); }
       imps = air.ar.imps;
       want_name = qname(t.mod_path, fd.name);
-      if has_str_sorted(emitted_sorted, want_name) { ti = ti + 1; continue; }
+      let want_find: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
+      if want_find >= 0 { ti = ti + 1; continue; }
+      want_insert_pos = 0 - (want_find + 1);
       r = gen_func(ctx, w, t.mod_path, imps, m2.prog.exprs, fd);
     } else if t.impl_idx != -1 {
       // Impl method task.
@@ -684,7 +686,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       if !air.ar.ok { return err0(p, tc.tc_error_to_string(air.ar.err)); }
       imps = air.ar.imps;
       want_name = qname(t.mod_path, t.impl_name);
-      if has_str_sorted(emitted_sorted, want_name) { ti = ti + 1; continue; }
+      let want_find0: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
+      if want_find0 >= 0 { ti = ti + 1; continue; }
+      want_insert_pos = 0 - (want_find0 + 1);
       if md.is_async {
         // Lower async impl methods (including from-default) through the instantiation path
         // so body module and target symbol module can differ.
@@ -732,13 +736,19 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       if !air.ar.ok { return err0(p, tc.tc_error_to_string(air.ar.err)); }
       imps = air.ar.imps;
       want_name = qname(t.mod_path, t.inst_name);
-      if has_str_sorted(emitted_sorted, want_name) { ti = ti + 1; continue; }
+      let want_find1: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
+      if want_find1 >= 0 { ti = ti + 1; continue; }
+      want_insert_pos = 0 - (want_find1 + 1);
       r = gen_func_inst(ctx, w, bmod.path, t.mod_path, imps, bmod.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs, t.const_subs);
     }
 
     if !r.ok { return err0(p, r.err); }
     ctx = r.ctx;
-    emitted_sorted = insert_unique_str_sorted(emitted_sorted, want_name);
+    if want_insert_pos >= 0 {
+      emitted_sorted = insert_str_sorted_at(emitted_sorted, want_name, want_insert_pos);
+    } else {
+      emitted_sorted = insert_unique_str_sorted(emitted_sorted, want_name);
+    }
     p.funcs.push(r.f);
     let mut ei: i32 = 0;
     while ei < r.extras.len() {
@@ -753,11 +763,16 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
     while pi < r.pending.len() {
       let pend: PendingInst = r.pending.get(pi);
       let pend_name: String = qname(pend.mod_path, pend.inst_name);
-      if has_str_sorted(emitted_sorted, pend_name) || has_str_sorted(pending_inst_scheduled_sorted, pend_name) {
+      if has_str_sorted(emitted_sorted, pend_name) {
         pi = pi + 1;
         continue;
       }
-      pending_inst_scheduled_sorted = insert_unique_str_sorted(pending_inst_scheduled_sorted, pend_name);
+      let pend_find: i32 = find_str_sorted_idx_or_insert(pending_inst_scheduled_sorted, pend_name);
+      if pend_find >= 0 {
+        pi = pi + 1;
+        continue;
+      }
+      pending_inst_scheduled_sorted = insert_str_sorted_at(pending_inst_scheduled_sorted, pend_name, 0 - (pend_find + 1));
       tasks.push(FuncTask {
         kind: TaskKind.Inst,
         mod_path: pend.mod_path,
