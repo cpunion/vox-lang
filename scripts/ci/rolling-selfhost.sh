@@ -160,10 +160,13 @@ write_selfhost_cache_key() {
   mv "$tmp_file" "$cache_key_file"
 }
 
-pick_bootstrap() {
-  if [[ -n "${VOX_BOOTSTRAP:-}" && -f "${VOX_BOOTSTRAP}" ]]; then
-    printf '%s\n' "$VOX_BOOTSTRAP"
-    return 0
+bootstrap_candidates() {
+  local explicit="${VOX_BOOTSTRAP:-}"
+  if [[ -n "$explicit" ]]; then
+    local ep=""
+    if ep="$(resolve_bin "$explicit" 2>/dev/null)"; then
+      printf '%s\n' "$ep"
+    fi
   fi
 
   local candidates=(
@@ -179,18 +182,22 @@ pick_bootstrap() {
   for c in "${candidates[@]}"; do
     if p="$(resolve_bin "$c" 2>/dev/null)"; then
       printf '%s\n' "$p"
-      return 0
     fi
   done
 
   for p in "$WORK_DIR"/target/debug/vox* "$WORK_DIR"/target/release/vox*; do
     if is_runnable_bin "$p"; then
       printf '%s\n' "$p"
-      return 0
     fi
   done
+}
 
-  return 1
+pick_bootstrap() {
+  local raw=""
+  raw="$(bootstrap_candidates)"
+  if [[ -z "$raw" ]]; then return 1; fi
+  printf '%s\n' "$raw" | awk '!seen[$0]++ { print; }' | head -n 1
+  return 0
 }
 
 pick_legacy_bootstrap() {
@@ -275,19 +282,40 @@ if ! BOOTSTRAP_BIN="$(pick_bootstrap)"; then
   echo "[selfhost] set VOX_BOOTSTRAP or prepare target/bootstrap/vox_prev" >&2
   exit 1
 fi
+BOOTSTRAP_CANDIDATES_RAW="$(bootstrap_candidates)"
+BOOTSTRAP_CANDIDATES="$(printf '%s\n' "$BOOTSTRAP_CANDIDATES_RAW" | awk '!seen[$0]++ { print; }')"
 
 echo "[selfhost] bootstrap: $BOOTSTRAP_BIN"
 if should_rebuild_selfhost "$BOOTSTRAP_BIN"; then
   echo "[selfhost] rebuild: yes"
+  BUILD_OK=0
   if ! build_from_bootstrap "$BOOTSTRAP_BIN"; then
-    LEGACY_BOOTSTRAP=""
-    if LEGACY_BOOTSTRAP="$(pick_legacy_bootstrap)" && [[ "$LEGACY_BOOTSTRAP" != "$BOOTSTRAP_BIN" ]]; then
-      echo "[selfhost] retry with legacy bootstrap: $LEGACY_BOOTSTRAP"
-      build_from_bootstrap "$LEGACY_BOOTSTRAP"
-      BOOTSTRAP_BIN="$LEGACY_BOOTSTRAP"
+    while IFS= read -r ALT_BOOTSTRAP; do
+      [[ -z "$ALT_BOOTSTRAP" ]] && continue
+      [[ "$ALT_BOOTSTRAP" == "$BOOTSTRAP_BIN" ]] && continue
+      echo "[selfhost] retry with bootstrap candidate: $ALT_BOOTSTRAP"
+      if build_from_bootstrap "$ALT_BOOTSTRAP"; then
+        BOOTSTRAP_BIN="$ALT_BOOTSTRAP"
+        BUILD_OK=1
+        break
+      fi
+    done <<< "$BOOTSTRAP_CANDIDATES"
+
+    if [[ "$BUILD_OK" == "1" ]]; then
+      :
     else
-      exit 1
+      LEGACY_BOOTSTRAP=""
+      if LEGACY_BOOTSTRAP="$(pick_legacy_bootstrap)" && [[ "$LEGACY_BOOTSTRAP" != "$BOOTSTRAP_BIN" ]]; then
+        echo "[selfhost] retry with legacy bootstrap: $LEGACY_BOOTSTRAP"
+        build_from_bootstrap "$LEGACY_BOOTSTRAP"
+        BOOTSTRAP_BIN="$LEGACY_BOOTSTRAP"
+        BUILD_OK=1
+      else
+        exit 1
+      fi
     fi
+  else
+    BUILD_OK=1
   fi
   write_selfhost_cache_key "$BOOTSTRAP_BIN"
 else

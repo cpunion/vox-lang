@@ -368,6 +368,7 @@ Invalidate unit on any of:
 - 2026-03-09: `irgen.find_generic_func` now prebuilds one module-local `decl_idx -> impl_sig_idx` map before impl-method probes, replacing nested `m.prog.impls × ctx.impls` scans in generic impl-method lookup. Local no-build-cache A/B (`vox build --driver=tool`) improved from ~`10.90-10.97s` to ~`10.78-10.86s` (~`1-2%`) with unchanged output/tests.
 - 2026-03-09: codegen call emission now prebuilds one sorted call-name table (`func name` + FFI import symbol override) per program (`build_call_name_entries`) and reuses it in `emit_instr_call` via binary-search lookup, avoiding repeated `c_fn_name`/FFI symbol resolution work on every call instruction. Local no-build-cache A/B (`vox build --driver=tool`) moved compile total from ~`9.04-9.05s` to ~`8.94-9.03s`, with `compile codegen` from ~`3.02-3.08s` to ~`2.88-2.98s`.
 - 2026-03-09: `collect_live_temps` in C codegen now uses a destination-indexed worklist closure (map `dst temp -> drop-safe defs`) instead of repeated full rescans + global live-count fixed-point loops, and propagates liveness only from newly discovered live temps. Local no-build-cache A/B (`vox build --driver=tool`) moved compile total from ~`8.99-9.10s` to ~`8.82-8.90s`, with `compile codegen` from ~`2.91-2.99s` to ~`2.88-2.93s`.
+- 2026-03-09: `rolling-selfhost` bootstrap fallback now tries all discovered bootstrap candidates (deduped) before dropping to legacy `vox_prev`, so stale/incompatible first-choice bootstrap binaries no longer immediately block build/test/fmt workflows.
 
 ## 5. Validation Gates
 
