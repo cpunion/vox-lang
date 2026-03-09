@@ -239,7 +239,9 @@ pub struct FindImplForTyResult {
 }
 
 fn impl_match_candidates_text(ctx: Ctx, trait_mod: String, trait_name: String, recv_ty: i32) -> String {
+  let nmax: i32 = 8;
   let mut rows: Vec[String] = Vec();
+  let mut total: i32 = 0;
   let mut i: i32 = 0;
   while i < ctx.impls.len() {
     let isg: ImplSig = ctx.impls.get(i);
@@ -247,48 +249,44 @@ fn impl_match_candidates_text(ctx: Ctx, trait_mod: String, trait_name: String, r
     if isg.trait_mod_path == trait_mod && isg.trait_name == trait_name {
       let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
       if ur.ok {
-        rows.push(impl_diag_text(ctx, isg));
+        rows = sym_lookup_insert_sorted_limit(rows, impl_diag_text(ctx, isg), nmax);
+        total = total + 1;
       }
     }
     i = i + 1;
   }
-  rows = sym_lookup_sort_strings(rows);
-  return sym_lookup_join_first(rows, 8);
+  return sym_lookup_join_first(rows, total, nmax);
 }
 
-fn sym_lookup_insert_sorted(xs0: Vec[String], x: String) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
-  let mut inserted: bool = false;
-  let mut i: i32 = 0;
-  while i < xs0.len() {
-    let cur: String = xs0.get(i);
-    if !inserted && x < cur {
-      out.push(x);
-      inserted = true;
+fn sym_lookup_insert_sorted_limit(xs0: Vec[String], x: String, lim: i32) -> Vec[String] {
+  if lim <= 0 { return Vec(); }
+  let mut xs: Vec[String] = xs0;
+  let n: i32 = xs.len();
+  if n >= lim && x >= xs.get(n - 1) {
+    return xs;
+  }
+  let mut lo: i32 = 0;
+  let mut hi: i32 = n;
+  while lo < hi {
+    let mid: i32 = lo + (hi - lo) / 2;
+    let cur: String = xs.get(mid);
+    if x < cur {
+      hi = mid;
+    } else {
+      lo = mid + 1;
     }
-    out.push(cur);
-    i = i + 1;
   }
-  if !inserted {
-    out.push(x);
+  xs.insert(lo, x);
+  if xs.len() > lim {
+    xs.pop();
   }
-  return out;
+  return xs;
 }
 
-fn sym_lookup_sort_strings(xs0: Vec[String]) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
-  let mut i: i32 = 0;
-  while i < xs0.len() {
-    out = sym_lookup_insert_sorted(out, xs0.get(i));
-    i = i + 1;
-  }
-  return out;
-}
-
-fn sym_lookup_join_first(xs: Vec[String], nmax: i32) -> String {
-  if xs.len() == 0 { return "<none>"; }
+fn sym_lookup_join_first(xs: Vec[String], total: i32, nmax: i32) -> String {
+  if total == 0 { return "<none>"; }
   let mut out: String = "";
-  let mut n: i32 = xs.len();
+  let mut n: i32 = total;
   if n > nmax { n = nmax; }
   let mut i: i32 = 0;
   while i < n {
@@ -296,7 +294,7 @@ fn sym_lookup_join_first(xs: Vec[String], nmax: i32) -> String {
     out = out.concat(xs.get(i));
     i = i + 1;
   }
-  if xs.len() > nmax {
+  if total > nmax {
     out = out.concat(", ...");
   }
   return out;
