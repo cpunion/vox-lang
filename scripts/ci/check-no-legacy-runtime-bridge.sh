@@ -23,7 +23,8 @@ rm -f "$OUT" "${OUT}.exe" "$C_PATH" "${OUT}.cache.key"
 
 echo "[legacy-runtime] compiler: $COMPILER_BIN"
 echo "[legacy-runtime] building guard output"
-"$COMPILER_BIN" build --driver=tool "$OUT"
+# Guard scan must inspect freshly emitted C, not a warm cache copy.
+VOX_BUILD_CACHE_DISABLE=1 "$COMPILER_BIN" build --driver=tool "$OUT"
 
 if [[ ! -f "$C_PATH" ]]; then
   echo "[legacy-runtime] expected generated C file not found: $C_PATH" >&2
@@ -49,6 +50,14 @@ declare -a forbidden=(
   '^static bool vox_vec_eq\('
   '^static void vox_vec_get\('
   '^static const char\* vox_vec_str_join\('
+  '^int32_t rt_atomic_i32_load\('
+  '^void rt_atomic_i32_store\('
+  '^bool rt_atomic_i32_cas\('
+  '^int32_t rt_atomic_i32_fetch_add\('
+  '^int64_t rt_atomic_i64_load\('
+  '^void rt_atomic_i64_store\('
+  '^bool rt_atomic_i64_cas\('
+  '^int64_t rt_atomic_i64_fetch_add\('
 )
 
 hits=""
