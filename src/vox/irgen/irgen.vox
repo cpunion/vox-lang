@@ -252,8 +252,8 @@ struct FindGenericFuncCachedResult { cache: Vec[GenericFuncCacheEntry], res: Fin
 struct ImportsCacheEntry { mod_path: String, file: String, imps: tc.Imports }
 struct FindImportsCachedResult { cache: Vec[ImportsCacheEntry], ar: tc.ImportsResult }
 struct GenericFindModuleIndex { decl_impl_sig_idx: Vec[i32], method_decl_indexes: Vec[Vec[ImplMethodDeclIndexEntry]] }
-struct GenericFindIndexCacheEntry { mod_path: String, mix: GenericFindModuleIndex }
-struct FindGenericFindIndexCachedResult { cache: Vec[GenericFindIndexCacheEntry], mix: GenericFindModuleIndex }
+struct GenericFindIndexCacheByModEntry { ready: bool, mix: GenericFindModuleIndex }
+struct FindGenericFindIndexCachedResult { cache: Vec[GenericFindIndexCacheByModEntry], mix: GenericFindModuleIndex }
 
 fn build_generic_find_module_index(ctx: tc.Ctx, m: tc.WorldModule) -> GenericFindModuleIndex {
   let mut decl_impl_sig_idx: Vec[i32] = Vec();
@@ -398,46 +398,29 @@ fn imports_cache_entry_less(ce: ImportsCacheEntry, mod_path: String, file: Strin
   return ce.file < file;
 }
 
-fn generic_find_index_cache_entry_eq(ce: GenericFindIndexCacheEntry, mod_path: String) -> bool {
-  return ce.mod_path == mod_path;
+fn empty_generic_find_module_index() -> GenericFindModuleIndex {
+  return GenericFindModuleIndex { decl_impl_sig_idx: Vec(), method_decl_indexes: Vec() };
 }
 
-fn generic_find_index_cache_entry_less(ce: GenericFindIndexCacheEntry, mod_path: String) -> bool {
-  return ce.mod_path < mod_path;
+fn ensure_generic_find_index_cache_by_mod_len(cache0: Vec[GenericFindIndexCacheByModEntry], need_len: i32) -> Vec[GenericFindIndexCacheByModEntry] {
+  let mut cache: Vec[GenericFindIndexCacheByModEntry] = cache0;
+  while cache.len() < need_len {
+    cache.push(GenericFindIndexCacheByModEntry {
+      ready: false,
+      mix: empty_generic_find_module_index(),
+    });
+  }
+  return cache;
 }
 
-fn find_generic_find_index_cached(ctx: tc.Ctx, m: tc.WorldModule, cache0: Vec[GenericFindIndexCacheEntry]) -> FindGenericFindIndexCachedResult {
-  if cache0.len() > 0 {
-    let last: GenericFindIndexCacheEntry = cache0.get(cache0.len() - 1);
-    if generic_find_index_cache_entry_eq(last, m.path) {
-      return FindGenericFindIndexCachedResult { cache: cache0, mix: last.mix };
-    }
-    if generic_find_index_cache_entry_less(last, m.path) {
-      let mix1: GenericFindModuleIndex = build_generic_find_module_index(ctx, m);
-      let mut cache1: Vec[GenericFindIndexCacheEntry] = cache0;
-      cache1.push(GenericFindIndexCacheEntry { mod_path: m.path, mix: mix1 });
-      return FindGenericFindIndexCachedResult { cache: cache1, mix: mix1 };
-    }
+fn find_generic_find_index_cached(ctx: tc.Ctx, m: tc.WorldModule, mod_idx: i32, cache0: Vec[GenericFindIndexCacheByModEntry]) -> FindGenericFindIndexCachedResult {
+  let mut cache: Vec[GenericFindIndexCacheByModEntry] = ensure_generic_find_index_cache_by_mod_len(cache0, mod_idx + 1);
+  let ce: GenericFindIndexCacheByModEntry = cache.get(mod_idx);
+  if ce.ready {
+    return FindGenericFindIndexCachedResult { cache: cache, mix: ce.mix };
   }
-
-  let mut lo: i32 = 0;
-  let mut hi: i32 = cache0.len();
-  while lo < hi {
-    let mid: i32 = lo + ((hi - lo) / 2);
-    let ce: GenericFindIndexCacheEntry = cache0.get(mid);
-    if generic_find_index_cache_entry_eq(ce, m.path) {
-      return FindGenericFindIndexCachedResult { cache: cache0, mix: ce.mix };
-    }
-    if generic_find_index_cache_entry_less(ce, m.path) {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
-  }
-
   let mix: GenericFindModuleIndex = build_generic_find_module_index(ctx, m);
-  let mut cache: Vec[GenericFindIndexCacheEntry] = cache0;
-  cache.insert(lo, GenericFindIndexCacheEntry { mod_path: m.path, mix: mix });
+  cache.set(mod_idx, GenericFindIndexCacheByModEntry { ready: true, mix: mix });
   return FindGenericFindIndexCachedResult { cache: cache, mix: mix };
 }
 
@@ -808,7 +791,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
   let mod_index: Vec[ModIndexEntry] = build_mod_index(w);
   let mut cached_mod_path: String = "";
   let mut cached_mod_idx: i32 = -1;
-  let mut generic_find_index_cache: Vec[GenericFindIndexCacheEntry] = Vec();
+  let mut generic_find_index_cache: Vec[GenericFindIndexCacheByModEntry] = Vec();
   let mut generic_func_cache: Vec[GenericFuncCacheEntry] = Vec();
   let mut imports_cache: Vec[ImportsCacheEntry] = Vec();
   let mut ti: i32 = 0;
@@ -947,7 +930,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       }
     } else {
       // Generic instantiation task.
-      let gfx: FindGenericFindIndexCachedResult = find_generic_find_index_cached(ctx, m2, generic_find_index_cache);
+      let gfx: FindGenericFindIndexCachedResult = find_generic_find_index_cached(ctx, m2, mod_idx, generic_find_index_cache);
       generic_find_index_cache = gfx.cache;
       let cfr: FindGenericFuncCachedResult = find_generic_func_cached(ctx, m2, t.base_name, gfx.mix, generic_func_cache);
       generic_func_cache = cfr.cache;
