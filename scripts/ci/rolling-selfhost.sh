@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK_DIR="$ROOT"
 OUT_REL="${VOX_SELFHOST_OUT:-target/debug/vox_rolling}"
 FORCE_REBUILD="${VOX_SELFHOST_FORCE_REBUILD:-0}"
+INCREMENTAL_RAW="${VOX_INCREMENTAL:-1}"
 
 # Some generated stage binaries can exceed default thread stack limits on
 # macOS during rolling bootstrap. Best-effort raise stack limit.
@@ -21,6 +22,17 @@ modes:
   test       build compiler, then run test smoke
   print-bin  build compiler and print its absolute path
 USAGE
+}
+
+incremental_enabled() {
+  case "$INCREMENTAL_RAW" in
+    0|false|FALSE|False|off|OFF|Off|no|NO|No)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
 }
 
 resolve_bin() {
@@ -146,6 +158,7 @@ should_rebuild_selfhost() {
   local out_path="$WORK_DIR/$OUT_REL"
   local cache_key_file="${out_path}.cache.key"
   if [[ "$FORCE_REBUILD" == "1" ]]; then return 0; fi
+  if ! incremental_enabled; then return 0; fi
   if [[ ! -f "$out_path" && ! -f "${out_path}.exe" ]]; then return 0; fi
   if [[ ! -f "$cache_key_file" ]]; then return 0; fi
 
@@ -169,6 +182,7 @@ should_rebuild_selfhost() {
 
 write_selfhost_cache_key() {
   local bootstrap_bin="$1"
+  if ! incremental_enabled; then return 0; fi
   local out_path="$WORK_DIR/$OUT_REL"
   local cache_key_file="${out_path}.cache.key"
   local cache_dir

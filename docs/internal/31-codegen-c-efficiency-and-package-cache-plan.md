@@ -390,6 +390,7 @@ Invalidate unit on any of:
 - 2026-03-10: added a top-level incremental gate env (`VOX_INCREMENTAL=0/1`) for `build`/`test`/`list` cache reuse paths (including test discovery/list caches in `vox test`). Effective cache enablement is now `build-cache-enabled && incremental-enabled`, so developers can force non-incremental behavior for A/B profiling or cache-debug runs without changing existing `VOX_BUILD_CACHE_DISABLE` semantics.
 - 2026-03-10: added CI incremental gate check (`scripts/ci/check-incremental-gate.sh`, wired into `make test-active`/`make test`) to assert end-to-end `VOX_INCREMENTAL` behavior on test discovery cache sidecars: `VOX_INCREMENTAL=0` must not read/write `.vox_test_discover.{key,list}`, and `VOX_INCREMENTAL=1` must create them.
 - 2026-03-10: build/test query-shadow preparation is now also gated by `VOX_INCREMENTAL` (effective `query_shadow_on = VOX_QUERY_SHADOW && VOX_INCREMENTAL`), so fully non-incremental runs skip parse/load shadow key derivation and write paths consistently.
+- 2026-03-10: `scripts/ci/rolling-selfhost.sh` now also honors `VOX_INCREMENTAL=0` by forcing non-cache rebuild path (`should_rebuild_selfhost => yes`) and skipping selfhost cache-key writes in that mode, keeping bootstrap/toolchain behavior aligned with compiler incremental toggles.
 
 ## 5. Validation Gates
 
