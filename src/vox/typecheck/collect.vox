@@ -406,7 +406,7 @@ struct TypeWalkResult {
 struct TypeResolveCacheEntry {
   mod_path: String,
   file: String,
-  ty_text: String,
+  ty: ast.TypeName,
   ty_idx: i32,
 }
 
@@ -415,7 +415,7 @@ struct TypeResolveCache {
   has_last: bool,
   last_mod_path: String,
   last_file: String,
-  last_ty_text: String,
+  last_ty: ast.TypeName,
   last_ty_idx: i32,
 }
 
@@ -432,21 +432,55 @@ fn type_resolve_cache_empty() -> TypeResolveCache {
     has_last: false,
     last_mod_path: "",
     last_file: "",
-    last_ty_text: "",
+    last_ty: ast.TypeName { parts: Vec(), args: Vec() },
     last_ty_idx: -1,
   };
 }
 
-fn type_resolve_cache_entry_eq(ce: TypeResolveCacheEntry, mod_path: String, file: String, ty_text: String) -> bool {
-  return ce.mod_path == mod_path && ce.file == file && ce.ty_text == ty_text;
+fn type_name_key_cmp(a: ast.TypeName, b: ast.TypeName) -> i32 {
+  let mut i: i32 = 0;
+  let mut parts_len: i32 = a.parts.len();
+  if b.parts.len() < parts_len { parts_len = b.parts.len(); }
+  while i < parts_len {
+    let ap: String = a.parts.get(i);
+    let bp: String = b.parts.get(i);
+    if ap < bp { return -1; }
+    if ap > bp { return 1; }
+    i = i + 1;
+  }
+  if a.parts.len() < b.parts.len() { return -1; }
+  if a.parts.len() > b.parts.len() { return 1; }
+  i = 0;
+  let mut args_len: i32 = a.args.len();
+  if b.args.len() < args_len { args_len = b.args.len(); }
+  while i < args_len {
+    let ci: i32 = type_name_key_cmp(a.args.get(i), b.args.get(i));
+    if ci != 0 { return ci; }
+    i = i + 1;
+  }
+  if a.args.len() < b.args.len() { return -1; }
+  if a.args.len() > b.args.len() { return 1; }
+  return 0;
 }
 
-fn type_resolve_cache_entry_less(ce: TypeResolveCacheEntry, mod_path: String, file: String, ty_text: String) -> bool {
+fn type_name_key_eq(a: ast.TypeName, b: ast.TypeName) -> bool {
+  return type_name_key_cmp(a, b) == 0;
+}
+
+fn type_name_key_less(a: ast.TypeName, b: ast.TypeName) -> bool {
+  return type_name_key_cmp(a, b) < 0;
+}
+
+fn type_resolve_cache_entry_eq(ce: TypeResolveCacheEntry, mod_path: String, file: String, ty: ast.TypeName) -> bool {
+  return ce.mod_path == mod_path && ce.file == file && type_name_key_eq(ce.ty, ty);
+}
+
+fn type_resolve_cache_entry_less(ce: TypeResolveCacheEntry, mod_path: String, file: String, ty: ast.TypeName) -> bool {
   if ce.mod_path < mod_path { return true; }
   if ce.mod_path > mod_path { return false; }
   if ce.file < file { return true; }
   if ce.file > file { return false; }
-  return ce.ty_text < ty_text;
+  return type_name_key_less(ce.ty, ty);
 }
 
 fn resolve_type_cached_for_body(
@@ -464,8 +498,7 @@ fn resolve_type_cached_for_body(
     return ResolveTypeCachedResult { ok: tr.ok, idx: tr.idx, ctx: tr.ctx, cache: cache0 };
   }
   let mut cache: TypeResolveCache = cache0;
-  let ty_text: String = type_name_text(tn);
-  if cache.has_last && cache.last_mod_path == mod_path && cache.last_file == owner_file && cache.last_ty_text == ty_text {
+  if cache.has_last && cache.last_mod_path == mod_path && cache.last_file == owner_file && type_name_key_eq(cache.last_ty, tn) {
     return ResolveTypeCachedResult { ok: true, idx: cache.last_ty_idx, ctx: ctx, cache: cache };
   }
   let mut lo: i32 = 0;
@@ -473,15 +506,15 @@ fn resolve_type_cached_for_body(
   while lo < hi {
     let mid: i32 = lo + ((hi - lo) / 2);
     let ce: TypeResolveCacheEntry = cache.entries.get(mid);
-    if type_resolve_cache_entry_eq(ce, mod_path, owner_file, ty_text) {
+    if type_resolve_cache_entry_eq(ce, mod_path, owner_file, tn) {
       cache.has_last = true;
       cache.last_mod_path = mod_path;
       cache.last_file = owner_file;
-      cache.last_ty_text = ty_text;
+      cache.last_ty = ce.ty;
       cache.last_ty_idx = ce.ty_idx;
       return ResolveTypeCachedResult { ok: true, idx: ce.ty_idx, ctx: ctx, cache: cache };
     }
-    if type_resolve_cache_entry_less(ce, mod_path, owner_file, ty_text) {
+    if type_resolve_cache_entry_less(ce, mod_path, owner_file, tn) {
       lo = mid + 1;
     } else {
       hi = mid;
@@ -494,13 +527,13 @@ fn resolve_type_cached_for_body(
   cache.entries.insert(lo, TypeResolveCacheEntry {
     mod_path: mod_path,
     file: owner_file,
-    ty_text: ty_text,
+    ty: tn,
     ty_idx: tr.idx,
   });
   cache.has_last = true;
   cache.last_mod_path = mod_path;
   cache.last_file = owner_file;
-  cache.last_ty_text = ty_text;
+  cache.last_ty = tn;
   cache.last_ty_idx = tr.idx;
   return ResolveTypeCachedResult { ok: true, idx: tr.idx, ctx: tr.ctx, cache: cache };
 }
