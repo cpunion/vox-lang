@@ -251,17 +251,11 @@ struct GenericFuncCacheEntry { mod_path: String, name: String, res: FindFuncDecl
 struct FindGenericFuncCachedResult { cache: Vec[GenericFuncCacheEntry], res: FindFuncDeclResult }
 struct ImportsCacheEntry { mod_path: String, file: String, imps: tc.Imports }
 struct FindImportsCachedResult { cache: Vec[ImportsCacheEntry], ar: tc.ImportsResult }
+struct GenericFindModuleIndex { decl_impl_sig_idx: Vec[i32], method_decl_indexes: Vec[Vec[ImplMethodDeclIndexEntry]] }
+struct GenericFindIndexCacheEntry { mod_path: String, mix: GenericFindModuleIndex }
+struct FindGenericFindIndexCachedResult { cache: Vec[GenericFindIndexCacheEntry], mix: GenericFindModuleIndex }
 
-fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDeclResult {
-  let mut i: i32 = 0;
-  while i < m.prog.funcs.len() {
-    let fd: ast.FuncDecl = m.prog.funcs.get(i);
-    if fd.name == name && (fd.type_params.len() != 0 || fd.const_params.len() != 0) { return FindFuncDeclResult { found: true, mod_path: m.path, fd: fd }; }
-    i = i + 1;
-  }
-
-  // Generic impl methods are looked up by lowered impl symbol name.
-  // Build once: decl_idx -> impl sig idx for this module, then probe methods.
+fn build_generic_find_module_index(ctx: tc.Ctx, m: tc.WorldModule) -> GenericFindModuleIndex {
   let mut decl_impl_sig_idx: Vec[i32] = Vec();
   let mut di: i32 = 0;
   while di < m.prog.impls.len() {
@@ -278,13 +272,31 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
     }
     si = si + 1;
   }
-
+  let mut method_decl_indexes: Vec[Vec[ImplMethodDeclIndexEntry]] = Vec();
   let mut ii: i32 = 0;
   while ii < m.prog.impls.len() {
-    let sig_idx: i32 = decl_impl_sig_idx.get(ii);
+    method_decl_indexes.push(build_impl_method_decl_index(m.prog.impls.get(ii)));
+    ii = ii + 1;
+  }
+  return GenericFindModuleIndex { decl_impl_sig_idx: decl_impl_sig_idx, method_decl_indexes: method_decl_indexes };
+}
+
+fn find_generic_func_with_index(ctx: tc.Ctx, m: tc.WorldModule, name: String, mix: GenericFindModuleIndex) -> FindFuncDeclResult {
+  let mut i: i32 = 0;
+  while i < m.prog.funcs.len() {
+    let fd: ast.FuncDecl = m.prog.funcs.get(i);
+    if fd.name == name && (fd.type_params.len() != 0 || fd.const_params.len() != 0) { return FindFuncDeclResult { found: true, mod_path: m.path, fd: fd }; }
+    i = i + 1;
+  }
+
+  // Generic impl methods are looked up by lowered impl symbol name.
+  // Reuse prebuilt per-module indexes to avoid repeated rebuild work.
+  let mut ii: i32 = 0;
+  while ii < m.prog.impls.len() {
+    let sig_idx: i32 = mix.decl_impl_sig_idx.get(ii);
     if sig_idx != -1 {
       let id: ast.ImplDecl = m.prog.impls.get(ii);
-      let method_decl_index: Vec[ImplMethodDeclIndexEntry] = build_impl_method_decl_index(id);
+      let method_decl_index: Vec[ImplMethodDeclIndexEntry] = mix.method_decl_indexes.get(ii);
       let isg: tc.ImplSig = ctx.impls.get(sig_idx);
       let mut mi: i32 = 0;
       while mi < isg.methods.len() {
@@ -361,6 +373,11 @@ fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDe
   };
 }
 
+fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDeclResult {
+  let mix: GenericFindModuleIndex = build_generic_find_module_index(ctx, m);
+  return find_generic_func_with_index(ctx, m, name, mix);
+}
+
 fn generic_func_cache_entry_eq(ce: GenericFuncCacheEntry, mod_path: String, name: String) -> bool {
   return ce.mod_path == mod_path && ce.name == name;
 }
@@ -381,14 +398,57 @@ fn imports_cache_entry_less(ce: ImportsCacheEntry, mod_path: String, file: Strin
   return ce.file < file;
 }
 
-fn find_generic_func_cached(ctx: tc.Ctx, m: tc.WorldModule, name: String, cache0: Vec[GenericFuncCacheEntry]) -> FindGenericFuncCachedResult {
+fn generic_find_index_cache_entry_eq(ce: GenericFindIndexCacheEntry, mod_path: String) -> bool {
+  return ce.mod_path == mod_path;
+}
+
+fn generic_find_index_cache_entry_less(ce: GenericFindIndexCacheEntry, mod_path: String) -> bool {
+  return ce.mod_path < mod_path;
+}
+
+fn find_generic_find_index_cached(ctx: tc.Ctx, m: tc.WorldModule, cache0: Vec[GenericFindIndexCacheEntry]) -> FindGenericFindIndexCachedResult {
+  if cache0.len() > 0 {
+    let last: GenericFindIndexCacheEntry = cache0.get(cache0.len() - 1);
+    if generic_find_index_cache_entry_eq(last, m.path) {
+      return FindGenericFindIndexCachedResult { cache: cache0, mix: last.mix };
+    }
+    if generic_find_index_cache_entry_less(last, m.path) {
+      let mix1: GenericFindModuleIndex = build_generic_find_module_index(ctx, m);
+      let mut cache1: Vec[GenericFindIndexCacheEntry] = cache0;
+      cache1.push(GenericFindIndexCacheEntry { mod_path: m.path, mix: mix1 });
+      return FindGenericFindIndexCachedResult { cache: cache1, mix: mix1 };
+    }
+  }
+
+  let mut lo: i32 = 0;
+  let mut hi: i32 = cache0.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let ce: GenericFindIndexCacheEntry = cache0.get(mid);
+    if generic_find_index_cache_entry_eq(ce, m.path) {
+      return FindGenericFindIndexCachedResult { cache: cache0, mix: ce.mix };
+    }
+    if generic_find_index_cache_entry_less(ce, m.path) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  let mix: GenericFindModuleIndex = build_generic_find_module_index(ctx, m);
+  let mut cache: Vec[GenericFindIndexCacheEntry] = cache0;
+  cache.insert(lo, GenericFindIndexCacheEntry { mod_path: m.path, mix: mix });
+  return FindGenericFindIndexCachedResult { cache: cache, mix: mix };
+}
+
+fn find_generic_func_cached(ctx: tc.Ctx, m: tc.WorldModule, name: String, mix: GenericFindModuleIndex, cache0: Vec[GenericFuncCacheEntry]) -> FindGenericFuncCachedResult {
   if cache0.len() > 0 {
     let last: GenericFuncCacheEntry = cache0.get(cache0.len() - 1);
     if generic_func_cache_entry_eq(last, m.path, name) {
       return FindGenericFuncCachedResult { cache: cache0, res: last.res };
     }
     if generic_func_cache_entry_less(last, m.path, name) {
-      let res1: FindFuncDeclResult = find_generic_func(ctx, m, name);
+      let res1: FindFuncDeclResult = find_generic_func_with_index(ctx, m, name, mix);
       let mut cache1: Vec[GenericFuncCacheEntry] = cache0;
       cache1.push(GenericFuncCacheEntry { mod_path: m.path, name: name, res: res1 });
       return FindGenericFuncCachedResult { cache: cache1, res: res1 };
@@ -408,7 +468,7 @@ fn find_generic_func_cached(ctx: tc.Ctx, m: tc.WorldModule, name: String, cache0
       hi = mid;
     }
   }
-  let res: FindFuncDeclResult = find_generic_func(ctx, m, name);
+  let res: FindFuncDeclResult = find_generic_func_with_index(ctx, m, name, mix);
   let mut cache: Vec[GenericFuncCacheEntry] = cache0;
   cache.insert(lo, GenericFuncCacheEntry { mod_path: m.path, name: name, res: res });
   return FindGenericFuncCachedResult { cache: cache, res: res };
@@ -748,6 +808,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
   let mod_index: Vec[ModIndexEntry] = build_mod_index(w);
   let mut cached_mod_path: String = "";
   let mut cached_mod_idx: i32 = -1;
+  let mut generic_find_index_cache: Vec[GenericFindIndexCacheEntry] = Vec();
   let mut generic_func_cache: Vec[GenericFuncCacheEntry] = Vec();
   let mut imports_cache: Vec[ImportsCacheEntry] = Vec();
   let mut ti: i32 = 0;
@@ -886,7 +947,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       }
     } else {
       // Generic instantiation task.
-      let cfr: FindGenericFuncCachedResult = find_generic_func_cached(ctx, m2, t.base_name, generic_func_cache);
+      let gfx: FindGenericFindIndexCachedResult = find_generic_find_index_cached(ctx, m2, generic_find_index_cache);
+      generic_find_index_cache = gfx.cache;
+      let cfr: FindGenericFuncCachedResult = find_generic_func_cached(ctx, m2, t.base_name, gfx.mix, generic_func_cache);
       generic_func_cache = cfr.cache;
       let fr: FindFuncDeclResult = cfr.res;
       if !fr.found { return err0(p, "missing generic fn for instantiation"); }
