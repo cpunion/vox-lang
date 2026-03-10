@@ -2,6 +2,7 @@
 // Migration: API may change between minor releases; prefer vox/types for external tooling integration.
 
 import "vox/ast" as ast
+import "std/time" as tm
 
 pub struct TcDiag {
   pub kind: i32,
@@ -399,6 +400,44 @@ pub struct BuildCtxResult {
   pub ok: bool,
   pub err: TcError,
   pub ctx: Ctx,
+  pub p: BuildCtxPhaseProfile,
+}
+
+pub struct BuildCtxPhaseProfile {
+  pub validate_imports_ns: i64,
+  pub collect_type_aliases_ns: i64,
+  pub collect_structs_ns: i64,
+  pub collect_enums_ns: i64,
+  pub collect_traits_ns: i64,
+  pub collect_funcs_ns: i64,
+  pub collect_impls_ns: i64,
+  pub collect_async_fns_ns: i64,
+  pub collect_consts_ns: i64,
+  pub collect_statics_ns: i64,
+  pub collect_body_type_names_ns: i64,
+  pub rebuild_lookup_indexes_ns: i64,
+}
+
+fn build_ctx_phase_profile_zero() -> BuildCtxPhaseProfile {
+  return BuildCtxPhaseProfile {
+    validate_imports_ns: 0,
+    collect_type_aliases_ns: 0,
+    collect_structs_ns: 0,
+    collect_enums_ns: 0,
+    collect_traits_ns: 0,
+    collect_funcs_ns: 0,
+    collect_impls_ns: 0,
+    collect_async_fns_ns: 0,
+    collect_consts_ns: 0,
+    collect_statics_ns: 0,
+    collect_body_type_names_ns: 0,
+    rebuild_lookup_indexes_ns: 0,
+  };
+}
+
+fn dur_nonneg_ns_tc(start_ns: i64, end_ns: i64) -> i64 {
+  if end_ns <= start_ns { return 0; }
+  return end_ns - start_ns;
 }
 
 pub fn build_ctx(w: World) -> BuildCtxResult {
@@ -411,8 +450,10 @@ pub fn build_ctx_with_ptr_bits(w: World, ptr_bits: i32) -> BuildCtxResult {
 
 pub fn build_ctx_with_target(w: World, ptr_bits: i32, target_os: String, target_arch: String) -> BuildCtxResult {
   let mut c: Ctx = new_ctx_with_target(ptr_bits, target_os, target_arch);
+  let mut prof: BuildCtxPhaseProfile = build_ctx_phase_profile_zero();
   let w0: World = world_filter_by_file_build(c, w);
   // Validate that all imported modules exist.
+  let t0_validate_imports: i64 = tm.now_ns();
   let mut mi: i32 = 0;
   while mi < w0.mods.len() {
     let m: WorldModule = w0.mods.get(mi);
@@ -421,14 +462,19 @@ pub fn build_ctx_with_target(w: World, ptr_bits: i32, target_os: String, target_
     while ii < imps.len() {
       let imp: ast.ImportDecl = imps.get(ii);
       let rr: ResolveImportResult = resolve_import_path(w0, imp.file, imp.path, imp.sp);
-      if !rr.ok { return BuildCtxResult { ok: false, err: rr.err, ctx: c }; }
+      if !rr.ok {
+        prof.validate_imports_ns = dur_nonneg_ns_tc(t0_validate_imports, tm.now_ns());
+        return BuildCtxResult { ok: false, err: rr.err, ctx: c, p: prof };
+      }
       if rr.mod_idx == -1 {
         let fm: FindModResult = find_mod(w0, rr.path);
         if !fm.found {
+          prof.validate_imports_ns = dur_nonneg_ns_tc(t0_validate_imports, tm.now_ns());
           return BuildCtxResult {
             ok: false,
             err: import_error_at_code(imp.sp, "unknown module import: ".concat(imp.path), diag_code_import_unknown_module()),
             ctx: c,
+            p: prof,
           };
         }
       }
@@ -436,37 +482,60 @@ pub fn build_ctx_with_target(w: World, ptr_bits: i32, target_os: String, target_
     }
     mi = mi + 1;
   }
+  prof.validate_imports_ns = dur_nonneg_ns_tc(t0_validate_imports, tm.now_ns());
 
+  let t0_collect_type_aliases: i64 = tm.now_ns();
   let r0: TcCtxResult = collect_type_aliases(c, w0);
-  if !r0.ok { return BuildCtxResult { ok: false, err: r0.err, ctx: r0.ctx }; }
+  prof.collect_type_aliases_ns = dur_nonneg_ns_tc(t0_collect_type_aliases, tm.now_ns());
+  if !r0.ok { return BuildCtxResult { ok: false, err: r0.err, ctx: r0.ctx, p: prof }; }
   c = r0.ctx;
+  let t0_collect_structs: i64 = tm.now_ns();
   let r1: TcCtxResult = collect_structs(c, w0);
-  if !r1.ok { return BuildCtxResult { ok: false, err: r1.err, ctx: r1.ctx }; }
+  prof.collect_structs_ns = dur_nonneg_ns_tc(t0_collect_structs, tm.now_ns());
+  if !r1.ok { return BuildCtxResult { ok: false, err: r1.err, ctx: r1.ctx, p: prof }; }
   c = r1.ctx;
+  let t0_collect_enums: i64 = tm.now_ns();
   let r2: TcCtxResult = collect_enums(c, w0);
-  if !r2.ok { return BuildCtxResult { ok: false, err: r2.err, ctx: r2.ctx }; }
+  prof.collect_enums_ns = dur_nonneg_ns_tc(t0_collect_enums, tm.now_ns());
+  if !r2.ok { return BuildCtxResult { ok: false, err: r2.err, ctx: r2.ctx, p: prof }; }
   c = r2.ctx;
+  let t0_collect_traits: i64 = tm.now_ns();
   let r25: TcCtxResult = collect_traits(c, w0);
-  if !r25.ok { return BuildCtxResult { ok: false, err: r25.err, ctx: r25.ctx }; }
+  prof.collect_traits_ns = dur_nonneg_ns_tc(t0_collect_traits, tm.now_ns());
+  if !r25.ok { return BuildCtxResult { ok: false, err: r25.err, ctx: r25.ctx, p: prof }; }
   c = r25.ctx;
+  let t0_collect_funcs: i64 = tm.now_ns();
   let r3: TcCtxResult = collect_funcs(c, w0);
-  if !r3.ok { return BuildCtxResult { ok: false, err: r3.err, ctx: r3.ctx }; }
+  prof.collect_funcs_ns = dur_nonneg_ns_tc(t0_collect_funcs, tm.now_ns());
+  if !r3.ok { return BuildCtxResult { ok: false, err: r3.err, ctx: r3.ctx, p: prof }; }
   c = r3.ctx;
+  let t0_collect_impls: i64 = tm.now_ns();
   let r35: TcCtxResult = collect_impls(c, w0);
-  if !r35.ok { return BuildCtxResult { ok: false, err: r35.err, ctx: r35.ctx }; }
+  prof.collect_impls_ns = dur_nonneg_ns_tc(t0_collect_impls, tm.now_ns());
+  if !r35.ok { return BuildCtxResult { ok: false, err: r35.err, ctx: r35.ctx, p: prof }; }
   c = r35.ctx;
+  let t0_collect_async_fns: i64 = tm.now_ns();
   let r3a: TcCtxResult = collect_async_fns(c, w0);
-  if !r3a.ok { return BuildCtxResult { ok: false, err: r3a.err, ctx: r3a.ctx }; }
+  prof.collect_async_fns_ns = dur_nonneg_ns_tc(t0_collect_async_fns, tm.now_ns());
+  if !r3a.ok { return BuildCtxResult { ok: false, err: r3a.err, ctx: r3a.ctx, p: prof }; }
   c = r3a.ctx;
+  let t0_collect_consts: i64 = tm.now_ns();
   let r00: TcCtxResult = collect_consts(c, w0);
-  if !r00.ok { return BuildCtxResult { ok: false, err: r00.err, ctx: r00.ctx }; }
+  prof.collect_consts_ns = dur_nonneg_ns_tc(t0_collect_consts, tm.now_ns());
+  if !r00.ok { return BuildCtxResult { ok: false, err: r00.err, ctx: r00.ctx, p: prof }; }
   c = r00.ctx;
+  let t0_collect_statics: i64 = tm.now_ns();
   let r00s: TcCtxResult = collect_statics(c, w0);
-  if !r00s.ok { return BuildCtxResult { ok: false, err: r00s.err, ctx: r00s.ctx }; }
+  prof.collect_statics_ns = dur_nonneg_ns_tc(t0_collect_statics, tm.now_ns());
+  if !r00s.ok { return BuildCtxResult { ok: false, err: r00s.err, ctx: r00s.ctx, p: prof }; }
   c = r00s.ctx;
+  let t0_collect_body_type_names: i64 = tm.now_ns();
   let r4: TcCtxResult = collect_body_type_names(c, w0);
-  if !r4.ok { return BuildCtxResult { ok: false, err: r4.err, ctx: r4.ctx }; }
+  prof.collect_body_type_names_ns = dur_nonneg_ns_tc(t0_collect_body_type_names, tm.now_ns());
+  if !r4.ok { return BuildCtxResult { ok: false, err: r4.err, ctx: r4.ctx, p: prof }; }
   c = r4.ctx;
+  let t0_rebuild_lookup_indexes: i64 = tm.now_ns();
   c = ctx_rebuild_sym_lookup_indexes(c);
-  return BuildCtxResult { ok: true, err: TcError.None, ctx: c };
+  prof.rebuild_lookup_indexes_ns = dur_nonneg_ns_tc(t0_rebuild_lookup_indexes, tm.now_ns());
+  return BuildCtxResult { ok: true, err: TcError.None, ctx: c, p: prof };
 }
