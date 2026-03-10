@@ -180,6 +180,31 @@ fn c_atomic_val_c_type(pool: ir.TyPool, elem_ty: i32) -> String {
   };
 }
 
+pub fn build_c_type_table(pool: ir.TyPool) -> Vec[String] {
+  let mut out: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < pool.tys.len() {
+    let t: ir.Ty = ir.ty_pool_get(pool, i);
+    if t.kind == ir.TyKind.Param || t.kind == ir.TyKind.Ref || t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified {
+      // Keep wrappers/unresolved params lazy; precomputing them can recurse into
+      // unresolved type params in generic contexts.
+      out.push("");
+    } else {
+      out.push(c_type(pool, i));
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+fn c_type_from_table(c_types: Vec[String], pool: ir.TyPool, ty_idx: i32) -> String {
+  if ty_idx >= 0 && ty_idx < c_types.len() {
+    let ct: String = c_types.get(ty_idx);
+    if ct != "" { return ct; }
+  }
+  return c_type(pool, ty_idx);
+}
+
 fn emit_instr_atomic_new(pool: ir.TyPool, tid: i32, elem_ty: i32, val: ir.Value) -> Vec[String] {
   let at: String = c_atomic_c_type(pool, elem_ty);
   let tmp: String = "_at_".concat(tid.to_string());
@@ -1047,59 +1072,59 @@ fn locals_add_temp(l0: LocalsResult, tid: i32, ty: String) -> LocalsResult {
   return l;
 }
 
-fn locals_add_call(pool: ir.TyPool, l0: LocalsResult, has_dst: bool, tid: i32, ret_ty: i32) -> LocalsResult {
+fn locals_add_call(c_types: Vec[String], pool: ir.TyPool, l0: LocalsResult, has_dst: bool, tid: i32, ret_ty: i32) -> LocalsResult {
   if !has_dst { return l0; }
-  return locals_add_temp(l0, tid, c_type(pool, ret_ty));
+  return locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ret_ty));
 }
 
-fn locals_add_instr(pool: ir.TyPool, l0: LocalsResult, ins: ir.Instr) -> LocalsResult {
+fn locals_add_instr(c_types: Vec[String], pool: ir.TyPool, l0: LocalsResult, ins: ir.Instr) -> LocalsResult {
   return match ins {
-    ir.Instr.SlotDecl(sid, ty) => locals_add_slot(l0, sid, c_type(pool, ty)),
-    ir.Instr.Const(tid, ty, _v) => locals_add_temp(l0, tid, c_type(pool, ty)),
-    ir.Instr.BinOp(tid, _op, ty, _a, _b) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.SlotDecl(sid, ty) => locals_add_slot(l0, sid, c_type_from_table(c_types, pool, ty)),
+    ir.Instr.Const(tid, ty, _v) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
+    ir.Instr.BinOp(tid, _op, ty, _a, _b) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
     ir.Instr.Cmp(tid, _op, _oty, _a, _b) => locals_add_temp(l0, tid, "bool"),
     ir.Instr.And(tid, _a, _b) => locals_add_temp(l0, tid, "bool"),
     ir.Instr.Or(tid, _a, _b) => locals_add_temp(l0, tid, "bool"),
     ir.Instr.Not(tid, _a) => locals_add_temp(l0, tid, "bool"),
-    ir.Instr.IntCast(tid, dst_ty, _src_ty, _v) => locals_add_temp(l0, tid, c_type(pool, dst_ty)),
-    ir.Instr.IntCastChecked(tid, dst_ty, _src_ty, _v) => locals_add_temp(l0, tid, c_type(pool, dst_ty)),
-    ir.Instr.FloatCast(tid, dst_ty, _src_ty, _v) => locals_add_temp(l0, tid, c_type(pool, dst_ty)),
-    ir.Instr.Load(tid, ty, _sid) => locals_add_temp(l0, tid, c_type(pool, ty)),
-    ir.Instr.GlobalLoad(tid, ty, _name) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.IntCast(tid, dst_ty, _src_ty, _v) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, dst_ty)),
+    ir.Instr.IntCastChecked(tid, dst_ty, _src_ty, _v) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, dst_ty)),
+    ir.Instr.FloatCast(tid, dst_ty, _src_ty, _v) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, dst_ty)),
+    ir.Instr.Load(tid, ty, _sid) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
+    ir.Instr.GlobalLoad(tid, ty, _name) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
     ir.Instr.GlobalStore(_ty, _name, _v) => l0,
-    ir.Instr.AddrOfSlot(tid, ty, _sid) => locals_add_temp(l0, tid, c_type(pool, ty)),
-    ir.Instr.AddrOfFieldChain(tid, ty, _sid, _fs) => locals_add_temp(l0, tid, c_type(pool, ty)),
-    ir.Instr.RefLoad(tid, ty, _recv) => locals_add_temp(l0, tid, c_type(pool, ty)),
-    ir.Instr.PtrRead(tid, ty, _ptr) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.AddrOfSlot(tid, ty, _sid) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
+    ir.Instr.AddrOfFieldChain(tid, ty, _sid, _fs) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
+    ir.Instr.RefLoad(tid, ty, _recv) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
+    ir.Instr.PtrRead(tid, ty, _ptr) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
     ir.Instr.PtrWrite(_ty, _ptr, _v) => l0,
     ir.Instr.PtrOffset(tid, _ptr, _off) => locals_add_temp(l0, tid, "void*"),
-    ir.Instr.StructInit(tid, ty, _fs) => locals_add_temp(l0, tid, c_type(pool, ty)),
-    ir.Instr.FieldGet(tid, ty, _r, _f) => locals_add_temp(l0, tid, c_type(pool, ty)),
-    ir.Instr.EnumInit(tid, ty, _v, _ps) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.StructInit(tid, ty, _fs) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
+    ir.Instr.FieldGet(tid, ty, _r, _f) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
+    ir.Instr.EnumInit(tid, ty, _v, _ps) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
     ir.Instr.EnumTag(tid, _r) => locals_add_temp(l0, tid, "int32_t"),
-    ir.Instr.EnumPayload(tid, ty, _r, _v, _i) => locals_add_temp(l0, tid, c_type(pool, ty)),
-    ir.Instr.VecNew(tid, ty, _elem) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.EnumPayload(tid, ty, _r, _v, _i) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
+    ir.Instr.VecNew(tid, ty, _elem) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
     ir.Instr.VecInsert(_sid, _elem, _idx, _v) => l0,
     ir.Instr.VecSet(_sid, _elem, _idx, _v) => l0,
     ir.Instr.VecClear(_sid) => l0,
     ir.Instr.VecExtend(_sid, _other_sid) => l0,
-    ir.Instr.VecPop(tid, ty, _sid) => locals_add_temp(l0, tid, c_type(pool, ty)),
-    ir.Instr.VecRemove(tid, ty, _sid, _idx) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.VecPop(tid, ty, _sid) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
+    ir.Instr.VecRemove(tid, ty, _sid, _idx) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
     ir.Instr.VecLen(tid, _sid) => locals_add_temp(l0, tid, "int32_t"),
-    ir.Instr.VecGet(tid, ty, _sid, _idx) => locals_add_temp(l0, tid, c_type(pool, ty)),
+    ir.Instr.VecGet(tid, ty, _sid, _idx) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, ty)),
     ir.Instr.AtomicNew(tid, _elem_ty, _val) => locals_add_temp(l0, tid, "intptr_t"),
-    ir.Instr.AtomicLoad(tid, elem_ty, _h) => locals_add_temp(l0, tid, c_type(pool, elem_ty)),
+    ir.Instr.AtomicLoad(tid, elem_ty, _h) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, elem_ty)),
     ir.Instr.AtomicStore(_elem_ty, _h, _val) => l0,
-    ir.Instr.AtomicFetchAdd(tid, elem_ty, _h, _delta) => locals_add_temp(l0, tid, c_type(pool, elem_ty)),
-    ir.Instr.AtomicSwap(tid, elem_ty, _h, _val) => locals_add_temp(l0, tid, c_type(pool, elem_ty)),
+    ir.Instr.AtomicFetchAdd(tid, elem_ty, _h, _delta) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, elem_ty)),
+    ir.Instr.AtomicSwap(tid, elem_ty, _h, _val) => locals_add_temp(l0, tid, c_type_from_table(c_types, pool, elem_ty)),
     ir.Instr.AtomicCAS(tid, _ety, _h, _expected, _desired) => locals_add_temp(l0, tid, "bool"),
     ir.Instr.AtomicDrop(_ety, _h) => l0,
-    ir.Instr.Call(has_dst, tid, ret_ty, _name, _args) => locals_add_call(pool, l0, has_dst, tid, ret_ty),
+    ir.Instr.Call(has_dst, tid, ret_ty, _name, _args) => locals_add_call(c_types, pool, l0, has_dst, tid, ret_ty),
     _ => l0,
   };
 }
 
-fn collect_locals(pool: ir.TyPool, f: ir.Func, keep_instrs: Vec[bool], block_offsets: Vec[i32], read_temps: Vec[bool]) -> LocalsResult {
+fn collect_locals(c_types: Vec[String], pool: ir.TyPool, f: ir.Func, keep_instrs: Vec[bool], block_offsets: Vec[i32], read_temps: Vec[bool]) -> LocalsResult {
   let mut l: LocalsResult = locals0();
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
@@ -1112,14 +1137,14 @@ fn collect_locals(pool: ir.TyPool, f: ir.Func, keep_instrs: Vec[bool], block_off
       if keep {
         l = match ins {
           ir.Instr.Call(has_dst, tid, ret_ty, _name, _args) =>
-            locals_add_call(pool, l, call_dst_is_read(has_dst, tid, read_temps), tid, ret_ty),
+            locals_add_call(c_types, pool, l, call_dst_is_read(has_dst, tid, read_temps), tid, ret_ty),
           ir.Instr.VecPop(tid, ty, _sid) =>
-            if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type(pool, ty)) } else { l },
+            if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type_from_table(c_types, pool, ty)) } else { l },
           ir.Instr.VecRemove(tid, ty, _sid, _idx) =>
-            if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type(pool, ty)) } else { l },
+            if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type_from_table(c_types, pool, ty)) } else { l },
           ir.Instr.VecGet(tid, ty, _sid, _idx) =>
-            if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type(pool, ty)) } else { l },
-          _ => locals_add_instr(pool, l, ins),
+            if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type_from_table(c_types, pool, ty)) } else { l },
+          _ => locals_add_instr(c_types, pool, l, ins),
         };
       }
       ii = ii + 1;
@@ -2243,7 +2268,7 @@ fn enum_variant_tag(en: ir.EnumDecl, variant: String) -> i32 {
   return -1;
 }
 
-pub fn emit_func_append(out0: Vec[String], pool: ir.TyPool, p: ir.Program, f: ir.Func, call_names: Vec[CallNameEntry], enum_order: Vec[i32]) -> Vec[String] {
+pub fn emit_func_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, p: ir.Program, f: ir.Func, call_names: Vec[CallNameEntry], enum_order: Vec[i32]) -> Vec[String] {
   let seed_slots: Vec[bool] = collect_live_slots_all_reads(f);
   let live_temps0: Vec[bool] = collect_live_temps(pool, f, seed_slots);
   let live_slots: Vec[bool] = collect_live_slots_filtered(pool, f, live_temps0, seed_slots);
@@ -2257,7 +2282,7 @@ pub fn emit_func_append(out0: Vec[String], pool: ir.TyPool, p: ir.Program, f: ir
   let read_temps: Vec[bool] = live_temps;
   let block_offsets: Vec[i32] = block_instr_offsets(f);
   let keep_instrs: Vec[bool] = collect_kept_instr_flags(pool, f, live_temps, live_slots);
-  let locals: LocalsResult = collect_locals(pool, f, keep_instrs, block_offsets, read_temps);
+  let locals: LocalsResult = collect_locals(c_types, pool, f, keep_instrs, block_offsets, read_temps);
   let slot_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.slots);
   let temp_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.temps);
   let block_order: Vec[i32] = block_name_order(f.blocks);
@@ -2280,7 +2305,7 @@ pub fn emit_func_append(out0: Vec[String], pool: ir.TyPool, p: ir.Program, f: ir
   while i < f.params.len() {
     if i != 0 { sig = sig.concat(", "); }
     let pa: ir.Param = f.params.get(i);
-    sig = sig.concat(c_type(pool, pa.ty)).concat(" ").concat(c_param_name(i));
+    sig = sig.concat(c_type_from_table(c_types, pool, pa.ty)).concat(" ").concat(c_param_name(i));
     i = i + 1;
   }
   sig = sig.concat(") {");
@@ -2378,6 +2403,6 @@ pub fn emit_func_append(out0: Vec[String], pool: ir.TyPool, p: ir.Program, f: ir
   return out;
 }
 
-pub fn emit_func(pool: ir.TyPool, p: ir.Program, f: ir.Func, call_names: Vec[CallNameEntry], enum_order: Vec[i32]) -> Vec[String] {
-  return emit_func_append(Vec(), pool, p, f, call_names, enum_order);
+pub fn emit_func(c_types: Vec[String], pool: ir.TyPool, p: ir.Program, f: ir.Func, call_names: Vec[CallNameEntry], enum_order: Vec[i32]) -> Vec[String] {
+  return emit_func_append(Vec(), c_types, pool, p, f, call_names, enum_order);
 }
