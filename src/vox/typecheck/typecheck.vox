@@ -151,6 +151,8 @@ pub fn world_add(w: World, path: String, prog: ast.Program) -> World {
 
 struct FindImplByDeclResult { found: bool, sig: ImplSig }
 struct ImplByDeclIndexEntry { mod_path: String, decl_idx: i32, impl_idx: i32 }
+struct ImplMethodByNameIndexEntry { name: String, method_idx: i32 }
+struct TraitMethodAsyncIndexEntry { name: String, is_async: bool }
 
 fn empty_impl_sig() -> ImplSig {
   return ImplSig {
@@ -243,6 +245,156 @@ fn find_impl_by_decl_indexed(ctx: Ctx, index: Vec[ImplByDeclIndexEntry], mod_pat
   return FindImplByDeclResult { found: false, sig: empty_impl_sig() };
 }
 
+fn impl_method_by_name_index_entry_less(a: ImplMethodByNameIndexEntry, b: ImplMethodByNameIndexEntry) -> bool {
+  if a.name < b.name { return true; }
+  if a.name > b.name { return false; }
+  return a.method_idx < b.method_idx;
+}
+
+fn build_impl_method_by_name_index(methods: Vec[ImplMethodSig]) -> Vec[ImplMethodByNameIndexEntry] {
+  let mut out: Vec[ImplMethodByNameIndexEntry] = Vec();
+  let mut i: i32 = 0;
+  while i < methods.len() {
+    out.push(ImplMethodByNameIndexEntry { name: methods.get(i).name, method_idx: i });
+    i = i + 1;
+  }
+  if out.len() <= 1 { return out; }
+
+  let mut sorted: bool = true;
+  i = 1;
+  while i < out.len() {
+    if impl_method_by_name_index_entry_less(out.get(i), out.get(i - 1)) {
+      sorted = false;
+      break;
+    }
+    i = i + 1;
+  }
+  if !sorted {
+    let mut gap: i32 = out.len() / 2;
+    while gap > 0 {
+      let mut oi: i32 = gap;
+      while oi < out.len() {
+        let keep: ImplMethodByNameIndexEntry = out.get(oi);
+        let mut j: i32 = oi;
+        while j >= gap {
+          let prev: ImplMethodByNameIndexEntry = out.get(j - gap);
+          if !impl_method_by_name_index_entry_less(keep, prev) { break; }
+          out.set(j, prev);
+          j = j - gap;
+        }
+        out.set(j, keep);
+        oi = oi + 1;
+      }
+      gap = gap / 2;
+    }
+  }
+
+  // Keep first method order for duplicate names (same behavior as linear first-hit scan).
+  let mut dedup: Vec[ImplMethodByNameIndexEntry] = Vec();
+  i = 0;
+  while i < out.len() {
+    let keep: ImplMethodByNameIndexEntry = out.get(i);
+    dedup.push(keep);
+    i = i + 1;
+    while i < out.len() && out.get(i).name == keep.name {
+      i = i + 1;
+    }
+  }
+  return dedup;
+}
+
+fn find_impl_method_idx_from_index(ix: Vec[ImplMethodByNameIndexEntry], name: String) -> i32 {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = ix.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let it: ImplMethodByNameIndexEntry = ix.get(mid);
+    if it.name < name {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  if lo < ix.len() && ix.get(lo).name == name {
+    return ix.get(lo).method_idx;
+  }
+  return -1;
+}
+
+fn trait_method_async_index_entry_less(a: TraitMethodAsyncIndexEntry, b: TraitMethodAsyncIndexEntry) -> bool {
+  return a.name < b.name;
+}
+
+fn build_trait_method_async_index(ts: TraitSig) -> Vec[TraitMethodAsyncIndexEntry] {
+  let mut out: Vec[TraitMethodAsyncIndexEntry] = Vec();
+  let mut i: i32 = 0;
+  while i < ts.methods.len() {
+    let m: TraitMethodSig = ts.methods.get(i);
+    out.push(TraitMethodAsyncIndexEntry { name: m.name, is_async: m.is_async });
+    i = i + 1;
+  }
+  if out.len() <= 1 { return out; }
+
+  let mut sorted: bool = true;
+  i = 1;
+  while i < out.len() {
+    if trait_method_async_index_entry_less(out.get(i), out.get(i - 1)) {
+      sorted = false;
+      break;
+    }
+    i = i + 1;
+  }
+  if !sorted {
+    let mut gap: i32 = out.len() / 2;
+    while gap > 0 {
+      let mut oi: i32 = gap;
+      while oi < out.len() {
+        let keep: TraitMethodAsyncIndexEntry = out.get(oi);
+        let mut j: i32 = oi;
+        while j >= gap {
+          let prev: TraitMethodAsyncIndexEntry = out.get(j - gap);
+          if !trait_method_async_index_entry_less(keep, prev) { break; }
+          out.set(j, prev);
+          j = j - gap;
+        }
+        out.set(j, keep);
+        oi = oi + 1;
+      }
+      gap = gap / 2;
+    }
+  }
+
+  let mut dedup: Vec[TraitMethodAsyncIndexEntry] = Vec();
+  i = 0;
+  while i < out.len() {
+    let keep: TraitMethodAsyncIndexEntry = out.get(i);
+    dedup.push(keep);
+    i = i + 1;
+    while i < out.len() && out.get(i).name == keep.name {
+      i = i + 1;
+    }
+  }
+  return dedup;
+}
+
+fn find_trait_method_async_from_index(ix: Vec[TraitMethodAsyncIndexEntry], name: String) -> bool {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = ix.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let it: TraitMethodAsyncIndexEntry = ix.get(mid);
+    if it.name < name {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  if lo < ix.len() && ix.get(lo).name == name {
+    return ix.get(lo).is_async;
+  }
+  return false;
+}
+
 fn dummy_type_name() -> ast.TypeName {
   let mut parts: Vec[String] = Vec();
   parts.push("i32");
@@ -289,6 +441,7 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
       let id: ast.ImplDecl = m2.prog.impls.get(ii2);
       let fr0: FindImplByDeclResult = find_impl_by_decl_indexed(c, impl_by_decl_index, m2.path, ii2);
       if !fr0.found { return TcResult { ok: false, err: type_error_at(id.sp, "missing impl sig") }; }
+      let method_sig_index: Vec[ImplMethodByNameIndexEntry] = build_impl_method_by_name_index(fr0.sig.methods);
 
       let ir0: FindImportsCachedResult = build_imports_cached(w0, m2.path, m2.prog.imports, id.file, imports_cache);
       imports_cache = ir0.cache;
@@ -298,8 +451,9 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
       let mut mdi: i32 = 0;
       while mdi < id.methods.len() {
         let md: ast.FuncDecl = id.methods.get(mdi);
-        let mf: FindImplMethodResult = find_impl_method(fr0.sig, md.name);
-        if !mf.found { return TcResult { ok: false, err: type_error_at(md.sp, "missing impl method sig") }; }
+        let mf_idx: i32 = find_impl_method_idx_from_index(method_sig_index, md.name);
+        if mf_idx == -1 { return TcResult { ok: false, err: type_error_at(md.sp, "missing impl method sig") }; }
+        let mf: ImplMethodSig = fr0.sig.methods.get(mf_idx);
         // Use lowered name for async methods so lowering metadata lookup is unambiguous.
         let md2: ast.FuncDecl = ast.FuncDecl {
           file: md.file,
@@ -309,7 +463,7 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
           is_async: md.is_async,
           track_caller: md.track_caller,
           deprecated_message: md.deprecated_message,
-          name: mf.m.lowered_name,
+          name: mf.lowered_name,
           type_params: md.type_params,
           type_param_packs: md.type_param_packs,
           const_params: md.const_params,
@@ -324,27 +478,35 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
           resources: md.resources,
           body: md.body,
         };
-        let tr: TcResult = typecheck_fn_with_sig(c, w0, m2.path, m2.path, imps0, m2.prog.exprs, md2, mf.m.sig);
+        let tr: TcResult = typecheck_fn_with_sig(c, w0, m2.path, m2.path, imps0, m2.prog.exprs, md2, mf.sig);
         if !tr.ok { return tr; }
         mdi = mdi + 1;
       }
 
       // Typecheck synthesized default trait methods lowered into impl signatures.
+      let mut trait_method_async_ix: Vec[TraitMethodAsyncIndexEntry] = Vec();
+      if !fr0.sig.is_inherent {
+        let tf: FindTraitResult = find_trait(c, fr0.sig.trait_mod_path, fr0.sig.trait_name);
+        if tf.found {
+          trait_method_async_ix = build_trait_method_async_index(tf.sig);
+        }
+      }
+      let mut default_mod_cache_path: String = "";
+      let mut default_mod_cache_idx: i32 = -1;
       let mut mi3: i32 = 0;
       while mi3 < fr0.sig.methods.len() {
         let ms: ImplMethodSig = fr0.sig.methods.get(mi3);
         if ms.from_default {
-          let mut is_async: bool = false;
-          if !fr0.sig.is_inherent {
-            let tf: FindTraitResult = find_trait(c, fr0.sig.trait_mod_path, fr0.sig.trait_name);
-            if tf.found {
-              let tmf: FindTraitMethodResult = find_trait_method(tf.sig, ms.name);
-              if tmf.found { is_async = tmf.m.is_async; }
-            }
+          let is_async: bool = find_trait_method_async_from_index(trait_method_async_ix, ms.name);
+          let mut default_mod_idx: i32 = default_mod_cache_idx;
+          if default_mod_idx < 0 || default_mod_cache_path != ms.default_mod_path {
+            let fmd: FindModResult = find_mod(w0, ms.default_mod_path);
+            if !fmd.found { return TcResult { ok: false, err: type_error_at(id.sp, "missing default trait method module") }; }
+            default_mod_idx = fmd.idx;
+            default_mod_cache_path = ms.default_mod_path;
+            default_mod_cache_idx = default_mod_idx;
           }
-          let fmd: FindModResult = find_mod(w0, ms.default_mod_path);
-          if !fmd.found { return TcResult { ok: false, err: type_error_at(id.sp, "missing default trait method module") }; }
-          let mdm: WorldModule = w0.mods.get(fmd.idx);
+          let mdm: WorldModule = w0.mods.get(default_mod_idx);
           let ird: FindImportsCachedResult = build_imports_cached(w0, mdm.path, mdm.prog.imports, ms.default_file, imports_cache);
           imports_cache = ird.cache;
           if !ird.ar.ok { return TcResult { ok: false, err: ird.ar.err }; }
