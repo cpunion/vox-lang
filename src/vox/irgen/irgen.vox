@@ -249,6 +249,8 @@ fn find_mod_idx_from_index(ix: Vec[ModIndexEntry], path: String) -> i32 {
 struct FindFuncDeclResult { found: bool, mod_path: String, fd: ast.FuncDecl }
 struct GenericFuncCacheEntry { mod_path: String, name: String, res: FindFuncDeclResult }
 struct FindGenericFuncCachedResult { cache: Vec[GenericFuncCacheEntry], res: FindFuncDeclResult }
+struct ModIdxCacheEntry { path: String, idx: i32 }
+struct FindModIdxCachedResult { cache: Vec[ModIdxCacheEntry], idx: i32 }
 struct ImportsCacheEntry { mod_path: String, file: String, imps: tc.Imports }
 struct FindImportsCachedResult { cache: Vec[ImportsCacheEntry], ar: tc.ImportsResult }
 struct GenericFindModuleIndex { decl_impl_sig_idx: Vec[i32], method_decl_indexes: Vec[Vec[ImplMethodDeclIndexEntry]] }
@@ -396,6 +398,45 @@ fn imports_cache_entry_less(ce: ImportsCacheEntry, mod_path: String, file: Strin
   if ce.mod_path < mod_path { return true; }
   if ce.mod_path > mod_path { return false; }
   return ce.file < file;
+}
+
+fn mod_idx_cache_entry_less(ce: ModIdxCacheEntry, path: String) -> bool {
+  return ce.path < path;
+}
+
+fn find_mod_idx_cached(mod_index: Vec[ModIndexEntry], path: String, cache0: Vec[ModIdxCacheEntry]) -> FindModIdxCachedResult {
+  if cache0.len() > 0 {
+    let last: ModIdxCacheEntry = cache0.get(cache0.len() - 1);
+    if last.path == path {
+      return FindModIdxCachedResult { cache: cache0, idx: last.idx };
+    }
+    if mod_idx_cache_entry_less(last, path) {
+      let idx1: i32 = find_mod_idx_from_index(mod_index, path);
+      if idx1 == -1 { return FindModIdxCachedResult { cache: cache0, idx: -1 }; }
+      let mut cache1: Vec[ModIdxCacheEntry] = cache0;
+      cache1.push(ModIdxCacheEntry { path: path, idx: idx1 });
+      return FindModIdxCachedResult { cache: cache1, idx: idx1 };
+    }
+  }
+  let mut lo: i32 = 0;
+  let mut hi: i32 = cache0.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let ce: ModIdxCacheEntry = cache0.get(mid);
+    if ce.path == path {
+      return FindModIdxCachedResult { cache: cache0, idx: ce.idx };
+    }
+    if mod_idx_cache_entry_less(ce, path) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  let idx: i32 = find_mod_idx_from_index(mod_index, path);
+  if idx == -1 { return FindModIdxCachedResult { cache: cache0, idx: -1 }; }
+  let mut cache: Vec[ModIdxCacheEntry] = cache0;
+  cache.insert(lo, ModIdxCacheEntry { path: path, idx: idx });
+  return FindModIdxCachedResult { cache: cache, idx: idx };
 }
 
 fn empty_generic_find_module_index() -> GenericFindModuleIndex {
@@ -789,8 +830,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
   let mut emitted_sorted: Vec[String] = Vec();
   let mut pending_inst_scheduled_sorted: Vec[String] = Vec();
   let mod_index: Vec[ModIndexEntry] = build_mod_index(w);
-  let mut cached_mod_path: String = "";
-  let mut cached_mod_idx: i32 = -1;
+  let mut mod_idx_cache: Vec[ModIdxCacheEntry] = Vec();
   let mut generic_find_index_cache: Vec[GenericFindIndexCacheByModEntry] = Vec();
   let mut generic_func_cache: Vec[GenericFuncCacheEntry] = Vec();
   let mut imports_cache: Vec[ImportsCacheEntry] = Vec();
@@ -798,13 +838,10 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
   while ti < tasks.len() {
     let t: FuncTask = tasks.get(ti);
 
-    let mut mod_idx: i32 = cached_mod_idx;
-    if mod_idx < 0 || cached_mod_path != t.mod_path {
-      mod_idx = find_mod_idx_from_index(mod_index, t.mod_path);
-      if mod_idx < 0 { return err0(p, "missing module for task"); }
-      cached_mod_path = t.mod_path;
-      cached_mod_idx = mod_idx;
-    }
+    let mcr: FindModIdxCachedResult = find_mod_idx_cached(mod_index, t.mod_path, mod_idx_cache);
+    mod_idx_cache = mcr.cache;
+    let mod_idx: i32 = mcr.idx;
+    if mod_idx < 0 { return err0(p, "missing module for task"); }
     let m2: tc.WorldModule = w.mods.get(mod_idx);
     let mut want_name: String = "";
     let mut imps: tc.Imports = tc.Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() };
@@ -856,7 +893,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       if t.impl_from_default {
         let ar1: tc.FindAsyncFnResult = tc.find_async_fn(ctx, t.mod_path, t.impl_name);
         body_mod_path = t.impl_default_mod_path;
-        let fmd_idx: i32 = find_mod_idx_from_index(mod_index, t.impl_default_mod_path);
+        let mcr0: FindModIdxCachedResult = find_mod_idx_cached(mod_index, t.impl_default_mod_path, mod_idx_cache);
+        mod_idx_cache = mcr0.cache;
+        let fmd_idx: i32 = mcr0.idx;
         if fmd_idx < 0 { return err0(p, "missing default trait method module"); }
         let fmd: tc.WorldModule = w.mods.get(fmd_idx);
         body_exprs = fmd.prog.exprs;
@@ -938,7 +977,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       if !fr.found { return err0(p, "missing generic fn for instantiation"); }
       let mut bmod: tc.WorldModule = m2;
       if fr.mod_path != t.mod_path {
-        let fm2_idx: i32 = find_mod_idx_from_index(mod_index, fr.mod_path);
+        let mcr1: FindModIdxCachedResult = find_mod_idx_cached(mod_index, fr.mod_path, mod_idx_cache);
+        mod_idx_cache = mcr1.cache;
+        let fm2_idx: i32 = mcr1.idx;
         if fm2_idx < 0 { return err0(p, "missing module for generic body"); }
         bmod = w.mods.get(fm2_idx);
       }
