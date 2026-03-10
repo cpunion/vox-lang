@@ -246,7 +246,17 @@ fn find_mod_idx_from_index(ix: Vec[ModIndexEntry], path: String) -> i32 {
   return -1;
 }
 
-struct FindFuncDeclResult { found: bool, mod_path: String, fd: ast.FuncDecl }
+struct FindFuncDeclResult {
+  found: bool,
+  mod_path: String,
+  kind: i32,
+  func_idx: i32,
+  impl_idx: i32,
+  impl_m_decl_idx: i32,
+  impl_sig_idx: i32,
+  impl_m_sig_idx: i32,
+  default_is_async: bool,
+}
 struct GenericFuncCacheEntry { mod_path: String, name: String, res: FindFuncDeclResult }
 struct FindGenericFuncCachedResult { cache: Vec[GenericFuncCacheEntry], res: FindFuncDeclResult }
 struct ModIdxCacheEntry { path: String, idx: i32 }
@@ -256,6 +266,28 @@ struct FindImportsCachedResult { cache: Vec[ImportsCacheEntry], ar: tc.ImportsRe
 struct GenericFindModuleIndex { decl_impl_sig_idx: Vec[i32], method_decl_indexes: Vec[Vec[ImplMethodDeclIndexEntry]] }
 struct GenericFindIndexCacheByModEntry { ready: bool, mix: GenericFindModuleIndex }
 struct FindGenericFindIndexCachedResult { cache: Vec[GenericFindIndexCacheByModEntry], mix: GenericFindModuleIndex }
+
+fn find_func_decl_kind_none() -> i32 { return 0; }
+
+fn find_func_decl_kind_mod_func() -> i32 { return 1; }
+
+fn find_func_decl_kind_impl_method_decl() -> i32 { return 2; }
+
+fn find_func_decl_kind_impl_method_default() -> i32 { return 3; }
+
+fn empty_find_func_decl_result() -> FindFuncDeclResult {
+  return FindFuncDeclResult {
+    found: false,
+    mod_path: "",
+    kind: find_func_decl_kind_none(),
+    func_idx: -1,
+    impl_idx: -1,
+    impl_m_decl_idx: -1,
+    impl_sig_idx: -1,
+    impl_m_sig_idx: -1,
+    default_is_async: false,
+  };
+}
 
 fn build_generic_find_module_index(ctx: tc.Ctx, m: tc.WorldModule) -> GenericFindModuleIndex {
   let mut decl_impl_sig_idx: Vec[i32] = Vec();
@@ -287,7 +319,19 @@ fn find_generic_func_with_index(ctx: tc.Ctx, m: tc.WorldModule, name: String, mi
   let mut i: i32 = 0;
   while i < m.prog.funcs.len() {
     let fd: ast.FuncDecl = m.prog.funcs.get(i);
-    if fd.name == name && (fd.type_params.len() != 0 || fd.const_params.len() != 0) { return FindFuncDeclResult { found: true, mod_path: m.path, fd: fd }; }
+    if fd.name == name && (fd.type_params.len() != 0 || fd.const_params.len() != 0) {
+      return FindFuncDeclResult {
+        found: true,
+        mod_path: m.path,
+        kind: find_func_decl_kind_mod_func(),
+        func_idx: i,
+        impl_idx: -1,
+        impl_m_decl_idx: -1,
+        impl_sig_idx: -1,
+        impl_m_sig_idx: -1,
+        default_is_async: false,
+      };
+    }
     i = i + 1;
   }
 
@@ -297,7 +341,6 @@ fn find_generic_func_with_index(ctx: tc.Ctx, m: tc.WorldModule, name: String, mi
   while ii < m.prog.impls.len() {
     let sig_idx: i32 = mix.decl_impl_sig_idx.get(ii);
     if sig_idx != -1 {
-      let id: ast.ImplDecl = m.prog.impls.get(ii);
       let method_decl_index: Vec[ImplMethodDeclIndexEntry] = mix.method_decl_indexes.get(ii);
       let isg: tc.ImplSig = ctx.impls.get(sig_idx);
       let mut mi: i32 = 0;
@@ -306,37 +349,31 @@ fn find_generic_func_with_index(ctx: tc.Ctx, m: tc.WorldModule, name: String, mi
         if ms.lowered_name == name && (ms.sig.type_params.len() != 0 || ms.sig.const_params.len() != 0) {
           if ms.from_default {
             let ar0: tc.FindAsyncFnResult = tc.find_async_fn(ctx, m.path, ms.lowered_name);
-            let fd0: ast.FuncDecl = ast.FuncDecl {
-              file: ms.default_file,
-              sp: ast.span0(),
-              vis: ast.vis_private(),
-              is_pub: false,
-              is_async: ar0.found,
-              track_caller: false,
-              deprecated_message: "",
-              name: ms.lowered_name,
-              type_params: ms.sig.type_params,
-              type_param_packs: Vec(),
-              const_params: Vec(),
-              type_param_bounds: Vec(),
-              const_where_bounds: Vec(),
-              params: synth_params(ms.default_params),
-              ret: dummy_type_name(),
-              cfgs: Vec(),
-              ffi_imports: Vec(),
-              ffi_exports: Vec(),
-              effects: Vec(),
-              resources: Vec(),
-              body: ms.default_body,
+            return FindFuncDeclResult {
+              found: true,
+              mod_path: ms.default_mod_path,
+              kind: find_func_decl_kind_impl_method_default(),
+              func_idx: -1,
+              impl_idx: -1,
+              impl_m_decl_idx: -1,
+              impl_sig_idx: sig_idx,
+              impl_m_sig_idx: mi,
+              default_is_async: ar0.found,
             };
-            return FindFuncDeclResult { found: true, mod_path: ms.default_mod_path, fd: fd0 };
           } else {
             let mdi: i32 = find_impl_method_decl_idx_from_index(method_decl_index, ms.name);
             if mdi != -1 {
-              let md: ast.FuncDecl = id.methods.get(mdi);
-              // `ms.sig.type_params` already includes impl-header + method generics.
-              // For `impl[T] Trait for ... { fn m(...) ... }`, method decl itself can be non-generic.
-              return FindFuncDeclResult { found: true, mod_path: m.path, fd: md };
+              return FindFuncDeclResult {
+                found: true,
+                mod_path: m.path,
+                kind: find_func_decl_kind_impl_method_decl(),
+                func_idx: -1,
+                impl_idx: ii,
+                impl_m_decl_idx: mdi,
+                impl_sig_idx: sig_idx,
+                impl_m_sig_idx: mi,
+                default_is_async: false,
+              };
             }
           }
         }
@@ -346,38 +383,73 @@ fn find_generic_func_with_index(ctx: tc.Ctx, m: tc.WorldModule, name: String, mi
     ii = ii + 1;
   }
 
-  return FindFuncDeclResult {
-    found: false,
-    mod_path: "",
-    fd: ast.FuncDecl {
-      file: "",
-      sp: ast.span0(),
-      vis: ast.vis_private(),
-      is_pub: false,
-      is_async: false,
-      track_caller: false,
-      deprecated_message: "",
-      name: "",
-      type_params: Vec(),
-      type_param_packs: Vec(),
-      const_params: Vec(),
-      type_param_bounds: Vec(),
-      const_where_bounds: Vec(),
-      params: Vec(),
-      ret: ast.TypeName { parts: Vec(), args: Vec() },
-      cfgs: Vec(),
-      ffi_imports: Vec(),
-      ffi_exports: Vec(),
-      effects: Vec(),
-      resources: Vec(),
-      body: ast.Block { stmts: Vec() },
-    },
-  };
+  return empty_find_func_decl_result();
 }
 
 fn find_generic_func(ctx: tc.Ctx, m: tc.WorldModule, name: String) -> FindFuncDeclResult {
   let mix: GenericFindModuleIndex = build_generic_find_module_index(ctx, m);
   return find_generic_func_with_index(ctx, m, name, mix);
+}
+
+fn materialize_generic_func_decl(ctx: tc.Ctx, m: tc.WorldModule, fr: FindFuncDeclResult) -> ast.FuncDecl {
+  if fr.kind == find_func_decl_kind_mod_func() {
+    return m.prog.funcs.get(fr.func_idx);
+  }
+  if fr.kind == find_func_decl_kind_impl_method_decl() {
+    let id: ast.ImplDecl = m.prog.impls.get(fr.impl_idx);
+    return id.methods.get(fr.impl_m_decl_idx);
+  }
+  if fr.kind == find_func_decl_kind_impl_method_default() {
+    let isg: tc.ImplSig = ctx.impls.get(fr.impl_sig_idx);
+    let ms: tc.ImplMethodSig = isg.methods.get(fr.impl_m_sig_idx);
+    return ast.FuncDecl {
+      file: ms.default_file,
+      sp: ast.span0(),
+      vis: ast.vis_private(),
+      is_pub: false,
+      is_async: fr.default_is_async,
+      track_caller: false,
+      deprecated_message: "",
+      name: ms.lowered_name,
+      type_params: ms.sig.type_params,
+      type_param_packs: Vec(),
+      const_params: Vec(),
+      type_param_bounds: Vec(),
+      const_where_bounds: Vec(),
+      params: synth_params(ms.default_params),
+      ret: dummy_type_name(),
+      cfgs: Vec(),
+      ffi_imports: Vec(),
+      ffi_exports: Vec(),
+      effects: Vec(),
+      resources: Vec(),
+      body: ms.default_body,
+    };
+  }
+  panic("invalid generic function locator kind");
+  return ast.FuncDecl {
+    file: "",
+    sp: ast.span0(),
+    vis: ast.vis_private(),
+    is_pub: false,
+    is_async: false,
+    track_caller: false,
+    deprecated_message: "",
+    name: "",
+    type_params: Vec(),
+    type_param_packs: Vec(),
+    const_params: Vec(),
+    type_param_bounds: Vec(),
+    const_where_bounds: Vec(),
+    params: Vec(),
+    ret: ast.TypeName { parts: Vec(), args: Vec() },
+    cfgs: Vec(),
+    ffi_imports: Vec(),
+    ffi_exports: Vec(),
+    effects: Vec(),
+    resources: Vec(),
+    body: ast.Block { stmts: Vec() },
+  };
 }
 
 fn generic_func_cache_entry_eq(ce: GenericFuncCacheEntry, mod_path: String, name: String) -> bool {
@@ -983,7 +1055,8 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         if fm2_idx < 0 { return err0(p, "missing module for generic body"); }
         bmod = w.mods.get(fm2_idx);
       }
-      let air: FindImportsCachedResult = find_imports_cached(w, bmod.path, bmod.prog.imports, fr.fd.file, imports_cache);
+      let fd_for_inst: ast.FuncDecl = materialize_generic_func_decl(ctx, bmod, fr);
+      let air: FindImportsCachedResult = find_imports_cached(w, bmod.path, bmod.prog.imports, fd_for_inst.file, imports_cache);
       imports_cache = air.cache;
       if !air.ar.ok { return err0(p, tc.tc_error_to_string(air.ar.err)); }
       imps = air.ar.imps;
@@ -991,7 +1064,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       let want_find1: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
       if want_find1 >= 0 { ti = ti + 1; continue; }
       want_insert_pos = 0 - (want_find1 + 1);
-      r = gen_func_inst(ctx, w, bmod.path, t.mod_path, imps, bmod.prog.exprs, fr.fd, t.inst_name, t.inst_sig, t.subs, t.const_subs);
+      r = gen_func_inst(ctx, w, bmod.path, t.mod_path, imps, bmod.prog.exprs, fd_for_inst, t.inst_name, t.inst_sig, t.subs, t.const_subs);
     }
 
     if !r.ok { return err0(p, r.err); }
