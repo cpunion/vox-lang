@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-syntax test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-frozen-builtins test-intrinsics test-reference test-build-style test-runtime-alias test-no-legacy-runtime-bridge \
+.PHONY: fmt fmt-check test test-syntax test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-frozen-builtins test-intrinsics test-reference test-build-style test-runtime-alias test-no-legacy-runtime-bridge test-incremental-gate \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run \
 	release-source-bundle release-source-verify
 
@@ -15,10 +15,10 @@ fmt-check:
 	"$$COMPILER_BIN" fmt --check $(FMT_PATHS)
 
 # Run core repo tests: rolling selfhost gates + syntax/reference gates + example package smoke.
-test: test-frozen-builtins test-intrinsics test-build-style test-runtime-alias test-reference test-syntax test-rolling test-examples
+test: test-frozen-builtins test-intrinsics test-build-style test-runtime-alias test-reference test-syntax test-rolling test-incremental-gate test-examples
 
 # Active development gate.
-test-active: test-frozen-builtins test-intrinsics test-build-style test-runtime-alias test-reference test-syntax test-rolling
+test-active: test-frozen-builtins test-intrinsics test-build-style test-runtime-alias test-reference test-syntax test-rolling test-incremental-gate
 
 # Guard builtin/intrinsic symbol set against uncontrolled growth.
 test-frozen-builtins:
@@ -64,6 +64,9 @@ test-selfhost-gate:
 
 test-selfhost-smoke:
 	./scripts/ci/rolling-selfhost.sh test
+
+test-incremental-gate:
+	./scripts/ci/check-incremental-gate.sh
 
 # Stable public library API contract gate.
 test-public-api:
