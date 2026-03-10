@@ -411,7 +411,35 @@ fn synth_params(names: Vec[String]) -> Vec[ast.Param] {
   return out;
 }
 
-pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
+pub struct TypecheckCorePhaseProfile {
+  pub funcs_ns: i64,
+  pub impl_methods_ns: i64,
+  pub default_methods_ns: i64,
+}
+
+pub struct TypecheckCoreProfileResult {
+  pub r: TcResult,
+  pub p: TypecheckCorePhaseProfile,
+}
+
+fn typecheck_core_phase_profile_zero() -> TypecheckCorePhaseProfile {
+  return TypecheckCorePhaseProfile {
+    funcs_ns: 0,
+    impl_methods_ns: 0,
+    default_methods_ns: 0,
+  };
+}
+
+fn typecheck_core_prof_ok(p: TypecheckCorePhaseProfile) -> TypecheckCoreProfileResult {
+  return TypecheckCoreProfileResult { r: TcResult { ok: true, err: TcError.None }, p: p };
+}
+
+fn typecheck_core_prof_err(p: TypecheckCorePhaseProfile, err: TcError) -> TypecheckCoreProfileResult {
+  return TypecheckCoreProfileResult { r: TcResult { ok: false, err: err }, p: p };
+}
+
+pub fn typecheck_world_with_ctx_profile(w: World, c: Ctx) -> TypecheckCoreProfileResult {
+  let mut prof: TypecheckCorePhaseProfile = typecheck_core_phase_profile_zero();
   let w0: World = world_filter_by_file_build(c, w);
   let mut imports_cache: ImportsCache = imports_cache_empty();
   let impl_by_decl_index: Vec[ImplByDeclIndexEntry] = build_impl_by_decl_index(c.impls);
@@ -428,10 +456,12 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
       }
       let ir: FindImportsCachedResult = build_imports_cached(w0, m2.path, m2.prog.imports, fd.file, imports_cache);
       imports_cache = ir.cache;
-      if !ir.ar.ok { return TcResult { ok: false, err: ir.ar.err }; }
+      if !ir.ar.ok { return typecheck_core_prof_err(prof, ir.ar.err); }
       let imps: Imports = ir.ar.imps;
+      let t0_fn: i64 = tm.now_ns();
       let fr: TcResult = typecheck_fn(c, w0, m2.path, imps, m2.prog.exprs, fd);
-      if !fr.ok { return fr; }
+      prof.funcs_ns = prof.funcs_ns + dur_nonneg_ns_tc(t0_fn, tm.now_ns());
+      if !fr.ok { return typecheck_core_prof_err(prof, fr.err); }
       fi2 = fi2 + 1;
     }
 
@@ -440,19 +470,20 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
     while ii2 < m2.prog.impls.len() {
       let id: ast.ImplDecl = m2.prog.impls.get(ii2);
       let fr0: FindImplByDeclResult = find_impl_by_decl_indexed(c, impl_by_decl_index, m2.path, ii2);
-      if !fr0.found { return TcResult { ok: false, err: type_error_at(id.sp, "missing impl sig") }; }
+      if !fr0.found { return typecheck_core_prof_err(prof, type_error_at(id.sp, "missing impl sig")); }
       let method_sig_index: Vec[ImplMethodByNameIndexEntry] = build_impl_method_by_name_index(fr0.sig.methods);
 
       let ir0: FindImportsCachedResult = build_imports_cached(w0, m2.path, m2.prog.imports, id.file, imports_cache);
       imports_cache = ir0.cache;
-      if !ir0.ar.ok { return TcResult { ok: false, err: ir0.ar.err }; }
+      if !ir0.ar.ok { return typecheck_core_prof_err(prof, ir0.ar.err); }
       let imps0: Imports = ir0.ar.imps;
 
       let mut mdi: i32 = 0;
       while mdi < id.methods.len() {
+        let t0_impl_method: i64 = tm.now_ns();
         let md: ast.FuncDecl = id.methods.get(mdi);
         let mf_idx: i32 = find_impl_method_idx_from_index(method_sig_index, md.name);
-        if mf_idx == -1 { return TcResult { ok: false, err: type_error_at(md.sp, "missing impl method sig") }; }
+        if mf_idx == -1 { return typecheck_core_prof_err(prof, type_error_at(md.sp, "missing impl method sig")); }
         let mf: ImplMethodSig = fr0.sig.methods.get(mf_idx);
         // Only async/lowered-name methods need a rewritten decl name for metadata lookup.
         let tr: TcResult = if md.name == mf.lowered_name {
@@ -483,7 +514,8 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
           };
           typecheck_fn_with_sig(c, w0, m2.path, m2.path, imps0, m2.prog.exprs, md2, mf.sig)
         };
-        if !tr.ok { return tr; }
+        prof.impl_methods_ns = prof.impl_methods_ns + dur_nonneg_ns_tc(t0_impl_method, tm.now_ns());
+        if !tr.ok { return typecheck_core_prof_err(prof, tr.err); }
         mdi = mdi + 1;
       }
 
@@ -501,11 +533,12 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
       while mi3 < fr0.sig.methods.len() {
         let ms: ImplMethodSig = fr0.sig.methods.get(mi3);
         if ms.from_default {
+          let t0_default_method: i64 = tm.now_ns();
           let is_async: bool = find_trait_method_async_from_index(trait_method_async_ix, ms.name);
           let mut default_mod_idx: i32 = default_mod_cache_idx;
           if default_mod_idx < 0 || default_mod_cache_path != ms.default_mod_path {
             let fmd: FindModResult = find_mod(w0, ms.default_mod_path);
-            if !fmd.found { return TcResult { ok: false, err: type_error_at(id.sp, "missing default trait method module") }; }
+            if !fmd.found { return typecheck_core_prof_err(prof, type_error_at(id.sp, "missing default trait method module")); }
             default_mod_idx = fmd.idx;
             default_mod_cache_path = ms.default_mod_path;
             default_mod_cache_idx = default_mod_idx;
@@ -513,7 +546,7 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
           let mdm: WorldModule = w0.mods.get(default_mod_idx);
           let ird: FindImportsCachedResult = build_imports_cached(w0, mdm.path, mdm.prog.imports, ms.default_file, imports_cache);
           imports_cache = ird.cache;
-          if !ird.ar.ok { return TcResult { ok: false, err: ird.ar.err }; }
+          if !ird.ar.ok { return typecheck_core_prof_err(prof, ird.ar.err); }
           let impsd: Imports = ird.ar.imps;
           let fd: ast.FuncDecl = ast.FuncDecl {
             file: ms.default_file,
@@ -542,7 +575,8 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
           // but async lowering metadata is keyed by the lowered impl symbol (in impl mod m2.path).
           let async_meta_mod: String = if is_async { m2.path } else { mdm.path };
           let tr2: TcResult = typecheck_fn_with_sig(c, w0, mdm.path, async_meta_mod, impsd, mdm.prog.exprs, fd, ms.sig);
-          if !tr2.ok { return tr2; }
+          prof.default_methods_ns = prof.default_methods_ns + dur_nonneg_ns_tc(t0_default_method, tm.now_ns());
+          if !tr2.ok { return typecheck_core_prof_err(prof, tr2.err); }
         }
         mi3 = mi3 + 1;
       }
@@ -553,7 +587,12 @@ pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
     mi2 = mi2 + 1;
   }
 
-  return TcResult { ok: true, err: TcError.None };
+  return typecheck_core_prof_ok(prof);
+}
+
+pub fn typecheck_world_with_ctx(w: World, c: Ctx) -> TcResult {
+  let pr: TypecheckCoreProfileResult = typecheck_world_with_ctx_profile(w, c);
+  return pr.r;
 }
 
 pub fn typecheck_world(w: World) -> TcResult {
