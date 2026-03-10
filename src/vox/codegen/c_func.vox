@@ -1637,14 +1637,26 @@ fn call_name_lookup(entries: Vec[CallNameEntry], name: String) -> String {
   return c_fn_name(name);
 }
 
-fn emit_instr_call(call_names: Vec[CallNameEntry], has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec[ir.Value], read_temps: Vec[bool]) -> Vec[String] {
-  if name == "panic" {
-    if args.len() != 1 { panic("panic expects 1 arg"); }
-    return vec1("  vox_host_panic(".concat(c_value(args.get(0))).concat(");"));
+struct CallNameLookupCachedResult {
+  sym: String,
+  cache: Vec[CallNameEntry],
+}
+
+fn call_name_lookup_cached(global_entries: Vec[CallNameEntry], cache0: Vec[CallNameEntry], name: String) -> CallNameLookupCachedResult {
+  let mut cache: Vec[CallNameEntry] = cache0;
+  let lo: i32 = call_name_lower_bound(cache, name);
+  if lo < cache.len() && cache.get(lo).name == name {
+    return CallNameLookupCachedResult { sym: cache.get(lo).sym, cache: cache };
   }
+  let sym: String = call_name_lookup(global_entries, name);
+  cache.insert(lo, CallNameEntry { name: name, sym: sym });
+  return CallNameLookupCachedResult { sym: sym, cache: cache };
+}
+
+fn emit_instr_call_with_sym(has_dst: bool, tid: i32, ret_ty: i32, sym: String, args: Vec[ir.Value], read_temps: Vec[bool]) -> Vec[String] {
   let mut s: String = "  ";
   if call_dst_is_read(has_dst, tid, read_temps) && ret_ty != -1 { s = s.concat(c_temp_name(tid)).concat(" = "); }
-  s = s.concat(call_name_lookup(call_names, name)).concat("(");
+  s = s.concat(sym).concat("(");
   let mut i: i32 = 0;
   while i < args.len() {
     if i != 0 { s = s.concat(", "); }
@@ -1653,6 +1665,39 @@ fn emit_instr_call(call_names: Vec[CallNameEntry], has_dst: bool, tid: i32, ret_
   }
   s = s.concat(");");
   return vec1(s);
+}
+
+struct EmitInstrCallCachedResult {
+  lines: Vec[String],
+  cache: Vec[CallNameEntry],
+}
+
+fn emit_instr_call_cached(
+  call_names: Vec[CallNameEntry],
+  cache0: Vec[CallNameEntry],
+  has_dst: bool,
+  tid: i32,
+  ret_ty: i32,
+  name: String,
+  args: Vec[ir.Value],
+  read_temps: Vec[bool],
+) -> EmitInstrCallCachedResult {
+  if name == "panic" {
+    if args.len() != 1 { panic("panic expects 1 arg"); }
+    return EmitInstrCallCachedResult {
+      lines: vec1("  vox_host_panic(".concat(c_value(args.get(0))).concat(");")),
+      cache: cache0,
+    };
+  }
+  let cr: CallNameLookupCachedResult = call_name_lookup_cached(call_names, cache0, name);
+  return EmitInstrCallCachedResult {
+    lines: emit_instr_call_with_sym(has_dst, tid, ret_ty, cr.sym, args, read_temps),
+    cache: cr.cache,
+  };
+}
+
+fn emit_instr_call(call_names: Vec[CallNameEntry], has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec[ir.Value], read_temps: Vec[bool]) -> Vec[String] {
+  return emit_instr_call_cached(call_names, Vec(), has_dst, tid, ret_ty, name, args, read_temps).lines;
 }
 
 fn emit_instr(pool: ir.TyPool, p: ir.Program, call_names: Vec[CallNameEntry], enum_order: Vec[i32], ins: ir.Instr, read_temps: Vec[bool]) -> Vec[String] {
@@ -2157,6 +2202,7 @@ pub fn emit_func_append(out0: Vec[String], pool: ir.TyPool, p: ir.Program, f: ir
   let entry_idx: i32 = if block_redirects.len() > 0 { block_redirects.get(0) } else { 0 };
   let block_indices: Vec[i32] = collect_reachable_block_indices(f.blocks, block_jumps, entry_idx);
   let jump_target_flags: Vec[bool] = collect_jump_target_flags(f.blocks, block_jumps, block_indices);
+  let mut call_cache: Vec[CallNameEntry] = Vec();
   let mut ri: i32 = 0;
   while ri < block_indices.len() {
     let bi: i32 = block_indices.get(ri);
@@ -2170,7 +2216,15 @@ pub fn emit_func_append(out0: Vec[String], pool: ir.TyPool, p: ir.Program, f: ir
       let idx: i32 = block_offsets.get(bi) + ii;
       let keep: bool = if idx >= 0 && idx < keep_instrs.len() { keep_instrs.get(idx) } else { true };
       if keep {
-        let lines: Vec[String] = emit_instr(pool, p, call_names, enum_order, ins, read_temps);
+        let lines: Vec[String] =
+          match ins {
+            ir.Instr.Call(has_dst, tid, ret_ty, name, args) => {
+              let cr: EmitInstrCallCachedResult = emit_instr_call_cached(call_names, call_cache, has_dst, tid, ret_ty, name, args, read_temps);
+              call_cache = cr.cache;
+              cr.lines
+            },
+            _ => emit_instr(pool, p, call_names, enum_order, ins, read_temps),
+          };
         let mut li: i32 = 0;
         while li < lines.len() { out.push(lines.get(li)); li = li + 1; }
       }
