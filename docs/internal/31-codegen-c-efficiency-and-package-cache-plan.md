@@ -378,6 +378,7 @@ Invalidate unit on any of:
 - 2026-03-10: `rolling-selfhost` rebuild fast-path now falls back to full source-hash validation when tracked selfhost inputs are dirty (`src/**.vox`, `vox.toml`), even if mtime fast-path says “not newer”. This closes same-timestamp dirty-edit false cache-hit cases that could skip required compiler rebuilds on local iterative development.
 - 2026-03-10: `vox test --list` discovery fast-hit path now skips upfront `walk_vox_files('.')` source/test path scanning when `.vox_test_discover.{key,list}` already exists. This keeps list-only flow on cached discovery data directly (same semantics as before) and removes one redundant filesystem walk before list filtering/rendering. Local miss-path A/B in same workspace moved `vox test --list --json` from ~`1.50s` to ~`1.44s` after clearing `target/cache/test-list-v1`.
 - 2026-03-10: `rolling-selfhost` bootstrap fallback candidate scan is now restricted to known compiler binary names (`vox`, `vox_tool`, `vox_rolling`, `vox_prev`) and explicitly ignores `*.test.*` artifacts. This avoids retry storms/noise where temporary test binaries (for example `vox.*.test.*`) were mistakenly treated as bootstrap compilers.
+- 2026-03-10: `rolling-selfhost` bootstrap candidate discovery now relies on the explicit candidate set only (`VOX_BOOTSTRAP` + known standard output paths) and no longer globs `target/**/vox*`. This removes one per-invocation directory scan and avoids accidental pickup of unrelated binaries from debug output directories.
 
 ## 5. Validation Gates
 
