@@ -374,6 +374,7 @@ Invalidate unit on any of:
 - 2026-03-09: test scheduler/report helper hot paths now use lower-overhead data shaping: module queue construction switched from per-test linear module scan to indexed lookup with same first-seen module ordering, and module summary/detail sorting now uses in-place shell-sort with already-sorted fast paths.
 - 2026-03-09: `json_quote` in test JSON report generation now also uses piece assembly (`Vec[String]` + `join`) instead of per-character `String.concat`, reducing per-name quoting overhead on large list/report outputs. On top of the previous report-assembly optimization, warm `vox test --list --json` moved from ~`1.72-1.78s` to ~`1.62-1.67s` in same-input A/B runs.
 - 2026-03-09: `rolling-selfhost` bootstrap first-candidate selection no longer uses `head -n 1` in a `pipefail` pipeline; it now picks the first deduped candidate via a read loop, removing a potential SIGPIPE/141 failure mode under heavy candidate-output races.
+- 2026-03-10: `vox test --list` now has a dedicated rendered-output cache (`target/cache/test-list-v1/<key>.out`) keyed by discover key + selected tests + filter/module/run patterns + json/plain mode + rerun/job toggles. `test_list_only` first probes this cache and skips list/json rendering on hit; miss path renders once, writes cache, then prints. Local warm A/B on same inputs moved `vox test --list --json` from ~`1.63-1.74s` to ~`1.33-1.39s`, and `vox test --list` from ~`1.31-1.37s` to ~`1.26-1.33s`.
 
 ## 5. Validation Gates
 
