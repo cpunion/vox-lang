@@ -563,6 +563,7 @@ struct DiscoverTestsResult {
   paths: Vec[String],
   tests: Vec[String],
   cached_files: Vec[ld.SourceFile],
+  key: String,
 }
 
 fn detect_src_presence(paths0: Vec[String]) -> SrcPresenceResult {
@@ -1153,7 +1154,7 @@ fn json_of_tests(tests: Vec[String]) -> String {
   return parts.join("");
 }
 
-fn print_json_report(
+fn json_report_text(
   discovered: i32,
   selected: i32,
   module_pat: String,
@@ -1176,7 +1177,7 @@ fn print_json_report(
   failed: i32,
   skipped: i32,
   total_ns: i64,
-) -> () {
+) -> String {
   let list_module_details: Vec[ModuleDetail] =
     if list_only {
       let mut selected_tests_for_modules: Vec[String] = Vec();
@@ -1333,7 +1334,59 @@ fn print_json_report(
     out = out.concat("}");
   }
   out = out.concat("}");
-  print(out.concat("\n"));
+  return out;
+}
+
+fn print_json_report(
+  discovered: i32,
+  selected: i32,
+  module_pat: String,
+  run_pat: String,
+  filter: String,
+  jobs: i32,
+  fail_fast: bool,
+  rerun_failed: bool,
+  rerun_failed_count: i32,
+  list_only: bool,
+  selected_tests: Vec[String],
+  results: Vec[TestRunResult],
+  modules: Vec[ModuleSummary],
+  module_details: Vec[ModuleDetail],
+  slowest: Vec[NamedDuration],
+  failed_tests: Vec[String],
+  hint: String,
+  message: String,
+  passed: i32,
+  failed: i32,
+  skipped: i32,
+  total_ns: i64,
+) -> () {
+  print(
+    json_report_text(
+      discovered,
+      selected,
+      module_pat,
+      run_pat,
+      filter,
+      jobs,
+      fail_fast,
+      rerun_failed,
+      rerun_failed_count,
+      list_only,
+      selected_tests,
+      results,
+      modules,
+      module_details,
+      slowest,
+      failed_tests,
+      hint,
+      message,
+      passed,
+      failed,
+      skipped,
+      total_ns,
+    ).concat("\n"),
+  );
 }
 
 fn failed_tests_path() -> String {
@@ -3408,7 +3461,12 @@ fn main() -> i32 {
       let key_path: String = "target/debug/.vox_test_discover.key";
       let list_path: String = "target/debug/.vox_test_discover.list";
       if fs.exists(key_path) && fs.exists(list_path) {
-        DiscoverTestsResult { paths: paths, tests: parse_test_build_cache_tests(fs.read_to_string(list_path)), cached_files: Vec() }
+        DiscoverTestsResult {
+          paths: paths,
+          tests: parse_test_build_cache_tests(fs.read_to_string(list_path)),
+          cached_files: Vec(),
+          key: txt.trim_space(fs.read_to_string(key_path)),
+        }
       } else {
         discover_tests_cached_with_paths(paths)
       }
@@ -3498,6 +3556,37 @@ fn main() -> i32 {
       }
     }
     if test_list_only {
+      let cache_enabled_list: bool = build_cache_enabled_from_env(osys.getenv("VOX_BUILD_CACHE_DISABLE"));
+      let mut list_cache_key: String = "";
+      if cache_enabled_list {
+        let mut tests_for_cache: Vec[String] = Vec();
+        let mut tci: i32 = 0;
+        while tci < tests.len() {
+          tests_for_cache.push(tests.get(tci));
+          tci = tci + 1;
+        }
+        list_cache_key =
+          test_list_output_cache_key(
+            discovered_result.key,
+            tests_for_cache,
+            test_module_pat,
+            test_run_pat,
+            test_filter,
+            test_jobs,
+            test_fail_fast,
+            test_rerun_failed,
+            if test_rerun_failed { prev_failed_count } else { 0 },
+            test_json,
+          );
+        if list_cache_key != "" {
+          let cached_list_output: TestListOutputCacheReadResult = test_list_output_cache_read(list_cache_key);
+          if cached_list_output.hit {
+            print(cached_list_output.text);
+            return 0;
+          }
+        }
+      }
+      let mut rendered: String = "";
       if test_json {
         let mut tests_for_report: Vec[String] = Vec();
         let mut ti: i32 = 0;
@@ -3505,7 +3594,31 @@ fn main() -> i32 {
           tests_for_report.push(tests.get(ti));
           ti = ti + 1;
         }
-        print_json_report(discovered_count, tests.len(), test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed_count } else { 0 }, true, tests_for_report, Vec(), Vec(), Vec(), Vec(), Vec(), "", "", 0, 0, 0, 0);
+        rendered =
+          json_report_text(
+            discovered_count,
+            tests.len(),
+            test_module_pat,
+            test_run_pat,
+            test_filter,
+            test_jobs,
+            test_fail_fast,
+            test_rerun_failed,
+            if test_rerun_failed { prev_failed_count } else { 0 },
+            true,
+            tests_for_report,
+            Vec(),
+            Vec(),
+            Vec(),
+            Vec(),
+            Vec(),
+            "",
+            "",
+            0,
+            0,
+            0,
+            0,
+          ).concat("\n");
       } else {
         let mut names_unsorted: Vec[String] = Vec();
         let mut ti: i32 = 0;
@@ -3514,6 +3627,7 @@ fn main() -> i32 {
           ti = ti + 1;
         }
         let names: Vec[String] = sort_strings(names_unsorted);
+        let mut rendered_parts: Vec[String] = Vec();
         let mut i: i32 = 0;
         while i < names.len() {
           let module: String = test_module_name(names.get(i));
@@ -3521,16 +3635,21 @@ fn main() -> i32 {
           while j < names.len() && test_module_name(names.get(j)) == module {
             j = j + 1;
           }
-          print("[list] ".concat(module).concat(" (").concat((j - i).to_string()).concat(")\n"));
+          rendered_parts.push("[list] ".concat(module).concat(" (").concat((j - i).to_string()).concat(")\n"));
           let mut k: i32 = i;
           while k < j {
-            print("[test] ".concat(names.get(k)).concat("\n"));
+            rendered_parts.push("[test] ".concat(names.get(k)).concat("\n"));
             k = k + 1;
           }
           i = j;
         }
-        print("[list] total: ".concat(names.len().to_string()).concat("\n"));
+        rendered_parts.push("[list] total: ".concat(names.len().to_string()).concat("\n"));
+        rendered = rendered_parts.join("");
       }
+      if cache_enabled_list && list_cache_key != "" {
+        write_test_list_output_cache(list_cache_key, rendered);
+      }
+      print(rendered);
       return 0;
     }
     if tests.len() == 0 {
