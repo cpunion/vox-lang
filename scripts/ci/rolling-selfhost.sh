@@ -144,6 +144,14 @@ has_newer_selfhost_inputs() {
   return 1
 }
 
+has_dirty_selfhost_inputs() {
+  if ! command -v git >/dev/null 2>&1; then return 1; fi
+  if ! git -C "$WORK_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then return 1; fi
+  if ! git -C "$WORK_DIR" diff --quiet -- src vox.toml; then return 0; fi
+  if ! git -C "$WORK_DIR" diff --cached --quiet -- src vox.toml; then return 0; fi
+  return 1
+}
+
 should_rebuild_selfhost() {
   local bootstrap_bin="$1"
   local out_path="$WORK_DIR/$OUT_REL"
@@ -155,7 +163,9 @@ should_rebuild_selfhost() {
   # Fast path: when none of the key inputs are newer than the key stamp,
   # the hash cannot change and we can skip the full-tree hash walk.
   if ! has_newer_selfhost_inputs "$cache_key_file" "$bootstrap_bin"; then
-    return 1
+    # On dirty trees, mtime-only checks can miss same-timestamp edits.
+    # Fall back to full hash validation instead of taking the fast path.
+    if ! has_dirty_selfhost_inputs; then return 1; fi
   fi
 
   local new_key
