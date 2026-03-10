@@ -15,32 +15,71 @@ fn ok0(p: ir.Program) -> GenResult { return GenResult { ok: true, err: "", prog:
 
 fn err0(p: ir.Program, msg: String) -> GenResult { return GenResult { ok: false, err: msg, prog: p }; }
 
-fn qname(mod_path: String, name: String) -> String {
-  // Root module uses plain names (stage0-like); others use `a.b::name`.
-  if mod_path == "" || mod_path == "main" { return name; }
-  // Fast path: no path separator.
-  let mut has_slash: bool = false;
-  let mut i: i32 = 0;
-  while i < mod_path.len() {
-    if mod_path.byte_at(i) == 47 { has_slash = true; i = mod_path.len(); } else { i = i + 1; }
-  }
-  if !has_slash { return mod_path.concat("::").concat(name); }
+struct QNamePrefixCacheEntry { mod_path: String, prefix: String }
+struct QNameCachedResult { cache: Vec[QNamePrefixCacheEntry], qn: String }
 
-  // Convert "a/b/c" => "a.b.c" in one pass by segments.
+fn qprefix(mod_path: String) -> String {
+  if mod_path == "" || mod_path == "main" { return ""; }
   let mut out: String = "";
   let mut seg_start: i32 = 0;
-  i = 0;
+  let mut saw_slash: bool = false;
+  let mut i: i32 = 0;
   while i < mod_path.len() {
     if mod_path.byte_at(i) == 47 { // '/'
+      saw_slash = true;
       let seg: String = mod_path.slice(seg_start, i);
       if out == "" { out = seg; } else { out = out.concat(".").concat(seg); }
       seg_start = i + 1;
     }
     i = i + 1;
   }
+  if !saw_slash { return mod_path.concat("::"); }
   let tail: String = mod_path.slice(seg_start, mod_path.len());
   if out == "" { out = tail; } else { out = out.concat(".").concat(tail); }
-  return out.concat("::").concat(name);
+  return out.concat("::");
+}
+
+fn qname(mod_path: String, name: String) -> String {
+  let p: String = qprefix(mod_path);
+  if p == "" { return name; }
+  return p.concat(name);
+}
+
+fn qname_cache_entry_less(ce: QNamePrefixCacheEntry, mod_path: String) -> bool {
+  return ce.mod_path < mod_path;
+}
+
+fn qname_cached(mod_path: String, name: String, cache0: Vec[QNamePrefixCacheEntry]) -> QNameCachedResult {
+  if cache0.len() > 0 {
+    let last: QNamePrefixCacheEntry = cache0.get(cache0.len() - 1);
+    if last.mod_path == mod_path {
+      return QNameCachedResult { cache: cache0, qn: if last.prefix == "" { name } else { last.prefix.concat(name) } };
+    }
+    if qname_cache_entry_less(last, mod_path) {
+      let p1: String = qprefix(mod_path);
+      let mut cache1: Vec[QNamePrefixCacheEntry] = cache0;
+      cache1.push(QNamePrefixCacheEntry { mod_path: mod_path, prefix: p1 });
+      return QNameCachedResult { cache: cache1, qn: if p1 == "" { name } else { p1.concat(name) } };
+    }
+  }
+  let mut lo: i32 = 0;
+  let mut hi: i32 = cache0.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let ce: QNamePrefixCacheEntry = cache0.get(mid);
+    if ce.mod_path == mod_path {
+      return QNameCachedResult { cache: cache0, qn: if ce.prefix == "" { name } else { ce.prefix.concat(name) } };
+    }
+    if qname_cache_entry_less(ce, mod_path) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  let p: String = qprefix(mod_path);
+  let mut cache: Vec[QNamePrefixCacheEntry] = cache0;
+  cache.insert(lo, QNamePrefixCacheEntry { mod_path: mod_path, prefix: p });
+  return QNameCachedResult { cache: cache, qn: if p == "" { name } else { p.concat(name) } };
 }
 
 enum TaskKind { Normal, Inst }
@@ -719,6 +758,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
   let mut ctx: tc.Ctx = ctx0;
   let mut p: ir.Program = ir.program(ctx.pool);
   let impl_sig_index: Vec[ImplSigIndexEntry] = build_impl_sig_index(ctx);
+  let mut qname_cache: Vec[QNamePrefixCacheEntry] = Vec();
 
   // Nominal defs from collected signatures.
   let mut si: i32 = 0;
@@ -731,7 +771,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       fields.push(ir.StructField { name: f.name, ty: f.ty });
       fi = fi + 1;
     }
-    p.structs.push(ir.StructDecl { name: qname(s.mod_path, s.name), repr_c: s.repr_c, packed_align: s.packed_align, fields: fields });
+    let qr: QNameCachedResult = qname_cached(s.mod_path, s.name, qname_cache);
+    qname_cache = qr.cache;
+    p.structs.push(ir.StructDecl { name: qr.qn, repr_c: s.repr_c, packed_align: s.packed_align, fields: fields });
     si = si + 1;
   }
 
@@ -745,7 +787,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       vars.push(ir.EnumVariant { name: v.name, fields: v.fields });
       vi = vi + 1;
     }
-    p.enums.push(ir.EnumDecl { name: qname(e.mod_path, e.name), variants: vars });
+    let qr: QNameCachedResult = qname_cached(e.mod_path, e.name, qname_cache);
+    qname_cache = qr.cache;
+    p.enums.push(ir.EnumDecl { name: qr.qn, variants: vars });
     ei = ei + 1;
   }
 
@@ -760,8 +804,14 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         fi0 = fi0 + 1;
         continue;
       }
+      let mut qn0: String = "";
+      if fd0.ffi_imports.len() != 0 || fd0.ffi_exports.len() != 0 {
+        let qr: QNameCachedResult = qname_cached(m0.path, fd0.name, qname_cache);
+        qname_cache = qr.cache;
+        qn0 = qr.qn;
+      }
+
       if fd0.ffi_imports.len() != 0 {
-        let qn0: String = qname(m0.path, fd0.name);
         let fr0: tc.FindFuncResult = tc.find_func(ctx, m0.path, fd0.name);
         if !fr0.found { return err0(p, "missing fn sig"); }
         let ia: ast.FfiImportAttr = fd0.ffi_imports.get(0);
@@ -788,7 +838,6 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       }
 
       let mut exi: i32 = 0;
-      let qn0: String = if fd0.ffi_exports.len() != 0 { qname(m0.path, fd0.name) } else { "" };
       while exi < fd0.ffi_exports.len() {
         let exa: ast.FfiExportAttr = fd0.ffi_exports.get(exi);
         p.ffi_exports.push(ir.FfiExportDecl { func: qn0, target: exa.target, symbol: exa.symbol });
@@ -928,7 +977,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       imports_cache = air.cache;
       if !air.ar.ok { return err0(p, tc.tc_error_to_string(air.ar.err)); }
       imps = air.ar.imps;
-      want_name = qname(t.mod_path, fd.name);
+      let qr: QNameCachedResult = qname_cached(t.mod_path, fd.name, qname_cache);
+      qname_cache = qr.cache;
+      want_name = qr.qn;
       let want_find: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
       if want_find >= 0 { ti = ti + 1; continue; }
       want_insert_pos = 0 - (want_find + 1);
@@ -1005,7 +1056,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       imports_cache = air.cache;
       if !air.ar.ok { return err0(p, tc.tc_error_to_string(air.ar.err)); }
       imps = air.ar.imps;
-      want_name = qname(t.mod_path, t.impl_name);
+      let qr0: QNameCachedResult = qname_cached(t.mod_path, t.impl_name, qname_cache);
+      qname_cache = qr0.cache;
+      want_name = qr0.qn;
       let want_find0: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
       if want_find0 >= 0 { ti = ti + 1; continue; }
       want_insert_pos = 0 - (want_find0 + 1);
@@ -1060,7 +1113,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       imports_cache = air.cache;
       if !air.ar.ok { return err0(p, tc.tc_error_to_string(air.ar.err)); }
       imps = air.ar.imps;
-      want_name = qname(t.mod_path, t.inst_name);
+      let qr1: QNameCachedResult = qname_cached(t.mod_path, t.inst_name, qname_cache);
+      qname_cache = qr1.cache;
+      want_name = qr1.qn;
       let want_find1: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
       if want_find1 >= 0 { ti = ti + 1; continue; }
       want_insert_pos = 0 - (want_find1 + 1);
@@ -1087,7 +1142,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
     let mut pi: i32 = 0;
     while pi < r.pending.len() {
       let pend: PendingInst = r.pending.get(pi);
-      let pend_name: String = qname(pend.mod_path, pend.inst_name);
+      let qr2: QNameCachedResult = qname_cached(pend.mod_path, pend.inst_name, qname_cache);
+      qname_cache = qr2.cache;
+      let pend_name: String = qr2.qn;
       if has_str_sorted(emitted_sorted, pend_name) {
         pi = pi + 1;
         continue;
