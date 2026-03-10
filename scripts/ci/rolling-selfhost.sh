@@ -42,9 +42,28 @@ is_runnable_bin() {
   [[ -x "$p" ]] || return 1
   [[ "$p" == *.c ]] && return 1
   [[ "$p" == *.test ]] && return 1
+  [[ "$p" == *.test.* ]] && return 1
   [[ "$p" == *.cache.key ]] && return 1
   [[ "$p" == *.log ]] && return 1
   return 0
+}
+
+is_known_bootstrap_name() {
+  local p="$1"
+  local base
+  base="$(basename "$p")"
+  local stem="$base"
+  if [[ "$stem" == *.exe ]]; then
+    stem="${stem%.exe}"
+  fi
+  case "$stem" in
+    vox|vox_tool|vox_rolling|vox_prev)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 sha256_text() {
@@ -219,7 +238,7 @@ bootstrap_candidates() {
   done
 
   for p in "$WORK_DIR"/target/debug/vox* "$WORK_DIR"/target/release/vox*; do
-    if is_runnable_bin "$p"; then
+    if is_runnable_bin "$p" && is_known_bootstrap_name "$p"; then
       printf '%s\n' "$p"
     fi
   done
