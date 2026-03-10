@@ -94,13 +94,8 @@ struct FuncTask {
   func_idx: i32,     // for Normal (-1 otherwise)
   impl_idx: i32,     // for impl method task (-1 otherwise)
   impl_m_idx: i32,   // for impl method task (-1 otherwise)
-  impl_name: String, // lowered impl method name
-  impl_sig: tc.FuncSig,
-  impl_from_default: bool,
-  impl_default_mod_path: String,
-  impl_default_file: String,
-  impl_default_params: Vec[String],
-  impl_default_body: ast.Block,
+  impl_sig_idx: i32,   // for impl method task (-1 otherwise)
+  impl_m_sig_idx: i32, // for impl method task (-1 otherwise)
   base_name: String, // for Inst
   inst_name: String, // for Inst
   inst_sig: tc.FuncSig,
@@ -659,7 +654,7 @@ fn find_imports_cached(w: tc.World, mod_path: String, mod_imports: Vec[ast.Impor
   return FindImportsCachedResult { cache: cache, ar: ar };
 }
 
-struct FindImplSigResult { found: bool, sig: tc.ImplSig }
+struct FindImplSigResult { found: bool, idx: i32, sig: tc.ImplSig }
 struct ImplSigIndexEntry { mod_path: String, decl_idx: i32, idx: i32 }
 
 fn empty_impl_sig() -> tc.ImplSig {
@@ -751,7 +746,7 @@ fn find_impl_sig_from_index(ctx: tc.Ctx, ix: Vec[ImplSigIndexEntry], mod_path: S
     let mid: i32 = lo + ((hi - lo) / 2);
     let it: ImplSigIndexEntry = ix.get(mid);
     if it.mod_path == mod_path && it.decl_idx == decl_idx {
-      return FindImplSigResult { found: true, sig: ctx.impls.get(it.idx) };
+      return FindImplSigResult { found: true, idx: it.idx, sig: ctx.impls.get(it.idx) };
     }
     if it.mod_path < mod_path || (it.mod_path == mod_path && it.decl_idx < decl_idx) {
       lo = mid + 1;
@@ -759,7 +754,7 @@ fn find_impl_sig_from_index(ctx: tc.Ctx, ix: Vec[ImplSigIndexEntry], mod_path: S
       hi = mid;
     }
   }
-  return FindImplSigResult { found: false, sig: empty_impl_sig() };
+  return FindImplSigResult { found: false, idx: -1, sig: empty_impl_sig() };
 }
 
 pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
@@ -891,13 +886,8 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
           func_idx: fi,
           impl_idx: -1,
           impl_m_idx: -1,
-          impl_name: "",
-          impl_sig: empty_irgen_func_sig(ctx.ty_bad),
-          impl_from_default: false,
-          impl_default_mod_path: "",
-          impl_default_file: "",
-          impl_default_params: Vec(),
-          impl_default_body: ast.Block { stmts: Vec() },
+          impl_sig_idx: -1,
+          impl_m_sig_idx: -1,
           base_name: "",
           inst_name: "",
           inst_sig: empty_irgen_func_sig(ctx.ty_bad),
@@ -934,13 +924,8 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
           func_idx: -1,
           impl_idx: ii,
           impl_m_idx: mdi,
-          impl_name: mr0.lowered_name,
-          impl_sig: mr0.sig,
-          impl_from_default: mr0.from_default,
-          impl_default_mod_path: mr0.default_mod_path,
-          impl_default_file: mr0.default_file,
-          impl_default_params: mr0.default_params,
-          impl_default_body: mr0.default_body,
+          impl_sig_idx: ir0.idx,
+          impl_m_sig_idx: msi,
           base_name: "",
           inst_name: "",
           inst_sig: empty_irgen_func_sig(ctx.ty_bad),
@@ -994,6 +979,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       r = gen_func(ctx, w, t.mod_path, imps, m2.prog.exprs, fd);
     } else if t.impl_idx != -1 {
       // Impl method task.
+      if t.impl_sig_idx < 0 || t.impl_m_sig_idx < 0 { return err0(p, "missing impl method signature locator"); }
+      let isg_task: tc.ImplSig = ctx.impls.get(t.impl_sig_idx);
+      let ms_task: tc.ImplMethodSig = isg_task.methods.get(t.impl_m_sig_idx);
       let mut md: ast.FuncDecl = ast.FuncDecl {
         file: "",
         sp: ast.span0(),
@@ -1021,39 +1009,39 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       let mut body_exprs: ast.ExprPool = m2.prog.exprs;
       let mut body_imports: Vec[ast.ImportDecl] = m2.prog.imports;
       let mut file_for_imports: String = "";
-      if t.impl_from_default {
-        let ar1: tc.FindAsyncFnResult = tc.find_async_fn(ctx, t.mod_path, t.impl_name);
-        body_mod_path = t.impl_default_mod_path;
-        let mcr0: FindModIdxCachedResult = find_mod_idx_cached(mod_index, t.impl_default_mod_path, mod_idx_cache);
+      if ms_task.from_default {
+        let ar1: tc.FindAsyncFnResult = tc.find_async_fn(ctx, t.mod_path, ms_task.lowered_name);
+        body_mod_path = ms_task.default_mod_path;
+        let mcr0: FindModIdxCachedResult = find_mod_idx_cached(mod_index, ms_task.default_mod_path, mod_idx_cache);
         mod_idx_cache = mcr0.cache;
         let fmd_idx: i32 = mcr0.idx;
         if fmd_idx < 0 { return err0(p, "missing default trait method module"); }
         let fmd: tc.WorldModule = w.mods.get(fmd_idx);
         body_exprs = fmd.prog.exprs;
         body_imports = fmd.prog.imports;
-        file_for_imports = t.impl_default_file;
+        file_for_imports = ms_task.default_file;
         md = ast.FuncDecl {
-          file: t.impl_default_file,
+          file: ms_task.default_file,
           sp: ast.span0(),
           vis: ast.vis_private(),
           is_pub: false,
           is_async: ar1.found,
           track_caller: false,
-          deprecated_message: "",
-          name: t.impl_name,
+          deprecated_message: ms_task.deprecated_message,
+          name: ms_task.lowered_name,
           type_params: Vec(),
           type_param_packs: Vec(),
           const_params: Vec(),
           type_param_bounds: Vec(),
           const_where_bounds: Vec(),
-          params: synth_params(t.impl_default_params),
+          params: synth_params(ms_task.default_params),
           ret: dummy_type_name(),
           cfgs: Vec(),
           ffi_imports: Vec(),
           ffi_exports: Vec(),
           effects: Vec(),
           resources: Vec(),
-          body: t.impl_default_body,
+          body: ms_task.default_body,
         };
       } else {
         let id: ast.ImplDecl = m2.prog.impls.get(t.impl_idx);
@@ -1064,7 +1052,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       imports_cache = air.cache;
       if !air.ar.ok { return err0(p, tc.tc_error_to_string(air.ar.err)); }
       imps = air.ar.imps;
-      let qr0: QNameCachedResult = qname_cached(t.mod_path, t.impl_name, qname_cache);
+      let qr0: QNameCachedResult = qname_cached(t.mod_path, ms_task.lowered_name, qname_cache);
       qname_cache = qr0.cache;
       want_name = qr0.qn;
       let want_find0: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
@@ -1081,7 +1069,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
           is_async: true,
           track_caller: md.track_caller,
           deprecated_message: md.deprecated_message,
-          name: t.impl_name,
+          name: ms_task.lowered_name,
           type_params: md.type_params,
           type_param_packs: md.type_param_packs,
           const_params: md.const_params,
@@ -1096,9 +1084,9 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
           resources: md.resources,
           body: md.body,
         };
-        r = gen_func_inst(ctx, w, body_mod_path, t.mod_path, imps, body_exprs, md2, t.impl_name, t.impl_sig, Vec(), Vec());
+        r = gen_func_inst(ctx, w, body_mod_path, t.mod_path, imps, body_exprs, md2, ms_task.lowered_name, ms_task.sig, Vec(), Vec());
       } else {
-        r = gen_func_impl(ctx, w, body_mod_path, t.mod_path, imps, body_exprs, md, t.impl_name, t.impl_sig, Vec(), Vec());
+        r = gen_func_impl(ctx, w, body_mod_path, t.mod_path, imps, body_exprs, md, ms_task.lowered_name, ms_task.sig, Vec(), Vec());
       }
     } else {
       // Generic instantiation task.
@@ -1169,13 +1157,8 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         func_idx: -1,
         impl_idx: -1,
         impl_m_idx: -1,
-        impl_name: "",
-        impl_sig: empty_irgen_func_sig(ctx.ty_bad),
-        impl_from_default: false,
-        impl_default_mod_path: "",
-        impl_default_file: "",
-        impl_default_params: Vec(),
-        impl_default_body: ast.Block { stmts: Vec() },
+        impl_sig_idx: -1,
+        impl_m_sig_idx: -1,
         base_name: pend.base_name,
         inst_name: pend.inst_name,
         inst_sig: pend.sig,
