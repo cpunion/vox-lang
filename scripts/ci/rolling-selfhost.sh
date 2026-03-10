@@ -36,36 +36,6 @@ resolve_bin() {
   return 1
 }
 
-is_runnable_bin() {
-  local p="$1"
-  [[ -f "$p" ]] || return 1
-  [[ -x "$p" ]] || return 1
-  [[ "$p" == *.c ]] && return 1
-  [[ "$p" == *.test ]] && return 1
-  [[ "$p" == *.test.* ]] && return 1
-  [[ "$p" == *.cache.key ]] && return 1
-  [[ "$p" == *.log ]] && return 1
-  return 0
-}
-
-is_known_bootstrap_name() {
-  local p="$1"
-  local base
-  base="$(basename "$p")"
-  local stem="$base"
-  if [[ "$stem" == *.exe ]]; then
-    stem="${stem%.exe}"
-  fi
-  case "$stem" in
-    vox|vox_tool|vox_rolling|vox_prev)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 sha256_text() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 | awk '{print $1}'
@@ -233,12 +203,6 @@ bootstrap_candidates() {
   local p
   for c in "${candidates[@]}"; do
     if p="$(resolve_bin "$c" 2>/dev/null)"; then
-      printf '%s\n' "$p"
-    fi
-  done
-
-  for p in "$WORK_DIR"/target/debug/vox* "$WORK_DIR"/target/release/vox*; do
-    if is_runnable_bin "$p" && is_known_bootstrap_name "$p"; then
       printf '%s\n' "$p"
     fi
   done
