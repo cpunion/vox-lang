@@ -1,4 +1,5 @@
 import "std/testing" as t
+import "vox/ast" as ast
 import "vox/typecheck" as tc
 
 fn ctx_lookup_test_empty_func_sig(c: tc.Ctx) -> tc.FuncSig {
@@ -68,6 +69,7 @@ fn ctx_lookup_test_impl_sig(
   trait_mod_path: String,
   trait_name: String,
   for_ty: i32,
+  methods: Vec[tc.ImplMethodSig],
 ) -> tc.ImplSig {
   return tc.ImplSig {
     mod_path: mod_path,
@@ -81,7 +83,21 @@ fn ctx_lookup_test_impl_sig(
     head_type_param_bounds: Vec(),
     head_const_where_bounds: Vec(),
     assoc_types: Vec(),
-    methods: Vec(),
+    methods: methods,
+  };
+}
+
+fn ctx_lookup_test_impl_method_sig(c: tc.Ctx, name: String) -> tc.ImplMethodSig {
+  return tc.ImplMethodSig {
+    name: name,
+    lowered_name: name,
+    sig: ctx_lookup_test_empty_func_sig(c),
+    deprecated_message: "",
+    from_default: false,
+    default_mod_path: "",
+    default_file: "",
+    default_params: Vec(),
+    default_body: ast.Block { stmts: Vec() },
   };
 }
 
@@ -203,10 +219,10 @@ fn test_find_static_lookup_index_root_mod_equivalence() -> () {
 
 fn test_ctx_impl_trait_lookup_index_sorts_and_keeps_duplicate_trait_entries() -> () {
   let mut c: tc.Ctx = tc.new_ctx();
-  c.impls.push(ctx_lookup_test_impl_sig("main", true, false, "", "", c.ty_i32));
-  c.impls.push(ctx_lookup_test_impl_sig("main", false, false, "zmod", "T", c.ty_i32));
-  c.impls.push(ctx_lookup_test_impl_sig("main", false, false, "amod", "A", c.ty_i64));
-  c.impls.push(ctx_lookup_test_impl_sig("main", false, true, "amod", "A", c.ty_u32));
+  c.impls.push(ctx_lookup_test_impl_sig("main", true, false, "", "", c.ty_i32, Vec()));
+  c.impls.push(ctx_lookup_test_impl_sig("main", false, false, "zmod", "T", c.ty_i32, Vec()));
+  c.impls.push(ctx_lookup_test_impl_sig("main", false, false, "amod", "A", c.ty_i64, Vec()));
+  c.impls.push(ctx_lookup_test_impl_sig("main", false, true, "amod", "A", c.ty_u32, Vec()));
   c = tc.ctx_rebuild_sym_lookup_indexes(c);
 
   t.assert_eq(c.impl_trait_lookup_index.len(), 3);
@@ -223,4 +239,41 @@ fn test_ctx_impl_trait_lookup_index_sorts_and_keeps_duplicate_trait_entries() ->
   t.assert_eq(e2.mod_path, "zmod");
   t.assert_eq(e2.name, "T");
   t.assert_eq(e2.idx, 1);
+}
+
+fn test_ctx_impl_method_lookup_index_sorts_and_keeps_duplicate_method_entries() -> () {
+  let mut c: tc.Ctx = tc.new_ctx();
+  let mut m_foo_a: Vec[tc.ImplMethodSig] = Vec();
+  m_foo_a.push(ctx_lookup_test_impl_method_sig(c, "foo"));
+  let mut m_bar_b: Vec[tc.ImplMethodSig] = Vec();
+  m_bar_b.push(ctx_lookup_test_impl_method_sig(c, "bar"));
+  let mut m_foo_baz_c: Vec[tc.ImplMethodSig] = Vec();
+  m_foo_baz_c.push(ctx_lookup_test_impl_method_sig(c, "foo"));
+  m_foo_baz_c.push(ctx_lookup_test_impl_method_sig(c, "baz"));
+  let mut m_bar_inherent: Vec[tc.ImplMethodSig] = Vec();
+  m_bar_inherent.push(ctx_lookup_test_impl_method_sig(c, "bar"));
+  let mut m_foo_negative: Vec[tc.ImplMethodSig] = Vec();
+  m_foo_negative.push(ctx_lookup_test_impl_method_sig(c, "foo"));
+
+  c.impls.push(ctx_lookup_test_impl_sig("main", false, false, "pkg/a", "TraitA", c.ty_i32, m_foo_a));
+  c.impls.push(ctx_lookup_test_impl_sig("main", false, false, "pkg/b", "TraitB", c.ty_i32, m_bar_b));
+  c.impls.push(ctx_lookup_test_impl_sig("main", false, false, "pkg/c", "TraitC", c.ty_i32, m_foo_baz_c));
+  c.impls.push(ctx_lookup_test_impl_sig("main", true, false, "", "", c.ty_i32, m_bar_inherent));
+  c.impls.push(ctx_lookup_test_impl_sig("main", false, true, "pkg/d", "TraitD", c.ty_i32, m_foo_negative));
+
+  c = tc.ctx_rebuild_sym_lookup_indexes(c);
+  t.assert_eq(c.impl_method_lookup_index.len(), 4);
+  let e0: tc.SymLookupIndexEntry = c.impl_method_lookup_index.get(0);
+  let e1: tc.SymLookupIndexEntry = c.impl_method_lookup_index.get(1);
+  let e2: tc.SymLookupIndexEntry = c.impl_method_lookup_index.get(2);
+  let e3: tc.SymLookupIndexEntry = c.impl_method_lookup_index.get(3);
+
+  t.assert_eq(e0.name, "bar");
+  t.assert_eq(e0.idx, 1);
+  t.assert_eq(e1.name, "baz");
+  t.assert_eq(e1.idx, 2);
+  t.assert_eq(e2.name, "foo");
+  t.assert_eq(e2.idx, 0);
+  t.assert_eq(e3.name, "foo");
+  t.assert_eq(e3.idx, 2);
 }
