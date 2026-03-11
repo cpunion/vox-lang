@@ -320,8 +320,99 @@ fn qname_split(qn: String) -> QNameSplitResult {
   return QNameSplitResult { mod_path: qn.slice(0, cut), name: qn.slice(cut + 2, qn.len()) };
 }
 
+struct DeprecatedFuncLookupEntry {
+  qname: String,
+  msg: String,
+}
+
+fn qname_from_mod_path_name(mod_path: String, name: String) -> String {
+  if mod_path == "" || mod_path == "main" { return name; }
+  let mut out: String = "";
+  let mut seg_start: i32 = 0;
+  let mut saw_slash: bool = false;
+  let mut i: i32 = 0;
+  while i < mod_path.len() {
+    if mod_path.byte_at(i) == 47 { // '/'
+      saw_slash = true;
+      let seg: String = mod_path.slice(seg_start, i);
+      if out == "" { out = seg; } else { out = out.concat(".").concat(seg); }
+      seg_start = i + 1;
+    }
+    i = i + 1;
+  }
+  if !saw_slash { return mod_path.concat("::").concat(name); }
+  let tail: String = mod_path.slice(seg_start, mod_path.len());
+  if out == "" { out = tail; } else { out = out.concat(".").concat(tail); }
+  return out.concat("::").concat(name);
+}
+
+fn deprecated_lookup_entry_less(a: DeprecatedFuncLookupEntry, b: DeprecatedFuncLookupEntry) -> bool {
+  return a.qname < b.qname;
+}
+
+fn build_deprecated_func_lookup(ctx: tc.Ctx) -> Vec[DeprecatedFuncLookupEntry] {
+  let mut out: Vec[DeprecatedFuncLookupEntry] = Vec();
+  let mut i: i32 = 0;
+  while i < ctx.funcs.len() {
+    let f: tc.FuncSym = ctx.funcs.get(i);
+    if f.deprecated_message != "" {
+      out.push(DeprecatedFuncLookupEntry {
+        qname: qname_from_mod_path_name(f.mod_path, f.name),
+        msg: f.deprecated_message,
+      });
+    }
+    i = i + 1;
+  }
+  let mut sorted: bool = true;
+  let mut si: i32 = 1;
+  while si < out.len() {
+    if deprecated_lookup_entry_less(out.get(si), out.get(si - 1)) {
+      sorted = false;
+      break;
+    }
+    si = si + 1;
+  }
+  if sorted { return out; }
+  let mut gap: i32 = out.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < out.len() {
+      let keep: DeprecatedFuncLookupEntry = out.get(oi);
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: DeprecatedFuncLookupEntry = out.get(j - gap);
+        if !deprecated_lookup_entry_less(keep, prev) { break; }
+        out.set(j, prev);
+        j = j - gap;
+      }
+      out.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return out;
+}
+
+fn find_deprecated_lookup_msg(ix: Vec[DeprecatedFuncLookupEntry], qname: String) -> String {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = ix.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let it: DeprecatedFuncLookupEntry = ix.get(mid);
+    if it.qname == qname { return it.msg; }
+    if it.qname < qname {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return "";
+}
+
 fn collect_deprecated_warnings_ir(ctx: tc.Ctx, prog: ir.Program, ws0: Vec[String]) -> Vec[String] {
   let mut ws: Vec[String] = ws0;
+  let dep_lookup: Vec[DeprecatedFuncLookupEntry] = build_deprecated_func_lookup(ctx);
+  if dep_lookup.len() == 0 { return ws; }
   let mut fi: i32 = 0;
   while fi < prog.funcs.len() {
     let f: ir.Func = prog.funcs.get(fi);
@@ -338,12 +429,11 @@ fn collect_deprecated_warnings_ir(ctx: tc.Ctx, prog: ir.Program, ws0: Vec[String
         let ins: ir.Instr = b.instrs.get(ii);
         if match ins { ir.Instr.Call(_, _, _, _, _) => true, _ => false } {
           let qn: String = match ins { ir.Instr.Call(_, _, _, n, _) => n, _ => "" };
-          let cq: QNameSplitResult = qname_split(qn);
-          let fr: tc.FindFuncResult = tc.find_func(ctx, cq.mod_path, cq.name);
-          if fr.found && fr.deprecated_message != "" {
+          let msg: String = find_deprecated_lookup_msg(dep_lookup, qn);
+          if msg != "" {
             let line: String = compile_warn_render(
               ast.span0(),
-              "deprecated function `".concat(qn).concat("` (called from `").concat(f.name).concat("`): ").concat(fr.deprecated_message),
+              "deprecated function `".concat(qn).concat("` (called from `").concat(f.name).concat("`): ").concat(msg),
             );
             ws = warnings_add_unique(ws, line);
           }
