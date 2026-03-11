@@ -553,6 +553,7 @@ fn usage() -> () {
   print("  VOX_CACHE_TRACE=1   print cache hit/miss traces for build/test/list\n");
   print("  VOX_QUERY_SHADOW=1  enable parse/load shadow cache (predict+write, no read)\n");
   print("  VOX_QUERY_SHADOW_TRACE=1  print parse/load shadow cache hit prediction logs\n");
+  print("  VOX_QUERY_SHADOW_FORCE_PREPARE=1  force query-shadow prepare even on sem-cache hit\n");
   print("  VOX_ROOT=<path>     source root override for loading src/std and src/vox\n");
   print("  VOX_STDLIB=<path>   stdlib root override (highest priority; supports root, root/src, root/src/std)\n");
   print("  VOX_NODE=<path>     node executable for `vox lsp` (default: node)\n");
@@ -834,15 +835,19 @@ fn effective_incremental_query_shadow_enabled(query_shadow_enabled: bool, increm
   return query_shadow_enabled && incremental_enabled;
 }
 
+fn query_shadow_force_prepare_from_env(raw: String) -> bool {
+  return env_truthy(raw);
+}
+
 fn should_use_sem_cache(cache_enabled: bool, query_shadow_on: bool) -> bool {
   let _: bool = query_shadow_on;
   return cache_enabled;
 }
 
-fn should_skip_query_shadow_prepare(cache_enabled: bool, sem_cache_hit: bool, query_shadow_trace: bool) -> bool {
+fn should_skip_query_shadow_prepare(cache_enabled: bool, sem_cache_hit: bool, query_shadow_force_prepare: bool) -> bool {
   if !cache_enabled { return false; }
   if !sem_cache_hit { return false; }
-  if query_shadow_trace { return false; }
+  if query_shadow_force_prepare { return false; }
   return true;
 }
 
@@ -2958,6 +2963,7 @@ fn main() -> i32 {
     let query_shadow_env_on: bool = env_truthy(osys.getenv("VOX_QUERY_SHADOW"));
     let query_shadow_on: bool = effective_incremental_query_shadow_enabled(query_shadow_env_on, incremental_enabled);
     let query_shadow_trace: bool = query_shadow_on && (trace_exec || env_truthy(osys.getenv("VOX_QUERY_SHADOW_TRACE")));
+    let query_shadow_force_prepare: bool = query_shadow_on && query_shadow_force_prepare_from_env(osys.getenv("VOX_QUERY_SHADOW_FORCE_PREPARE"));
     let cache_trace: bool = env_truthy(osys.getenv("VOX_CACHE_TRACE"));
     let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
     let cc_target_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
@@ -3021,7 +3027,7 @@ fn main() -> i32 {
         compile_reused_sem_c = true;
       }
     }
-    let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, compile_c_cache_hit || sem_cache_hit, query_shadow_trace);
+    let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, compile_c_cache_hit || sem_cache_hit, query_shadow_force_prepare);
     if cache_trace {
       print(
         "[cache] mode=build cache="
@@ -3035,6 +3041,9 @@ fn main() -> i32 {
           .concat(" qshadow_skip=").concat(cache_hit_miss(skip_query_shadow_prepare))
           .concat("\n"),
       );
+    }
+    if query_shadow_on && skip_query_shadow_prepare && query_shadow_trace {
+      print("[query-shadow] phase=build skipped prepare (sem-cache hit; set VOX_QUERY_SHADOW_FORCE_PREPARE=1 to force)\n");
     }
     if query_shadow_on && !skip_query_shadow_prepare {
       let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
@@ -3846,6 +3855,7 @@ fn main() -> i32 {
     let query_shadow_env_on: bool = env_truthy(osys.getenv("VOX_QUERY_SHADOW"));
     let query_shadow_on: bool = effective_incremental_query_shadow_enabled(query_shadow_env_on, incremental_enabled);
     let query_shadow_trace: bool = query_shadow_on && (trace_exec || env_truthy(osys.getenv("VOX_QUERY_SHADOW_TRACE")));
+    let query_shadow_force_prepare: bool = query_shadow_on && query_shadow_force_prepare_from_env(osys.getenv("VOX_QUERY_SHADOW_FORCE_PREPARE"));
     let cache_trace: bool = env_truthy(osys.getenv("VOX_CACHE_TRACE"));
     let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
     let cc_test_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
@@ -3929,7 +3939,7 @@ fn main() -> i32 {
         }
       }
     }
-    let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, cache_c_hit || sem_cache_hit, query_shadow_trace);
+    let skip_query_shadow_prepare: bool = should_skip_query_shadow_prepare(cache_enabled, cache_c_hit || sem_cache_hit, query_shadow_force_prepare);
     if cache_trace {
       print(
         "[cache] mode=test cache="
@@ -3943,6 +3953,9 @@ fn main() -> i32 {
           .concat(" qshadow_skip=").concat(cache_hit_miss(skip_query_shadow_prepare))
           .concat("\n"),
       );
+    }
+    if query_shadow_on && skip_query_shadow_prepare && query_shadow_trace {
+      print("[query-shadow] phase=test skipped prepare (sem-cache hit; set VOX_QUERY_SHADOW_FORCE_PREPARE=1 to force)\n");
     }
     if query_shadow_on && !skip_query_shadow_prepare {
       let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
