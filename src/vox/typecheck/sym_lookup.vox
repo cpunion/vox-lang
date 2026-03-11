@@ -295,6 +295,21 @@ fn impl_trait_index_range(ctx: Ctx, trait_mod: String, trait_name: String) -> Im
   return ImplTraitIndexRange { use_index: true, lo: lo, hi: hi };
 }
 
+fn impl_method_index_range(ctx: Ctx, name: String) -> ImplTraitIndexRange {
+  if ctx.impl_method_lookup_index_src_len != ctx.impls.len() || ctx.impl_method_lookup_index.len() == 0 {
+    return ImplTraitIndexRange { use_index: false, lo: 0, hi: 0 };
+  }
+  let xs: Vec[SymLookupIndexEntry] = ctx.impl_method_lookup_index;
+  let lo: i32 = impl_trait_index_lower_bound(xs, "", name);
+  let mut hi: i32 = lo;
+  while hi < xs.len() {
+    let e: SymLookupIndexEntry = xs.get(hi);
+    if e.mod_path != "" || e.name != name { break; }
+    hi = hi + 1;
+  }
+  return ImplTraitIndexRange { use_index: true, lo: lo, hi: hi };
+}
+
 fn impl_match_candidates_text(ctx: Ctx, trait_mod: String, trait_name: String, recv_ty: i32) -> String {
   let nmax: i32 = 8;
   let mut rows: Vec[String] = Vec();
@@ -769,10 +784,28 @@ pub fn find_trait_dispatch_method(ctx: Ctx, cur_mod: String, recv_ty: i32, name:
   let mut out_mod: String = "";
   let mut out_m: ImplMethodSig = empty_impl_method_sig();
 
-  let mut i: i32 = 0;
-  while i < ctx.impls.len() {
-    let isg: ImplSig = ctx.impls.get(i);
-    if isg.is_inherent || isg.is_negative { i = i + 1; continue; }
+  let r: ImplTraitIndexRange = impl_method_index_range(ctx, name);
+  let xs: Vec[SymLookupIndexEntry] = ctx.impl_method_lookup_index;
+  let mut i: i32 = if r.use_index { r.lo } else { 0 };
+  while true {
+    let idx: i32 = if r.use_index {
+      if i >= r.hi { break; }
+      xs.get(i).idx
+    } else {
+      if i >= ctx.impls.len() { break; }
+      i
+    };
+    if idx < 0 || idx >= ctx.impls.len() {
+      i = i + 1;
+      continue;
+    }
+    let isg: ImplSig = ctx.impls.get(idx);
+    if !r.use_index {
+      if isg.is_inherent || isg.is_negative {
+        i = i + 1;
+        continue;
+      }
+    }
     let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
     if !ur.ok { i = i + 1; continue; }
     let mf: FindImplMethodResult = find_impl_method(isg, name);
