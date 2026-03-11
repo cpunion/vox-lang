@@ -1795,9 +1795,15 @@ fn call_name_put(entries0: Vec[CallNameEntry], name: String, sym: String) -> Vec
   return entries;
 }
 
-pub fn build_call_name_entries(p: ir.Program, ffi_order: Vec[i32]) -> Vec[CallNameEntry] {
-  if ffi_order.len() == 0 { return Vec(); }
+pub fn build_call_name_entries(p: ir.Program, funcs: Vec[ir.Func], ffi_order: Vec[i32]) -> Vec[CallNameEntry] {
   let mut entries: Vec[CallNameEntry] = Vec();
+  // Preseed internal function names so most call lookups are direct hits.
+  let mut fi: i32 = 0;
+  while fi < funcs.len() {
+    let f: ir.Func = funcs.get(fi);
+    entries = call_name_put(entries, f.name, c_fn_name(f.name));
+    fi = fi + 1;
+  }
   let mut ii: i32 = 0;
   while ii < ffi_order.len() {
     let im: ir.FfiImportDecl = p.ffi_imports.get(ffi_order.get(ii));
@@ -2315,6 +2321,24 @@ fn enum_variant_tag(en: ir.EnumDecl, variant: String) -> i32 {
 }
 
 pub fn emit_func_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, p: ir.Program, f: ir.Func, call_names: Vec[CallNameEntry], enum_order: Vec[i32]) -> Vec[String] {
+  return emit_func_append_with_call_cache(out0, c_types, pool, p, f, call_names, enum_order, Vec()).out;
+}
+
+pub struct EmitFuncAppendWithCallCacheResult {
+  pub out: Vec[String],
+  pub call_cache: Vec[CallNameEntry],
+}
+
+pub fn emit_func_append_with_call_cache(
+  out0: Vec[String],
+  c_types: Vec[String],
+  pool: ir.TyPool,
+  p: ir.Program,
+  f: ir.Func,
+  call_names: Vec[CallNameEntry],
+  enum_order: Vec[i32],
+  call_cache0: Vec[CallNameEntry],
+) -> EmitFuncAppendWithCallCacheResult {
   let seed_slots: Vec[bool] = collect_live_slots_all_reads(f);
   let live_temps0: Vec[bool] = collect_live_temps(pool, f, seed_slots);
   let live_slots: Vec[bool] = collect_live_slots_filtered(pool, f, live_temps0, seed_slots);
@@ -2392,7 +2416,7 @@ pub fn emit_func_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool
   if slot_locals.len() != 0 || temp_locals.len() != 0 { out.push(""); }
 
   // Blocks
-  let mut call_cache: Vec[CallNameEntry] = Vec();
+  let mut call_cache: Vec[CallNameEntry] = call_cache0;
   let mut ri: i32 = 0;
   while ri < block_indices.len() {
     let bi: i32 = block_indices.get(ri);
@@ -2447,7 +2471,10 @@ pub fn emit_func_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool
   }
 
   out.push("}");
-  return out;
+  return EmitFuncAppendWithCallCacheResult {
+    out: out,
+    call_cache: call_cache,
+  };
 }
 
 pub fn emit_func(c_types: Vec[String], pool: ir.TyPool, p: ir.Program, f: ir.Func, call_names: Vec[CallNameEntry], enum_order: Vec[i32]) -> Vec[String] {
