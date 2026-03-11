@@ -288,6 +288,54 @@ build_from_bootstrap() {
   )
 }
 
+compiler_smoke_ok() {
+  local bin="$1"
+  if "$bin" --version >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+rebuild_with_fallback() {
+  local preferred_bootstrap="$1"
+  local build_ok=0
+  local active_bootstrap="$preferred_bootstrap"
+
+  if build_from_bootstrap "$active_bootstrap"; then
+    build_ok=1
+  else
+    while IFS= read -r ALT_BOOTSTRAP; do
+      [[ -z "$ALT_BOOTSTRAP" ]] && continue
+      [[ "$ALT_BOOTSTRAP" == "$active_bootstrap" ]] && continue
+      echo "[selfhost] retry with bootstrap candidate: $ALT_BOOTSTRAP"
+      if build_from_bootstrap "$ALT_BOOTSTRAP"; then
+        active_bootstrap="$ALT_BOOTSTRAP"
+        build_ok=1
+        break
+      fi
+    done <<< "$BOOTSTRAP_CANDIDATES"
+  fi
+
+  if [[ "$build_ok" != "1" ]]; then
+    local legacy_bootstrap=""
+    if legacy_bootstrap="$(pick_legacy_bootstrap)" && [[ "$legacy_bootstrap" != "$active_bootstrap" ]]; then
+      echo "[selfhost] retry with legacy bootstrap: $legacy_bootstrap"
+      if build_from_bootstrap "$legacy_bootstrap"; then
+        active_bootstrap="$legacy_bootstrap"
+        build_ok=1
+      fi
+    fi
+  fi
+
+  if [[ "$build_ok" != "1" ]]; then
+    return 1
+  fi
+
+  BOOTSTRAP_BIN="$active_bootstrap"
+  write_selfhost_cache_key "$BOOTSTRAP_BIN"
+  return 0
+}
+
 MODE="${1:-}"
 case "$MODE" in
   build|test|print-bin)
@@ -315,41 +363,21 @@ fi
 echo "[selfhost] bootstrap: $BOOTSTRAP_BIN"
 if should_rebuild_selfhost "$BOOTSTRAP_BIN"; then
   echo "[selfhost] rebuild: yes"
-  BUILD_OK=0
-  if ! build_from_bootstrap "$BOOTSTRAP_BIN"; then
-    while IFS= read -r ALT_BOOTSTRAP; do
-      [[ -z "$ALT_BOOTSTRAP" ]] && continue
-      [[ "$ALT_BOOTSTRAP" == "$BOOTSTRAP_BIN" ]] && continue
-      echo "[selfhost] retry with bootstrap candidate: $ALT_BOOTSTRAP"
-      if build_from_bootstrap "$ALT_BOOTSTRAP"; then
-        BOOTSTRAP_BIN="$ALT_BOOTSTRAP"
-        BUILD_OK=1
-        break
-      fi
-    done <<< "$BOOTSTRAP_CANDIDATES"
-
-    if [[ "$BUILD_OK" == "1" ]]; then
-      :
-    else
-      LEGACY_BOOTSTRAP=""
-      if LEGACY_BOOTSTRAP="$(pick_legacy_bootstrap)" && [[ "$LEGACY_BOOTSTRAP" != "$BOOTSTRAP_BIN" ]]; then
-        echo "[selfhost] retry with legacy bootstrap: $LEGACY_BOOTSTRAP"
-        build_from_bootstrap "$LEGACY_BOOTSTRAP"
-        BOOTSTRAP_BIN="$LEGACY_BOOTSTRAP"
-        BUILD_OK=1
-      else
-        exit 1
-      fi
-    fi
-  else
-    BUILD_OK=1
-  fi
-  write_selfhost_cache_key "$BOOTSTRAP_BIN"
+  rebuild_with_fallback "$BOOTSTRAP_BIN"
 else
   echo "[selfhost] rebuild: no (cache hit)"
 fi
 
 SELF_BIN="$(resolve_bin "$WORK_DIR/$OUT_REL")"
+if ! compiler_smoke_ok "$SELF_BIN"; then
+  echo "[selfhost] cached output failed smoke check; rebuilding"
+  rebuild_with_fallback "$BOOTSTRAP_BIN"
+  SELF_BIN="$(resolve_bin "$WORK_DIR/$OUT_REL")"
+  if ! compiler_smoke_ok "$SELF_BIN"; then
+    echo "[selfhost] rebuilt output still failed smoke check: $SELF_BIN" >&2
+    exit 1
+  fi
+fi
 echo "[selfhost] built: $SELF_BIN"
 
 if [[ "$MODE" == "print-bin" ]]; then
