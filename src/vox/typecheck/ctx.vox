@@ -46,6 +46,7 @@ pub struct Ctx {
   pub static_lookup_index: Vec[SymLookupIndexEntry],
   pub impl_trait_lookup_index: Vec[SymLookupIndexEntry],
   pub impl_method_lookup_index: Vec[SymLookupIndexEntry],
+  pub trait_method_lookup_index: Vec[TraitMethodLookupIndexEntry],
   pub func_lookup_index_src_len: i32,
   pub struct_lookup_index_src_len: i32,
   pub enum_lookup_index_src_len: i32,
@@ -55,12 +56,21 @@ pub struct Ctx {
   pub static_lookup_index_src_len: i32,
   pub impl_trait_lookup_index_src_len: i32,
   pub impl_method_lookup_index_src_len: i32,
+  pub trait_method_lookup_index_src_len: i32,
 }
 
 pub struct SymLookupIndexEntry {
   pub mod_path: String,
   pub name: String,
   pub idx: i32,
+}
+
+pub struct TraitMethodLookupIndexEntry {
+  pub trait_mod_path: String,
+  pub trait_name: String,
+  pub method_name: String,
+  pub trait_idx: i32,
+  pub method_idx: i32,
 }
 
 pub fn sym_lookup_norm_mod_path(mod_path0: String) -> String {
@@ -295,6 +305,91 @@ fn build_impl_method_lookup_index(isigs: Vec[ImplSig]) -> Vec[SymLookupIndexEntr
   return sym_lookup_index_sort_by_key_and_idx(ws);
 }
 
+fn trait_method_lookup_entry_less(a: TraitMethodLookupIndexEntry, b: TraitMethodLookupIndexEntry) -> bool {
+  if a.trait_mod_path < b.trait_mod_path { return true; }
+  if a.trait_mod_path > b.trait_mod_path { return false; }
+  if a.trait_name < b.trait_name { return true; }
+  if a.trait_name > b.trait_name { return false; }
+  if a.method_name < b.method_name { return true; }
+  if a.method_name > b.method_name { return false; }
+  if a.trait_idx < b.trait_idx { return true; }
+  if a.trait_idx > b.trait_idx { return false; }
+  return a.method_idx < b.method_idx;
+}
+
+fn trait_method_lookup_entry_key_eq(a: TraitMethodLookupIndexEntry, b: TraitMethodLookupIndexEntry) -> bool {
+  return a.trait_mod_path == b.trait_mod_path && a.trait_name == b.trait_name && a.method_name == b.method_name;
+}
+
+fn trait_method_lookup_index_sort_by_key_and_idx(xs0: Vec[TraitMethodLookupIndexEntry]) -> Vec[TraitMethodLookupIndexEntry] {
+  let mut xs: Vec[TraitMethodLookupIndexEntry] = xs0;
+  if xs.len() < 2 { return xs; }
+  let mut already_sorted: bool = true;
+  let mut si: i32 = 1;
+  while si < xs.len() {
+    if trait_method_lookup_entry_less(xs.get(si), xs.get(si - 1)) {
+      already_sorted = false;
+      break;
+    }
+    si = si + 1;
+  }
+  if already_sorted { return xs; }
+  let mut gap: i32 = xs.len() / 2;
+  while gap > 0 {
+    let mut i: i32 = gap;
+    while i < xs.len() {
+      let keep: TraitMethodLookupIndexEntry = xs.get(i);
+      let mut j: i32 = i;
+      while j >= gap {
+        let prev: TraitMethodLookupIndexEntry = xs.get(j - gap);
+        if !trait_method_lookup_entry_less(keep, prev) { break; }
+        xs.set(j, prev);
+        j = j - gap;
+      }
+      xs.set(j, keep);
+      i = i + 1;
+    }
+    gap = gap / 2;
+  }
+  return xs;
+}
+
+fn trait_method_lookup_index_unique_sorted(xs: Vec[TraitMethodLookupIndexEntry]) -> Vec[TraitMethodLookupIndexEntry] {
+  let mut out: Vec[TraitMethodLookupIndexEntry] = Vec();
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    let keep: TraitMethodLookupIndexEntry = xs.get(i);
+    out.push(keep);
+    i = i + 1;
+    while i < xs.len() && trait_method_lookup_entry_key_eq(xs.get(i), keep) {
+      i = i + 1;
+    }
+  }
+  return out;
+}
+
+fn build_trait_method_lookup_index(ts: Vec[TraitSig]) -> Vec[TraitMethodLookupIndexEntry] {
+  let mut ws: Vec[TraitMethodLookupIndexEntry] = Vec();
+  let mut ti: i32 = 0;
+  while ti < ts.len() {
+    let t: TraitSig = ts.get(ti);
+    let mut mi: i32 = 0;
+    while mi < t.methods.len() {
+      let m: TraitMethodSig = t.methods.get(mi);
+      ws.push(TraitMethodLookupIndexEntry {
+        trait_mod_path: sym_lookup_norm_mod_path(t.mod_path),
+        trait_name: t.name,
+        method_name: m.name,
+        trait_idx: ti,
+        method_idx: mi,
+      });
+      mi = mi + 1;
+    }
+    ti = ti + 1;
+  }
+  return trait_method_lookup_index_unique_sorted(trait_method_lookup_index_sort_by_key_and_idx(ws));
+}
+
 pub fn ctx_rebuild_sym_lookup_indexes(ctx0: Ctx) -> Ctx {
   let mut c: Ctx = ctx0;
   c.func_lookup_index = build_func_lookup_index(c.funcs);
@@ -306,6 +401,7 @@ pub fn ctx_rebuild_sym_lookup_indexes(ctx0: Ctx) -> Ctx {
   c.static_lookup_index = build_static_lookup_index(c.statics);
   c.impl_trait_lookup_index = build_impl_trait_lookup_index(c.impls);
   c.impl_method_lookup_index = build_impl_method_lookup_index(c.impls);
+  c.trait_method_lookup_index = build_trait_method_lookup_index(c.traits);
   c.func_lookup_index_src_len = c.funcs.len();
   c.struct_lookup_index_src_len = c.structs.len();
   c.enum_lookup_index_src_len = c.enums.len();
@@ -315,6 +411,7 @@ pub fn ctx_rebuild_sym_lookup_indexes(ctx0: Ctx) -> Ctx {
   c.static_lookup_index_src_len = c.statics.len();
   c.impl_trait_lookup_index_src_len = c.impls.len();
   c.impl_method_lookup_index_src_len = c.impls.len();
+  c.trait_method_lookup_index_src_len = c.traits.len();
   return c;
 }
 
@@ -481,6 +578,7 @@ pub fn new_ctx_with_target(bits0: i32, target_os0: String, target_arch0: String)
     static_lookup_index: Vec(),
     impl_trait_lookup_index: Vec(),
     impl_method_lookup_index: Vec(),
+    trait_method_lookup_index: Vec(),
     func_lookup_index_src_len: 0,
     struct_lookup_index_src_len: 0,
     enum_lookup_index_src_len: 0,
@@ -490,6 +588,7 @@ pub fn new_ctx_with_target(bits0: i32, target_os0: String, target_arch0: String)
     static_lookup_index_src_len: 0,
     impl_trait_lookup_index_src_len: 0,
     impl_method_lookup_index_src_len: 0,
+    trait_method_lookup_index_src_len: 0,
   };
   let r0: InternResult = intern_ty(c, ir.ty_bad()); c = r0.ctx; c.ty_bad = r0.idx;
   let r1: InternResult = intern_ty(c, ir.ty_unit()); c = r1.ctx; c.ty_unit = r1.idx;
