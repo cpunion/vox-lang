@@ -106,6 +106,7 @@ Invalidate unit on any of:
 
 ### 4.6 Progress Notes
 
+- 2026-03-11: `typecheck` moved-state branch/loop joins (`locals_join_if_moved` / `locals_join_while_moved`) now use an index-aligned fast path with name-lookup fallback, and update `out.vars` in place instead of repeated `locals_set_moved_at` copies. Local profile sample moved `compile typecheck/core/funcs ~1.38s -> ~1.30s` and `compile total ~7.89s -> ~7.70s` on the same selfhost build command lineage.
 - 2026-03-11: `rolling-selfhost.sh` now validates cache-hit compiler output with a lightweight smoke check (`--version`); if the cached binary is unhealthy, it auto-rebuilds via existing bootstrap fallback candidates before continuing, reducing flaky “cache hit but broken compiler binary” failures in local/CI flows.
 - 2026-03-11: `typecheck` block-exit move-state merge (`locals_sync_moved`) switched from per-var name lookup to index-stable slot sync fast path (with mismatch fallback), then further moved to in-place `out.vars.set(...)` updates instead of repeated `locals_set_moved_at` calls; local sample on the same selfhost build command moved `compile typecheck/core/funcs ~1.36s -> ~1.27s` and `compile total ~7.49s -> ~7.16s`.
 - 2026-02-28: link-cache hit check was decoupled from package C path existence.
