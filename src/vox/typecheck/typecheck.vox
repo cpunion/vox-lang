@@ -151,7 +151,6 @@ pub fn world_add(w: World, path: String, prog: ast.Program) -> World {
 
 struct FindImplByDeclResult { found: bool, sig: ImplSig }
 struct ImplByDeclIndexEntry { mod_path: String, decl_idx: i32, impl_idx: i32 }
-struct ImplMethodByNameIndexEntry { name: String, method_idx: i32 }
 struct TraitMethodAsyncIndexEntry { name: String, is_async: bool }
 
 fn empty_impl_sig() -> ImplSig {
@@ -245,78 +244,13 @@ fn find_impl_by_decl_indexed(ctx: Ctx, index: Vec[ImplByDeclIndexEntry], mod_pat
   return FindImplByDeclResult { found: false, sig: empty_impl_sig() };
 }
 
-fn impl_method_by_name_index_entry_less(a: ImplMethodByNameIndexEntry, b: ImplMethodByNameIndexEntry) -> bool {
-  if a.name < b.name { return true; }
-  if a.name > b.name { return false; }
-  return a.method_idx < b.method_idx;
-}
-
-fn build_impl_method_by_name_index(methods: Vec[ImplMethodSig]) -> Vec[ImplMethodByNameIndexEntry] {
-  let mut out: Vec[ImplMethodByNameIndexEntry] = Vec();
+fn find_impl_method_idx_linear(methods: Vec[ImplMethodSig], name: String) -> i32 {
   let mut i: i32 = 0;
   while i < methods.len() {
-    out.push(ImplMethodByNameIndexEntry { name: methods.get(i).name, method_idx: i });
-    i = i + 1;
-  }
-  if out.len() <= 1 { return out; }
-
-  let mut sorted: bool = true;
-  i = 1;
-  while i < out.len() {
-    if impl_method_by_name_index_entry_less(out.get(i), out.get(i - 1)) {
-      sorted = false;
-      break;
+    if methods.get(i).name == name {
+      return i;
     }
     i = i + 1;
-  }
-  if !sorted {
-    let mut gap: i32 = out.len() / 2;
-    while gap > 0 {
-      let mut oi: i32 = gap;
-      while oi < out.len() {
-        let keep: ImplMethodByNameIndexEntry = out.get(oi);
-        let mut j: i32 = oi;
-        while j >= gap {
-          let prev: ImplMethodByNameIndexEntry = out.get(j - gap);
-          if !impl_method_by_name_index_entry_less(keep, prev) { break; }
-          out.set(j, prev);
-          j = j - gap;
-        }
-        out.set(j, keep);
-        oi = oi + 1;
-      }
-      gap = gap / 2;
-    }
-  }
-
-  // Keep first method order for duplicate names (same behavior as linear first-hit scan).
-  let mut dedup: Vec[ImplMethodByNameIndexEntry] = Vec();
-  i = 0;
-  while i < out.len() {
-    let keep: ImplMethodByNameIndexEntry = out.get(i);
-    dedup.push(keep);
-    i = i + 1;
-    while i < out.len() && out.get(i).name == keep.name {
-      i = i + 1;
-    }
-  }
-  return dedup;
-}
-
-fn find_impl_method_idx_from_index(ix: Vec[ImplMethodByNameIndexEntry], name: String) -> i32 {
-  let mut lo: i32 = 0;
-  let mut hi: i32 = ix.len();
-  while lo < hi {
-    let mid: i32 = lo + ((hi - lo) / 2);
-    let it: ImplMethodByNameIndexEntry = ix.get(mid);
-    if it.name < name {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
-  }
-  if lo < ix.len() && ix.get(lo).name == name {
-    return ix.get(lo).method_idx;
   }
   return -1;
 }
@@ -483,7 +417,6 @@ pub fn typecheck_world_with_ctx_profile(w: World, c: Ctx) -> TypecheckCoreProfil
       let id: ast.ImplDecl = m2.prog.impls.get(ii2);
       let fr0: FindImplByDeclResult = find_impl_by_decl_indexed(c, impl_by_decl_index, m2.path, ii2);
       if !fr0.found { return typecheck_core_prof_err(prof, type_error_at(id.sp, "missing impl sig")); }
-      let method_sig_index: Vec[ImplMethodByNameIndexEntry] = build_impl_method_by_name_index(fr0.sig.methods);
 
       let mut imps0: Imports = impl_imps;
       if !impl_imps_cached || impl_imps_file != id.file {
@@ -500,7 +433,12 @@ pub fn typecheck_world_with_ctx_profile(w: World, c: Ctx) -> TypecheckCoreProfil
       while mdi < id.methods.len() {
         let t0_impl_method: i64 = tm.now_ns();
         let md: ast.FuncDecl = id.methods.get(mdi);
-        let mf_idx: i32 = find_impl_method_idx_from_index(method_sig_index, md.name);
+        let mut mf_idx: i32 = -1;
+        if mdi < fr0.sig.methods.len() && fr0.sig.methods.get(mdi).name == md.name {
+          mf_idx = mdi;
+        } else {
+          mf_idx = find_impl_method_idx_linear(fr0.sig.methods, md.name);
+        }
         if mf_idx == -1 { return typecheck_core_prof_err(prof, type_error_at(md.sp, "missing impl method sig")); }
         let mf: ImplMethodSig = fr0.sig.methods.get(mf_idx);
         // Only async/lowered-name methods need a rewritten decl name for metadata lookup.
