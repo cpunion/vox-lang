@@ -990,43 +990,66 @@ fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
   return TcStmtResult { ok: true, err: TcError.None, locals: l0 };
 }
 
+struct MovedLookupResult { found: bool, moved: bool }
+
+fn lookup_moved_at_or_name(src: Locals, idx: i32, name: String, depth: i32) -> MovedLookupResult {
+  if idx >= 0 && idx < src.vars.len() {
+    let sv: VarEntry = src.vars.get(idx);
+    if sv.name == name && sv.depth == depth {
+      return MovedLookupResult { found: true, moved: sv.moved };
+    }
+  }
+  let v: LookupVarResult = locals_lookup(src, name);
+  return MovedLookupResult { found: v.found, moved: v.moved };
+}
+
 fn locals_join_if_moved(l0: Locals, then_in: Locals, has_else: bool, else_in: Locals) -> Locals {
   let then_l: Locals = locals_exit(then_in);
   let else_l: Locals = if has_else { locals_exit(else_in) } else { l0 };
 
   let mut out: Locals = l0;
+  let mut out_vars: Vec[VarEntry] = out.vars;
+  let out_depth: i32 = out.depth;
   let mut i: i32 = 0;
-  while i < out.vars.len() {
-    let v: VarEntry = out.vars.get(i);
-    if v.depth <= out.depth {
-      let tv: LookupVarResult = locals_lookup(then_l, v.name);
-      let ev: LookupVarResult = locals_lookup(else_l, v.name);
+  while i < out_vars.len() {
+    let v: VarEntry = out_vars.get(i);
+    if v.depth <= out_depth {
+      let tv: MovedLookupResult = lookup_moved_at_or_name(then_l, i, v.name, v.depth);
+      let ev: MovedLookupResult = if has_else { lookup_moved_at_or_name(else_l, i, v.name, v.depth) } else { MovedLookupResult { found: false, moved: false } };
       let moved: bool =
         if has_else {
           (tv.found && tv.moved) || (ev.found && ev.moved)
         } else {
           v.moved || (tv.found && tv.moved)
         };
-      out = locals_set_moved_at(out, i, moved);
+      if moved != v.moved {
+        out_vars.set(i, VarEntry { name: v.name, ty: v.ty, mutable: v.mutable, depth: v.depth, moved: moved });
+      }
     }
     i = i + 1;
   }
+  out.vars = out_vars;
   return out;
 }
 
 fn locals_join_while_moved(l0: Locals, body_in: Locals) -> Locals {
   let body_l: Locals = locals_exit(body_in);
   let mut out: Locals = l0;
+  let mut out_vars: Vec[VarEntry] = out.vars;
+  let out_depth: i32 = out.depth;
   let mut i: i32 = 0;
-  while i < out.vars.len() {
-    let v: VarEntry = out.vars.get(i);
-    if v.depth <= out.depth {
-      let bv: LookupVarResult = locals_lookup(body_l, v.name);
+  while i < out_vars.len() {
+    let v: VarEntry = out_vars.get(i);
+    if v.depth <= out_depth {
+      let bv: MovedLookupResult = lookup_moved_at_or_name(body_l, i, v.name, v.depth);
       let moved: bool = v.moved || (bv.found && bv.moved);
-      out = locals_set_moved_at(out, i, moved);
+      if moved != v.moved {
+        out_vars.set(i, VarEntry { name: v.name, ty: v.ty, mutable: v.mutable, depth: v.depth, moved: moved });
+      }
     }
     i = i + 1;
   }
+  out.vars = out_vars;
   return out;
 }
 
