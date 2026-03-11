@@ -851,6 +851,34 @@ fn should_skip_query_shadow_prepare(cache_enabled: bool, sem_cache_hit: bool, qu
   return true;
 }
 
+fn query_shadow_state_from_sem_key(
+  phase: String,
+  sem_key: String,
+  switches0: Vec[String],
+  trace_predicted_hit: bool,
+) -> q.ParseLoadShadowState {
+  let switches: Vec[String] = switches0;
+  if sem_key == "" {
+    return q.ParseLoadShadowState { key: "", predicted_hit: false };
+  }
+  let mut h: u64 = 1469598103934665603 as u64;
+  h = lock_hash_text(h, "query-shadow-sem-v1\n");
+  h = lock_hash_text(h, phase);
+  h = lock_hash_text(h, "\n");
+  h = lock_hash_text(h, sem_key);
+  h = lock_hash_text(h, "\n");
+  let mut i: i32 = 0;
+  while i < switches.len() {
+    h = lock_hash_text(h, "X\n");
+    h = lock_hash_text(h, switches.get(i));
+    h = lock_hash_text(h, "\n");
+    i = i + 1;
+  }
+  let key: String = h.to_string();
+  let predicted_hit: bool = if trace_predicted_hit { q.parse_load_shadow_predict_hit(key) } else { false };
+  return q.ParseLoadShadowState { key: key, predicted_hit: predicted_hit };
+}
+
 fn cache_on_off(v: bool) -> String {
   return if v { "on" } else { "off" };
 }
@@ -3046,57 +3074,73 @@ fn main() -> i32 {
       print("[query-shadow] phase=build skipped prepare (sem-cache hit; set VOX_QUERY_SHADOW_FORCE_PREPARE=1 to force)\n");
     }
     if query_shadow_on && !skip_query_shadow_prepare {
-      let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
-      if use_sem_cache {
-        if sem_dep_hashes.len() == 0 {
-          let sem_deps_keep: BuildCacheSemDepHashesKeep = build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-          sem_pkg_keys = sem_deps_keep.keys;
-          sem_dep_hashes = sem_deps_keep.dep_hashes;
-        }
-        let mut sdi: i32 = 0;
-        while sdi < sem_dep_hashes.len() {
-          dep_hashes.push(sem_dep_hashes.get(sdi));
-          sdi = sdi + 1;
-        }
+      if use_sem_cache && sem_key != "" && !query_shadow_force_prepare {
+        let mut qswitches: Vec[String] = Vec();
+        qswitches.push("compile_mode=".concat(compile_mode));
+        qswitches.push("link_mode=".concat(link_mode));
+        qswitches.push("target_triple=".concat(target_triple));
+        qswitches.push("target_abi=".concat(target_abi));
+        qswitches.push("artifact=".concat(artifact));
+        query_shadow_state =
+          query_shadow_state_from_sem_key(
+            "build",
+            sem_key,
+            qswitches,
+            query_shadow_trace,
+          );
       } else {
-        let mut dhi: i32 = 0;
-        while dhi < pkg_keys.len() {
-          let pk: BuildCachePkgKey = pkg_keys.get(dhi);
-          dep_hashes.push(q.ParseLoadDepHash {
-            pkg: pk.pkg,
-            export_sig_hash: pk.key,
-            type_sig_hash: pk.key,
-            impl_sig_hash: pk.key,
-          });
-          dhi = dhi + 1;
+        let mut qswitches: Vec[String] = Vec();
+        qswitches.push("compile_mode=".concat(compile_mode));
+        qswitches.push("link_mode=".concat(link_mode));
+        qswitches.push("target_triple=".concat(target_triple));
+        qswitches.push("target_abi=".concat(target_abi));
+        qswitches.push("artifact=".concat(artifact));
+        let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
+        if use_sem_cache {
+          if sem_dep_hashes.len() == 0 {
+            let sem_deps_keep: BuildCacheSemDepHashesKeep = build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
+            sem_pkg_keys = sem_deps_keep.keys;
+            sem_dep_hashes = sem_deps_keep.dep_hashes;
+          }
+          let mut sdi: i32 = 0;
+          while sdi < sem_dep_hashes.len() {
+            dep_hashes.push(sem_dep_hashes.get(sdi));
+            sdi = sdi + 1;
+          }
+        } else {
+          let mut dhi: i32 = 0;
+          while dhi < pkg_keys.len() {
+            let pk: BuildCachePkgKey = pkg_keys.get(dhi);
+            dep_hashes.push(q.ParseLoadDepHash {
+              pkg: pk.pkg,
+              export_sig_hash: pk.key,
+              type_sig_hash: pk.key,
+              impl_sig_hash: pk.key,
+            });
+            dhi = dhi + 1;
+          }
         }
+        let qprep: c.CompileQueryShadowPrepareResult =
+          c.compile_query_shadow_prepare_for_target_with_files(
+            files,
+            emit_opts,
+            target_ptr,
+            target_os,
+            target_arch,
+            c.CompileQueryShadowOptions {
+            enabled: true,
+            trace_predicted_hit: query_shadow_trace,
+            mode: "build",
+            diagnostics_mode: "diag-v0",
+            compiler_version: bi.version(),
+            compiler_channel: bi.channel(),
+            feature_switches: qswitches,
+            dep_hashes: dep_hashes,
+          },
+          );
+        files = qprep.files;
+        query_shadow_state = qprep.state;
       }
-      let mut qswitches: Vec[String] = Vec();
-      qswitches.push("compile_mode=".concat(compile_mode));
-      qswitches.push("link_mode=".concat(link_mode));
-      qswitches.push("target_triple=".concat(target_triple));
-      qswitches.push("target_abi=".concat(target_abi));
-      qswitches.push("artifact=".concat(artifact));
-      let qprep: c.CompileQueryShadowPrepareResult =
-        c.compile_query_shadow_prepare_for_target_with_files(
-          files,
-          emit_opts,
-          target_ptr,
-          target_os,
-          target_arch,
-          c.CompileQueryShadowOptions {
-          enabled: true,
-          trace_predicted_hit: query_shadow_trace,
-          mode: "build",
-          diagnostics_mode: "diag-v0",
-          compiler_version: bi.version(),
-          compiler_channel: bi.channel(),
-          feature_switches: qswitches,
-          dep_hashes: dep_hashes,
-        },
-        );
-      files = qprep.files;
-      query_shadow_state = qprep.state;
       if query_shadow_trace {
         print(q.parse_load_shadow_trace_line("build", query_shadow_state).concat("\n"));
       }
@@ -3958,59 +4002,77 @@ fn main() -> i32 {
       print("[query-shadow] phase=test skipped prepare (sem-cache hit; set VOX_QUERY_SHADOW_FORCE_PREPARE=1 to force)\n");
     }
     if query_shadow_on && !skip_query_shadow_prepare {
-      let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
-      if use_sem_cache {
-        if sem_dep_hashes.len() == 0 {
-          let sem_deps_keep: BuildCacheSemDepHashesKeep = build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-          sem_pkg_keys = sem_deps_keep.keys;
-          sem_dep_hashes = sem_deps_keep.dep_hashes;
-        }
-        let mut sdi: i32 = 0;
-        while sdi < sem_dep_hashes.len() {
-          dep_hashes.push(sem_dep_hashes.get(sdi));
-          sdi = sdi + 1;
-        }
+      if use_sem_cache && sem_key != "" && !query_shadow_force_prepare {
+        let mut qswitches: Vec[String] = Vec();
+        qswitches.push("test_mode=".concat(test_mode));
+        qswitches.push("target_triple=".concat(target_triple));
+        qswitches.push("target_abi=".concat(target_abi));
+        qswitches.push("test_module=".concat(test_module_pat));
+        qswitches.push("test_run=".concat(test_run_pat));
+        qswitches.push("test_filter=".concat(test_filter));
+        qswitches.push("test_rerun_failed=".concat(if test_rerun_failed { "1" } else { "0" }));
+        query_shadow_state =
+          query_shadow_state_from_sem_key(
+            "test",
+            sem_key,
+            qswitches,
+            query_shadow_trace,
+          );
       } else {
-        let mut dhi: i32 = 0;
-        while dhi < pkg_keys.len() {
-          let pk: BuildCachePkgKey = pkg_keys.get(dhi);
-          dep_hashes.push(q.ParseLoadDepHash {
-            pkg: pk.pkg,
-            export_sig_hash: pk.key,
-            type_sig_hash: pk.key,
-            impl_sig_hash: pk.key,
-          });
-          dhi = dhi + 1;
+        let mut qswitches: Vec[String] = Vec();
+        qswitches.push("test_mode=".concat(test_mode));
+        qswitches.push("target_triple=".concat(target_triple));
+        qswitches.push("target_abi=".concat(target_abi));
+        qswitches.push("test_module=".concat(test_module_pat));
+        qswitches.push("test_run=".concat(test_run_pat));
+        qswitches.push("test_filter=".concat(test_filter));
+        qswitches.push("test_rerun_failed=".concat(if test_rerun_failed { "1" } else { "0" }));
+        let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
+        if use_sem_cache {
+          if sem_dep_hashes.len() == 0 {
+            let sem_deps_keep: BuildCacheSemDepHashesKeep = build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
+            sem_pkg_keys = sem_deps_keep.keys;
+            sem_dep_hashes = sem_deps_keep.dep_hashes;
+          }
+          let mut sdi: i32 = 0;
+          while sdi < sem_dep_hashes.len() {
+            dep_hashes.push(sem_dep_hashes.get(sdi));
+            sdi = sdi + 1;
+          }
+        } else {
+          let mut dhi: i32 = 0;
+          while dhi < pkg_keys.len() {
+            let pk: BuildCachePkgKey = pkg_keys.get(dhi);
+            dep_hashes.push(q.ParseLoadDepHash {
+              pkg: pk.pkg,
+              export_sig_hash: pk.key,
+              type_sig_hash: pk.key,
+              impl_sig_hash: pk.key,
+            });
+            dhi = dhi + 1;
+          }
         }
+        let qprep: c.CompileQueryShadowPrepareResult =
+          c.compile_query_shadow_prepare_for_target_with_files(
+            files,
+            emit_test_opts,
+            target_ptr,
+            target_os,
+            target_arch,
+            c.CompileQueryShadowOptions {
+            enabled: true,
+            trace_predicted_hit: query_shadow_trace,
+            mode: "test",
+            diagnostics_mode: "diag-v0",
+            compiler_version: bi.version(),
+            compiler_channel: bi.channel(),
+            feature_switches: qswitches,
+            dep_hashes: dep_hashes,
+          },
+          );
+        files = qprep.files;
+        query_shadow_state = qprep.state;
       }
-      let mut qswitches: Vec[String] = Vec();
-      qswitches.push("test_mode=".concat(test_mode));
-      qswitches.push("target_triple=".concat(target_triple));
-      qswitches.push("target_abi=".concat(target_abi));
-      qswitches.push("test_module=".concat(test_module_pat));
-      qswitches.push("test_run=".concat(test_run_pat));
-      qswitches.push("test_filter=".concat(test_filter));
-      qswitches.push("test_rerun_failed=".concat(if test_rerun_failed { "1" } else { "0" }));
-      let qprep: c.CompileQueryShadowPrepareResult =
-        c.compile_query_shadow_prepare_for_target_with_files(
-          files,
-          emit_test_opts,
-          target_ptr,
-          target_os,
-          target_arch,
-          c.CompileQueryShadowOptions {
-          enabled: true,
-          trace_predicted_hit: query_shadow_trace,
-          mode: "test",
-          diagnostics_mode: "diag-v0",
-          compiler_version: bi.version(),
-          compiler_channel: bi.channel(),
-          feature_switches: qswitches,
-          dep_hashes: dep_hashes,
-        },
-        );
-      files = qprep.files;
-      query_shadow_state = qprep.state;
       if query_shadow_trace {
         print(q.parse_load_shadow_trace_line("test", query_shadow_state).concat("\n"));
       }
