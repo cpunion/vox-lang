@@ -1,6 +1,6 @@
 import "vox/ir" as ir
 
-struct NomInfo { name: String, kind: i32 } // 0=struct, 1=enum
+struct NomInfo { name: String, kind: i32, idx: i32 } // 0=struct, 1=enum
 
 fn ty_idx_has_param(pool: ir.TyPool, ty: i32) -> bool {
   let t: ir.Ty = ir.ty_pool_get(pool, ty);
@@ -34,13 +34,31 @@ fn enum_has_param_field(pool: ir.TyPool, en: ir.EnumDecl) -> bool {
   return false;
 }
 
-fn emitted_has(emitted: Vec[String], name: String) -> bool {
-  let mut i: i32 = 0;
-  while i < emitted.len() {
-    if emitted.get(i) == name { return true; }
-    i = i + 1;
+fn emitted_name_lower_bound(names: Vec[String], name: String) -> i32 {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = names.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    if names.get(mid) < name {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
   }
-  return false;
+  return lo;
+}
+
+fn emitted_has_sorted(names: Vec[String], name: String) -> bool {
+  let lo: i32 = emitted_name_lower_bound(names, name);
+  return lo < names.len() && names.get(lo) == name;
+}
+
+fn emitted_insert_sorted(names0: Vec[String], name: String) -> Vec[String] {
+  let mut names: Vec[String] = names0;
+  let lo: i32 = emitted_name_lower_bound(names, name);
+  if lo < names.len() && names.get(lo) == name { return names; }
+  names.insert(lo, name);
+  return names;
 }
 
 fn emit_struct_typedef(pool: ir.TyPool, st: ir.StructDecl) -> Vec[String] {
@@ -102,20 +120,20 @@ fn emit_enum_typedef(pool: ir.TyPool, en: ir.EnumDecl) -> Vec[String] {
 
 fn deps_satisfied(pool: ir.TyPool, p: ir.Program, info: NomInfo, emitted: Vec[String]) -> bool {
   if info.kind == 0 {
-    let st: ir.StructDecl = find_struct(p, info.name);
+    let st: ir.StructDecl = p.structs.get(info.idx);
     let mut i: i32 = 0;
     while i < st.fields.len() {
       let f: ir.StructField = st.fields.get(i);
       let t: ir.Ty = ir.ty_pool_get(pool, f.ty);
       if t.kind == ir.TyKind.Struct || t.kind == ir.TyKind.Enum {
-        if !emitted_has(emitted, ty_qname(t)) { return false; }
+        if !emitted_has_sorted(emitted, ty_qname(t)) { return false; }
       }
       i = i + 1;
     }
     return true;
   }
 
-  let en: ir.EnumDecl = find_enum(p, info.name);
+  let en: ir.EnumDecl = p.enums.get(info.idx);
   let mut vi: i32 = 0;
   while vi < en.variants.len() {
     let v: ir.EnumVariant = en.variants.get(vi);
@@ -123,7 +141,7 @@ fn deps_satisfied(pool: ir.TyPool, p: ir.Program, info: NomInfo, emitted: Vec[St
     while fi < v.fields.len() {
       let t: ir.Ty = ir.ty_pool_get(pool, v.fields.get(fi));
       if t.kind == ir.TyKind.Struct || t.kind == ir.TyKind.Enum {
-        if !emitted_has(emitted, ty_qname(t)) { return false; }
+        if !emitted_has_sorted(emitted, ty_qname(t)) { return false; }
       }
       fi = fi + 1;
     }
@@ -132,35 +150,13 @@ fn deps_satisfied(pool: ir.TyPool, p: ir.Program, info: NomInfo, emitted: Vec[St
   return true;
 }
 
-fn find_struct(p: ir.Program, name: String) -> ir.StructDecl {
-  let mut i: i32 = 0;
-  while i < p.structs.len() {
-    let st: ir.StructDecl = p.structs.get(i);
-    if st.name == name { return st; }
-    i = i + 1;
-  }
-  panic("unknown struct in codegen");
-  return ir.StructDecl { name: "", repr_c: false, packed_align: 0, fields: Vec() };
-}
-
-fn find_enum(p: ir.Program, name: String) -> ir.EnumDecl {
-  let mut i: i32 = 0;
-  while i < p.enums.len() {
-    let en: ir.EnumDecl = p.enums.get(i);
-    if en.name == name { return en; }
-    i = i + 1;
-  }
-  panic("unknown enum in codegen");
-  return ir.EnumDecl { name: "", variants: Vec() };
-}
-
 pub fn emit_nominal_types(pool: ir.TyPool, p: ir.Program) -> Vec[String] {
   let mut infos: Vec[NomInfo] = Vec();
   let mut si: i32 = 0;
   while si < p.structs.len() {
     let st: ir.StructDecl = p.structs.get(si);
     if !struct_has_param_field(pool, st) {
-      infos.push(NomInfo { name: st.name, kind: 0 });
+      infos.push(NomInfo { name: st.name, kind: 0, idx: si });
     }
     si = si + 1;
   }
@@ -168,7 +164,7 @@ pub fn emit_nominal_types(pool: ir.TyPool, p: ir.Program) -> Vec[String] {
   while ei < p.enums.len() {
     let en: ir.EnumDecl = p.enums.get(ei);
     if !enum_has_param_field(pool, en) {
-      infos.push(NomInfo { name: en.name, kind: 1 });
+      infos.push(NomInfo { name: en.name, kind: 1, idx: ei });
     }
     ei = ei + 1;
   }
@@ -180,14 +176,19 @@ pub fn emit_nominal_types(pool: ir.TyPool, p: ir.Program) -> Vec[String] {
     let mut i: i32 = 0;
     while i < infos.len() {
       let info: NomInfo = infos.get(i);
-      if emitted_has(emitted, info.name) { i = i + 1; continue; }
+      if emitted_has_sorted(emitted, info.name) { i = i + 1; continue; }
       if !deps_satisfied(pool, p, info, emitted) { i = i + 1; continue; }
 
-      let lines: Vec[String] = if info.kind == 0 { emit_struct_typedef(pool, find_struct(p, info.name)) } else { emit_enum_typedef(pool, find_enum(p, info.name)) };
+      let lines: Vec[String] =
+        if info.kind == 0 {
+          emit_struct_typedef(pool, p.structs.get(info.idx))
+        } else {
+          emit_enum_typedef(pool, p.enums.get(info.idx))
+        };
       let mut li: i32 = 0;
       while li < lines.len() { out.push(lines.get(li)); li = li + 1; }
       out.push("");
-      emitted.push(info.name);
+      emitted = emitted_insert_sorted(emitted, info.name);
       progress = true;
       i = i + 1;
     }
