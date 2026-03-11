@@ -317,7 +317,12 @@ struct ModIdxCacheEntry { path: String, idx: i32 }
 struct FindModIdxCachedResult { cache: Vec[ModIdxCacheEntry], idx: i32 }
 struct ImportsCacheEntry { mod_idx: i32, file: String, imps: tc.Imports }
 struct FindImportsCachedResult { cache: Vec[ImportsCacheEntry], ar: tc.ImportsResult }
-struct GenericFindModuleIndex { decl_impl_sig_idx: Vec[i32], method_decl_indexes: Vec[Vec[ImplMethodDeclIndexEntry]] }
+struct GenericFindNameIndexEntry { name: String, res: FindFuncDeclResult }
+struct GenericFindModuleIndex {
+  decl_impl_sig_idx: Vec[i32],
+  method_decl_indexes: Vec[Vec[ImplMethodDeclIndexEntry]],
+  generic_name_index: Vec[GenericFindNameIndexEntry],
+}
 struct GenericFindIndexCacheByModEntry { ready: bool, mix: GenericFindModuleIndex }
 struct FindGenericFindIndexCachedResult { cache: Vec[GenericFindIndexCacheByModEntry], mix: GenericFindModuleIndex }
 
@@ -366,68 +371,87 @@ fn build_generic_find_module_index(ctx: tc.Ctx, m: tc.WorldModule) -> GenericFin
     method_decl_indexes.push(build_impl_method_decl_index(m.prog.impls.get(ii)));
     ii = ii + 1;
   }
-  return GenericFindModuleIndex { decl_impl_sig_idx: decl_impl_sig_idx, method_decl_indexes: method_decl_indexes };
-}
 
-fn find_generic_func_with_index(ctx: tc.Ctx, m: tc.WorldModule, name: String, mix: GenericFindModuleIndex) -> FindFuncDeclResult {
-  let mut i: i32 = 0;
-  while i < m.prog.funcs.len() {
-    let fd: ast.FuncDecl = m.prog.funcs.get(i);
-    if fd.name == name && (fd.type_params.len() != 0 || fd.const_params.len() != 0) {
-      return FindFuncDeclResult {
-        found: true,
-        mod_path: m.path,
-        kind: find_func_decl_kind_mod_func(),
-        func_idx: i,
-        impl_idx: -1,
-        impl_m_decl_idx: -1,
-        impl_sig_idx: -1,
-        impl_m_sig_idx: -1,
-        default_is_async: false,
-      };
+  let mut seen_names: Vec[String] = Vec();
+  let mut generic_name_index: Vec[GenericFindNameIndexEntry] = Vec();
+
+  let mut fi: i32 = 0;
+  while fi < m.prog.funcs.len() {
+    let fd: ast.FuncDecl = m.prog.funcs.get(fi);
+    if fd.type_params.len() != 0 || fd.const_params.len() != 0 {
+      let pos: i32 = find_str_sorted_idx_or_insert(seen_names, fd.name);
+      if pos < 0 {
+        let ins: i32 = 0 - (pos + 1);
+        seen_names = insert_str_sorted_at(seen_names, fd.name, ins);
+        generic_name_index.push(GenericFindNameIndexEntry {
+          name: fd.name,
+          res: FindFuncDeclResult {
+            found: true,
+            mod_path: m.path,
+            kind: find_func_decl_kind_mod_func(),
+            func_idx: fi,
+            impl_idx: -1,
+            impl_m_decl_idx: -1,
+            impl_sig_idx: -1,
+            impl_m_sig_idx: -1,
+            default_is_async: false,
+          },
+        });
+      }
     }
-    i = i + 1;
+    fi = fi + 1;
   }
 
-  // Generic impl methods are looked up by lowered impl symbol name.
-  // Reuse prebuilt per-module indexes to avoid repeated rebuild work.
-  let mut ii: i32 = 0;
+  ii = 0;
   while ii < m.prog.impls.len() {
-    let sig_idx: i32 = mix.decl_impl_sig_idx.get(ii);
+    let sig_idx: i32 = decl_impl_sig_idx.get(ii);
     if sig_idx != -1 {
-      let method_decl_index: Vec[ImplMethodDeclIndexEntry] = mix.method_decl_indexes.get(ii);
+      let method_decl_index: Vec[ImplMethodDeclIndexEntry] = method_decl_indexes.get(ii);
       let isg: tc.ImplSig = ctx.impls.get(sig_idx);
       let mut mi: i32 = 0;
       while mi < isg.methods.len() {
         let ms: tc.ImplMethodSig = isg.methods.get(mi);
-        if ms.lowered_name == name && (ms.sig.type_params.len() != 0 || ms.sig.const_params.len() != 0) {
-          if ms.from_default {
-            let ar0: tc.FindAsyncFnResult = tc.find_async_fn(ctx, m.path, ms.lowered_name);
-            return FindFuncDeclResult {
-              found: true,
-              mod_path: ms.default_mod_path,
-              kind: find_func_decl_kind_impl_method_default(),
-              func_idx: -1,
-              impl_idx: -1,
-              impl_m_decl_idx: -1,
-              impl_sig_idx: sig_idx,
-              impl_m_sig_idx: mi,
-              default_is_async: ar0.found,
-            };
-          } else {
-            let mdi: i32 = find_impl_method_decl_idx_from_index(method_decl_index, ms.name);
-            if mdi != -1 {
-              return FindFuncDeclResult {
-                found: true,
-                mod_path: m.path,
-                kind: find_func_decl_kind_impl_method_decl(),
-                func_idx: -1,
-                impl_idx: ii,
-                impl_m_decl_idx: mdi,
-                impl_sig_idx: sig_idx,
-                impl_m_sig_idx: mi,
-                default_is_async: false,
-              };
+        if ms.sig.type_params.len() != 0 || ms.sig.const_params.len() != 0 {
+          let pos: i32 = find_str_sorted_idx_or_insert(seen_names, ms.lowered_name);
+          if pos < 0 {
+            if ms.from_default {
+              let ar: tc.FindAsyncFnResult = tc.find_async_fn(ctx, m.path, ms.lowered_name);
+              let ins: i32 = 0 - (pos + 1);
+              seen_names = insert_str_sorted_at(seen_names, ms.lowered_name, ins);
+              generic_name_index.push(GenericFindNameIndexEntry {
+                name: ms.lowered_name,
+                res: FindFuncDeclResult {
+                  found: true,
+                  mod_path: ms.default_mod_path,
+                  kind: find_func_decl_kind_impl_method_default(),
+                  func_idx: -1,
+                  impl_idx: -1,
+                  impl_m_decl_idx: -1,
+                  impl_sig_idx: sig_idx,
+                  impl_m_sig_idx: mi,
+                  default_is_async: ar.found,
+                },
+              });
+            } else {
+              let mdi: i32 = find_impl_method_decl_idx_from_index(method_decl_index, ms.name);
+              if mdi != -1 {
+                let ins: i32 = 0 - (pos + 1);
+                seen_names = insert_str_sorted_at(seen_names, ms.lowered_name, ins);
+                generic_name_index.push(GenericFindNameIndexEntry {
+                  name: ms.lowered_name,
+                  res: FindFuncDeclResult {
+                    found: true,
+                    mod_path: m.path,
+                    kind: find_func_decl_kind_impl_method_decl(),
+                    func_idx: -1,
+                    impl_idx: ii,
+                    impl_m_decl_idx: mdi,
+                    impl_sig_idx: sig_idx,
+                    impl_m_sig_idx: mi,
+                    default_is_async: false,
+                  },
+                });
+              }
             }
           }
         }
@@ -437,6 +461,57 @@ fn find_generic_func_with_index(ctx: tc.Ctx, m: tc.WorldModule, name: String, mi
     ii = ii + 1;
   }
 
+  let mut sorted: bool = true;
+  let mut si2: i32 = 1;
+  while si2 < generic_name_index.len() {
+    if generic_name_index.get(si2 - 1).name > generic_name_index.get(si2).name {
+      sorted = false;
+      break;
+    }
+    si2 = si2 + 1;
+  }
+  if !sorted {
+    let mut gap: i32 = generic_name_index.len() / 2;
+    while gap > 0 {
+      let mut oi: i32 = gap;
+      while oi < generic_name_index.len() {
+        let keep: GenericFindNameIndexEntry = generic_name_index.get(oi);
+        let keep_name: String = keep.name;
+        let mut j: i32 = oi;
+        while j >= gap {
+          let prev: GenericFindNameIndexEntry = generic_name_index.get(j - gap);
+          if prev.name <= keep_name { break; }
+          generic_name_index.set(j, prev);
+          j = j - gap;
+        }
+        generic_name_index.set(j, keep);
+        oi = oi + 1;
+      }
+      gap = gap / 2;
+    }
+  }
+
+  return GenericFindModuleIndex {
+    decl_impl_sig_idx: decl_impl_sig_idx,
+    method_decl_indexes: method_decl_indexes,
+    generic_name_index: generic_name_index,
+  };
+}
+
+fn find_generic_func_with_index(ctx: tc.Ctx, m: tc.WorldModule, name: String, mix: GenericFindModuleIndex) -> FindFuncDeclResult {
+  let ix: Vec[GenericFindNameIndexEntry] = mix.generic_name_index;
+  let mut lo: i32 = 0;
+  let mut hi: i32 = ix.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let cur: GenericFindNameIndexEntry = ix.get(mid);
+    if cur.name == name { return cur.res; }
+    if cur.name < name {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
   return empty_find_func_decl_result();
 }
 
@@ -566,7 +641,7 @@ fn find_mod_idx_cached(mod_index: Vec[ModIndexEntry], path: String, cache0: Vec[
 }
 
 fn empty_generic_find_module_index() -> GenericFindModuleIndex {
-  return GenericFindModuleIndex { decl_impl_sig_idx: Vec(), method_decl_indexes: Vec() };
+  return GenericFindModuleIndex { decl_impl_sig_idx: Vec(), method_decl_indexes: Vec(), generic_name_index: Vec() };
 }
 
 fn ensure_generic_find_index_cache_by_mod_len(cache0: Vec[GenericFindIndexCacheByModEntry], need_len: i32) -> Vec[GenericFindIndexCacheByModEntry] {
