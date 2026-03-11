@@ -202,15 +202,30 @@ pub fn find_trait_method(ts: TraitSig, name: String) -> FindTraitMethodResult {
 pub struct FindImplResult { pub found: bool, pub sig: ImplSig }
 
 pub fn find_impl(ctx: Ctx, trait_mod: String, trait_name: String, for_ty: i32) -> FindImplResult {
-  let is: Vec[ImplSig] = ctx.impls;
-  let mut i: i32 = 0;
-  while i < is.len() {
-    let it: ImplSig = is.get(i);
-    if it.is_inherent || it.is_negative { i = i + 1; continue; }
-    if it.trait_mod_path == trait_mod && it.trait_name == trait_name && it.for_ty == for_ty {
-      return FindImplResult { found: true, sig: it };
+  let r: ImplTraitIndexRange = impl_trait_index_range(ctx, trait_mod, trait_name);
+  if r.use_index {
+    let xs: Vec[SymLookupIndexEntry] = ctx.impl_trait_lookup_index;
+    let mut i: i32 = r.lo;
+    while i < r.hi {
+      let idx: i32 = xs.get(i).idx;
+      if idx >= 0 && idx < ctx.impls.len() {
+        let it: ImplSig = ctx.impls.get(idx);
+        if !it.is_negative && it.for_ty == for_ty {
+          return FindImplResult { found: true, sig: it };
+        }
+      }
+      i = i + 1;
     }
-    i = i + 1;
+  } else {
+    let mut i: i32 = 0;
+    while i < ctx.impls.len() {
+      let it: ImplSig = ctx.impls.get(i);
+      if it.is_inherent || it.is_negative { i = i + 1; continue; }
+      if it.trait_mod_path == trait_mod && it.trait_name == trait_name && it.for_ty == for_ty {
+        return FindImplResult { found: true, sig: it };
+      }
+      i = i + 1;
+    }
   }
   return FindImplResult {
     found: false,
@@ -238,15 +253,76 @@ pub struct FindImplForTyResult {
   pub sig: ImplSig,
 }
 
+fn impl_trait_key_before(mod0: String, name0: String, mod1: String, name1: String) -> bool {
+  if mod0 < mod1 { return true; }
+  if mod0 > mod1 { return false; }
+  return name0 < name1;
+}
+
+fn impl_trait_index_lower_bound(xs: Vec[SymLookupIndexEntry], trait_mod: String, trait_name: String) -> i32 {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = xs.len();
+  while lo < hi {
+    let mid: i32 = lo + (hi - lo) / 2;
+    let e: SymLookupIndexEntry = xs.get(mid);
+    if impl_trait_key_before(e.mod_path, e.name, trait_mod, trait_name) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+struct ImplTraitIndexRange {
+  use_index: bool,
+  lo: i32,
+  hi: i32,
+}
+
+fn impl_trait_index_range(ctx: Ctx, trait_mod: String, trait_name: String) -> ImplTraitIndexRange {
+  if ctx.impl_trait_lookup_index_src_len != ctx.impls.len() || ctx.impl_trait_lookup_index.len() == 0 {
+    return ImplTraitIndexRange { use_index: false, lo: 0, hi: 0 };
+  }
+  let xs: Vec[SymLookupIndexEntry] = ctx.impl_trait_lookup_index;
+  let lo: i32 = impl_trait_index_lower_bound(xs, trait_mod, trait_name);
+  let mut hi: i32 = lo;
+  while hi < xs.len() {
+    let e: SymLookupIndexEntry = xs.get(hi);
+    if e.mod_path != trait_mod || e.name != trait_name { break; }
+    hi = hi + 1;
+  }
+  return ImplTraitIndexRange { use_index: true, lo: lo, hi: hi };
+}
+
 fn impl_match_candidates_text(ctx: Ctx, trait_mod: String, trait_name: String, recv_ty: i32) -> String {
   let nmax: i32 = 8;
   let mut rows: Vec[String] = Vec();
   let mut total: i32 = 0;
+  let r: ImplTraitIndexRange = impl_trait_index_range(ctx, trait_mod, trait_name);
+  if r.use_index {
+    let xs: Vec[SymLookupIndexEntry] = ctx.impl_trait_lookup_index;
+    let mut i: i32 = r.lo;
+    while i < r.hi {
+      let idx: i32 = xs.get(i).idx;
+      if idx >= 0 && idx < ctx.impls.len() {
+        let isg: ImplSig = ctx.impls.get(idx);
+        if !isg.is_negative {
+          let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
+          if ur.ok {
+            rows = sym_lookup_insert_sorted_limit(rows, impl_diag_text(ctx, isg), nmax);
+            total = total + 1;
+          }
+        }
+      }
+      i = i + 1;
+    }
+    return sym_lookup_join_first(rows, total, nmax);
+  }
   let mut i: i32 = 0;
   while i < ctx.impls.len() {
     let isg: ImplSig = ctx.impls.get(i);
-    if isg.is_inherent || isg.is_negative { i = i + 1; continue; }
-    if isg.trait_mod_path == trait_mod && isg.trait_name == trait_name {
+    if !isg.is_inherent && !isg.is_negative && isg.trait_mod_path == trait_mod && isg.trait_name == trait_name {
       let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
       if ur.ok {
         rows = sym_lookup_insert_sorted_limit(rows, impl_diag_text(ctx, isg), nmax);
@@ -480,89 +556,107 @@ fn find_impl_for_ty_with_stack(ctx: Ctx, trait_mod: String, trait_name: String, 
     assoc_types: Vec(),
     methods: Vec(),
   };
-  let mut i: i32 = 0;
-  while i < ctx.impls.len() {
-    let isg: ImplSig = ctx.impls.get(i);
-    if isg.is_inherent { i = i + 1; continue; }
-    if isg.trait_mod_path == trait_mod && isg.trait_name == trait_name {
-      let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
-      if ur.ok {
-        let mut bounds_ok: bool = true;
-        let mut bi: i32 = 0;
-        while bi < isg.head_type_param_bounds.len() {
-          let b: TypeParamBoundSig = isg.head_type_param_bounds.get(bi);
-          let ty0: i32 = ty_sub_lookup(ur.subs, b.type_param);
-          if ty0 == -1 {
-            bounds_ok = false;
-            bi = isg.head_type_param_bounds.len();
-            continue;
-          }
-          let ty1: i32 = strip_range(ctx, ty0);
-          let key: String = impl_req_key(b.trait_mod_path, b.trait_name, ty1);
-          if contains_str_sym_lookup(stack, key) {
-            bounds_ok = false;
-            bi = isg.head_type_param_bounds.len();
-            continue;
-          }
-          let mut next_stack: Vec[String] = stack;
-          next_stack.push(key);
-          let fi_b: FindImplForTyResult = find_impl_for_ty_with_stack(ctx, b.trait_mod_path, b.trait_name, ty1, next_stack);
-          if fi_b.ambiguous || !fi_b.found {
-            bounds_ok = false;
-            bi = isg.head_type_param_bounds.len();
-            continue;
-          }
-          bi = bi + 1;
-        }
-        if !bounds_ok {
-          i = i + 1;
-          continue;
-        }
-        let cwr_h: ConstWhereCheckResult = check_const_where_bounds(ctx, isg.head_const_where_bounds, ur.subs, Vec());
-        if !cwr_h.ok {
-          i = i + 1;
-          continue;
-        }
-        if isg.is_negative {
-          neg_hit = true;
-          i = i + 1;
-          continue;
-        }
-        if !found {
-          found = true;
-          out = isg;
-          i = i + 1;
-          continue;
-        }
-
-        // Prefer an exact `for_ty == recv_ty` match over broader unification
-        // matches. This avoids ambiguity between a base async frame impl and an
-        // instantiated async frame impl that is still structurally comparable.
-        let new_exact: bool = isg.for_ty == recv_ty;
-        let old_exact: bool = out.for_ty == recv_ty;
-        if new_exact && !old_exact {
-          out = isg;
-          i = i + 1;
-          continue;
-        }
-        if old_exact && !new_exact {
-          i = i + 1;
-          continue;
-        }
-
-        let new_more: bool = impl_sig_more_specific(ctx, isg, out);
-        let old_more: bool = impl_sig_more_specific(ctx, out, isg);
-        if new_more && !old_more {
-          out = isg;
-          i = i + 1;
-          continue;
-        }
-        if !new_more && !old_more {
-          let cands: String = impl_match_candidates_text(ctx, trait_mod, trait_name, recv_ty);
-          let trace: String = impl_rank_trace_text(ctx, out, isg);
-          return FindImplForTyResult { found: false, ambiguous: true, candidates: cands.concat(" | ").concat(trace), sig: out };
-        }
+  let r: ImplTraitIndexRange = impl_trait_index_range(ctx, trait_mod, trait_name);
+  let xs: Vec[SymLookupIndexEntry] = ctx.impl_trait_lookup_index;
+  let mut i: i32 = if r.use_index { r.lo } else { 0 };
+  while true {
+    let idx: i32 = if r.use_index {
+      if i >= r.hi { break; }
+      xs.get(i).idx
+    } else {
+      if i >= ctx.impls.len() { break; }
+      i
+    };
+    if idx < 0 || idx >= ctx.impls.len() {
+      i = i + 1;
+      continue;
+    }
+    let isg: ImplSig = ctx.impls.get(idx);
+    if !r.use_index {
+      if isg.is_inherent || isg.trait_mod_path != trait_mod || isg.trait_name != trait_name {
+        i = i + 1;
+        continue;
       }
+    }
+    let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
+    if !ur.ok {
+      i = i + 1;
+      continue;
+    }
+    let mut bounds_ok: bool = true;
+    let mut bi: i32 = 0;
+    while bi < isg.head_type_param_bounds.len() {
+      let b: TypeParamBoundSig = isg.head_type_param_bounds.get(bi);
+      let ty0: i32 = ty_sub_lookup(ur.subs, b.type_param);
+      if ty0 == -1 {
+        bounds_ok = false;
+        bi = isg.head_type_param_bounds.len();
+        continue;
+      }
+      let ty1: i32 = strip_range(ctx, ty0);
+      let key: String = impl_req_key(b.trait_mod_path, b.trait_name, ty1);
+      if contains_str_sym_lookup(stack, key) {
+        bounds_ok = false;
+        bi = isg.head_type_param_bounds.len();
+        continue;
+      }
+      let mut next_stack: Vec[String] = stack;
+      next_stack.push(key);
+      let fi_b: FindImplForTyResult = find_impl_for_ty_with_stack(ctx, b.trait_mod_path, b.trait_name, ty1, next_stack);
+      if fi_b.ambiguous || !fi_b.found {
+        bounds_ok = false;
+        bi = isg.head_type_param_bounds.len();
+        continue;
+      }
+      bi = bi + 1;
+    }
+    if !bounds_ok {
+      i = i + 1;
+      continue;
+    }
+    let cwr_h: ConstWhereCheckResult = check_const_where_bounds(ctx, isg.head_const_where_bounds, ur.subs, Vec());
+    if !cwr_h.ok {
+      i = i + 1;
+      continue;
+    }
+    if isg.is_negative {
+      neg_hit = true;
+      i = i + 1;
+      continue;
+    }
+    if !found {
+      found = true;
+      out = isg;
+      i = i + 1;
+      continue;
+    }
+
+    // Prefer an exact `for_ty == recv_ty` match over broader unification
+    // matches. This avoids ambiguity between a base async frame impl and an
+    // instantiated async frame impl that is still structurally comparable.
+    let new_exact: bool = isg.for_ty == recv_ty;
+    let old_exact: bool = out.for_ty == recv_ty;
+    if new_exact && !old_exact {
+      out = isg;
+      i = i + 1;
+      continue;
+    }
+    if old_exact && !new_exact {
+      i = i + 1;
+      continue;
+    }
+
+    let new_more: bool = impl_sig_more_specific(ctx, isg, out);
+    let old_more: bool = impl_sig_more_specific(ctx, out, isg);
+    if new_more && !old_more {
+      out = isg;
+      i = i + 1;
+      continue;
+    }
+    if !new_more && !old_more {
+      let cands: String = impl_match_candidates_text(ctx, trait_mod, trait_name, recv_ty);
+      let trace: String = impl_rank_trace_text(ctx, out, isg);
+      return FindImplForTyResult { found: false, ambiguous: true, candidates: cands.concat(" | ").concat(trace), sig: out };
     }
     i = i + 1;
   }
@@ -605,16 +699,36 @@ pub struct FindTraitDispatchMethodResult {
 pub fn trait_impl_candidates_text(ctx: Ctx, trait_mod: String, trait_name: String) -> String {
   let mut out: String = "";
   let mut n: i32 = 0;
-  let mut i: i32 = 0;
-  while i < ctx.impls.len() {
-    let isg: ImplSig = ctx.impls.get(i);
-    if isg.is_inherent || isg.is_negative { i = i + 1; continue; }
-    if isg.trait_mod_path == trait_mod && isg.trait_name == trait_name {
-      if n > 0 { out = out.concat(", "); }
-      out = out.concat(ty_inst_str(ctx, isg.for_ty));
-      n = n + 1;
-      if n >= 8 { return out.concat(", ..."); }
+  let r: ImplTraitIndexRange = impl_trait_index_range(ctx, trait_mod, trait_name);
+  let xs: Vec[SymLookupIndexEntry] = ctx.impl_trait_lookup_index;
+  let mut i: i32 = if r.use_index { r.lo } else { 0 };
+  while true {
+    let idx: i32 = if r.use_index {
+      if i >= r.hi { break; }
+      xs.get(i).idx
+    } else {
+      if i >= ctx.impls.len() { break; }
+      i
+    };
+    if idx < 0 || idx >= ctx.impls.len() {
+      i = i + 1;
+      continue;
     }
+    let isg: ImplSig = ctx.impls.get(idx);
+    if !r.use_index {
+      if isg.is_inherent || isg.trait_mod_path != trait_mod || isg.trait_name != trait_name {
+        i = i + 1;
+        continue;
+      }
+    }
+    if isg.is_negative {
+      i = i + 1;
+      continue;
+    }
+    if n > 0 { out = out.concat(", "); }
+    out = out.concat(ty_inst_str(ctx, isg.for_ty));
+    n = n + 1;
+    if n >= 8 { return out.concat(", ..."); }
     i = i + 1;
   }
   if n == 0 { return "<none>"; }
