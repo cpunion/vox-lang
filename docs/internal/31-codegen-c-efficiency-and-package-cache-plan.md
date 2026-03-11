@@ -106,6 +106,7 @@ Invalidate unit on any of:
 
 ### 4.6 Progress Notes
 
+- 2026-03-11: `typecheck` block-exit move-state merge (`locals_sync_moved`) switched from per-var name lookup to index-stable slot sync fast path (with mismatch fallback), removing one O(n^2)-like hot path in function-body checking. Local profile sample moved from `compile typecheck/core/funcs ~1.36s -> ~1.28s` and `compile total ~7.49s -> ~7.30s` on the same selfhost build command.
 - 2026-02-28: link-cache hit check was decoupled from package C path existence.
 - Current link hit condition is: `link` meta key match + linked binary artifact exists.
 - Package object cache (`pkg-obj`) still requires C path + object + obj meta, unchanged.
