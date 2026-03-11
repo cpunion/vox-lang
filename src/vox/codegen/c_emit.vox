@@ -184,6 +184,39 @@ fn find_func_index_by_name_ordered(funcs: Vec[ir.Func], order: Vec[i32], name: S
   return -1;
 }
 
+struct FuncLookupCacheEntry { name: String, idx: i32 }
+
+fn func_lookup_cache_lower_bound(entries: Vec[FuncLookupCacheEntry], name: String) -> i32 {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = entries.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let cur: String = entries.get(mid).name;
+    if cur < name {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+struct FindFuncIndexCachedResult {
+  idx: i32,
+  cache: Vec[FuncLookupCacheEntry],
+}
+
+fn find_func_index_by_name_cached(funcs: Vec[ir.Func], order: Vec[i32], name: String, cache0: Vec[FuncLookupCacheEntry]) -> FindFuncIndexCachedResult {
+  let mut cache: Vec[FuncLookupCacheEntry] = cache0;
+  let lo: i32 = func_lookup_cache_lower_bound(cache, name);
+  if lo < cache.len() && cache.get(lo).name == name {
+    return FindFuncIndexCachedResult { idx: cache.get(lo).idx, cache: cache };
+  }
+  let idx: i32 = find_func_index_by_name_ordered(funcs, order, name);
+  cache.insert(lo, FuncLookupCacheEntry { name: name, idx: idx });
+  return FindFuncIndexCachedResult { idx: idx, cache: cache };
+}
+
 fn funcs_for_emit(p: ir.Program, opts: EmitOptions) -> Vec[ir.Func] {
   let funcs0: Vec[ir.Func] = p.funcs;
   if !opts.emit_driver_main && !opts.emit_test_main { return funcs0; }
@@ -196,9 +229,12 @@ fn funcs_for_emit(p: ir.Program, opts: EmitOptions) -> Vec[ir.Func] {
     i0 = i0 + 1;
   }
   let order: Vec[i32] = func_name_order(funcs0);
+  let mut lookup_cache: Vec[FuncLookupCacheEntry] = Vec();
   let mut q: Vec[i32] = Vec();
   if opts.emit_driver_main {
-    let midx: i32 = find_func_index_by_name_ordered(funcs0, order, "main");
+    let mr: FindFuncIndexCachedResult = find_func_index_by_name_cached(funcs0, order, "main", lookup_cache);
+    lookup_cache = mr.cache;
+    let midx: i32 = mr.idx;
     if midx >= 0 && !queued.get(midx) {
       q.push(midx);
       queued.set(midx, true);
@@ -207,7 +243,9 @@ fn funcs_for_emit(p: ir.Program, opts: EmitOptions) -> Vec[ir.Func] {
   if opts.emit_test_main {
     let mut ti: i32 = 0;
     while ti < opts.test_funcs.len() {
-      let idx: i32 = find_func_index_by_name_ordered(funcs0, order, opts.test_funcs.get(ti));
+      let tr: FindFuncIndexCachedResult = find_func_index_by_name_cached(funcs0, order, opts.test_funcs.get(ti), lookup_cache);
+      lookup_cache = tr.cache;
+      let idx: i32 = tr.idx;
       if idx >= 0 && !queued.get(idx) {
         q.push(idx);
         queued.set(idx, true);
@@ -217,7 +255,9 @@ fn funcs_for_emit(p: ir.Program, opts: EmitOptions) -> Vec[ir.Func] {
   }
   let mut ei: i32 = 0;
   while ei < p.ffi_exports.len() {
-    let idx: i32 = find_func_index_by_name_ordered(funcs0, order, p.ffi_exports.get(ei).func);
+    let er: FindFuncIndexCachedResult = find_func_index_by_name_cached(funcs0, order, p.ffi_exports.get(ei).func, lookup_cache);
+    lookup_cache = er.cache;
+    let idx: i32 = er.idx;
     if idx >= 0 && !queued.get(idx) {
       q.push(idx);
       queued.set(idx, true);
@@ -233,18 +273,22 @@ fn funcs_for_emit(p: ir.Program, opts: EmitOptions) -> Vec[ir.Func] {
     keep.set(fi, true);
     let f: ir.Func = funcs0.get(fi);
     let mut bi: i32 = 0;
-    while bi < f.blocks.len() {
-      let b: ir.Block = f.blocks.get(bi);
-      let mut ii: i32 = 0;
-      while ii < b.instrs.len() {
-        let ins: ir.Instr = b.instrs.get(ii);
-        let ci: i32 = match ins {
-          ir.Instr.Call(_has_dst, _dst, _ret_ty, name, _args) => find_func_index_by_name_ordered(funcs0, order, name),
-          _ => -1,
-        };
-        if ci >= 0 && !queued.get(ci) {
-          q.push(ci);
-          queued.set(ci, true);
+      while bi < f.blocks.len() {
+        let b: ir.Block = f.blocks.get(bi);
+        let mut ii: i32 = 0;
+        while ii < b.instrs.len() {
+          let ins: ir.Instr = b.instrs.get(ii);
+          let ci: i32 = match ins {
+            ir.Instr.Call(_has_dst, _dst, _ret_ty, name, _args) => {
+              let cr: FindFuncIndexCachedResult = find_func_index_by_name_cached(funcs0, order, name, lookup_cache);
+              lookup_cache = cr.cache;
+              cr.idx
+            },
+            _ => -1,
+          };
+          if ci >= 0 && !queued.get(ci) {
+            q.push(ci);
+            queued.set(ci, true);
         }
         ii = ii + 1;
       }
