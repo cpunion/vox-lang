@@ -101,6 +101,33 @@ fn ctx_lookup_test_impl_method_sig(c: tc.Ctx, name: String) -> tc.ImplMethodSig 
   };
 }
 
+fn ctx_lookup_test_trait_method_sig(c: tc.Ctx, name: String) -> tc.TraitMethodSig {
+  return tc.TraitMethodSig {
+    name: name,
+    sig: ctx_lookup_test_empty_func_sig(c),
+    deprecated_message: "",
+    is_async: false,
+    async_output_ty: c.ty_bad,
+    has_default: false,
+    default_mod_path: "",
+    default_file: "",
+    default_params: Vec(),
+    default_body: ast.Block { stmts: Vec() },
+  };
+}
+
+fn ctx_lookup_test_trait_sig(c: tc.Ctx, mod_path: String, name: String, methods: Vec[tc.TraitMethodSig]) -> tc.TraitSig {
+  return tc.TraitSig {
+    mod_path: mod_path,
+    name: name,
+    vis: 0,
+    is_pub: true,
+    supers: Vec(),
+    assoc_types: Vec(),
+    methods: methods,
+  };
+}
+
 fn test_ctx_lookup_index_keeps_first_duplicate_func_entry() -> () {
   let mut c: tc.Ctx = tc.new_ctx();
   let sig: tc.FuncSig = ctx_lookup_test_empty_func_sig(c);
@@ -279,4 +306,89 @@ fn test_ctx_impl_method_lookup_index_sorts_and_keeps_duplicate_method_entries() 
   t.assert_eq(e3.idx, 0);
   t.assert_eq(e4.name, "foo");
   t.assert_eq(e4.idx, 2);
+}
+
+fn test_ctx_trait_method_lookup_index_sorts_and_keeps_first_duplicate_entries() -> () {
+  let mut c: tc.Ctx = tc.new_ctx();
+
+  let mut m_root: Vec[tc.TraitMethodSig] = Vec();
+  m_root.push(ctx_lookup_test_trait_method_sig(c, "root"));
+
+  let mut m_a: Vec[tc.TraitMethodSig] = Vec();
+  m_a.push(ctx_lookup_test_trait_method_sig(c, "foo"));
+  m_a.push(ctx_lookup_test_trait_method_sig(c, "bar"));
+
+  let mut m_b: Vec[tc.TraitMethodSig] = Vec();
+  m_b.push(ctx_lookup_test_trait_method_sig(c, "foo"));
+
+  let mut m_dup: Vec[tc.TraitMethodSig] = Vec();
+  m_dup.push(ctx_lookup_test_trait_method_sig(c, "dup"));
+  m_dup.push(ctx_lookup_test_trait_method_sig(c, "dup"));
+
+  let mut m_z: Vec[tc.TraitMethodSig] = Vec();
+  m_z.push(ctx_lookup_test_trait_method_sig(c, "baz"));
+
+  c.traits.push(ctx_lookup_test_trait_sig(c, "main", "Tmain", m_root));
+  c.traits.push(ctx_lookup_test_trait_sig(c, "amod", "A", m_a));
+  c.traits.push(ctx_lookup_test_trait_sig(c, "amod", "B", m_b));
+  c.traits.push(ctx_lookup_test_trait_sig(c, "dup", "D", m_dup));
+  c.traits.push(ctx_lookup_test_trait_sig(c, "zmod", "Z", m_z));
+
+  c = tc.ctx_rebuild_sym_lookup_indexes(c);
+  t.assert_eq(c.trait_method_lookup_index.len(), 6);
+
+  let e0: tc.TraitMethodLookupIndexEntry = c.trait_method_lookup_index.get(0);
+  let e1: tc.TraitMethodLookupIndexEntry = c.trait_method_lookup_index.get(1);
+  let e2: tc.TraitMethodLookupIndexEntry = c.trait_method_lookup_index.get(2);
+  let e3: tc.TraitMethodLookupIndexEntry = c.trait_method_lookup_index.get(3);
+  let e4: tc.TraitMethodLookupIndexEntry = c.trait_method_lookup_index.get(4);
+  let e5: tc.TraitMethodLookupIndexEntry = c.trait_method_lookup_index.get(5);
+
+  t.assert_eq(e0.trait_mod_path, "");
+  t.assert_eq(e0.trait_name, "Tmain");
+  t.assert_eq(e0.method_name, "root");
+  t.assert_eq(e0.method_idx, 0);
+
+  t.assert_eq(e1.trait_mod_path, "amod");
+  t.assert_eq(e1.trait_name, "A");
+  t.assert_eq(e1.method_name, "bar");
+  t.assert_eq(e1.method_idx, 1);
+
+  t.assert_eq(e2.trait_mod_path, "amod");
+  t.assert_eq(e2.trait_name, "A");
+  t.assert_eq(e2.method_name, "foo");
+  t.assert_eq(e2.method_idx, 0);
+
+  t.assert_eq(e3.trait_mod_path, "amod");
+  t.assert_eq(e3.trait_name, "B");
+  t.assert_eq(e3.method_name, "foo");
+  t.assert_eq(e3.method_idx, 0);
+
+  t.assert_eq(e4.trait_mod_path, "dup");
+  t.assert_eq(e4.trait_name, "D");
+  t.assert_eq(e4.method_name, "dup");
+  t.assert_eq(e4.method_idx, 0);
+
+  t.assert_eq(e5.trait_mod_path, "zmod");
+  t.assert_eq(e5.trait_name, "Z");
+  t.assert_eq(e5.method_name, "baz");
+  t.assert_eq(e5.method_idx, 0);
+}
+
+fn test_find_trait_method_ctx_lookup_index_root_mod_equivalence() -> () {
+  let mut c: tc.Ctx = tc.new_ctx();
+  let mut methods: Vec[tc.TraitMethodSig] = Vec();
+  methods.push(ctx_lookup_test_trait_method_sig(c, "ping"));
+  c.traits.push(ctx_lookup_test_trait_sig(c, "main", "RootTrait", methods));
+  c = tc.ctx_rebuild_sym_lookup_indexes(c);
+
+  let tf_main: tc.FindTraitResult = tc.find_trait(c, "main", "RootTrait");
+  t.assert(tf_main.found);
+  let fm_main: tc.FindTraitMethodResult = tc.find_trait_method_ctx(c, "main", "RootTrait", tf_main.sig, "ping");
+  t.assert(fm_main.found);
+
+  let tf_root: tc.FindTraitResult = tc.find_trait(c, "", "RootTrait");
+  t.assert(tf_root.found);
+  let fm_root: tc.FindTraitMethodResult = tc.find_trait_method_ctx(c, "", "RootTrait", tf_root.sig, "ping");
+  t.assert(fm_root.found);
 }
