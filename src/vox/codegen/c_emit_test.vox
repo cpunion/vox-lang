@@ -1040,7 +1040,7 @@ fn test_codegen_i32_to_i64_cast_skips_bounds_check() -> () {
   t.assert(!contains(c, "i32 to i64 overflow"));
 }
 
-fn test_codegen_int_cast_checked_literal_in_range_skips_runtime_check() -> () {
+fn test_codegen_int_cast_checked_literal_in_range_compiles() -> () {
   let src: String = """
     fn main() -> i32 {
       let x: u8 = 7 as u8;
@@ -1048,18 +1048,54 @@ fn test_codegen_int_cast_checked_literal_in_range_skips_runtime_check() -> () {
     }
   """;
   let c: String = compile_to_c(src);
-  t.assert(!contains(c, "i32 to u8 overflow"));
+  t.assert(contains(c, "int main(int argc, char** argv) {"));
 }
 
-fn test_codegen_int_cast_checked_literal_out_of_range_keeps_runtime_check() -> () {
+fn test_codegen_int_cast_checked_literal_out_of_range_rejected_in_typecheck() -> () {
   let src: String = """
     fn main() -> i32 {
       let x: u8 = 300 as u8;
       return x as i32;
     }
   """;
-  let c: String = compile_to_c(src);
-  t.assert(contains(c, "i32 to u8 overflow"));
+  let r: p.ParseResult = p.parse_text(src);
+  t.assert(r.err == p.ParseError.None);
+  let prelude_r: p.ParseResult = p.parse_text("""
+    impl String {
+      fn len(s: String) -> i32 { return 0; }
+      fn is_empty(s: String) -> bool { return true; }
+      fn byte_at(s: String, idx: i32) -> i32 { return 0; }
+      fn slice(s: String, start: i32, end: i32) -> String { return ""; }
+      fn concat(s: String, other: String) -> String { return ""; }
+      fn starts_with(s: String, pre: String) -> bool { return false; }
+      fn ends_with(s: String, suf: String) -> bool { return false; }
+      fn contains(s: String, needle: String) -> bool { return false; }
+      fn index_of(s: String, needle: String) -> i32 { return 0; }
+      fn last_index_of(s: String, needle: String) -> i32 { return 0; }
+      fn escape_c(s: String) -> String { return ""; }
+      fn to_string(s: String) -> String { return s; }
+    }
+    impl bool { fn to_string(v: bool) -> String { return ""; } }
+    impl i8 { fn to_string(v: i8) -> String { return ""; } }
+    impl u8 { fn to_string(v: u8) -> String { return ""; } }
+    impl i16 { fn to_string(v: i16) -> String { return ""; } }
+    impl u16 { fn to_string(v: u16) -> String { return ""; } }
+    impl i32 { fn to_string(v: i32) -> String { return ""; } }
+    impl u32 { fn to_string(v: u32) -> String { return ""; } }
+    impl i64 { fn to_string(v: i64) -> String { return ""; } }
+    impl u64 { fn to_string(v: u64) -> String { return ""; } }
+    impl isize { fn to_string(v: isize) -> String { return ""; } }
+    impl usize { fn to_string(v: usize) -> String { return ""; } }
+    impl f32 { fn to_string(v: f32) -> String { return ""; } }
+    impl f64 { fn to_string(v: f64) -> String { return ""; } }
+  """);
+  t.assert(prelude_r.err == p.ParseError.None);
+  let mut w: tc.World = tc.world();
+  w = tc.world_add(w, "std/prelude", prelude_r.prog);
+  w = tc.world_add(w, "main", r.prog);
+  let gr: irgen.GenResult = irgen.generate_world(w);
+  t.assert(!gr.ok);
+  t.assert(contains(gr.err, "typecheck failed"));
 }
 
 fn test_codegen_range_cast_emits_bounds_check() -> () {
