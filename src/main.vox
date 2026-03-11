@@ -2789,6 +2789,7 @@ fn main() -> i32 {
     let compiler_rev: String = bi.version().concat("@").concat(bi.channel());
     let mut sem_key: String = "";
     let mut sem_pkg_keys: Vec[BuildCachePkgKey] = Vec();
+    let mut sem_dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
     let mut sem_mode: String = "";
     let mut list_cache_out: String = "";
     let mut sem_cache_hit: bool = false;
@@ -2804,13 +2805,14 @@ fn main() -> i32 {
       list_mode = append_build_mode_line(list_mode, "compiler=", compiler_rev);
       sem_pkg_keys = pkg_keys_result.sem_keys;
       sem_mode = "sem\n".concat(list_mode);
-      let sem_keep: BuildCacheSemKeyKeep =
-        build_cache_sem_key_from_pkg_source_keys_keep(
+      let sem_keep: BuildCacheSemKeyDepsKeep =
+        build_cache_sem_key_dep_hashes_from_pkg_source_keys_keep(
           sem_pkg_keys,
           sem_mode,
         );
       sem_pkg_keys = sem_keep.keys;
       sem_key = sem_keep.sem_key;
+      sem_dep_hashes = sem_keep.dep_hashes;
       list_cache_out = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), sem_key).concat(if test_json { ".list.json" } else { ".list.txt" });
       sem_cache_hit = build_sem_cache_hit(sem_key);
       if sem_cache_hit && fs.exists(list_cache_out) {
@@ -2859,9 +2861,7 @@ fn main() -> i32 {
     };
     if use_sem_cache && sem_key != "" {
       if !sem_cache_hit {
-        let sem_deps_keep: BuildCacheSemDepHashesKeep = build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-        sem_pkg_keys = sem_deps_keep.keys;
-        write_build_sem_cache_with_deps(sem_key, sem_deps_keep.dep_hashes);
+        write_build_sem_cache_with_deps(sem_key, sem_dep_hashes);
       }
       fs.mkdir_p(dir_name(list_cache_out));
       let _: bool = write_string_if_changed(list_cache_out, rendered);
@@ -3047,15 +3047,17 @@ fn main() -> i32 {
       }
     }
     if cache_enabled && use_sem_cache && sem_key == "" && (!compile_c_cache_hit || query_shadow_on) {
-      if sem_pkg_keys.len() == 0 {
-        let sem_keys_result: BuildCachePkgSemOnlySourceKeysResult =
-          build_cache_pkg_sem_source_keys_only_from_order_with_files(files, pkg_key_pkgs, pkg_key_order);
-        files = sem_keys_result.files;
-        sem_pkg_keys = sem_keys_result.sem_keys;
-      }
-      let sem_keep: BuildCacheSemKeyKeep = build_cache_sem_key_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-      sem_pkg_keys = sem_keep.keys;
+      let sem_keep: BuildCacheSemKeyDepHashesOnlyResult =
+        build_cache_sem_key_dep_hashes_only_from_order_with_files(
+          files,
+          pkg_key_pkgs,
+          pkg_key_order,
+          sem_mode,
+        );
+      files = sem_keep.files;
+      sem_pkg_keys = sem_keep.sem_keys;
       sem_key = sem_keep.sem_key;
+      sem_dep_hashes = sem_keep.dep_hashes;
       sem_cache_hit = build_sem_cache_hit(sem_key);
     }
     if cache_enabled && use_sem_cache && sem_cache_hit && !compile_c_cache_hit && sem_key != "" && compile_key != "" && source_sig != "" {
@@ -3107,14 +3109,13 @@ fn main() -> i32 {
         let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
         if use_sem_cache {
           if sem_dep_hashes.len() == 0 {
-            if sem_pkg_keys.len() == 0 {
-              let sem_keys_result: BuildCachePkgSemOnlySourceKeysResult = build_cache_pkg_sem_source_keys_only_with_files(files);
-              files = sem_keys_result.files;
-              sem_pkg_keys = sem_keys_result.sem_keys;
+            let sem_keep: BuildCacheSemKeyDepHashesOnlyResult = build_cache_sem_key_dep_hashes_only_with_files(files, sem_mode);
+            files = sem_keep.files;
+            sem_pkg_keys = sem_keep.sem_keys;
+            sem_dep_hashes = sem_keep.dep_hashes;
+            if sem_key == "" || !sem_cache_hit {
+              sem_key = sem_keep.sem_key;
             }
-            let sem_deps_keep: BuildCacheSemDepHashesKeep = build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-            sem_pkg_keys = sem_deps_keep.keys;
-            sem_dep_hashes = sem_deps_keep.dep_hashes;
           }
           let mut sdi: i32 = 0;
           while sdi < sem_dep_hashes.len() {
@@ -3420,14 +3421,13 @@ fn main() -> i32 {
     }
     if use_sem_cache && !sem_cache_hit && sem_key != "" {
       if sem_dep_hashes.len() == 0 {
-        if sem_pkg_keys.len() == 0 {
-          let sem_keys_result: BuildCachePkgSemOnlySourceKeysResult = build_cache_pkg_sem_source_keys_only_with_files(files);
-          files = sem_keys_result.files;
-          sem_pkg_keys = sem_keys_result.sem_keys;
+        let sem_keep: BuildCacheSemKeyDepHashesOnlyResult = build_cache_sem_key_dep_hashes_only_with_files(files, sem_mode);
+        files = sem_keep.files;
+        sem_pkg_keys = sem_keep.sem_keys;
+        sem_dep_hashes = sem_keep.dep_hashes;
+        if sem_key == "" || !sem_cache_hit {
+          sem_key = sem_keep.sem_key;
         }
-        let sem_deps_keep: BuildCacheSemDepHashesKeep = build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-        sem_pkg_keys = sem_deps_keep.keys;
-        sem_dep_hashes = sem_deps_keep.dep_hashes;
       }
       write_build_sem_cache_with_deps(sem_key, sem_dep_hashes);
     }
@@ -3986,15 +3986,17 @@ fn main() -> i32 {
         }
       }
       if use_sem_cache && sem_key == "" && (!cache_c_hit || query_shadow_on) {
-        if sem_pkg_keys.len() == 0 {
-          let sem_keys_result: BuildCachePkgSemOnlySourceKeysResult =
-            build_cache_pkg_sem_source_keys_only_from_order_with_files(files, pkg_key_pkgs, pkg_key_order);
-          files = sem_keys_result.files;
-          sem_pkg_keys = sem_keys_result.sem_keys;
-        }
-        let sem_keep: BuildCacheSemKeyKeep = build_cache_sem_key_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-        sem_pkg_keys = sem_keep.keys;
+        let sem_keep: BuildCacheSemKeyDepHashesOnlyResult =
+          build_cache_sem_key_dep_hashes_only_from_order_with_files(
+            files,
+            pkg_key_pkgs,
+            pkg_key_order,
+            sem_mode,
+          );
+        files = sem_keep.files;
+        sem_pkg_keys = sem_keep.sem_keys;
         sem_key = sem_keep.sem_key;
+        sem_dep_hashes = sem_keep.dep_hashes;
         sem_cache_hit = build_sem_cache_hit(sem_key);
         if sem_cache_hit && !cache_c_hit && sem_key != "" && test_build_key != "" && source_sig != "" {
           if test_build_cache_try_reuse_sem_cached_c_with_source_sig(
@@ -4059,14 +4061,13 @@ fn main() -> i32 {
         let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
         if use_sem_cache {
           if sem_dep_hashes.len() == 0 {
-            if sem_pkg_keys.len() == 0 {
-              let sem_keys_result: BuildCachePkgSemOnlySourceKeysResult = build_cache_pkg_sem_source_keys_only_with_files(files);
-              files = sem_keys_result.files;
-              sem_pkg_keys = sem_keys_result.sem_keys;
+            let sem_keep: BuildCacheSemKeyDepHashesOnlyResult = build_cache_sem_key_dep_hashes_only_with_files(files, sem_mode);
+            files = sem_keep.files;
+            sem_pkg_keys = sem_keep.sem_keys;
+            sem_dep_hashes = sem_keep.dep_hashes;
+            if sem_key == "" || !sem_cache_hit {
+              sem_key = sem_keep.sem_key;
             }
-            let sem_deps_keep: BuildCacheSemDepHashesKeep = build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-            sem_pkg_keys = sem_deps_keep.keys;
-            sem_dep_hashes = sem_deps_keep.dep_hashes;
           }
           let mut sdi: i32 = 0;
           while sdi < sem_dep_hashes.len() {
@@ -4296,14 +4297,13 @@ fn main() -> i32 {
     }
     if use_sem_cache && !sem_cache_hit && sem_key != "" {
       if sem_dep_hashes.len() == 0 {
-        if sem_pkg_keys.len() == 0 {
-          let sem_keys_result: BuildCachePkgSemOnlySourceKeysResult = build_cache_pkg_sem_source_keys_only_with_files(files);
-          files = sem_keys_result.files;
-          sem_pkg_keys = sem_keys_result.sem_keys;
+        let sem_keep: BuildCacheSemKeyDepHashesOnlyResult = build_cache_sem_key_dep_hashes_only_with_files(files, sem_mode);
+        files = sem_keep.files;
+        sem_pkg_keys = sem_keep.sem_keys;
+        sem_dep_hashes = sem_keep.dep_hashes;
+        if sem_key == "" || !sem_cache_hit {
+          sem_key = sem_keep.sem_key;
         }
-        let sem_deps_keep: BuildCacheSemDepHashesKeep = build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-        sem_pkg_keys = sem_deps_keep.keys;
-        sem_dep_hashes = sem_deps_keep.dep_hashes;
       }
       write_build_sem_cache_with_deps(sem_key, sem_dep_hashes);
     }
