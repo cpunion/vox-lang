@@ -2020,39 +2020,64 @@ fn block_trivial_br_target_index(blocks: Vec[ir.Block], order: Vec[i32], bi: i32
   return block_index_by_name_ordered(blocks, order, target);
 }
 
-fn path_index_of(path: Vec[i32], v: i32) -> i32 {
-  let mut i: i32 = 0;
-  while i < path.len() {
-    if path.get(i) == v { return i; }
-    i = i + 1;
-  }
-  return -1;
-}
-
-fn resolve_trivial_br_redirect(blocks: Vec[ir.Block], order: Vec[i32], start: i32) -> i32 {
-  if start < 0 || start >= blocks.len() { return start; }
-  let mut path: Vec[i32] = Vec();
-  let mut cur: i32 = start;
-  while true {
-    let seen_at: i32 = path_index_of(path, cur);
-    if seen_at >= 0 {
-      // Cycle of trivial branch-only blocks: keep the cycle representative stable.
-      return path.get(seen_at);
-    }
-    path.push(cur);
-    let tgt: i32 = block_trivial_br_target_index(blocks, order, cur);
-    if tgt < 0 || tgt >= blocks.len() { return cur; }
-    if tgt == cur { return cur; }
-    cur = tgt;
-  }
-  return start;
-}
-
 fn build_trivial_br_redirects(blocks: Vec[ir.Block], order: Vec[i32]) -> Vec[i32] {
+  let unknown: i32 = -2;
   let mut out: Vec[i32] = Vec();
+  let mut seen_mark: Vec[i32] = Vec();
+  let mut seen_pos: Vec[i32] = Vec();
   let mut i: i32 = 0;
   while i < blocks.len() {
-    out.push(resolve_trivial_br_redirect(blocks, order, i));
+    out.push(unknown);
+    seen_mark.push(0);
+    seen_pos.push(-1);
+    i = i + 1;
+  }
+
+  let mut run_id: i32 = 1;
+  i = 0;
+  while i < blocks.len() {
+    if out.get(i) != unknown {
+      i = i + 1;
+      continue;
+    }
+    let mut path: Vec[i32] = Vec();
+    let mut cur: i32 = i;
+    let mut final_redirect: i32 = i;
+
+    while true {
+      if cur < 0 || cur >= blocks.len() {
+        break;
+      }
+      let known: i32 = out.get(cur);
+      if known != unknown {
+        final_redirect = known;
+        break;
+      }
+      if seen_mark.get(cur) == run_id {
+        // Cycle of trivial branch-only blocks: keep the cycle representative stable.
+        let pos: i32 = seen_pos.get(cur);
+        final_redirect = if pos >= 0 && pos < path.len() { path.get(pos) } else { cur };
+        break;
+      }
+
+      seen_mark.set(cur, run_id);
+      seen_pos.set(cur, path.len());
+      path.push(cur);
+
+      let tgt: i32 = block_trivial_br_target_index(blocks, order, cur);
+      if tgt < 0 || tgt >= blocks.len() || tgt == cur {
+        final_redirect = cur;
+        break;
+      }
+      cur = tgt;
+    }
+
+    let mut pi: i32 = 0;
+    while pi < path.len() {
+      out.set(path.get(pi), final_redirect);
+      pi = pi + 1;
+    }
+    run_id = run_id + 1;
     i = i + 1;
   }
   return out;
