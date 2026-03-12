@@ -589,22 +589,70 @@ fn mark_live_slot_values_from_term(flags0: Vec[bool], t: ir.Term) -> Vec[bool] {
   };
 }
 
-fn collect_live_slots_all_reads(f: ir.Func) -> Vec[bool] {
-  let mut live: Vec[bool] = Vec();
+struct SeedLivenessSummary {
+  live_slots: Vec[bool],
+  live_temps: Vec[bool],
+  slot_candidates: Vec[i32],
+  drop_temp_candidates: Vec[i32],
+}
+
+fn collect_seed_liveness_summary(pool: ir.TyPool, f: ir.Func) -> SeedLivenessSummary {
+  let mut live_slots: Vec[bool] = Vec();
+  let mut live_temps: Vec[bool] = Vec();
+  let mut slot_candidates: Vec[i32] = Vec();
+  let mut drop_temp_candidates: Vec[i32] = Vec();
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
     let b: ir.Block = f.blocks.get(bi);
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
-      live = mark_live_slot_reads(live, ins);
-      live = mark_live_slot_values_from_instr(live, ins);
+      live_slots = mark_live_slot_reads(live_slots, ins);
+      live_slots = mark_live_slot_values_from_instr(live_slots, ins);
+      live_temps = mark_live_from_instr_operands(live_temps, ins);
+      live_temps = match ins {
+        ir.Instr.SlotDecl(sid, _ty) => {
+          slot_candidates.push(sid);
+          live_temps
+        },
+        ir.Instr.Store(sid, _v) => {
+          slot_candidates.push(sid);
+          live_temps
+        },
+        _ => {
+          let dst: i32 = instr_dst_temp_id(ins);
+          if dst != -1 && instr_can_drop_when_dead(pool, ins) { drop_temp_candidates.push(dst); }
+          live_temps
+        },
+      };
       ii = ii + 1;
     }
-    if b.has_term { live = mark_live_slot_values_from_term(live, b.term); }
+    if b.has_term {
+      live_slots = mark_live_slot_values_from_term(live_slots, b.term);
+      live_temps = mark_live_from_term(live_temps, b.term);
+    }
     bi = bi + 1;
   }
-  return live;
+  return SeedLivenessSummary {
+    live_slots: live_slots,
+    live_temps: live_temps,
+    slot_candidates: slot_candidates,
+    drop_temp_candidates: drop_temp_candidates,
+  };
+}
+
+fn has_dead_candidates_from_seed(seed: SeedLivenessSummary) -> bool {
+  let mut i: i32 = 0;
+  while i < seed.slot_candidates.len() {
+    if !slot_flag_get(seed.live_slots, seed.slot_candidates.get(i)) { return true; }
+    i = i + 1;
+  }
+  i = 0;
+  while i < seed.drop_temp_candidates.len() {
+    if !temp_flag_get(seed.live_temps, seed.drop_temp_candidates.get(i)) { return true; }
+    i = i + 1;
+  }
+  return false;
 }
 
 fn collect_live_slots_filtered(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool], live_slots0: Vec[bool]) -> Vec[bool] {
@@ -625,6 +673,21 @@ fn collect_live_slots_filtered(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool
     bi = bi + 1;
   }
   return live;
+}
+
+fn collect_kept_instr_flags_all_true(f: ir.Func) -> Vec[bool] {
+  let mut keep: Vec[bool] = Vec();
+  let mut bi: i32 = 0;
+  while bi < f.blocks.len() {
+    let b: ir.Block = f.blocks.get(bi);
+    let mut ii: i32 = 0;
+    while ii < b.instrs.len() {
+      keep.push(true);
+      ii = ii + 1;
+    }
+    bi = bi + 1;
+  }
+  return keep;
 }
 
 fn instr_is_dead_slot_decl(ins: ir.Instr, live_slots: Vec[bool]) -> bool {
@@ -2414,19 +2477,26 @@ pub fn emit_func_append_with_call_cache(
   enum_order: Vec[i32],
   call_cache0: Vec[CallNameEntry],
 ) -> EmitFuncAppendWithCallCacheResult {
-  let seed_slots: Vec[bool] = collect_live_slots_all_reads(f);
-  let live_temps0: Vec[bool] = collect_live_temps(pool, f, seed_slots);
-  let live_slots: Vec[bool] = collect_live_slots_filtered(pool, f, live_temps0, seed_slots);
-  let live_temps: Vec[bool] = if bool_flags_equal(live_slots, seed_slots) {
-    live_temps0
-  } else {
-    collect_live_temps(pool, f, live_slots)
-  };
+  let seed: SeedLivenessSummary = collect_seed_liveness_summary(pool, f);
+  let seed_slots: Vec[bool] = seed.live_slots;
+  let seed_temps: Vec[bool] = seed.live_temps;
+  let has_dead_candidates: bool = has_dead_candidates_from_seed(seed);
+  let mut live_slots: Vec[bool] = seed_slots;
+  let mut live_temps: Vec[bool] = seed_temps;
+  if has_dead_candidates {
+    let live_temps0: Vec[bool] = collect_live_temps(pool, f, seed_slots);
+    live_slots = collect_live_slots_filtered(pool, f, live_temps0, seed_slots);
+    live_temps = if bool_flags_equal(live_slots, seed_slots) { live_temps0 } else { collect_live_temps(pool, f, live_slots) };
+  }
   // `live_temps` is already derived from read-use closure on kept instructions;
   // reuse it directly to avoid an extra full-function scan.
   let read_temps: Vec[bool] = live_temps;
   let block_offsets: Vec[i32] = block_instr_offsets(f);
-  let keep_instrs: Vec[bool] = collect_kept_instr_flags(pool, f, live_temps, live_slots);
+  let keep_instrs: Vec[bool] = if !has_dead_candidates {
+    collect_kept_instr_flags_all_true(f)
+  } else {
+    collect_kept_instr_flags(pool, f, live_temps, live_slots)
+  };
   let locals: LocalsResult = collect_locals(c_types, pool, f, keep_instrs, block_offsets, read_temps);
   let slot_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.slots);
   let temp_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.temps);
