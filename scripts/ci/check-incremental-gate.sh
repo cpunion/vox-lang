@@ -2,14 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-if ! COMPILER_BIN_RAW="$("$ROOT/scripts/ci/rolling-selfhost.sh" print-bin)"; then
-  exit $?
-fi
-COMPILER_BIN="$(printf '%s\n' "$COMPILER_BIN_RAW" | tail -n 1)"
-if [[ ! -x "$COMPILER_BIN" ]]; then
-  echo "[incremental-gate] invalid compiler bin: $COMPILER_BIN" >&2
-  exit 1
-fi
+COMPILER_BIN="$("$ROOT/scripts/ci/resolve-selfhost-bin.sh")"
 
 TMP_BASE="${TMPDIR:-/tmp}"
 WORK_DIR="$(mktemp -d "$TMP_BASE/vox-incremental-gate.XXXXXX")"
