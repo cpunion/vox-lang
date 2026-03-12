@@ -2303,6 +2303,37 @@ fn copy_file_host(src: String, dst: String, trace: bool) -> bool {
   return exec_cmd(cmd, trace) == 0;
 }
 
+fn move_file_host(src: String, dst: String, trace: bool) -> bool {
+  let mut cmd: String = "";
+  if host_is_windows() {
+    cmd =
+      "move /Y "
+        .concat(shell_quote(shell_exec_path(src)))
+        .concat(" ")
+        .concat(shell_quote(shell_exec_path(dst)));
+  } else {
+    cmd =
+      "mv -f "
+        .concat(shell_quote(shell_exec_path(src)))
+        .concat(" ")
+        .concat(shell_quote(shell_exec_path(dst)));
+  }
+  return exec_cmd(cmd, trace) == 0;
+}
+
+fn tmp_artifact_path(dst: String) -> String {
+  return dst.concat(".tmp.").concat(tm.now_ns().to_string());
+}
+
+fn replace_file_host_from_tmp(tmp_out: String, dst: String, trace: bool) -> bool {
+  let mut src: String = tmp_out;
+  if !fs.exists(src) && fs.exists(tmp_out.concat(".exe")) {
+    src = tmp_out.concat(".exe");
+  }
+  if !fs.exists(src) { return false; }
+  return move_file_host(src, dst, trace);
+}
+
 fn cmd_lsp(trace: bool) -> i32 {
   let root: String = stage1_root();
   let p0: String = path_join(path_join(root, "tools"), "lsp/server.mjs");
@@ -3443,6 +3474,7 @@ fn main() -> i32 {
           target_arch.slice(0, target_arch.len()),
           target_triple.slice(0, target_triple.len()),
         );
+      let cache_obj_tmp: String = tmp_artifact_path(cache_obj);
       let cc_obj_cmdline: String =
         if cc_obj_use_msvc {
           let mut cmd: String = cc_obj_cmd;
@@ -3451,7 +3483,7 @@ fn main() -> i32 {
           cmd = cmd.concat(" /c ");
           cmd = cmd.concat(cache_cpath);
           cmd = cmd.concat(" /Fo:");
-          cmd = cmd.concat(cache_obj);
+          cmd = cmd.concat(cache_obj_tmp);
           cmd
         } else {
           let mut cmd: String = cc_obj_cmd;
@@ -3462,7 +3494,7 @@ fn main() -> i32 {
           cmd = cmd.concat(" -c ");
           cmd = cmd.concat(cache_cpath);
           cmd = cmd.concat(" -o ");
-          cmd = cmd.concat(cache_obj);
+          cmd = cmd.concat(cache_obj_tmp);
           cmd
         };
       let cc_obj_t0: i64 = tm.now_ns();
@@ -3472,6 +3504,10 @@ fn main() -> i32 {
       if code != 0 {
         print("cc failed: ".concat(cc_obj_cmdline).concat("\n"));
         print("cc exit: ".concat(code.to_string()).concat("\n"));
+        return 1;
+      }
+      if !replace_file_host_from_tmp(cache_obj_tmp, cache_obj, trace_exec) {
+        print("cc artifact replace failed: ".concat(cache_obj_tmp).concat(" -> ").concat(cache_obj).concat("\n"));
         return 1;
       }
       if cache_enabled {
@@ -3501,6 +3537,7 @@ fn main() -> i32 {
           target_arch.slice(0, target_arch.len()),
           target_triple.slice(0, target_triple.len()),
         );
+      let cache_bin_tmp: String = tmp_artifact_path(cache_bin);
       let link_cmdline: String =
         if artifact == "static" {
           let ar: String =
@@ -3512,9 +3549,9 @@ fn main() -> i32 {
             target_abi.slice(0, target_abi.len()),
           );
           if link_use_msvc {
-            ar.concat(" /nologo /OUT:").concat(cache_bin).concat(" ").concat(cache_obj)
+            ar.concat(" /nologo /OUT:").concat(cache_bin_tmp).concat(" ").concat(cache_obj)
           } else {
-            ar.concat(" rcs ").concat(cache_bin).concat(" ").concat(cache_obj)
+            ar.concat(" rcs ").concat(cache_bin_tmp).concat(" ").concat(cache_obj)
           }
         } else if link_use_msvc {
           let shared_flag: String = if artifact == "shared" { cc_shared_flag_for_target(target_os.slice(0, target_os.len()), true) } else { "" };
@@ -3524,7 +3561,7 @@ fn main() -> i32 {
           cmd = cmd.concat(" ");
           cmd = cmd.concat(cache_obj);
           cmd = cmd.concat(" /Fe:");
-          cmd = cmd.concat(cache_bin);
+          cmd = cmd.concat(cache_bin_tmp);
           cmd = cmd.concat(cc_link_flags_for_target(target_os.slice(0, target_os.len()), target_abi.slice(0, target_abi.len()), true, artifact));
           cmd
         } else {
@@ -3535,7 +3572,7 @@ fn main() -> i32 {
           cmd = cmd.concat(" ");
           cmd = cmd.concat(cache_obj);
           cmd = cmd.concat(" -o ");
-          cmd = cmd.concat(cache_bin);
+          cmd = cmd.concat(cache_bin_tmp);
           cmd = cmd.concat(cc_link_flags_for_target(target_os.slice(0, target_os.len()), target_abi.slice(0, target_abi.len()), false, artifact));
           cmd
         };
@@ -3546,6 +3583,10 @@ fn main() -> i32 {
       if link_code != 0 {
         print("link failed: ".concat(link_cmdline).concat("\n"));
         print("link exit: ".concat(link_code.to_string()).concat("\n"));
+        return 1;
+      }
+      if !replace_file_host_from_tmp(cache_bin_tmp, cache_bin, trace_exec) {
+        print("link artifact replace failed: ".concat(cache_bin_tmp).concat(" -> ").concat(cache_bin).concat("\n"));
         return 1;
       }
       if cache_enabled {
@@ -4420,6 +4461,7 @@ fn main() -> i32 {
             target_arch.slice(0, target_arch.len()),
             target_triple.slice(0, target_triple.len()),
           );
+        let obj_tmp: String = tmp_artifact_path(obj);
         let cc_obj_cmdline: String =
           if cc_test_use_msvc {
             let mut cmd: String = cc_test_cmd;
@@ -4428,7 +4470,7 @@ fn main() -> i32 {
             cmd = cmd.concat(" /c ");
             cmd = cmd.concat(cpath);
             cmd = cmd.concat(" /Fo:");
-            cmd = cmd.concat(obj);
+            cmd = cmd.concat(obj_tmp);
             cmd
           } else {
             let mut cmd: String = cc_test_cmd;
@@ -4439,7 +4481,7 @@ fn main() -> i32 {
             cmd = cmd.concat(" -c ");
             cmd = cmd.concat(cpath);
             cmd = cmd.concat(" -o ");
-            cmd = cmd.concat(obj);
+            cmd = cmd.concat(obj_tmp);
             cmd
           };
         let cc_obj_t0: i64 = tm.now_ns();
@@ -4449,6 +4491,10 @@ fn main() -> i32 {
         if cc_obj_code != 0 {
           print("cc failed: ".concat(cc_obj_cmdline).concat("\n"));
           print("cc exit: ".concat(cc_obj_code.to_string()).concat("\n"));
+          return 1;
+        }
+        if !replace_file_host_from_tmp(obj_tmp, obj, trace_exec) {
+          print("test cc artifact replace failed: ".concat(obj_tmp).concat(" -> ").concat(obj).concat("\n"));
           return 1;
         }
       }
@@ -4463,13 +4509,14 @@ fn main() -> i32 {
           target_arch.slice(0, target_arch.len()),
           target_triple.slice(0, target_triple.len()),
         );
+      let bin_tmp: String = tmp_artifact_path(bin);
       let link_cmdline: String =
         if cc_test_use_msvc {
           let mut cmd: String = cc_test_cmd;
           cmd = cmd.concat(" /nologo ");
           cmd = cmd.concat(obj);
           cmd = cmd.concat(" /Fe:");
-          cmd = cmd.concat(bin);
+          cmd = cmd.concat(bin_tmp);
           cmd = cmd.concat(cc_link_flags_for_target(target_os.slice(0, target_os.len()), target_abi.slice(0, target_abi.len()), true, "exe"));
           cmd
         } else {
@@ -4478,7 +4525,7 @@ fn main() -> i32 {
           cmd = cmd.concat(" ");
           cmd = cmd.concat(obj);
           cmd = cmd.concat(" -o ");
-          cmd = cmd.concat(bin);
+          cmd = cmd.concat(bin_tmp);
           cmd = cmd.concat(cc_link_flags_for_target(target_os.slice(0, target_os.len()), target_abi.slice(0, target_abi.len()), false, "exe"));
           cmd
         };
@@ -4489,6 +4536,10 @@ fn main() -> i32 {
       if link_code != 0 {
         print("link failed: ".concat(link_cmdline).concat("\n"));
         print("link exit: ".concat(link_code.to_string()).concat("\n"));
+        return 1;
+      }
+      if !replace_file_host_from_tmp(bin_tmp, bin, trace_exec) {
+        print("test link artifact replace failed: ".concat(bin_tmp).concat(" -> ").concat(bin).concat("\n"));
         return 1;
       }
       if cache_enabled && (!cache_c_hit || cache_reused_sem_c) {
