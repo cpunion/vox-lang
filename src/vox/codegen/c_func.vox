@@ -333,11 +333,31 @@ fn int_bits_max(k: ir.TyKind) -> i32 {
   return int_bits(k);
 }
 
-fn int_cast_needs_runtime_check(dst: ir.TyKind, src: ir.TyKind) -> bool {
+fn ptr_bits_known(pbits: i32) -> bool {
+  return pbits == 32 || pbits == 64;
+}
+
+fn int_bits_min_for_target(k: ir.TyKind, target_ptr_bits: i32) -> i32 {
+  if k == ir.TyKind.ISize || k == ir.TyKind.USize {
+    if ptr_bits_known(target_ptr_bits) { return target_ptr_bits; }
+    return 32;
+  }
+  return int_bits_min(k);
+}
+
+fn int_bits_max_for_target(k: ir.TyKind, target_ptr_bits: i32) -> i32 {
+  if k == ir.TyKind.ISize || k == ir.TyKind.USize {
+    if ptr_bits_known(target_ptr_bits) { return target_ptr_bits; }
+    return 64;
+  }
+  return int_bits_max(k);
+}
+
+fn int_cast_needs_runtime_check(dst: ir.TyKind, src: ir.TyKind, target_ptr_bits: i32) -> bool {
   if !is_int_scalar_kind(dst) || !is_int_scalar_kind(src) { return true; }
   if dst == src { return false; }
-  let dmin: i32 = int_bits_min(dst);
-  let smax: i32 = int_bits_max(src);
+  let dmin: i32 = int_bits_min_for_target(dst, target_ptr_bits);
+  let smax: i32 = int_bits_max_for_target(src, target_ptr_bits);
   if dmin == 0 || smax == 0 { return true; }
 
   let du: bool = is_unsigned_int_kind(dst);
@@ -347,12 +367,12 @@ fn int_cast_needs_runtime_check(dst: ir.TyKind, src: ir.TyKind) -> bool {
   return dmin < smax; // same signedness: destination must hold full source range
 }
 
-fn int_cast_signed_to_unsigned_needs_upper_check(dst: ir.TyKind, src: ir.TyKind) -> bool {
+fn int_cast_signed_to_unsigned_needs_upper_check(dst: ir.TyKind, src: ir.TyKind, target_ptr_bits: i32) -> bool {
   if !is_unsigned_int_kind(dst) || !is_signed_int_kind(src) { return true; }
   // isize -> usize is width-equal by definition on every target.
   if src == ir.TyKind.ISize && dst == ir.TyKind.USize { return false; }
-  let dmin: i32 = int_bits_min(dst);
-  let smax: i32 = int_bits_max(src);
+  let dmin: i32 = int_bits_min_for_target(dst, target_ptr_bits);
+  let smax: i32 = int_bits_max_for_target(src, target_ptr_bits);
   if dmin == 0 || smax == 0 { return true; }
   // Signed src max is 2^(s-1)-1; any unsigned destination with at least s bits always fits it.
   return dmin < smax;
@@ -360,7 +380,7 @@ fn int_cast_signed_to_unsigned_needs_upper_check(dst: ir.TyKind, src: ir.TyKind)
 
 // Conservative literal-fit check used by codegen-only fast paths.
 // For pointer-sized ints, require fit across all supported targets (32/64-bit).
-fn int_literal_always_fits_dst_kind(dst: ir.TyKind, n: i64) -> bool {
+fn int_literal_always_fits_dst_kind(dst: ir.TyKind, n: i64, target_ptr_bits: i32) -> bool {
   return match dst {
     ir.TyKind.I8 => n >= -128 && n <= 127,
     ir.TyKind.U8 => n >= 0 && n <= 255,
@@ -370,8 +390,18 @@ fn int_literal_always_fits_dst_kind(dst: ir.TyKind, n: i64) -> bool {
     ir.TyKind.U32 => n >= 0 && n <= 4294967295,
     ir.TyKind.I64 => true,
     ir.TyKind.U64 => n >= 0,
-    ir.TyKind.ISize => n >= -2147483648 && n <= 2147483647,
-    ir.TyKind.USize => n >= 0 && n <= 4294967295,
+    ir.TyKind.ISize =>
+      if ptr_bits_known(target_ptr_bits) && target_ptr_bits >= 64 {
+        true
+      } else {
+        n >= -2147483648 && n <= 2147483647
+      },
+    ir.TyKind.USize =>
+      if ptr_bits_known(target_ptr_bits) && target_ptr_bits >= 64 {
+        n >= 0
+      } else {
+        n >= 0 && n <= 4294967295
+      },
     _ => false,
   };
 }
@@ -1128,7 +1158,16 @@ fn emit_instr_cmp(pool: ir.TyPool, tid: i32, op: ir.CmpKind, oty: i32, a: ir.Val
   return vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_value_named(a, vn)).concat(" ").concat(c_cmpop(op)).concat(" ").concat(c_value_named(b, vn)).concat(");"));
 }
 
-fn emit_instr_int_cast_checked(c_types: Vec[String], pool: ir.TyPool, tid: i32, dst_ty: i32, src_ty: i32, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
+fn emit_instr_int_cast_checked(
+  c_types: Vec[String],
+  pool: ir.TyPool,
+  target_ptr_bits: i32,
+  tid: i32,
+  dst_ty: i32,
+  src_ty: i32,
+  v: ir.Value,
+  vn: ValueNameTables,
+) -> Vec[String] {
   let dst: ir.Ty = ir.ty_pool_get(pool, dst_ty);
   let src: ir.Ty = ir.ty_pool_get(pool, src_ty);
   let v_text: String = c_value_named(v, vn);
@@ -1146,11 +1185,11 @@ fn emit_instr_int_cast_checked(c_types: Vec[String], pool: ir.TyPool, tid: i32, 
   };
 
   let mut out: Vec[String] = Vec();
-  if !src_is_float && src_is_int_lit && int_literal_always_fits_dst_kind(dst.kind, src_int_lit) {
+  if !src_is_float && src_is_int_lit && int_literal_always_fits_dst_kind(dst.kind, src_int_lit, target_ptr_bits) {
     out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
     return out;
   }
-  if !src_is_float && !int_cast_needs_runtime_check(dst.kind, src.kind) {
+  if !src_is_float && !int_cast_needs_runtime_check(dst.kind, src.kind, target_ptr_bits) {
     out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
     return out;
   }
@@ -1256,7 +1295,7 @@ fn emit_instr_int_cast_checked(c_types: Vec[String], pool: ir.TyPool, tid: i32, 
         } else if dst.kind == ir.TyKind.U32 && src.kind == ir.TyKind.ISize {
           out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
           out.push("  if (vox_iptr_exceeds_u32_max((intptr_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-        } else if int_cast_signed_to_unsigned_needs_upper_check(dst.kind, src.kind) {
+        } else if int_cast_signed_to_unsigned_needs_upper_check(dst.kind, src.kind, target_ptr_bits) {
           if dst.kind == ir.TyKind.USize && src.kind == ir.TyKind.I64 {
             out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
             out.push("  if (vox_u64_exceeds_uintptr_max((uint64_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
@@ -1791,7 +1830,17 @@ fn emit_instr_call(call_names: Vec[CallNameEntry], has_dst: bool, tid: i32, ret_
   return emit_instr_call_cached(call_names, Vec(), has_dst, tid, ret_ty, name, args, read_temps, vn).lines;
 }
 
-fn emit_instr(c_types: Vec[String], pool: ir.TyPool, p: ir.Program, call_names: Vec[CallNameEntry], enum_order: Vec[i32], ins: ir.Instr, read_temps: Vec[bool], vn: ValueNameTables) -> Vec[String] {
+fn emit_instr(
+  c_types: Vec[String],
+  pool: ir.TyPool,
+  target_ptr_bits: i32,
+  p: ir.Program,
+  call_names: Vec[CallNameEntry],
+  enum_order: Vec[i32],
+  ins: ir.Instr,
+  read_temps: Vec[bool],
+  vn: ValueNameTables,
+) -> Vec[String] {
   return match ins {
     ir.Instr.SlotDecl(_sid, _ty) => vec0(),
 
@@ -1814,7 +1863,8 @@ fn emit_instr(c_types: Vec[String], pool: ir.TyPool, p: ir.Program, call_names: 
 
     ir.Instr.IntCast(tid, dst_ty, _src_ty, v) =>
       vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(c_value_named(v, vn)).concat(";")),
-    ir.Instr.IntCastChecked(tid, dst_ty, src_ty, v) => emit_instr_int_cast_checked(c_types, pool, tid, dst_ty, src_ty, v, vn),
+    ir.Instr.IntCastChecked(tid, dst_ty, src_ty, v) =>
+      emit_instr_int_cast_checked(c_types, pool, target_ptr_bits, tid, dst_ty, src_ty, v, vn),
     ir.Instr.FloatCast(tid, dst_ty, _src_ty, v) =>
       vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(c_value_named(v, vn)).concat(";")),
     ir.Instr.RangeCheck(ty, v, lo, hi) => vec1(
@@ -2320,7 +2370,7 @@ fn mark_used_params_from_term(flags0: Vec[bool], t: ir.Term) -> Vec[bool] {
 }
 
 pub fn emit_func_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, p: ir.Program, f: ir.Func, call_names: Vec[CallNameEntry], enum_order: Vec[i32]) -> Vec[String] {
-  return emit_func_append_with_call_cache(out0, c_types, pool, p, f, call_names, enum_order, Vec()).out;
+  return emit_func_append_with_call_cache(out0, c_types, pool, 0, p, f, call_names, enum_order, Vec()).out;
 }
 
 pub struct EmitFuncAppendWithCallCacheResult {
@@ -2332,6 +2382,7 @@ pub fn emit_func_append_with_call_cache(
   out0: Vec[String],
   c_types: Vec[String],
   pool: ir.TyPool,
+  target_ptr_bits: i32,
   p: ir.Program,
   f: ir.Func,
   call_names: Vec[CallNameEntry],
@@ -2422,7 +2473,7 @@ pub fn emit_func_append_with_call_cache(
               call_cache = cr.cache;
               cr.lines
             },
-            _ => emit_instr(c_types, pool, p, call_names, enum_order, ins, read_temps, vn),
+            _ => emit_instr(c_types, pool, target_ptr_bits, p, call_names, enum_order, ins, read_temps, vn),
           };
         let mut li: i32 = 0;
         while li < lines.len() { out.push(lines.get(li)); li = li + 1; }
