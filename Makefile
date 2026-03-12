@@ -6,12 +6,16 @@ FMT_PATHS ?= src/main.vox src/vox/fmt
 
 fmt:
 	@set -e; \
-	COMPILER_BIN=$$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1); \
+	if ! COMPILER_BIN_RAW=$$(./scripts/ci/rolling-selfhost.sh print-bin); then exit $$?; fi; \
+	COMPILER_BIN=$$(printf '%s\n' "$$COMPILER_BIN_RAW" | tail -n 1); \
+	if [ ! -x "$$COMPILER_BIN" ]; then echo "[selfhost] invalid compiler bin: $$COMPILER_BIN" >&2; exit 1; fi; \
 	"$$COMPILER_BIN" fmt $(FMT_PATHS)
 
 fmt-check:
 	@set -e; \
-	COMPILER_BIN=$$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1); \
+	if ! COMPILER_BIN_RAW=$$(./scripts/ci/rolling-selfhost.sh print-bin); then exit $$?; fi; \
+	COMPILER_BIN=$$(printf '%s\n' "$$COMPILER_BIN_RAW" | tail -n 1); \
+	if [ ! -x "$$COMPILER_BIN" ]; then echo "[selfhost] invalid compiler bin: $$COMPILER_BIN" >&2; exit 1; fi; \
 	"$$COMPILER_BIN" fmt --check $(FMT_PATHS)
 
 # Run core repo tests: rolling selfhost gates + syntax/reference gates + example package smoke.
@@ -71,14 +75,18 @@ test-incremental-gate:
 # Stable public library API contract gate.
 test-public-api:
 	@set -e; \
-	COMPILER_BIN=$$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1); \
+	if ! COMPILER_BIN_RAW=$$(./scripts/ci/rolling-selfhost.sh print-bin); then exit $$?; fi; \
+	COMPILER_BIN=$$(printf '%s\n' "$$COMPILER_BIN_RAW" | tail -n 1); \
+	if [ ! -x "$$COMPILER_BIN" ]; then echo "[selfhost] invalid compiler bin: $$COMPILER_BIN" >&2; exit 1; fi; \
 	"$$COMPILER_BIN" test --run='*public_api*' target/debug/vox.public_api
 
 # Example package smoke uses rolling-built compiler.
 test-examples:
 	@set -e; \
 	start=$$(date +%s); \
-	COMPILER_BIN=$$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1); \
+	if ! COMPILER_BIN_RAW=$$(./scripts/ci/rolling-selfhost.sh print-bin); then exit $$?; fi; \
+	COMPILER_BIN=$$(printf '%s\n' "$$COMPILER_BIN_RAW" | tail -n 1); \
+	if [ ! -x "$$COMPILER_BIN" ]; then echo "[selfhost] invalid compiler bin: $$COMPILER_BIN" >&2; exit 1; fi; \
 	cd examples/c_demo; \
 	"$$COMPILER_BIN" test target/compiler_examples.test; \
 	end=$$(date +%s); \
