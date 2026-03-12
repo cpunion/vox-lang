@@ -246,6 +246,13 @@ fn test_query_shadow_force_prepare_from_env_smoke() -> () {
   t.assert(!query_shadow_force_prepare_from_env("0"));
 }
 
+fn test_effective_query_shadow_force_prepare_smoke() -> () {
+  t.assert(effective_query_shadow_force_prepare(true, true, true));
+  t.assert(!effective_query_shadow_force_prepare(true, true, false));
+  t.assert(!effective_query_shadow_force_prepare(true, false, true));
+  t.assert(!effective_query_shadow_force_prepare(false, true, true));
+}
+
 fn test_query_shadow_state_from_sem_key_smoke() -> () {
   let mut switches: Vec[String] = Vec();
   switches.push("a=1");
@@ -296,6 +303,59 @@ fn test_should_skip_query_shadow_prepare_smoke() -> () {
   t.assert(!should_skip_query_shadow_prepare(true, false, false));
   t.assert(!should_skip_query_shadow_prepare(true, true, true));
   t.assert(should_skip_query_shadow_prepare(true, true, false));
+}
+
+fn test_should_refresh_sem_key_from_pkg_keys_smoke() -> () {
+  t.assert(should_refresh_sem_key_from_pkg_keys("", false, false));
+  t.assert(!should_refresh_sem_key_from_pkg_keys("k", true, true));
+  t.assert(!should_refresh_sem_key_from_pkg_keys("k", false, false));
+  t.assert(should_refresh_sem_key_from_pkg_keys("k", false, true));
+}
+
+fn test_ensure_sem_key_dep_hashes_with_keep_order_derives_sem_key_and_deps_smoke() -> () {
+  let sem_mode: String = "sem\ncmd=build\ntarget=linux-amd64";
+  let ordered: SourceFilePkgOrderResult = source_file_order_by_pkg_path_with_files(build_cache_test_files_main_and_dep());
+  let kept: SemKeyDepHashesKeepOrderResult =
+    ensure_sem_key_dep_hashes_with_keep_order(
+      ordered.files,
+      ordered.pkgs,
+      ordered.order,
+      Vec(),
+      sem_mode,
+      "",
+      false,
+      false,
+      Vec(),
+    );
+  let expected: BuildCacheSemKeyDepHashesOnlyResult =
+    build_cache_sem_key_dep_hashes_only_with_files(
+      build_cache_test_files_main_and_dep(),
+      sem_mode,
+    );
+  t.assert_eq(kept.sem_key, expected.sem_key);
+  t.assert(build_cache_sem_dep_hashes_equal(kept.sem_dep_hashes, expected.dep_hashes));
+  t.assert(!kept.sem_key_from_obj_ref);
+}
+
+fn test_ensure_sem_key_dep_hashes_with_keep_order_keeps_existing_deps_smoke() -> () {
+  let sem_mode: String = "sem\ncmd=test\ntarget=linux-amd64";
+  let ordered: SourceFilePkgOrderResult = source_file_order_by_pkg_path_with_files(build_cache_test_files_ab());
+  let deps: Vec[q.ParseLoadDepHash] = build_cache_test_sem_deps_main_dep();
+  let kept: SemKeyDepHashesKeepOrderResult =
+    ensure_sem_key_dep_hashes_with_keep_order(
+      ordered.files,
+      ordered.pkgs,
+      ordered.order,
+      Vec(),
+      sem_mode,
+      "k",
+      true,
+      true,
+      deps,
+    );
+  t.assert_eq(kept.sem_key, "k");
+  t.assert(kept.sem_key_from_obj_ref);
+  t.assert(build_cache_sem_dep_hashes_equal(kept.sem_dep_hashes, build_cache_test_sem_deps_main_dep()));
 }
 
 fn test_should_use_sem_cache_smoke() -> () {
@@ -803,6 +863,84 @@ fn test_build_cache_source_sig_tracks_c_source_changes_smoke() -> () {
   let sig0: String = build_cache_source_sig_from_pkg_source_keys(build_cache_pkg_source_keys_with_files(fs0).keys);
   let sig1: String = build_cache_source_sig_from_pkg_source_keys(build_cache_pkg_source_keys_with_files(fs1).keys);
   t.assert(sig0 != sig1);
+}
+
+fn test_build_cache_c_sources_sig_tracks_c_changes_smoke() -> () {
+  let mut c0: Vec[String] = Vec();
+  c0.push("int helper() { return 1; }");
+  let mut c1: Vec[String] = Vec();
+  c1.push("int helper() { return 2; }");
+  let sig0: String = build_cache_c_sources_sig_from_texts(c0);
+  let sig1: String = build_cache_c_sources_sig_from_texts(c1);
+  t.assert(sig0 != sig1);
+}
+
+fn test_build_cache_source_sig_with_c_sig_tracks_c_changes_smoke() -> () {
+  let fs0: Vec[ld.SourceFile] = build_cache_test_files_with_mixed_sources("fn main() -> i32 { return 1; }", "int helper() { return 1; }");
+  let fs1: Vec[ld.SourceFile] = build_cache_test_files_with_mixed_sources("fn main() -> i32 { return 1; }", "int helper() { return 2; }");
+  let split0: BuildCachePkgSemSourceKeysResult = build_cache_pkg_sem_source_keys_with_files(fs0);
+  let split1: BuildCachePkgSemSourceKeysResult = build_cache_pkg_sem_source_keys_with_files(fs1);
+  let sem_source_sig0: String = build_cache_source_sig_from_pkg_source_keys(split0.sem_keys);
+  let sem_source_sig1: String = build_cache_source_sig_from_pkg_source_keys(split1.sem_keys);
+  t.assert_eq(sem_source_sig0, sem_source_sig1);
+  let mut c0: Vec[String] = Vec();
+  c0.push("int helper() { return 1; }");
+  let mut c1: Vec[String] = Vec();
+  c1.push("int helper() { return 2; }");
+  let source_sig0: String = build_cache_source_sig_with_c_sources_sig(sem_source_sig0, build_cache_c_sources_sig_from_texts(c0));
+  let source_sig1: String = build_cache_source_sig_with_c_sources_sig(sem_source_sig1, build_cache_c_sources_sig_from_texts(c1));
+  t.assert(source_sig0 != source_sig1);
+}
+
+fn test_build_cache_key_pair_from_sem_keys_tracks_c_source_changes_via_mode_smoke() -> () {
+  let split0: BuildCachePkgSemSourceKeysResult =
+    build_cache_pkg_sem_source_keys_with_files(
+      build_cache_test_files_with_mixed_sources("fn main() -> i32 { return 1; }", "int helper() { return 1; }"),
+    );
+  let split1: BuildCachePkgSemSourceKeysResult =
+    build_cache_pkg_sem_source_keys_with_files(
+      build_cache_test_files_with_mixed_sources("fn main() -> i32 { return 1; }", "int helper() { return 2; }"),
+    );
+  t.assert_eq(pkg_key_for_pkg(split0.sem_keys, "main"), pkg_key_for_pkg(split1.sem_keys, "main"));
+  let mut c0: Vec[String] = Vec();
+  c0.push("int helper() { return 1; }");
+  let mut c1: Vec[String] = Vec();
+  c1.push("int helper() { return 2; }");
+  let c_sig0: String = build_cache_c_sources_sig_from_texts(c0);
+  let c_sig1: String = build_cache_c_sources_sig_from_texts(c1);
+  let compile_mode0: String = "cmd=build\ntarget=linux-amd64\nc_sources_sig=".concat(c_sig0);
+  let compile_mode1: String = "cmd=build\ntarget=linux-amd64\nc_sources_sig=".concat(c_sig1);
+  let link_mode0: String = "cmd=build-link\ntarget=linux-amd64\nc_sources_sig=".concat(c_sig0);
+  let link_mode1: String = "cmd=build-link\ntarget=linux-amd64\nc_sources_sig=".concat(c_sig1);
+  let kept0: BuildCacheKeyPairSourceSigKeep =
+    build_cache_key_pair_source_sig_from_pkg_source_keys_keep(split0.sem_keys, compile_mode0, link_mode0);
+  let kept1: BuildCacheKeyPairSourceSigKeep =
+    build_cache_key_pair_source_sig_from_pkg_source_keys_keep(split1.sem_keys, compile_mode1, link_mode1);
+  t.assert(kept0.pair.compile_key != kept1.pair.compile_key);
+  t.assert(kept0.pair.link_key != kept1.pair.link_key);
+}
+
+fn test_test_build_key_from_sem_keys_tracks_c_source_changes_via_mode_smoke() -> () {
+  let split0: BuildCachePkgSemSourceKeysResult =
+    build_cache_pkg_sem_source_keys_with_files(
+      build_cache_test_files_with_mixed_sources("fn main() -> i32 { return 1; }", "int helper() { return 1; }"),
+    );
+  let split1: BuildCachePkgSemSourceKeysResult =
+    build_cache_pkg_sem_source_keys_with_files(
+      build_cache_test_files_with_mixed_sources("fn main() -> i32 { return 1; }", "int helper() { return 2; }"),
+    );
+  t.assert_eq(pkg_key_for_pkg(split0.sem_keys, "main"), pkg_key_for_pkg(split1.sem_keys, "main"));
+  let mut c0: Vec[String] = Vec();
+  c0.push("int helper() { return 1; }");
+  let mut c1: Vec[String] = Vec();
+  c1.push("int helper() { return 2; }");
+  let c_sig0: String = build_cache_c_sources_sig_from_texts(c0);
+  let c_sig1: String = build_cache_c_sources_sig_from_texts(c1);
+  let test_mode0: String = "cmd=test\ntarget=linux-amd64\nc_sources_sig=".concat(c_sig0);
+  let test_mode1: String = "cmd=test\ntarget=linux-amd64\nc_sources_sig=".concat(c_sig1);
+  let kept0: TestBuildKeySourceSigKeep = test_build_key_source_sig_from_pkg_source_keys_keep(split0.sem_keys, test_mode0);
+  let kept1: TestBuildKeySourceSigKeep = test_build_key_source_sig_from_pkg_source_keys_keep(split1.sem_keys, test_mode1);
+  t.assert(kept0.test_key != kept1.test_key);
 }
 
 fn test_build_sem_cache_c_ref_roundtrip_smoke() -> () {
