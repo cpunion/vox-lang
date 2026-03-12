@@ -15,7 +15,14 @@ if ! ulimit -s unlimited >/dev/null 2>&1; then
   ulimit -s 65520 >/dev/null 2>&1 || true
 fi
 
-COMPILER_BIN="$(./scripts/ci/rolling-selfhost.sh print-bin | tail -n 1)"
+if ! COMPILER_BIN_RAW="$(./scripts/ci/rolling-selfhost.sh print-bin)"; then
+  exit $?
+fi
+COMPILER_BIN="$(printf '%s\n' "$COMPILER_BIN_RAW" | tail -n 1)"
+if [[ ! -x "$COMPILER_BIN" ]]; then
+  echo "[legacy-runtime] invalid compiler bin: $COMPILER_BIN" >&2
+  exit 1
+fi
 OUT="${VOX_NO_LEGACY_RUNTIME_OUT:-target/debug/vox.no_legacy_runtime_guard}"
 C_PATH="${OUT}.c"
 
