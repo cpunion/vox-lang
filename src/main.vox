@@ -839,6 +839,10 @@ fn query_shadow_force_prepare_from_env(raw: String) -> bool {
   return env_truthy(raw);
 }
 
+fn effective_query_shadow_force_prepare(query_shadow_on: bool, query_shadow_trace: bool, force_prepare_raw: bool) -> bool {
+  return query_shadow_on && query_shadow_trace && force_prepare_raw;
+}
+
 fn should_use_sem_cache(cache_enabled: bool, query_shadow_on: bool) -> bool {
   let _: bool = query_shadow_on;
   return cache_enabled;
@@ -849,6 +853,83 @@ fn should_skip_query_shadow_prepare(cache_enabled: bool, sem_cache_hit: bool, qu
   if !sem_cache_hit { return false; }
   if query_shadow_force_prepare { return false; }
   return true;
+}
+
+fn should_refresh_sem_key_from_pkg_keys(sem_key: String, sem_cache_hit: bool, sem_key_from_obj_ref: bool) -> bool {
+  if sem_key == "" { return true; }
+  return sem_key_from_obj_ref && !sem_cache_hit;
+}
+
+struct SemKeyDepHashesKeepOrderResult {
+  files: Vec[ld.SourceFile],
+  pkgs: Vec[String],
+  order: Vec[i32],
+  sem_pkg_keys: Vec[BuildCachePkgKey],
+  sem_key: String,
+  sem_key_from_obj_ref: bool,
+  sem_dep_hashes: Vec[q.ParseLoadDepHash],
+}
+
+fn ensure_sem_key_dep_hashes_with_keep_order(
+  files0: Vec[ld.SourceFile],
+  pkgs0: Vec[String],
+  order0: Vec[i32],
+  sem_pkg_keys0: Vec[BuildCachePkgKey],
+  sem_mode: String,
+  sem_key0: String,
+  sem_cache_hit: bool,
+  sem_key_from_obj_ref0: bool,
+  sem_dep_hashes0: Vec[q.ParseLoadDepHash],
+) -> SemKeyDepHashesKeepOrderResult {
+  let mut files: Vec[ld.SourceFile] = files0;
+  let mut pkgs: Vec[String] = pkgs0;
+  let mut order: Vec[i32] = order0;
+  let mut sem_pkg_keys: Vec[BuildCachePkgKey] = sem_pkg_keys0;
+  let mut sem_key: String = sem_key0;
+  let mut sem_key_from_obj_ref: bool = sem_key_from_obj_ref0;
+  let mut sem_dep_hashes: Vec[q.ParseLoadDepHash] = sem_dep_hashes0;
+  if sem_dep_hashes.len() != 0 {
+    return SemKeyDepHashesKeepOrderResult {
+      files: files,
+      pkgs: pkgs,
+      order: order,
+      sem_pkg_keys: sem_pkg_keys,
+      sem_key: sem_key,
+      sem_key_from_obj_ref: sem_key_from_obj_ref,
+      sem_dep_hashes: sem_dep_hashes,
+    };
+  }
+  if sem_pkg_keys.len() == 0 {
+    let sem_keys_keep: BuildCachePkgSemOnlySourceKeysKeepOrderResult =
+      build_cache_pkg_sem_source_keys_only_keep_order_with_files(
+        files,
+        pkgs,
+        order,
+      );
+    files = sem_keys_keep.files;
+    pkgs = sem_keys_keep.pkgs;
+    order = sem_keys_keep.order;
+    sem_pkg_keys = sem_keys_keep.sem_keys;
+  }
+  let sem_dep_keep: BuildCacheSemDepHashesKeep =
+    build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
+  sem_pkg_keys = sem_dep_keep.keys;
+  sem_dep_hashes = sem_dep_keep.dep_hashes;
+  if should_refresh_sem_key_from_pkg_keys(sem_key, sem_cache_hit, sem_key_from_obj_ref) {
+    let sem_key_keep: BuildCacheSemKeyKeep = build_cache_sem_key_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
+    sem_pkg_keys = sem_key_keep.keys;
+    sem_key = sem_key_keep.sem_key;
+    sem_key_from_obj_ref = false;
+  }
+  return SemKeyDepHashesKeepOrderResult {
+    files: files,
+    pkgs: pkgs,
+    order: order,
+    sem_pkg_keys: sem_pkg_keys,
+    sem_key: sem_key,
+    sem_key_from_obj_ref: sem_key_from_obj_ref,
+    sem_dep_hashes: sem_dep_hashes,
+  };
 }
 
 fn query_shadow_state_from_sem_key(
@@ -1833,6 +1914,25 @@ fn load_files(paths: Vec[String]) -> Vec[ld.SourceFile] {
     i = i + 1;
   }
   return out;
+}
+
+struct KeepVoxSourceFilesResult {
+  files: Vec[ld.SourceFile],
+  vox_files: Vec[ld.SourceFile],
+}
+
+fn keep_vox_source_files_with_input(files0: Vec[ld.SourceFile]) -> KeepVoxSourceFilesResult {
+  let files: Vec[ld.SourceFile] = files0;
+  let mut out: Vec[ld.SourceFile] = Vec();
+  let mut i: i32 = 0;
+  while i < files.len() {
+    let f: ld.SourceFile = files.get(i);
+    if txt.has_suffix(f.path, ".vox") {
+      out.push(f);
+    }
+    i = i + 1;
+  }
+  return KeepVoxSourceFilesResult { files: files, vox_files: out };
 }
 
 fn load_files_with_cached(paths: Vec[String], cached0: Vec[ld.SourceFile]) -> Vec[ld.SourceFile] {
@@ -2902,8 +3002,16 @@ fn main() -> i32 {
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
     let c_all_build: Vec[String] = filter_pkg_c_sources(srcw.walk_c_files("."));
     let c_user_build: Vec[ld.SourceFile] = load_files(c_all_build);
+    let mut c_sources_build: Vec[String] = Vec();
     let mut cubi: i32 = 0;
-    while cubi < c_user_build.len() { files.push(c_user_build.get(cubi)); cubi = cubi + 1; }
+    while cubi < c_user_build.len() {
+      let cf: ld.SourceFile = c_user_build.get(cubi);
+      c_sources_build.push(cf.text);
+      cubi = cubi + 1;
+    }
+    let c_sources_build_keep: BuildCacheCSourcesSigKeep = build_cache_c_sources_sig_from_texts_keep(c_sources_build);
+    c_sources_build = c_sources_build_keep.c_sources;
+    let c_sources_sig: String = c_sources_build_keep.c_sources_sig;
     let out_cpath: String = out.concat(".c");
     let driver_key: String = if driver == cg.DriverMainKind.Tool { "tool" } else { "user" };
     let emit_driver_key: String = if artifact == "exe" { "1" } else { "0" };
@@ -2935,6 +3043,7 @@ fn main() -> i32 {
       "toolchain=",
       compile_toolchain,
     );
+    compile_mode = append_build_mode_line(compile_mode, "c_sources_sig=", c_sources_sig);
     let mut link_toolchain: String = "";
     link_toolchain = append_build_mode_line(link_toolchain, "cc=", compile_cc);
     link_toolchain = append_build_mode_line(link_toolchain, "cc_version=", compile_cc_ver);
@@ -2948,7 +3057,7 @@ fn main() -> i32 {
       link_toolchain = append_build_mode_line(link_toolchain, "ar=", link_ar);
       link_toolchain = append_build_mode_line(link_toolchain, "ar_version=", link_ar_ver);
     }
-    let link_mode: String =
+    let mut link_mode: String =
       build_mode_text_with_toolchain(
         "build",
         driver_key,
@@ -2963,6 +3072,7 @@ fn main() -> i32 {
         compiler_rev,
         link_toolchain,
       );
+    link_mode = append_build_mode_line(link_mode, "c_sources_sig=", c_sources_sig);
     let sem_mode: String =
       "sem\n".concat(
         build_sem_mode_text(
@@ -2991,8 +3101,12 @@ fn main() -> i32 {
     let query_shadow_env_on: bool = env_truthy(osys.getenv("VOX_QUERY_SHADOW"));
     let query_shadow_on: bool = effective_incremental_query_shadow_enabled(query_shadow_env_on, incremental_enabled);
     let query_shadow_trace: bool = query_shadow_on && (trace_exec || env_truthy(osys.getenv("VOX_QUERY_SHADOW_TRACE")));
-    let query_shadow_force_prepare: bool = query_shadow_on && query_shadow_force_prepare_from_env(osys.getenv("VOX_QUERY_SHADOW_FORCE_PREPARE"));
+    let query_shadow_force_prepare_raw: bool = query_shadow_force_prepare_from_env(osys.getenv("VOX_QUERY_SHADOW_FORCE_PREPARE"));
+    let query_shadow_force_prepare: bool = effective_query_shadow_force_prepare(query_shadow_on, query_shadow_trace, query_shadow_force_prepare_raw);
     let cache_trace: bool = env_truthy(osys.getenv("VOX_CACHE_TRACE"));
+    if cache_trace && query_shadow_on && query_shadow_force_prepare_raw && !query_shadow_trace {
+      print("[query-shadow] force-prepare ignored (trace disabled)\n");
+    }
     let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
     let cc_target_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
     let obj_ext: String = if cc_is_msvc_cmd(cc_target_cmd) { ".obj" } else { ".o" };
@@ -3020,6 +3134,7 @@ fn main() -> i32 {
     let mut compile_cache_hit: bool = false;
     let mut link_cache_hit: bool = false;
     let mut sem_cache_hit: bool = false;
+    let mut sem_key_from_obj_ref: bool = false;
     let mut sem_dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
     if cache_enabled {
       let cache_keys_kept: BuildCacheKeyPairSourceSigKeep =
@@ -3032,7 +3147,7 @@ fn main() -> i32 {
       let cache_keys: BuildCacheKeyPair = cache_keys_kept.pair;
       compile_key = cache_keys.compile_key;
       link_key = cache_keys.link_key;
-      source_sig = cache_keys_kept.source_sig;
+      source_sig = build_cache_source_sig_with_c_sources_sig(cache_keys_kept.source_sig, c_sources_sig);
       cache_cpath = build_cache_obj_path_for_key(compile_key, ".c");
       cache_obj = build_cache_obj_path_for_key(compile_key, obj_ext);
       cache_bin = build_cache_bin_for_key(link_key, target_os);
@@ -3044,6 +3159,7 @@ fn main() -> i32 {
     if cache_enabled && use_sem_cache && sem_key == "" && compile_key != "" && source_sig != "" && should_lookup_sem_from_obj_ref_build {
       sem_key = build_cache_lookup_sem_key_from_obj_cache_ref("pkg-obj-v1", compile_key, source_sig);
       if sem_key != "" {
+        sem_key_from_obj_ref = true;
         sem_cache_hit = build_sem_cache_hit(sem_key);
       }
     }
@@ -3061,6 +3177,7 @@ fn main() -> i32 {
       let sem_key_keep: BuildCacheSemKeyKeep = build_cache_sem_key_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
       sem_pkg_keys = sem_key_keep.keys;
       sem_key = sem_key_keep.sem_key;
+      sem_key_from_obj_ref = false;
       sem_cache_hit = build_sem_cache_hit(sem_key);
     }
     if cache_enabled && use_sem_cache && sem_cache_hit && !compile_c_cache_hit && sem_key != "" && compile_key != "" && source_sig != "" {
@@ -3111,29 +3228,25 @@ fn main() -> i32 {
         qswitches.push("artifact=".concat(artifact));
         let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
         if use_sem_cache {
-          if sem_dep_hashes.len() == 0 {
-            if sem_pkg_keys.len() == 0 {
-              let sem_keys_keep: BuildCachePkgSemOnlySourceKeysKeepOrderResult =
-                build_cache_pkg_sem_source_keys_only_keep_order_with_files(
-                  files,
-                  pkg_key_pkgs,
-                  pkg_key_order,
-                );
-              files = sem_keys_keep.files;
-              pkg_key_pkgs = sem_keys_keep.pkgs;
-              pkg_key_order = sem_keys_keep.order;
-              sem_pkg_keys = sem_keys_keep.sem_keys;
-            }
-            let sem_dep_keep: BuildCacheSemDepHashesKeep =
-              build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-            sem_pkg_keys = sem_dep_keep.keys;
-            sem_dep_hashes = sem_dep_keep.dep_hashes;
-            if sem_key == "" || !sem_cache_hit {
-              let sem_key_keep: BuildCacheSemKeyKeep = build_cache_sem_key_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-              sem_pkg_keys = sem_key_keep.keys;
-              sem_key = sem_key_keep.sem_key;
-            }
-          }
+          let sem_keep: SemKeyDepHashesKeepOrderResult =
+            ensure_sem_key_dep_hashes_with_keep_order(
+              files,
+              pkg_key_pkgs,
+              pkg_key_order,
+              sem_pkg_keys,
+              sem_mode,
+              sem_key,
+              sem_cache_hit,
+              sem_key_from_obj_ref,
+              sem_dep_hashes,
+            );
+          files = sem_keep.files;
+          pkg_key_pkgs = sem_keep.pkgs;
+          pkg_key_order = sem_keep.order;
+          sem_pkg_keys = sem_keep.sem_pkg_keys;
+          sem_key = sem_keep.sem_key;
+          sem_key_from_obj_ref = sem_keep.sem_key_from_obj_ref;
+          sem_dep_hashes = sem_keep.sem_dep_hashes;
           let mut sdi: i32 = 0;
           while sdi < sem_dep_hashes.len() {
             dep_hashes.push(sem_dep_hashes.get(sdi));
@@ -3179,10 +3292,13 @@ fn main() -> i32 {
     }
     if !compile_cache_hit {
       if !compile_c_cache_hit {
+        let vox_files_keep: KeepVoxSourceFilesResult = keep_vox_source_files_with_input(files);
+        files = vox_files_keep.files;
         let cp: c.CompileProfileResult =
-          c.compile_files_to_c_profile_for_target(
-            files,
+          c.compile_files_to_c_profile_for_target_with_extra_c_sources(
+            vox_files_keep.vox_files,
             emit_opts,
+            c_sources_build,
             target_ptr,
             target_os,
             target_arch,
@@ -3437,27 +3553,25 @@ fn main() -> i32 {
       }
     }
     if use_sem_cache && !sem_cache_hit && sem_key != "" {
-      if sem_dep_hashes.len() == 0 {
-        if sem_pkg_keys.len() == 0 {
-          let sem_keys_keep: BuildCachePkgSemOnlySourceKeysKeepOrderResult =
-            build_cache_pkg_sem_source_keys_only_keep_order_with_files(
-              files,
-              pkg_key_pkgs,
-              pkg_key_order,
-            );
-          files = sem_keys_keep.files;
-          pkg_key_pkgs = sem_keys_keep.pkgs;
-          pkg_key_order = sem_keys_keep.order;
-          sem_pkg_keys = sem_keys_keep.sem_keys;
-        }
-        let sem_dep_keep: BuildCacheSemDepHashesKeep =
-          build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-        sem_pkg_keys = sem_dep_keep.keys;
-        sem_dep_hashes = sem_dep_keep.dep_hashes;
-        let sem_key_keep: BuildCacheSemKeyKeep = build_cache_sem_key_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-        sem_pkg_keys = sem_key_keep.keys;
-        sem_key = sem_key_keep.sem_key;
-      }
+      let sem_keep: SemKeyDepHashesKeepOrderResult =
+        ensure_sem_key_dep_hashes_with_keep_order(
+          files,
+          pkg_key_pkgs,
+          pkg_key_order,
+          sem_pkg_keys,
+          sem_mode,
+          sem_key,
+          sem_cache_hit,
+          sem_key_from_obj_ref,
+          sem_dep_hashes,
+        );
+      files = sem_keep.files;
+      pkg_key_pkgs = sem_keep.pkgs;
+      pkg_key_order = sem_keep.order;
+      sem_pkg_keys = sem_keep.sem_pkg_keys;
+      sem_key = sem_keep.sem_key;
+      sem_key_from_obj_ref = sem_keep.sem_key_from_obj_ref;
+      sem_dep_hashes = sem_keep.sem_dep_hashes;
       write_build_sem_cache_with_deps(sem_key, sem_dep_hashes);
     }
     if cache_enabled && use_sem_cache && sem_key != "" && compile_key != "" && source_sig != "" && compile_c_cache_hit {
@@ -3913,11 +4027,20 @@ fn main() -> i32 {
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
     let c_all_test: Vec[String] = filter_pkg_c_sources(srcw.walk_c_files("."));
     let c_user_test: Vec[ld.SourceFile] = load_files(c_all_test);
+    let mut c_sources_test: Vec[String] = Vec();
     let mut cuti: i32 = 0;
-    while cuti < c_user_test.len() { files.push(c_user_test.get(cuti)); cuti = cuti + 1; }
+    while cuti < c_user_test.len() {
+      let cf: ld.SourceFile = c_user_test.get(cuti);
+      c_sources_test.push(cf.text);
+      cuti = cuti + 1;
+    }
+    let c_sources_test_keep: BuildCacheCSourcesSigKeep = build_cache_c_sources_sig_from_texts_keep(c_sources_test);
+    c_sources_test = c_sources_test_keep.c_sources;
+    let c_sources_sig: String = c_sources_test_keep.c_sources_sig;
 
     let compiler_rev: String = bi.version().concat("@").concat(bi.channel());
-    let test_mode: String = build_mode_text("test", "user", "0", host_os, host_arch, target_os, target_arch, target_triple, target_abi, "exe", compiler_rev);
+    let mut test_mode: String = build_mode_text("test", "user", "0", host_os, host_arch, target_os, target_arch, target_triple, target_abi, "exe", compiler_rev);
+    test_mode = append_build_mode_line(test_mode, "c_sources_sig=", c_sources_sig);
     let sem_mode: String =
       "sem\n".concat(
         build_sem_mode_text(
@@ -3948,8 +4071,12 @@ fn main() -> i32 {
     let query_shadow_env_on: bool = env_truthy(osys.getenv("VOX_QUERY_SHADOW"));
     let query_shadow_on: bool = effective_incremental_query_shadow_enabled(query_shadow_env_on, incremental_enabled);
     let query_shadow_trace: bool = query_shadow_on && (trace_exec || env_truthy(osys.getenv("VOX_QUERY_SHADOW_TRACE")));
-    let query_shadow_force_prepare: bool = query_shadow_on && query_shadow_force_prepare_from_env(osys.getenv("VOX_QUERY_SHADOW_FORCE_PREPARE"));
+    let query_shadow_force_prepare_raw: bool = query_shadow_force_prepare_from_env(osys.getenv("VOX_QUERY_SHADOW_FORCE_PREPARE"));
+    let query_shadow_force_prepare: bool = effective_query_shadow_force_prepare(query_shadow_on, query_shadow_trace, query_shadow_force_prepare_raw);
     let cache_trace: bool = env_truthy(osys.getenv("VOX_CACHE_TRACE"));
+    if cache_trace && query_shadow_on && query_shadow_force_prepare_raw && !query_shadow_trace {
+      print("[query-shadow] force-prepare ignored (trace disabled)\n");
+    }
     let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
     let cc_test_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
     let cc_test_use_msvc: bool = cc_is_msvc_cmd(cc_test_cmd);
@@ -3973,12 +4100,13 @@ fn main() -> i32 {
     let mut obj: String = "";
     let mut bin: String = "";
     let mut sem_cache_hit: bool = false;
+    let mut sem_key_from_obj_ref: bool = false;
     let mut sem_dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
     if cache_enabled {
       let keys_kept: TestBuildKeySourceSigKeep = test_build_key_source_sig_from_pkg_source_keys_keep(pkg_keys, test_mode);
       pkg_keys = keys_kept.keys;
       test_build_key = keys_kept.test_key;
-      source_sig = keys_kept.source_sig;
+      source_sig = build_cache_source_sig_with_c_sources_sig(keys_kept.source_sig, c_sources_sig);
       test_cache_out = path_join(path_join(path_join("target", "cache"), "test-link-v1"), test_build_key);
       cpath = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), test_build_key).concat(".c");
       obj = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), test_build_key).concat(test_obj_ext);
@@ -4012,6 +4140,7 @@ fn main() -> i32 {
       if use_sem_cache && sem_key == "" && test_build_key != "" && source_sig != "" && should_lookup_sem_from_obj_ref_test {
         sem_key = build_cache_lookup_sem_key_from_obj_cache_ref("test-pkg-obj-v1", test_build_key, source_sig);
         if sem_key != "" {
+          sem_key_from_obj_ref = true;
           sem_cache_hit = build_sem_cache_hit(sem_key);
         }
       }
@@ -4029,6 +4158,7 @@ fn main() -> i32 {
         let sem_key_keep: BuildCacheSemKeyKeep = build_cache_sem_key_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
         sem_pkg_keys = sem_key_keep.keys;
         sem_key = sem_key_keep.sem_key;
+        sem_key_from_obj_ref = false;
         sem_cache_hit = build_sem_cache_hit(sem_key);
         if sem_cache_hit && !cache_c_hit && sem_key != "" && test_build_key != "" && source_sig != "" {
           if test_build_cache_try_reuse_sem_cached_c_with_source_sig(
@@ -4092,29 +4222,25 @@ fn main() -> i32 {
         qswitches.push("test_rerun_failed=".concat(if test_rerun_failed { "1" } else { "0" }));
         let mut dep_hashes: Vec[q.ParseLoadDepHash] = Vec();
         if use_sem_cache {
-          if sem_dep_hashes.len() == 0 {
-            if sem_pkg_keys.len() == 0 {
-              let sem_keys_keep: BuildCachePkgSemOnlySourceKeysKeepOrderResult =
-                build_cache_pkg_sem_source_keys_only_keep_order_with_files(
-                  files,
-                  pkg_key_pkgs,
-                  pkg_key_order,
-                );
-              files = sem_keys_keep.files;
-              pkg_key_pkgs = sem_keys_keep.pkgs;
-              pkg_key_order = sem_keys_keep.order;
-              sem_pkg_keys = sem_keys_keep.sem_keys;
-            }
-            let sem_dep_keep: BuildCacheSemDepHashesKeep =
-              build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-            sem_pkg_keys = sem_dep_keep.keys;
-            sem_dep_hashes = sem_dep_keep.dep_hashes;
-            if sem_key == "" || !sem_cache_hit {
-              let sem_key_keep: BuildCacheSemKeyKeep = build_cache_sem_key_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-              sem_pkg_keys = sem_key_keep.keys;
-              sem_key = sem_key_keep.sem_key;
-            }
-          }
+          let sem_keep: SemKeyDepHashesKeepOrderResult =
+            ensure_sem_key_dep_hashes_with_keep_order(
+              files,
+              pkg_key_pkgs,
+              pkg_key_order,
+              sem_pkg_keys,
+              sem_mode,
+              sem_key,
+              sem_cache_hit,
+              sem_key_from_obj_ref,
+              sem_dep_hashes,
+            );
+          files = sem_keep.files;
+          pkg_key_pkgs = sem_keep.pkgs;
+          pkg_key_order = sem_keep.order;
+          sem_pkg_keys = sem_keep.sem_pkg_keys;
+          sem_key = sem_keep.sem_key;
+          sem_key_from_obj_ref = sem_keep.sem_key_from_obj_ref;
+          sem_dep_hashes = sem_keep.sem_dep_hashes;
           let mut sdi: i32 = 0;
           while sdi < sem_dep_hashes.len() {
             dep_hashes.push(sem_dep_hashes.get(sdi));
@@ -4167,10 +4293,13 @@ fn main() -> i32 {
             tests_for_compile.push(tests.get(tco));
             tco = tco + 1;
           }
+          let vox_files_keep: KeepVoxSourceFilesResult = keep_vox_source_files_with_input(files);
+          files = vox_files_keep.files;
           let cp: c.CompileProfileResult =
-            c.compile_files_to_c_profile_for_target(
-              files,
+            c.compile_files_to_c_profile_for_target_with_extra_c_sources(
+              vox_files_keep.vox_files,
               cg.EmitOptions { emit_driver_main: false, driver_main_kind: cg.DriverMainKind.User, emit_test_main: true, test_funcs: tests_for_compile, c_sources: Vec() },
+              c_sources_test,
               target_ptr,
               target_os,
               target_arch,
@@ -4342,27 +4471,25 @@ fn main() -> i32 {
       }
     }
     if use_sem_cache && !sem_cache_hit && sem_key != "" {
-      if sem_dep_hashes.len() == 0 {
-        if sem_pkg_keys.len() == 0 {
-          let sem_keys_keep: BuildCachePkgSemOnlySourceKeysKeepOrderResult =
-            build_cache_pkg_sem_source_keys_only_keep_order_with_files(
-              files,
-              pkg_key_pkgs,
-              pkg_key_order,
-            );
-          files = sem_keys_keep.files;
-          pkg_key_pkgs = sem_keys_keep.pkgs;
-          pkg_key_order = sem_keys_keep.order;
-          sem_pkg_keys = sem_keys_keep.sem_keys;
-        }
-        let sem_dep_keep: BuildCacheSemDepHashesKeep =
-          build_cache_sem_dep_hashes_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-        sem_pkg_keys = sem_dep_keep.keys;
-        sem_dep_hashes = sem_dep_keep.dep_hashes;
-        let sem_key_keep: BuildCacheSemKeyKeep = build_cache_sem_key_from_pkg_source_keys_keep(sem_pkg_keys, sem_mode);
-        sem_pkg_keys = sem_key_keep.keys;
-        sem_key = sem_key_keep.sem_key;
-      }
+      let sem_keep: SemKeyDepHashesKeepOrderResult =
+        ensure_sem_key_dep_hashes_with_keep_order(
+          files,
+          pkg_key_pkgs,
+          pkg_key_order,
+          sem_pkg_keys,
+          sem_mode,
+          sem_key,
+          sem_cache_hit,
+          sem_key_from_obj_ref,
+          sem_dep_hashes,
+        );
+      files = sem_keep.files;
+      pkg_key_pkgs = sem_keep.pkgs;
+      pkg_key_order = sem_keep.order;
+      sem_pkg_keys = sem_keep.sem_pkg_keys;
+      sem_key = sem_keep.sem_key;
+      sem_key_from_obj_ref = sem_keep.sem_key_from_obj_ref;
+      sem_dep_hashes = sem_keep.sem_dep_hashes;
       write_build_sem_cache_with_deps(sem_key, sem_dep_hashes);
     }
     if cache_enabled && use_sem_cache && sem_key != "" && test_build_key != "" && source_sig != "" && cache_c_hit {
