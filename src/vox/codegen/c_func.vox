@@ -656,21 +656,6 @@ fn collect_live_slots_filtered(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool
   return live;
 }
 
-fn collect_kept_instr_flags_all_true(f: ir.Func) -> Vec[bool] {
-  let mut keep: Vec[bool] = Vec();
-  let mut bi: i32 = 0;
-  while bi < f.blocks.len() {
-    let b: ir.Block = f.blocks.get(bi);
-    let mut ii: i32 = 0;
-    while ii < b.instrs.len() {
-      keep.push(true);
-      ii = ii + 1;
-    }
-    bi = bi + 1;
-  }
-  return keep;
-}
-
 fn instr_is_dead_slot_decl(ins: ir.Instr, live_slots: Vec[bool]) -> bool {
   return match ins {
     ir.Instr.SlotDecl(sid, _ty) => !slot_flag_get(live_slots, sid),
@@ -1153,6 +1138,32 @@ fn collect_locals(c_types: Vec[String], pool: ir.TyPool, f: ir.Func, keep_instrs
           _ => locals_add_instr(c_types, pool, l, ins),
         };
       }
+      ii = ii + 1;
+    }
+    bi = bi + 1;
+  }
+  return l;
+}
+
+fn collect_locals_keep_all(c_types: Vec[String], pool: ir.TyPool, f: ir.Func, read_temps: Vec[bool]) -> LocalsResult {
+  let mut l: LocalsResult = locals0();
+  let mut bi: i32 = 0;
+  while bi < f.blocks.len() {
+    let b: ir.Block = f.blocks.get(bi);
+    let mut ii: i32 = 0;
+    while ii < b.instrs.len() {
+      let ins: ir.Instr = b.instrs.get(ii);
+      l = match ins {
+        ir.Instr.Call(has_dst, tid, ret_ty, _name, _args) =>
+          locals_add_call(c_types, pool, l, call_dst_is_read(has_dst, tid, read_temps), tid, ret_ty),
+        ir.Instr.VecPop(tid, ty, _sid) =>
+          if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type_from_table(c_types, pool, ty)) } else { l },
+        ir.Instr.VecRemove(tid, ty, _sid, _idx) =>
+          if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type_from_table(c_types, pool, ty)) } else { l },
+        ir.Instr.VecGet(tid, ty, _sid, _idx) =>
+          if temp_is_read(tid, read_temps) { locals_add_temp(l, tid, c_type_from_table(c_types, pool, ty)) } else { l },
+        _ => locals_add_instr(c_types, pool, l, ins),
+      };
       ii = ii + 1;
     }
     bi = bi + 1;
@@ -2472,13 +2483,22 @@ pub fn emit_func_append_with_call_cache(
   // `live_temps` is already derived from read-use closure on kept instructions;
   // reuse it directly to avoid an extra full-function scan.
   let read_temps: Vec[bool] = live_temps;
-  let block_offsets: Vec[i32] = block_instr_offsets(f);
-  let keep_instrs: Vec[bool] = if !has_dead_candidates {
-    collect_kept_instr_flags_all_true(f)
+  let keep_all: bool = !has_dead_candidates;
+  let block_offsets: Vec[i32] = if keep_all {
+    Vec()
+  } else {
+    block_instr_offsets(f)
+  };
+  let keep_instrs: Vec[bool] = if keep_all {
+    Vec()
   } else {
     collect_kept_instr_flags(pool, f, live_temps, live_slots)
   };
-  let locals: LocalsResult = collect_locals(c_types, pool, f, keep_instrs, block_offsets, read_temps);
+  let locals: LocalsResult = if keep_all {
+    collect_locals_keep_all(c_types, pool, f, read_temps)
+  } else {
+    collect_locals(c_types, pool, f, keep_instrs, block_offsets, read_temps)
+  };
   let slot_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.slots);
   let temp_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.temps);
   let block_order: Vec[i32] = block_name_order(f.blocks);
@@ -2538,8 +2558,12 @@ pub fn emit_func_append_with_call_cache(
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
-      let idx: i32 = block_offsets.get(bi) + ii;
-      let keep: bool = if idx >= 0 && idx < keep_instrs.len() { keep_instrs.get(idx) } else { true };
+      let keep: bool = if keep_all {
+        true
+      } else {
+        let idx: i32 = block_offsets.get(bi) + ii;
+        if idx >= 0 && idx < keep_instrs.len() { keep_instrs.get(idx) } else { true }
+      };
       if keep {
         used_params = mark_used_params_from_instr(used_params, ins);
         let lines: Vec[String] =
