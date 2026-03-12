@@ -296,10 +296,47 @@ compiler_smoke_ok() {
   return 1
 }
 
+backup_good_self_bin() {
+  local out_base="$WORK_DIR/$OUT_REL"
+  local cur_bin=""
+  if ! cur_bin="$(resolve_bin "$out_base" 2>/dev/null)"; then
+    return 1
+  fi
+  if ! compiler_smoke_ok "$cur_bin"; then
+    return 1
+  fi
+  local backup_path="${cur_bin}.selfhost.bak"
+  cp "$cur_bin" "$backup_path"
+  printf '%s|%s\n' "$cur_bin" "$backup_path"
+  return 0
+}
+
+restore_good_self_bin() {
+  local restore_target="$1"
+  local backup_path="$2"
+  if [[ -z "$restore_target" || -z "$backup_path" ]]; then
+    return 1
+  fi
+  if [[ ! -f "$backup_path" ]]; then
+    return 1
+  fi
+  cp "$backup_path" "$restore_target"
+  rm -f "$backup_path"
+  echo "[selfhost] restored previous good compiler: $restore_target"
+  return 0
+}
+
 rebuild_with_fallback() {
   local preferred_bootstrap="$1"
   local build_ok=0
   local active_bootstrap="$preferred_bootstrap"
+  local backup_info=""
+  local restore_target=""
+  local backup_path=""
+  if backup_info="$(backup_good_self_bin)"; then
+    restore_target="${backup_info%%|*}"
+    backup_path="${backup_info#*|}"
+  fi
 
   if build_from_bootstrap "$active_bootstrap"; then
     build_ok=1
@@ -328,9 +365,25 @@ rebuild_with_fallback() {
   fi
 
   if [[ "$build_ok" != "1" ]]; then
+    restore_good_self_bin "$restore_target" "$backup_path" || true
     return 1
   fi
 
+  local built_bin=""
+  if ! built_bin="$(resolve_bin "$WORK_DIR/$OUT_REL" 2>/dev/null)"; then
+    restore_good_self_bin "$restore_target" "$backup_path" || true
+    echo "[selfhost] rebuilt output binary missing: $WORK_DIR/$OUT_REL" >&2
+    return 1
+  fi
+  if ! compiler_smoke_ok "$built_bin"; then
+    restore_good_self_bin "$restore_target" "$backup_path" || true
+    echo "[selfhost] rebuilt output failed smoke check: $built_bin" >&2
+    return 1
+  fi
+
+  if [[ -n "$backup_path" ]]; then
+    rm -f "$backup_path"
+  fi
   BOOTSTRAP_BIN="$active_bootstrap"
   write_selfhost_cache_key "$BOOTSTRAP_BIN"
   return 0
