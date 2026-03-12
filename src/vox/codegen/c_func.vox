@@ -502,25 +502,8 @@ fn mark_live_slot_values(flags0: Vec[bool], vals: Vec[ir.Value]) -> Vec[bool] {
   return flags;
 }
 
-fn mark_live_slot_reads(flags0: Vec[bool], ins: ir.Instr) -> Vec[bool] {
-  return match ins {
-    ir.Instr.Load(_tid, _ty, sid) => slot_flag_set(flags0, sid),
-    ir.Instr.AddrOfSlot(_tid, _ty, sid) => slot_flag_set(flags0, sid),
-    ir.Instr.AddrOfFieldChain(_tid, _ty, sid, _fields) => slot_flag_set(flags0, sid),
-    ir.Instr.StoreField(sid, _field, _v) => slot_flag_set(flags0, sid),
-    ir.Instr.VecPush(sid, _elem, _v) => slot_flag_set(flags0, sid),
-    ir.Instr.VecInsert(sid, _elem, _idx, _v) => slot_flag_set(flags0, sid),
-    ir.Instr.VecSet(sid, _elem, _idx, _v) => slot_flag_set(flags0, sid),
-    ir.Instr.VecClear(sid) => slot_flag_set(flags0, sid),
-    ir.Instr.VecExtend(sid, other_sid) => slot_flag_set(slot_flag_set(flags0, sid), other_sid),
-    ir.Instr.VecPop(_tid, _elem, sid) => slot_flag_set(flags0, sid),
-    ir.Instr.VecRemove(_tid, _elem, sid, _idx) => slot_flag_set(flags0, sid),
-    ir.Instr.VecLen(_tid, sid) => slot_flag_set(flags0, sid),
-    ir.Instr.VecGet(_tid, _elem, sid, _idx) => slot_flag_set(flags0, sid),
-    _ => flags0,
-  };
-}
-
+// Includes explicit slot reads (e.g. Load/Vec receiver slots) and
+// slot-typed operands in values.
 fn mark_live_slot_values_from_instr(flags0: Vec[bool], ins: ir.Instr) -> Vec[bool] {
   return match ins {
     ir.Instr.Const(_tid, _ty, v) => mark_live_slot_value(flags0, v),
@@ -535,11 +518,11 @@ fn mark_live_slot_values_from_instr(flags0: Vec[bool], ins: ir.Instr) -> Vec[boo
     ir.Instr.RangeCheck(_ty, v, _lo, _hi) => mark_live_slot_value(flags0, v),
     ir.Instr.SlotDecl(_sid, _ty) => flags0,
     ir.Instr.Store(_sid, v) => mark_live_slot_value(flags0, v),
-    ir.Instr.Load(_tid, _ty, _sid) => flags0,
+    ir.Instr.Load(_tid, _ty, sid) => slot_flag_set(flags0, sid),
     ir.Instr.GlobalLoad(_tid, _ty, _name) => flags0,
     ir.Instr.GlobalStore(_ty, _name, v) => mark_live_slot_value(flags0, v),
-    ir.Instr.AddrOfSlot(_tid, _ty, _sid) => flags0,
-    ir.Instr.AddrOfFieldChain(_tid, _ty, _sid, _fields) => flags0,
+    ir.Instr.AddrOfSlot(_tid, _ty, sid) => slot_flag_set(flags0, sid),
+    ir.Instr.AddrOfFieldChain(_tid, _ty, sid, _fields) => slot_flag_set(flags0, sid),
     ir.Instr.RefLoad(_tid, _ty, recv) => mark_live_slot_value(flags0, recv),
     ir.Instr.RefStore(_ty, recv, v) => mark_live_slot_value(mark_live_slot_value(flags0, recv), v),
     ir.Instr.PtrRead(_tid, _ty, ptr) => mark_live_slot_value(flags0, ptr),
@@ -555,20 +538,20 @@ fn mark_live_slot_values_from_instr(flags0: Vec[bool], ins: ir.Instr) -> Vec[boo
       flags
     },
     ir.Instr.FieldGet(_tid, _ty, recv, _field) => mark_live_slot_value(flags0, recv),
-    ir.Instr.StoreField(_sid, _field, v) => mark_live_slot_value(flags0, v),
+    ir.Instr.StoreField(sid, _field, v) => mark_live_slot_value(slot_flag_set(flags0, sid), v),
     ir.Instr.EnumInit(_tid, _ty, _variant, payload) => mark_live_slot_values(flags0, payload),
     ir.Instr.EnumTag(_tid, recv) => mark_live_slot_value(flags0, recv),
     ir.Instr.EnumPayload(_tid, _ty, recv, _variant, _idx) => mark_live_slot_value(flags0, recv),
     ir.Instr.VecNew(_tid, _vty, _elem) => flags0,
-    ir.Instr.VecPush(_recv_slot, _elem, v) => mark_live_slot_value(flags0, v),
-    ir.Instr.VecInsert(_recv_slot, _elem, idx, v) => mark_live_slot_value(mark_live_slot_value(flags0, idx), v),
-    ir.Instr.VecSet(_recv_slot, _elem, idx, v) => mark_live_slot_value(mark_live_slot_value(flags0, idx), v),
-    ir.Instr.VecClear(_recv_slot) => flags0,
-    ir.Instr.VecExtend(_recv_slot, _other_slot) => flags0,
-    ir.Instr.VecPop(_tid, _elem, _recv_slot) => flags0,
-    ir.Instr.VecRemove(_tid, _elem, _recv_slot, idx) => mark_live_slot_value(flags0, idx),
-    ir.Instr.VecLen(_tid, _recv_slot) => flags0,
-    ir.Instr.VecGet(_tid, _elem, _recv_slot, idx) => mark_live_slot_value(flags0, idx),
+    ir.Instr.VecPush(recv_slot, _elem, v) => mark_live_slot_value(slot_flag_set(flags0, recv_slot), v),
+    ir.Instr.VecInsert(recv_slot, _elem, idx, v) => mark_live_slot_value(mark_live_slot_value(slot_flag_set(flags0, recv_slot), idx), v),
+    ir.Instr.VecSet(recv_slot, _elem, idx, v) => mark_live_slot_value(mark_live_slot_value(slot_flag_set(flags0, recv_slot), idx), v),
+    ir.Instr.VecClear(recv_slot) => slot_flag_set(flags0, recv_slot),
+    ir.Instr.VecExtend(recv_slot, other_slot) => slot_flag_set(slot_flag_set(flags0, recv_slot), other_slot),
+    ir.Instr.VecPop(_tid, _elem, recv_slot) => slot_flag_set(flags0, recv_slot),
+    ir.Instr.VecRemove(_tid, _elem, recv_slot, idx) => mark_live_slot_value(slot_flag_set(flags0, recv_slot), idx),
+    ir.Instr.VecLen(_tid, recv_slot) => slot_flag_set(flags0, recv_slot),
+    ir.Instr.VecGet(_tid, _elem, recv_slot, idx) => mark_live_slot_value(slot_flag_set(flags0, recv_slot), idx),
     ir.Instr.AtomicNew(_tid, _elem_ty, val) => mark_live_slot_value(flags0, val),
     ir.Instr.AtomicLoad(_tid, _elem_ty, h) => mark_live_slot_value(flags0, h),
     ir.Instr.AtomicStore(_elem_ty, h, val) => mark_live_slot_value(mark_live_slot_value(flags0, h), val),
@@ -607,7 +590,6 @@ fn collect_seed_liveness_summary(pool: ir.TyPool, f: ir.Func) -> SeedLivenessSum
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
-      live_slots = mark_live_slot_reads(live_slots, ins);
       live_slots = mark_live_slot_values_from_instr(live_slots, ins);
       live_temps = mark_live_from_instr_operands(live_temps, ins);
       live_temps = match ins {
@@ -664,7 +646,6 @@ fn collect_live_slots_filtered(pool: ir.TyPool, f: ir.Func, live_temps: Vec[bool
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
       if !instr_is_dead_temp(pool, ins, live_temps) && !instr_is_dead_slot_instr(ins, live_slots0) {
-        live = mark_live_slot_reads(live, ins);
         live = mark_live_slot_values_from_instr(live, ins);
       }
       ii = ii + 1;
