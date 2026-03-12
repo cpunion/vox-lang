@@ -843,6 +843,65 @@ fn effective_query_shadow_force_prepare(query_shadow_on: bool, query_shadow_trac
   return query_shadow_on && query_shadow_trace && force_prepare_raw;
 }
 
+struct CacheRuntimeFlags {
+  build_cache_enabled: bool,
+  incremental_enabled: bool,
+  cache_enabled: bool,
+  query_shadow_on: bool,
+  query_shadow_trace: bool,
+  query_shadow_force_prepare: bool,
+  cache_trace: bool,
+}
+
+fn cache_runtime_flags(trace_exec: bool) -> CacheRuntimeFlags {
+  let build_cache_enabled: bool = build_cache_enabled_from_env(osys.getenv("VOX_BUILD_CACHE_DISABLE"));
+  let incremental_enabled: bool = incremental_enabled_from_env(osys.getenv("VOX_INCREMENTAL"));
+  let cache_enabled: bool = effective_incremental_cache_enabled(build_cache_enabled, incremental_enabled);
+  let query_shadow_env_on: bool = env_truthy(osys.getenv("VOX_QUERY_SHADOW"));
+  let query_shadow_on: bool = effective_incremental_query_shadow_enabled(query_shadow_env_on, incremental_enabled);
+  let query_shadow_trace: bool = query_shadow_on && (trace_exec || env_truthy(osys.getenv("VOX_QUERY_SHADOW_TRACE")));
+  let query_shadow_force_prepare_raw: bool = query_shadow_force_prepare_from_env(osys.getenv("VOX_QUERY_SHADOW_FORCE_PREPARE"));
+  let query_shadow_force_prepare: bool = effective_query_shadow_force_prepare(query_shadow_on, query_shadow_trace, query_shadow_force_prepare_raw);
+  let cache_trace: bool = env_truthy(osys.getenv("VOX_CACHE_TRACE"));
+  if cache_trace && query_shadow_on && query_shadow_force_prepare_raw && !query_shadow_trace {
+    print("[query-shadow] force-prepare ignored (trace disabled)\n");
+  }
+  return CacheRuntimeFlags {
+    build_cache_enabled: build_cache_enabled,
+    incremental_enabled: incremental_enabled,
+    cache_enabled: cache_enabled,
+    query_shadow_on: query_shadow_on,
+    query_shadow_trace: query_shadow_trace,
+    query_shadow_force_prepare: query_shadow_force_prepare,
+    cache_trace: cache_trace,
+  };
+}
+
+struct CSourceLoadResult {
+  c_sources: Vec[String],
+  c_sources_sig: String,
+}
+
+fn load_pkg_c_sources_with_sig() -> CSourceLoadResult {
+  let c_all: Vec[String] = filter_pkg_c_sources(srcw.walk_c_files("."));
+  let c_user: Vec[ld.SourceFile] = load_files(c_all);
+  let mut c_sources: Vec[String] = Vec();
+  let mut i: i32 = 0;
+  while i < c_user.len() {
+    c_sources.push(c_user.get(i).text);
+    i = i + 1;
+  }
+  let kept: BuildCacheCSourcesSigKeep = build_cache_c_sources_sig_from_texts_keep(c_sources);
+  return CSourceLoadResult {
+    c_sources: kept.c_sources,
+    c_sources_sig: kept.c_sources_sig,
+  };
+}
+
+fn build_mode_with_c_sources_sig(mode: String, c_sources_sig: String) -> String {
+  return append_build_mode_line(mode, "c_sources_sig=", c_sources_sig);
+}
+
 fn should_use_sem_cache(cache_enabled: bool, query_shadow_on: bool) -> bool {
   let _: bool = query_shadow_on;
   return cache_enabled;
@@ -3000,18 +3059,9 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let c_all_build: Vec[String] = filter_pkg_c_sources(srcw.walk_c_files("."));
-    let c_user_build: Vec[ld.SourceFile] = load_files(c_all_build);
-    let mut c_sources_build: Vec[String] = Vec();
-    let mut cubi: i32 = 0;
-    while cubi < c_user_build.len() {
-      let cf: ld.SourceFile = c_user_build.get(cubi);
-      c_sources_build.push(cf.text);
-      cubi = cubi + 1;
-    }
-    let c_sources_build_keep: BuildCacheCSourcesSigKeep = build_cache_c_sources_sig_from_texts_keep(c_sources_build);
-    c_sources_build = c_sources_build_keep.c_sources;
-    let c_sources_sig: String = c_sources_build_keep.c_sources_sig;
+    let c_sources_build_loaded: CSourceLoadResult = load_pkg_c_sources_with_sig();
+    let c_sources_build: Vec[String] = c_sources_build_loaded.c_sources;
+    let c_sources_sig: String = c_sources_build_loaded.c_sources_sig;
     let out_cpath: String = out.concat(".c");
     let driver_key: String = if driver == cg.DriverMainKind.Tool { "tool" } else { "user" };
     let emit_driver_key: String = if artifact == "exe" { "1" } else { "0" };
@@ -3043,7 +3093,7 @@ fn main() -> i32 {
       "toolchain=",
       compile_toolchain,
     );
-    compile_mode = append_build_mode_line(compile_mode, "c_sources_sig=", c_sources_sig);
+    compile_mode = build_mode_with_c_sources_sig(compile_mode, c_sources_sig);
     let mut link_toolchain: String = "";
     link_toolchain = append_build_mode_line(link_toolchain, "cc=", compile_cc);
     link_toolchain = append_build_mode_line(link_toolchain, "cc_version=", compile_cc_ver);
@@ -3072,7 +3122,7 @@ fn main() -> i32 {
         compiler_rev,
         link_toolchain,
       );
-    link_mode = append_build_mode_line(link_mode, "c_sources_sig=", c_sources_sig);
+    link_mode = build_mode_with_c_sources_sig(link_mode, c_sources_sig);
     let sem_mode: String =
       "sem\n".concat(
         build_sem_mode_text(
@@ -3095,18 +3145,14 @@ fn main() -> i32 {
       test_funcs: Vec(),
       c_sources: Vec(),
     };
-    let build_cache_enabled: bool = build_cache_enabled_from_env(osys.getenv("VOX_BUILD_CACHE_DISABLE"));
-    let incremental_enabled: bool = incremental_enabled_from_env(osys.getenv("VOX_INCREMENTAL"));
-    let cache_enabled: bool = effective_incremental_cache_enabled(build_cache_enabled, incremental_enabled);
-    let query_shadow_env_on: bool = env_truthy(osys.getenv("VOX_QUERY_SHADOW"));
-    let query_shadow_on: bool = effective_incremental_query_shadow_enabled(query_shadow_env_on, incremental_enabled);
-    let query_shadow_trace: bool = query_shadow_on && (trace_exec || env_truthy(osys.getenv("VOX_QUERY_SHADOW_TRACE")));
-    let query_shadow_force_prepare_raw: bool = query_shadow_force_prepare_from_env(osys.getenv("VOX_QUERY_SHADOW_FORCE_PREPARE"));
-    let query_shadow_force_prepare: bool = effective_query_shadow_force_prepare(query_shadow_on, query_shadow_trace, query_shadow_force_prepare_raw);
-    let cache_trace: bool = env_truthy(osys.getenv("VOX_CACHE_TRACE"));
-    if cache_trace && query_shadow_on && query_shadow_force_prepare_raw && !query_shadow_trace {
-      print("[query-shadow] force-prepare ignored (trace disabled)\n");
-    }
+    let cache_flags: CacheRuntimeFlags = cache_runtime_flags(trace_exec);
+    let build_cache_enabled: bool = cache_flags.build_cache_enabled;
+    let incremental_enabled: bool = cache_flags.incremental_enabled;
+    let cache_enabled: bool = cache_flags.cache_enabled;
+    let query_shadow_on: bool = cache_flags.query_shadow_on;
+    let query_shadow_trace: bool = cache_flags.query_shadow_trace;
+    let query_shadow_force_prepare: bool = cache_flags.query_shadow_force_prepare;
+    let cache_trace: bool = cache_flags.cache_trace;
     let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
     let cc_target_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
     let obj_ext: String = if cc_is_msvc_cmd(cc_target_cmd) { ".obj" } else { ".o" };
@@ -4025,22 +4071,13 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files_with_cached(paths, cached_discovery_files);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let c_all_test: Vec[String] = filter_pkg_c_sources(srcw.walk_c_files("."));
-    let c_user_test: Vec[ld.SourceFile] = load_files(c_all_test);
-    let mut c_sources_test: Vec[String] = Vec();
-    let mut cuti: i32 = 0;
-    while cuti < c_user_test.len() {
-      let cf: ld.SourceFile = c_user_test.get(cuti);
-      c_sources_test.push(cf.text);
-      cuti = cuti + 1;
-    }
-    let c_sources_test_keep: BuildCacheCSourcesSigKeep = build_cache_c_sources_sig_from_texts_keep(c_sources_test);
-    c_sources_test = c_sources_test_keep.c_sources;
-    let c_sources_sig: String = c_sources_test_keep.c_sources_sig;
+    let c_sources_test_loaded: CSourceLoadResult = load_pkg_c_sources_with_sig();
+    let c_sources_test: Vec[String] = c_sources_test_loaded.c_sources;
+    let c_sources_sig: String = c_sources_test_loaded.c_sources_sig;
 
     let compiler_rev: String = bi.version().concat("@").concat(bi.channel());
     let mut test_mode: String = build_mode_text("test", "user", "0", host_os, host_arch, target_os, target_arch, target_triple, target_abi, "exe", compiler_rev);
-    test_mode = append_build_mode_line(test_mode, "c_sources_sig=", c_sources_sig);
+    test_mode = build_mode_with_c_sources_sig(test_mode, c_sources_sig);
     let sem_mode: String =
       "sem\n".concat(
         build_sem_mode_text(
@@ -4065,18 +4102,14 @@ fn main() -> i32 {
       c_sources: Vec(),
     };
     let mut query_shadow_state: q.ParseLoadShadowState = q.ParseLoadShadowState { key: "", predicted_hit: false };
-    let build_cache_enabled: bool = build_cache_enabled_from_env(osys.getenv("VOX_BUILD_CACHE_DISABLE"));
-    let incremental_enabled: bool = incremental_enabled_from_env(osys.getenv("VOX_INCREMENTAL"));
-    let cache_enabled: bool = effective_incremental_cache_enabled(build_cache_enabled, incremental_enabled);
-    let query_shadow_env_on: bool = env_truthy(osys.getenv("VOX_QUERY_SHADOW"));
-    let query_shadow_on: bool = effective_incremental_query_shadow_enabled(query_shadow_env_on, incremental_enabled);
-    let query_shadow_trace: bool = query_shadow_on && (trace_exec || env_truthy(osys.getenv("VOX_QUERY_SHADOW_TRACE")));
-    let query_shadow_force_prepare_raw: bool = query_shadow_force_prepare_from_env(osys.getenv("VOX_QUERY_SHADOW_FORCE_PREPARE"));
-    let query_shadow_force_prepare: bool = effective_query_shadow_force_prepare(query_shadow_on, query_shadow_trace, query_shadow_force_prepare_raw);
-    let cache_trace: bool = env_truthy(osys.getenv("VOX_CACHE_TRACE"));
-    if cache_trace && query_shadow_on && query_shadow_force_prepare_raw && !query_shadow_trace {
-      print("[query-shadow] force-prepare ignored (trace disabled)\n");
-    }
+    let cache_flags: CacheRuntimeFlags = cache_runtime_flags(trace_exec);
+    let build_cache_enabled: bool = cache_flags.build_cache_enabled;
+    let incremental_enabled: bool = cache_flags.incremental_enabled;
+    let cache_enabled: bool = cache_flags.cache_enabled;
+    let query_shadow_on: bool = cache_flags.query_shadow_on;
+    let query_shadow_trace: bool = cache_flags.query_shadow_trace;
+    let query_shadow_force_prepare: bool = cache_flags.query_shadow_force_prepare;
+    let cache_trace: bool = cache_flags.cache_trace;
     let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
     let cc_test_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
     let cc_test_use_msvc: bool = cc_is_msvc_cmd(cc_test_cmd);
