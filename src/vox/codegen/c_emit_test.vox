@@ -22,7 +22,7 @@ fn add_string_prelude(w0: tc.World) -> tc.World {
   return tc.world_add(w0, "std/prelude", prelude_r.prog);
 }
 
-fn compile_to_c(src: String) -> String {
+fn compile_to_c_for_target_ptr_bits(src: String, target_ptr_bits: i32) -> String {
   let r: p.ParseResult = p.parse_text(src);
   t.assert(r.err == p.ParseError.None);
   let prelude_r: p.ParseResult = p.parse_text("""
@@ -63,7 +63,15 @@ fn compile_to_c(src: String) -> String {
   w = tc.world_add(w, "main", r.prog);
   let gr: irgen.GenResult = irgen.generate_world(w);
   t.assert_with(gr.ok, gr.err);
-  return cg.emit_c(gr.prog, cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() });
+  return cg.emit_c_for_target_ptr_bits(
+    gr.prog,
+    cg.EmitOptions { emit_driver_main: true, driver_main_kind: cg.DriverMainKind.User, emit_test_main: false, test_funcs: Vec(), c_sources: Vec() },
+    target_ptr_bits,
+  );
+}
+
+fn compile_to_c(src: String) -> String {
+  return compile_to_c_for_target_ptr_bits(src, 0);
 }
 
 fn test_codegen_smoke_main_i32() -> () {
@@ -1271,6 +1279,20 @@ fn test_codegen_int_cast_checked_u32_to_isize_uses_ptr_width_guard_for_upper_che
   let c: String = compile_to_c(src);
   t.assert(contains(c, "vox_u32_exceeds_intptr_max((uint32_t)"));
   t.assert(contains(c, "u32 to isize overflow"));
+}
+
+fn test_codegen_int_cast_checked_u32_to_isize_skips_guard_on_64bit_target() -> () {
+  let src: String = """
+    fn main(x: u32) -> isize {
+      return x as isize;
+    }
+  """;
+  let c64: String = compile_to_c_for_target_ptr_bits(src, 64);
+  t.assert(!contains(c64, "vox_u32_exceeds_intptr_max((uint32_t)"));
+  t.assert(!contains(c64, "u32 to isize overflow"));
+  let c32: String = compile_to_c_for_target_ptr_bits(src, 32);
+  t.assert(contains(c32, "vox_u32_exceeds_intptr_max((uint32_t)"));
+  t.assert(contains(c32, "u32 to isize overflow"));
 }
 
 fn test_codegen_int_cast_checked_usize_to_i64_uses_ptr_width_guard_for_upper_check() -> () {
