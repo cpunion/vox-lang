@@ -269,14 +269,7 @@ if [[ "$bootstrap_help_text" == *"build-pkg <out.bin>"* ]]; then
   BOOTSTRAP_IS_LEGACY="1"
 fi
 BOOTSTRAP_BASE="$(basename "$BOOTSTRAP_BIN")"
-LEGACY_RUNTIME_C="${VOX_LEGACY_C_RUNTIME:-}"
-if [[ -z "$LEGACY_RUNTIME_C" ]]; then
-  if [[ "$BOOTSTRAP_BASE" == "vox_prev" || "$BOOTSTRAP_BASE" == "vox_prev.exe" ]]; then
-    LEGACY_RUNTIME_C="1"
-  else
-    LEGACY_RUNTIME_C="0"
-  fi
-fi
+LEGACY_RUNTIME_C="$("$ROOT/scripts/ci/resolve-legacy-runtime-c.sh" "$BOOTSTRAP_BASE")"
 echo "[release] bootstrap probe exit: $bootstrap_probe_rc"
 echo "[release] legacy C runtime bridge: $LEGACY_RUNTIME_C"
 echo "[release] host platform: ${HOST_OS}-${HOST_ARCH}"
