@@ -110,6 +110,7 @@
   - 进程：`system`
   - 内存：`calloc/free`
   - 网络：`connect/listen/accept/socket_send/recv/close_socket/wait_read/wait_write`
+  - 回归覆盖：`src/vox/public_api_contract_test.vox` 已增加跨目标 key-path 编译回归（`linux/darwin/windows`，`amd64`），用于持续验证 `std/sys` 平台分流接口在编译期不回退到项目私有 runtime 别名。
   - 约定：
     - `std::sys` 仅声明平台 API 差异与薄封装，不引入 `vox_builtin_*` / `vox_rt_*` 这类项目私有前缀符号。
     - 对不支持网络的平台（如 wasm、windows-x86）使用显式 panic/stub 语义。

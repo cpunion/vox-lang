@@ -103,6 +103,10 @@ pub fn add(a: i32, b: i32) -> i32 {
 - `std/sys` 各平台分支的 `open/access/mkdir/creat` 统一为“显式 NUL 适配后调用 C 符号”路径：调用前使用 `c_string_dup_nul` 构造临时缓冲，调用后释放。
 - 上述路径保留 `String` 形参仅用于与系统头声明保持 ABI 一致（`char*`），不再把业务字符串直接传入 C 边界。
 
+最新收敛进展（2026-03-13）：
+
+- `std/sys` 关键路径已补齐跨目标编译回归：`src/vox/public_api_contract_test.vox` 新增 `linux/darwin/windows (amd64)` 三组 target compile smoke，用于持续验证平台分流接口可编译且不依赖 `vox_rt_*` 兼容面。
+
 说明：
 
 - 以上“暂时保留”并不代表最终形态；仅用于在当前 bootstrap 约束下维持可发布链路。
