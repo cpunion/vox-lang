@@ -1,0 +1,124 @@
+import "std/testing" as t
+import "std/fs" as fs
+import "std/time" as tm
+import "vox/loader" as ld
+
+fn seed_files_test_tmp_dir(prefix: String) -> String {
+  let dir: String = "target/tmp/main_seed_files_test/".concat(prefix).concat("_").concat(tm.now_ns().to_string());
+  fs.mkdir_p(dir);
+  return dir;
+}
+
+fn seed_files_test_has_path(files: Vec[ld.SourceFile], path: String) -> bool {
+  let mut i: i32 = 0;
+  while i < files.len() {
+    if files.get(i).path == path { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+fn seed_files_test_text_for_path(files: Vec[ld.SourceFile], path: String) -> String {
+  let mut i: i32 = 0;
+  while i < files.len() {
+    let f: ld.SourceFile = files.get(i);
+    if f.path == path { return f.text; }
+    i = i + 1;
+  }
+  return "";
+}
+
+fn test_load_deps_from_manifest_at_skips_dep_c_when_text_disabled_smoke() -> () {
+  let root: String = seed_files_test_tmp_dir("deps_skip_c");
+  let dep_root: String = path_join(root, "dep_pkg");
+  fs.mkdir_p(dep_root);
+  fs.mkdir_p(path_join(dep_root, "src/native"));
+
+  fs.write_string(
+    path_join(root, "vox.toml"),
+    """
+      [package]
+      name = "app"
+
+      [dependencies]
+      dep = { path = "./dep_pkg" }
+    """,
+  );
+  fs.write_string(
+    path_join(dep_root, "vox.toml"),
+    """
+      [package]
+      name = "dep"
+    """,
+  );
+  fs.write_string(path_join(dep_root, "src/lib.vox"), "fn dep() -> i32 { return 1; }\n");
+  fs.write_string(path_join(dep_root, "src/native/helper.c"), "int dep_helper(void) { return 1; }\n");
+
+  let dr: DepsResult = load_deps_from_manifest_at(root, Vec(), Vec(), Vec(), false);
+  t.assert(dr.ok);
+  t.assert(seed_files_test_has_path(dr.files, "dep/src/lib.vox"));
+  t.assert(!seed_files_test_has_path(dr.files, "dep/src/native/helper.c"));
+}
+
+fn test_load_deps_from_manifest_at_loads_dep_c_when_text_enabled_smoke() -> () {
+  let root: String = seed_files_test_tmp_dir("deps_load_c");
+  let dep_root: String = path_join(root, "dep_pkg");
+  fs.mkdir_p(dep_root);
+  fs.mkdir_p(path_join(dep_root, "src/native"));
+
+  fs.write_string(
+    path_join(root, "vox.toml"),
+    """
+      [package]
+      name = "app"
+
+      [dependencies]
+      dep = { path = "./dep_pkg" }
+    """,
+  );
+  fs.write_string(
+    path_join(dep_root, "vox.toml"),
+    """
+      [package]
+      name = "dep"
+    """,
+  );
+  fs.write_string(path_join(dep_root, "src/lib.vox"), "fn dep() -> i32 { return 1; }\n");
+  fs.write_string(path_join(dep_root, "src/native/helper.c"), "int dep_helper(void) { return 1; }\n");
+
+  let dr: DepsResult = load_deps_from_manifest_at(root, Vec(), Vec(), Vec(), true);
+  t.assert(dr.ok);
+  t.assert(seed_files_test_has_path(dr.files, "dep/src/lib.vox"));
+  t.assert(seed_files_test_has_path(dr.files, "dep/src/native/helper.c"));
+  t.assert_eq(seed_files_test_text_for_path(dr.files, "dep/src/native/helper.c"), "int dep_helper(void) { return 1; }\n");
+}
+
+fn test_load_stage1_std_from_root_skips_c_when_text_disabled_smoke() -> () {
+  let root: String = seed_files_test_tmp_dir("std_skip_c");
+  fs.mkdir_p(path_join(root, "src/std/runtime"));
+  fs.mkdir_p(path_join(root, "src/other"));
+
+  fs.write_string(path_join(root, "src/std/runtime/core.vox"), "fn core() -> i32 { return 0; }\n");
+  fs.write_string(path_join(root, "src/std/runtime/core.c"), "int std_core(void) { return 0; }\n");
+  fs.write_string(path_join(root, "src/other/nope.c"), "int nope(void) { return 0; }\n");
+
+  let files: Vec[ld.SourceFile] = load_stage1_std_from_root_with_c_text(root, false);
+  t.assert(seed_files_test_has_path(files, "src/std/runtime/core.vox"));
+  t.assert(!seed_files_test_has_path(files, "src/std/runtime/core.c"));
+}
+
+fn test_load_stage1_std_from_root_loads_c_when_text_enabled_smoke() -> () {
+  let root: String = seed_files_test_tmp_dir("std_load_c");
+  fs.mkdir_p(path_join(root, "src/std/runtime"));
+  fs.mkdir_p(path_join(root, "src/other"));
+
+  fs.write_string(path_join(root, "src/std/runtime/core.vox"), "fn core() -> i32 { return 0; }\n");
+  fs.write_string(path_join(root, "src/std/runtime/core.c"), "int std_core(void) { return 0; }\n");
+  fs.write_string(path_join(root, "src/other/nope.c"), "int nope(void) { return 0; }\n");
+
+  let files: Vec[ld.SourceFile] = load_stage1_std_from_root_with_c_text(root, true);
+  t.assert(seed_files_test_has_path(files, "src/std/runtime/core.vox"));
+  t.assert(seed_files_test_has_path(files, "src/std/runtime/core.c"));
+  t.assert_eq(seed_files_test_text_for_path(files, "src/std/runtime/core.c"), "int std_core(void) { return 0; }\n");
+  t.assert(!seed_files_test_has_path(files, "src/other/nope.c"));
+}
