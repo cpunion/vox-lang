@@ -1068,6 +1068,12 @@ fn gen_binary_trait_name(op: ast.BinaryOp) -> String {
     ast.BinaryOp.Mul => "Mul",
     ast.BinaryOp.Div => "Div",
     ast.BinaryOp.Mod => "Mod",
+    ast.BinaryOp.Eq => "Eq",
+    ast.BinaryOp.Ne => "Eq",
+    ast.BinaryOp.Lt => "Ord",
+    ast.BinaryOp.Le => "Ord",
+    ast.BinaryOp.Gt => "Ord",
+    ast.BinaryOp.Ge => "Ord",
     _ => "",
   };
 }
@@ -1079,8 +1085,23 @@ fn gen_binary_trait_method(op: ast.BinaryOp) -> String {
     ast.BinaryOp.Mul => "mul",
     ast.BinaryOp.Div => "div",
     ast.BinaryOp.Mod => "modulo",
+    ast.BinaryOp.Eq => "eq",
+    ast.BinaryOp.Ne => "eq",
+    ast.BinaryOp.Lt => "lt",
+    ast.BinaryOp.Le => "le",
+    ast.BinaryOp.Gt => "gt",
+    ast.BinaryOp.Ge => "ge",
     _ => "",
   };
+}
+
+fn gen_find_trait_mod_for_binary(g0: Gen, trait_name: String) -> String {
+  let tf_local: tc.FindTraitResult = tc.find_trait(g0.ctx, g0.mod_path, trait_name);
+  if tf_local.found { return g0.mod_path; }
+  let prelude: String = "std/prelude";
+  let tf_prelude: tc.FindTraitResult = tc.find_trait(g0.ctx, prelude, trait_name);
+  if tf_prelude.found { return prelude; }
+  return "";
 }
 
 fn gen_expr_binary_try_trait_overload(g0: Gen, op: ast.BinaryOp, l: i32, r: i32, out_ty: i32) -> GenExprResult {
@@ -1098,24 +1119,57 @@ fn gen_expr_binary_try_trait_overload(g0: Gen, op: ast.BinaryOp, l: i32, r: i32,
   if lbase != rbase {
     return GenExprResult { ok: false, err: "", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
   }
-  if tc.is_int_like_ty(g0.ctx, lbase) || tc.is_float_ty(g0.ctx, lbase) || lbase == g0.ctx.ty_bool || lbase == g0.ctx.ty_string {
+
+  let is_arith: bool = match op {
+    ast.BinaryOp.Add => true,
+    ast.BinaryOp.Sub => true,
+    ast.BinaryOp.Mul => true,
+    ast.BinaryOp.Div => true,
+    ast.BinaryOp.Mod => true,
+    _ => false,
+  };
+  let is_eqop: bool = match op { ast.BinaryOp.Eq => true, ast.BinaryOp.Ne => true, _ => false };
+  let is_cmp: bool = match op { ast.BinaryOp.Lt => true, ast.BinaryOp.Le => true, ast.BinaryOp.Gt => true, ast.BinaryOp.Ge => true, _ => false };
+
+  if is_arith && (tc.is_int_like_ty(g0.ctx, lbase) || tc.is_float_ty(g0.ctx, lbase) || lbase == g0.ctx.ty_bool || lbase == g0.ctx.ty_string) {
     return GenExprResult { ok: false, err: "", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+  }
+  if is_eqop && (tc.is_int_like_ty(g0.ctx, lbase) || tc.is_float_ty(g0.ctx, lbase) || lbase == g0.ctx.ty_bool || lbase == g0.ctx.ty_string) {
+    return GenExprResult { ok: false, err: "", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+  }
+  if is_cmp && (tc.is_int_like_ty(g0.ctx, lbase) || tc.is_float_ty(g0.ctx, lbase) || lbase == g0.ctx.ty_string) {
+    return GenExprResult { ok: false, err: "", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+  }
+
+  let trait_mod: String = gen_find_trait_mod_for_binary(g0, trait_name);
+  if trait_mod == "" { return GenExprResult { ok: false, err: "", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+
+  if is_eqop {
+    // Preserve existing structural eq path when there is no explicit Eq impl.
+    let lt: ir.Ty = ir.ty_pool_get(g0.ctx.pool, lbase);
+    if lt.kind != ir.TyKind.Param {
+      let fi: tc.FindImplForTyResult = tc.find_impl_for_ty(g0.ctx, trait_mod, trait_name, lbase);
+      if !fi.found && !fi.ambiguous {
+        return GenExprResult { ok: false, err: "", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+      }
+    }
   }
 
   let mut args: Vec[i32] = Vec();
   args.push(l);
   args.push(r);
+  let cr: GenExprResult = gen_call_trait_static(g0, trait_mod, trait_name, method, Vec(), args, out_ty);
+  if !cr.ok { return cr; }
 
-  let tf_local: tc.FindTraitResult = tc.find_trait(g0.ctx, g0.mod_path, trait_name);
-  if tf_local.found {
-    return gen_call_trait_static(g0, g0.mod_path, trait_name, method, Vec(), args, out_ty);
+  if match op { ast.BinaryOp.Ne => true, _ => false } {
+    let mut g: Gen = cr.g;
+    let rn: GenNewIdResult = gen_new_temp(g);
+    g = rn.g;
+    let not_tid: i32 = rn.id;
+    g = gen_emit(g, ir.Instr.Not(not_tid, cr.val));
+    return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(not_tid), ty: out_ty };
   }
-  let prelude: String = "std/prelude";
-  let tf_prelude: tc.FindTraitResult = tc.find_trait(g0.ctx, prelude, trait_name);
-  if tf_prelude.found {
-    return gen_call_trait_static(g0, prelude, trait_name, method, Vec(), args, out_ty);
-  }
-  return GenExprResult { ok: false, err: "", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+  return cr;
 }
 
 fn gen_expr_binary(g0: Gen, op: ast.BinaryOp, l: i32, r: i32, out_ty: i32) -> GenExprResult {
