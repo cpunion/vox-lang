@@ -1381,6 +1381,83 @@ fn emit_int_cast_checked_i32_to_usize_from_call_via_slot_across_blocks_c(call_na
   );
 }
 
+fn emit_int_cast_checked_i32_to_usize_from_two_pred_slot_merge_c(
+  left_call_name: String,
+  right_call_name: String,
+  target_ptr_bits: i32,
+) -> String {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r_bool: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_bool());
+  pool = r_bool.pool;
+  let ty_bool: i32 = r_bool.idx;
+  let r_i32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r_i32.pool;
+  let ty_i32: i32 = r_i32.idx;
+  let r_usize: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_usize());
+  pool = r_usize.pool;
+  let ty_usize: i32 = r_usize.idx;
+  let mut p0: ir.Program = ir.program(pool);
+
+  let mut b_entry_instrs: Vec[ir.Instr] = Vec();
+  b_entry_instrs.push(ir.Instr.SlotDecl(0, ty_i32));
+  let b_entry: ir.Block = ir.Block {
+    name: "entry",
+    instrs: b_entry_instrs,
+    has_term: true,
+    term: ir.Term.CondBr(ir.v_param(0), "left", "right"),
+  };
+
+  let mut b_left_instrs: Vec[ir.Instr] = Vec();
+  b_left_instrs.push(ir.Instr.Call(true, 0, ty_i32, left_call_name, Vec()));
+  b_left_instrs.push(ir.Instr.Store(0, ir.v_temp(0)));
+  let b_left: ir.Block = ir.Block {
+    name: "left",
+    instrs: b_left_instrs,
+    has_term: true,
+    term: ir.Term.Br("join"),
+  };
+
+  let mut b_right_instrs: Vec[ir.Instr] = Vec();
+  b_right_instrs.push(ir.Instr.Call(true, 1, ty_i32, right_call_name, Vec()));
+  b_right_instrs.push(ir.Instr.Store(0, ir.v_temp(1)));
+  let b_right: ir.Block = ir.Block {
+    name: "right",
+    instrs: b_right_instrs,
+    has_term: true,
+    term: ir.Term.Br("join"),
+  };
+
+  let mut b_join_instrs: Vec[ir.Instr] = Vec();
+  b_join_instrs.push(ir.Instr.Load(2, ty_i32, 0));
+  b_join_instrs.push(ir.Instr.IntCastChecked(3, ty_usize, ty_i32, ir.v_temp(2)));
+  let b_join: ir.Block = ir.Block {
+    name: "join",
+    instrs: b_join_instrs,
+    has_term: true,
+    term: ir.Term.Ret(true, ir.v_temp(3)),
+  };
+
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(b_entry);
+  blocks.push(b_left);
+  blocks.push(b_right);
+  blocks.push(b_join);
+  let mut params: Vec[ir.Param] = Vec();
+  params.push(ir.Param { name: "flag", ty: ty_bool });
+  p0.funcs.push(ir.Func { name: "main", params: params, ret: ty_usize, blocks: blocks });
+  return cg.emit_c_for_target_ptr_bits(
+    p0,
+    cg.EmitOptions {
+      emit_driver_main: false,
+      driver_main_kind: cg.DriverMainKind.User,
+      emit_test_main: false,
+      test_funcs: Vec(),
+      c_sources: Vec(),
+    },
+    target_ptr_bits,
+  );
+}
+
 fn test_codegen_int_cast_checked_i32_to_usize_from_checked_u32_skips_negative_guard() -> () {
   let c64: String = emit_int_cast_checked_i32_to_usize_from_checked_u32_temp_c(64);
   t.assert(!contains(c64, "i32 to usize overflow"));
@@ -1434,6 +1511,36 @@ fn test_codegen_int_cast_checked_i32_to_usize_from_nonstd_len_like_call_via_slot
   let c64: String = emit_int_cast_checked_i32_to_usize_from_call_via_slot_across_blocks_c("main::impl$inherent$len$1", 64);
   t.assert(contains(c64, "i32 to usize overflow"));
   let c32: String = emit_int_cast_checked_i32_to_usize_from_call_via_slot_across_blocks_c("main::impl$inherent$len$1", 32);
+  t.assert(contains(c32, "i32 to usize overflow"));
+}
+
+fn test_codegen_int_cast_checked_i32_to_usize_from_two_std_len_calls_via_slot_merge_skips_negative_guard() -> () {
+  let c64: String = emit_int_cast_checked_i32_to_usize_from_two_pred_slot_merge_c(
+    "std.prelude::impl$inherent$len$36000",
+    "std.prelude::impl$inherent$len$36001",
+    64,
+  );
+  t.assert(!contains(c64, "i32 to usize overflow"));
+  let c32: String = emit_int_cast_checked_i32_to_usize_from_two_pred_slot_merge_c(
+    "std.prelude::impl$inherent$len$36000",
+    "std.prelude::impl$inherent$len$36001",
+    32,
+  );
+  t.assert(!contains(c32, "i32 to usize overflow"));
+}
+
+fn test_codegen_int_cast_checked_i32_to_usize_from_mixed_len_calls_via_slot_merge_keeps_negative_guard() -> () {
+  let c64: String = emit_int_cast_checked_i32_to_usize_from_two_pred_slot_merge_c(
+    "std.prelude::impl$inherent$len$36000",
+    "main::impl$inherent$len$1",
+    64,
+  );
+  t.assert(contains(c64, "i32 to usize overflow"));
+  let c32: String = emit_int_cast_checked_i32_to_usize_from_two_pred_slot_merge_c(
+    "std.prelude::impl$inherent$len$36000",
+    "main::impl$inherent$len$1",
+    32,
+  );
   t.assert(contains(c32, "i32 to usize overflow"));
 }
 
