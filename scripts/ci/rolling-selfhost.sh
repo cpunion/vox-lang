@@ -248,15 +248,8 @@ build_from_bootstrap() {
       fi
       ;;
   esac
-  local legacy_runtime_c="${VOX_LEGACY_C_RUNTIME:-}"
-  if [[ -z "$legacy_runtime_c" ]]; then
-    # Locked bootstrap binaries named vox_prev still require runtime C bridge.
-    if [[ "$bootstrap_base" == "vox_prev" || "$bootstrap_base" == "vox_prev.exe" ]]; then
-      legacy_runtime_c=1
-    else
-      legacy_runtime_c=0
-    fi
-  fi
+  local legacy_runtime_c=""
+  legacy_runtime_c="$("$ROOT/scripts/ci/resolve-legacy-runtime-c.sh" "$bootstrap_base")"
   local bootstrap_cc="${CC:-}"
   (
     cd "$WORK_DIR"

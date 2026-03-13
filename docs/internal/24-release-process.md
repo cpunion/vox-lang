@@ -49,6 +49,7 @@
   - 显式设置时按用户值生效（truthy: `1/true/yes/on`）。
   - 未设置时默认：`vox_prev[.exe] => 1`，其它 rolling/bootstrap 编译器 => `0`。
   - 该开关只影响是否打包 legacy runtime C bridge，不改变 `BOOTSTRAP_MODE=rolling` 的发布链路约束。
+  - 脚本实现统一复用：`scripts/ci/resolve-legacy-runtime-c.sh`（`rolling-selfhost` 与 `build-release-bundle` 共用）。
 
 ## 3. 锁文件
 
