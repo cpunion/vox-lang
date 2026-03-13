@@ -701,6 +701,7 @@ Drop（迁出）：
 - [x] `NIO-LANG-01`：已支持 `time` 数值后缀糖（`3.seconds`/`3.second`/`3.milliseconds`/`3.microseconds`/`3.nanoseconds`），按纳秒 `i64` 结果类型归一化，并在 typecheck 增加溢出诊断（`time literal out of range`）。
 - [x] `NIO-LANG-02`：已支持 Go 风格 `3 * time.s -> time.Duration`（不依赖操作符重载）：`std/time` 的 `ns/us/ms/s` 现在为 `Duration` 常量，编译器二元算术新增 `int * Duration` / `Duration * int -> Duration` 规则并完成 IR lowering。
 - `NIO-LANG-03`：操作符重载能力（如 trait/协议驱动的 `+ - * / ==`）单独立项；当前 `time.Duration` 方案不依赖该能力。
+  - 进行中：已落地第一批 `+ - * / %` trait 调度（`Add/Sub/Mul/Div/Mod`），在非原生标量路径上走 `Trait.method(a, b)` 分派；`==` 与有序比较的统一重载语义仍待后续收敛。
 
 ### Source Snapshot: `docs/internal/archive/22-backlog.md`
 

@@ -42,7 +42,7 @@ pub fn tc_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.E
     ast.ExprNode.If(c, t, e) => tc_expr_if(ctx, w, mod_path, imps, exprs, l0, c, t, e, expected),
     ast.ExprNode.Unary(op, a) => tc_expr_unary(ctx, w, mod_path, imps, exprs, l0, op, a, expected),
     ast.ExprNode.As(a, tn) => tc_expr_as(ctx, w, mod_path, imps, exprs, l0, a, tn, expected),
-    ast.ExprNode.Binary(op, l, r) => tc_expr_binary(ctx, w, mod_path, imps, exprs, l0, op, l, r, expected),
+    ast.ExprNode.Binary(op, l, r) => tc_expr_binary(ctx, w, mod_path, imps, exprs, l0, ast.expr_pool_span(exprs, id), op, l, r, expected),
 
     ast.ExprNode.Member(recv, name) => tc_expr_member(ctx, w, mod_path, imps, exprs, l0, recv, name, expected),
     ast.ExprNode.Call(callee, type_args, args) => tc_expr_call(ctx, w, mod_path, imps, exprs, l0, ast.expr_pool_span(exprs, id), callee, type_args, args, expected),
@@ -930,7 +930,74 @@ fn is_std_time_duration_ty(ctx: Ctx, ty: i32) -> bool {
   return t.kind == ir.TyKind.Struct && ty_mod(t) == "std/time" && ty_name(t) == "Duration";
 }
 
-fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, op: ast.BinaryOp, l: i32, r: i32, expected: i32) -> ExprTyResult {
+fn binary_op_trait_name(op: ast.BinaryOp) -> String {
+  return match op {
+    ast.BinaryOp.Add => "Add",
+    ast.BinaryOp.Sub => "Sub",
+    ast.BinaryOp.Mul => "Mul",
+    ast.BinaryOp.Div => "Div",
+    ast.BinaryOp.Mod => "Mod",
+    _ => "",
+  };
+}
+
+fn binary_op_trait_method(op: ast.BinaryOp) -> String {
+  return match op {
+    ast.BinaryOp.Add => "add",
+    ast.BinaryOp.Sub => "sub",
+    ast.BinaryOp.Mul => "mul",
+    ast.BinaryOp.Div => "div",
+    ast.BinaryOp.Mod => "modulo",
+    _ => "",
+  };
+}
+
+fn tc_expr_binary_try_trait_overload(
+  ctx: Ctx,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  op: ast.BinaryOp,
+  l: i32,
+  r: i32,
+  expected: i32,
+  lhs_ty: i32,
+  rhs_ty: i32,
+) -> ExprTyResult {
+  let trait_name: String = binary_op_trait_name(op);
+  if trait_name == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+  let method: String = binary_op_trait_method(op);
+  let lbase: i32 = strip_ref(ctx, strip_range(ctx, lhs_ty));
+  let rbase: i32 = strip_ref(ctx, strip_range(ctx, rhs_ty));
+  if lbase != rbase { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+  // Keep primitive scalar ops on the native arithmetic path.
+  if is_int_like_ty(ctx, lbase) || is_float_ty(ctx, lbase) || lbase == ctx.ty_bool || lbase == ctx.ty_string {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+  }
+
+  let mut args: Vec[i32] = Vec();
+  args.push(l);
+  args.push(r);
+
+  let tf_local: FindTraitResult = find_trait(ctx, mod_path, trait_name);
+  if tf_local.found {
+    return tc_call_trait_static(ctx, w, mod_path, imps, exprs, l0, call_sp, mod_path, trait_name, method, Vec(), args, expected);
+  }
+
+  let prelude: String = "std/prelude";
+  let tf_prelude: FindTraitResult = find_trait(ctx, prelude, trait_name);
+  if tf_prelude.found {
+    return tc_call_trait_static(ctx, w, mod_path, imps, exprs, l0, call_sp, prelude, trait_name, method, Vec(), args, expected);
+  }
+  return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+}
+
+fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, call_sp: ast.Span, op: ast.BinaryOp, l: i32, r: i32, expected: i32) -> ExprTyResult {
   // bool results
   let is_cmp: bool = match op { ast.BinaryOp.Lt => true, ast.BinaryOp.Le => true, ast.BinaryOp.Gt => true, ast.BinaryOp.Ge => true, _ => false };
   let is_eq: bool = match op { ast.BinaryOp.Eq => true, ast.BinaryOp.Ne => true, _ => false };
@@ -1098,6 +1165,13 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
       if expected != -1 && !assignable_to(ctx, expected, out_dur) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
       return ExprTyResult { ok: true, ty: out_dur, err: TcError.None };
     }
+  }
+
+  let tr_over: ExprTyResult = tc_expr_binary_try_trait_overload(
+    ctx, w, mod_path, imps, exprs, l0, call_sp, op, l, r, expected, lr.ty, rr.ty
+  );
+  if tr_over.ok || tr_over.err != TcError.None {
+    return tr_over;
   }
 
   // arithmetic
