@@ -418,6 +418,12 @@ fn build_mode_text_with_toolchain(cmd0: String, driver_key: String, emit_driver_
   return out;
 }
 
+fn build_mode_text_without_toolchain(cmd0: String, driver_key: String, emit_driver_key: String, host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, artifact: String, compiler_rev: String) -> String {
+  let mut out: String = build_sem_mode_text(cmd0, driver_key, emit_driver_key, host_os, host_arch, target_os, target_arch, target_triple, target_abi, compiler_rev);
+  out = append_build_mode_line(out, "artifact=", artifact);
+  return out;
+}
+
 fn build_mode_text(cmd0: String, driver_key: String, emit_driver_key: String, host_os: String, host_arch: String, target_os: String, target_arch: String, target_triple: String, target_abi: String, artifact: String, compiler_rev: String) -> String {
   let cc: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
   let use_msvc: bool = cc_is_msvc_cmd(cc);
@@ -898,7 +904,7 @@ struct CSourceLoadResult {
   c_sources_sig: String,
 }
 
-fn load_pkg_c_sources_with_sig() -> CSourceLoadResult {
+fn load_pkg_c_sources_with_optional_sig(need_sig: bool) -> CSourceLoadResult {
   let c_all: Vec[String] = filter_pkg_c_sources(srcw.walk_c_files("."));
   let c_user: Vec[ld.SourceFile] = load_files(c_all);
   let mut c_sources: Vec[String] = Vec();
@@ -906,6 +912,12 @@ fn load_pkg_c_sources_with_sig() -> CSourceLoadResult {
   while i < c_user.len() {
     c_sources.push(c_user.get(i).text);
     i = i + 1;
+  }
+  if !need_sig {
+    return CSourceLoadResult {
+      c_sources: c_sources,
+      c_sources_sig: "",
+    };
   }
   let kept: BuildCacheCSourcesSigKeep = build_cache_c_sources_sig_from_texts_keep(c_sources);
   return CSourceLoadResult {
@@ -3163,56 +3175,38 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let c_sources_build_loaded: CSourceLoadResult = load_pkg_c_sources_with_sig();
+    let cache_flags: CacheRuntimeFlags = cache_runtime_flags(trace_exec);
+    let build_cache_enabled: bool = cache_flags.build_cache_enabled;
+    let incremental_enabled: bool = cache_flags.incremental_enabled;
+    let cache_enabled: bool = cache_flags.cache_enabled;
+    let query_shadow_on: bool = cache_flags.query_shadow_on;
+    let query_shadow_trace: bool = cache_flags.query_shadow_trace;
+    let query_shadow_force_prepare: bool = cache_flags.query_shadow_force_prepare;
+    let cache_trace: bool = cache_flags.cache_trace;
+    let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
+    let need_c_sources_sig: bool = cache_enabled || query_shadow_on;
+    let c_sources_build_loaded: CSourceLoadResult = load_pkg_c_sources_with_optional_sig(need_c_sources_sig);
     let c_sources_build: Vec[String] = c_sources_build_loaded.c_sources;
     let c_sources_sig: String = c_sources_build_loaded.c_sources_sig;
     let out_cpath: String = out.concat(".c");
     let driver_key: String = if driver == cg.DriverMainKind.Tool { "tool" } else { "user" };
     let emit_driver_key: String = if artifact == "exe" { "1" } else { "0" };
     let compiler_rev: String = bi.version().concat("@").concat(bi.channel());
-    let mut compile_mode: String = "";
-    compile_mode = append_build_mode_line(compile_mode, "cmd=", "build");
-    compile_mode = append_build_mode_line(compile_mode, "driver=", driver_key);
-    compile_mode = append_build_mode_line(compile_mode, "emit_driver_main=", emit_driver_key);
-    compile_mode = append_build_mode_line(compile_mode, "host=", host_os.concat("-").concat(host_arch));
-    compile_mode = append_build_mode_line(compile_mode, "target=", target_os.concat("-").concat(target_arch));
-    compile_mode = append_build_mode_line(compile_mode, "triple=", target_triple);
-    compile_mode = append_build_mode_line(compile_mode, "abi=", target_abi);
-    compile_mode = append_build_mode_line(compile_mode, "compiler=", compiler_rev);
-    let compile_cc: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
-    let compile_use_msvc: bool = cc_is_msvc_cmd(compile_cc);
-    let compile_tflags: String = cc_target_flags_for_target(compile_cc, host_os, host_arch, target_os, target_arch, target_triple);
-    let compile_cflags: String = cc_common_flags_for_target(target_os, compile_use_msvc);
-    let compile_dflags: String = cc_debug_flags(compile_use_msvc);
-    let compile_lflags: String = cc_link_flags_for_target(target_os, target_abi, compile_use_msvc, artifact);
-    let compile_cc_ver: String = tool_version_fingerprint_line(compile_cc, "cc");
-    let mut compile_toolchain: String = "";
-    compile_toolchain = append_build_mode_line(compile_toolchain, "cc=", compile_cc);
-    compile_toolchain = append_build_mode_line(compile_toolchain, "cc_version=", compile_cc_ver);
-    compile_toolchain = append_build_mode_line(compile_toolchain, "cc_target_flags=", compile_tflags);
-    compile_toolchain = append_build_mode_line(compile_toolchain, "cc_common_flags=", compile_cflags);
-    compile_toolchain = append_build_mode_line(compile_toolchain, "cc_debug_flags=", compile_dflags);
-    compile_mode = append_build_mode_line(
-      compile_mode,
-      "toolchain=",
-      compile_toolchain,
-    );
-    compile_mode = build_mode_with_c_sources_sig(compile_mode, c_sources_sig);
-    let mut link_toolchain: String = "";
-    link_toolchain = append_build_mode_line(link_toolchain, "cc=", compile_cc);
-    link_toolchain = append_build_mode_line(link_toolchain, "cc_version=", compile_cc_ver);
-    link_toolchain = append_build_mode_line(link_toolchain, "cc_target_flags=", compile_tflags);
-    link_toolchain = append_build_mode_line(link_toolchain, "cc_common_flags=", compile_cflags);
-    link_toolchain = append_build_mode_line(link_toolchain, "cc_debug_flags=", compile_dflags);
-    link_toolchain = append_build_mode_line(link_toolchain, "cc_link_flags=", compile_lflags);
-    if artifact == "static" {
-      let link_ar: String = ar_cmd_for_target(host_os, target_os, target_arch, target_triple, target_abi);
-      let link_ar_ver: String = tool_version_fingerprint_line(link_ar, "ar");
-      link_toolchain = append_build_mode_line(link_toolchain, "ar=", link_ar);
-      link_toolchain = append_build_mode_line(link_toolchain, "ar_version=", link_ar_ver);
-    }
+    let mut compile_mode: String =
+      build_sem_mode_text(
+        "build",
+        driver_key,
+        emit_driver_key,
+        host_os,
+        host_arch,
+        target_os,
+        target_arch,
+        target_triple,
+        target_abi,
+        compiler_rev,
+      );
     let mut link_mode: String =
-      build_mode_text_with_toolchain(
+      build_mode_text_without_toolchain(
         "build",
         driver_key,
         emit_driver_key,
@@ -3224,9 +3218,59 @@ fn main() -> i32 {
         target_abi,
         artifact,
         compiler_rev,
-        link_toolchain,
       );
-    link_mode = build_mode_with_c_sources_sig(link_mode, c_sources_sig);
+    if cache_enabled {
+      let compile_cc: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
+      let compile_use_msvc: bool = cc_is_msvc_cmd(compile_cc);
+      let compile_tflags: String = cc_target_flags_for_target(compile_cc, host_os, host_arch, target_os, target_arch, target_triple);
+      let compile_cflags: String = cc_common_flags_for_target(target_os, compile_use_msvc);
+      let compile_dflags: String = cc_debug_flags(compile_use_msvc);
+      let compile_lflags: String = cc_link_flags_for_target(target_os, target_abi, compile_use_msvc, artifact);
+      let compile_cc_ver: String = tool_version_fingerprint_line(compile_cc, "cc");
+      let mut compile_toolchain: String = "";
+      compile_toolchain = append_build_mode_line(compile_toolchain, "cc=", compile_cc);
+      compile_toolchain = append_build_mode_line(compile_toolchain, "cc_version=", compile_cc_ver);
+      compile_toolchain = append_build_mode_line(compile_toolchain, "cc_target_flags=", compile_tflags);
+      compile_toolchain = append_build_mode_line(compile_toolchain, "cc_common_flags=", compile_cflags);
+      compile_toolchain = append_build_mode_line(compile_toolchain, "cc_debug_flags=", compile_dflags);
+      compile_mode = append_build_mode_line(
+        compile_mode,
+        "toolchain=",
+        compile_toolchain,
+      );
+      let mut link_toolchain: String = "";
+      link_toolchain = append_build_mode_line(link_toolchain, "cc=", compile_cc);
+      link_toolchain = append_build_mode_line(link_toolchain, "cc_version=", compile_cc_ver);
+      link_toolchain = append_build_mode_line(link_toolchain, "cc_target_flags=", compile_tflags);
+      link_toolchain = append_build_mode_line(link_toolchain, "cc_common_flags=", compile_cflags);
+      link_toolchain = append_build_mode_line(link_toolchain, "cc_debug_flags=", compile_dflags);
+      link_toolchain = append_build_mode_line(link_toolchain, "cc_link_flags=", compile_lflags);
+      if artifact == "static" {
+        let link_ar: String = ar_cmd_for_target(host_os, target_os, target_arch, target_triple, target_abi);
+        let link_ar_ver: String = tool_version_fingerprint_line(link_ar, "ar");
+        link_toolchain = append_build_mode_line(link_toolchain, "ar=", link_ar);
+        link_toolchain = append_build_mode_line(link_toolchain, "ar_version=", link_ar_ver);
+      }
+      link_mode =
+        build_mode_text_with_toolchain(
+          "build",
+          driver_key,
+          emit_driver_key,
+          host_os,
+          host_arch,
+          target_os,
+          target_arch,
+          target_triple,
+          target_abi,
+          artifact,
+          compiler_rev,
+          link_toolchain,
+        );
+    }
+    if need_c_sources_sig {
+      compile_mode = build_mode_with_c_sources_sig(compile_mode, c_sources_sig);
+      link_mode = build_mode_with_c_sources_sig(link_mode, c_sources_sig);
+    }
     let sem_mode: String =
       "sem\n".concat(
         build_sem_mode_text(
@@ -3249,15 +3293,6 @@ fn main() -> i32 {
       test_funcs: Vec(),
       c_sources: Vec(),
     };
-    let cache_flags: CacheRuntimeFlags = cache_runtime_flags(trace_exec);
-    let build_cache_enabled: bool = cache_flags.build_cache_enabled;
-    let incremental_enabled: bool = cache_flags.incremental_enabled;
-    let cache_enabled: bool = cache_flags.cache_enabled;
-    let query_shadow_on: bool = cache_flags.query_shadow_on;
-    let query_shadow_trace: bool = cache_flags.query_shadow_trace;
-    let query_shadow_force_prepare: bool = cache_flags.query_shadow_force_prepare;
-    let cache_trace: bool = cache_flags.cache_trace;
-    let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
     let cc_target_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
     let obj_ext: String = if cc_is_msvc_cmd(cc_target_cmd) { ".obj" } else { ".o" };
     let mut query_shadow_state: q.ParseLoadShadowState = q.ParseLoadShadowState { key: "", predicted_hit: false };
@@ -4174,13 +4209,30 @@ fn main() -> i32 {
     let user: Vec[ld.SourceFile] = load_files_with_cached(paths, cached_discovery_files);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
-    let c_sources_test_loaded: CSourceLoadResult = load_pkg_c_sources_with_sig();
+    let cache_flags: CacheRuntimeFlags = cache_runtime_flags(trace_exec);
+    let build_cache_enabled: bool = cache_flags.build_cache_enabled;
+    let incremental_enabled: bool = cache_flags.incremental_enabled;
+    let cache_enabled: bool = cache_flags.cache_enabled;
+    let query_shadow_on: bool = cache_flags.query_shadow_on;
+    let query_shadow_trace: bool = cache_flags.query_shadow_trace;
+    let query_shadow_force_prepare: bool = cache_flags.query_shadow_force_prepare;
+    let cache_trace: bool = cache_flags.cache_trace;
+    let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
+    let need_c_sources_sig: bool = cache_enabled || query_shadow_on;
+    let c_sources_test_loaded: CSourceLoadResult = load_pkg_c_sources_with_optional_sig(need_c_sources_sig);
     let c_sources_test: Vec[String] = c_sources_test_loaded.c_sources;
     let c_sources_sig: String = c_sources_test_loaded.c_sources_sig;
 
     let compiler_rev: String = bi.version().concat("@").concat(bi.channel());
-    let mut test_mode: String = build_mode_text("test", "user", "0", host_os, host_arch, target_os, target_arch, target_triple, target_abi, "exe", compiler_rev);
-    test_mode = build_mode_with_c_sources_sig(test_mode, c_sources_sig);
+    let mut test_mode: String =
+      if cache_enabled {
+        build_mode_text("test", "user", "0", host_os, host_arch, target_os, target_arch, target_triple, target_abi, "exe", compiler_rev)
+      } else {
+        build_mode_text_without_toolchain("test", "user", "0", host_os, host_arch, target_os, target_arch, target_triple, target_abi, "exe", compiler_rev)
+      };
+    if need_c_sources_sig {
+      test_mode = build_mode_with_c_sources_sig(test_mode, c_sources_sig);
+    }
     let sem_mode: String =
       "sem\n".concat(
         build_sem_mode_text(
@@ -4205,15 +4257,6 @@ fn main() -> i32 {
       c_sources: Vec(),
     };
     let mut query_shadow_state: q.ParseLoadShadowState = q.ParseLoadShadowState { key: "", predicted_hit: false };
-    let cache_flags: CacheRuntimeFlags = cache_runtime_flags(trace_exec);
-    let build_cache_enabled: bool = cache_flags.build_cache_enabled;
-    let incremental_enabled: bool = cache_flags.incremental_enabled;
-    let cache_enabled: bool = cache_flags.cache_enabled;
-    let query_shadow_on: bool = cache_flags.query_shadow_on;
-    let query_shadow_trace: bool = cache_flags.query_shadow_trace;
-    let query_shadow_force_prepare: bool = cache_flags.query_shadow_force_prepare;
-    let cache_trace: bool = cache_flags.cache_trace;
-    let use_sem_cache: bool = should_use_sem_cache(cache_enabled, query_shadow_on);
     let cc_test_cmd: String = cc_cmd_for_target(host_os, host_arch, target_os, target_arch, target_triple, target_abi);
     let cc_test_use_msvc: bool = cc_is_msvc_cmd(cc_test_cmd);
     let test_obj_ext: String = if cc_test_use_msvc { ".obj" } else { ".o" };
