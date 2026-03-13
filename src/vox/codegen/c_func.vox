@@ -160,7 +160,7 @@ fn temp_int_const_table_empty() -> TempIntConstTable {
   return TempIntConstTable { has: Vec(), vals: Vec(), not_signed_min: Vec(), non_negative: Vec() };
 }
 
-fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func, max_temp: i32) -> TempIntConstTable {
+fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func, max_temp: i32, max_slot: i32) -> TempIntConstTable {
   if max_temp < 0 { return temp_int_const_table_empty(); }
   let mut has: Vec[bool] = Vec();
   let mut vals: Vec[i64] = Vec();
@@ -177,6 +177,18 @@ fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func,
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
     let b: ir.Block = f.blocks.get(bi);
+    let mut slot_has: Vec[bool] = Vec();
+    let mut slot_vals: Vec[i64] = Vec();
+    let mut slot_not_signed_min: Vec[bool] = Vec();
+    let mut slot_non_negative: Vec[bool] = Vec();
+    let mut si0: i32 = 0;
+    while si0 <= max_slot {
+      slot_has.push(false);
+      slot_vals.push(0 as i64);
+      slot_not_signed_min.push(false);
+      slot_non_negative.push(false);
+      si0 = si0 + 1;
+    }
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
@@ -256,6 +268,87 @@ fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func,
             }
           }
         }
+      } else if match ins { ir.Instr.SlotDecl(_slot, _ty) => true, _ => false } {
+        let slot: i32 = match ins { ir.Instr.SlotDecl(slot, _ty) => slot, _ => 0 };
+        if slot >= 0 && slot < slot_has.len() {
+          slot_has.set(slot, false);
+          slot_vals.set(slot, 0 as i64);
+          slot_not_signed_min.set(slot, false);
+          slot_non_negative.set(slot, false);
+        }
+      } else if match ins { ir.Instr.Store(_slot, _v) => true, _ => false } {
+        let slot: i32 = match ins { ir.Instr.Store(slot, _v) => slot, _ => 0 };
+        if slot >= 0 && slot < slot_has.len() {
+          let v: ir.Value = match ins { ir.Instr.Store(_slot, v) => v, _ => ir.v_int(0) };
+          let lit: IntConstValue = match v {
+            ir.Value.Int(n) => IntConstValue { ok: true, n: n },
+            ir.Value.Temp(vtid) =>
+              if vtid >= 0 && vtid <= max_temp && has.get(vtid) {
+                IntConstValue { ok: true, n: vals.get(vtid) }
+              } else {
+                IntConstValue { ok: false, n: 0 }
+              },
+            _ => IntConstValue { ok: false, n: 0 },
+          };
+          if lit.ok {
+            slot_has.set(slot, true);
+            slot_vals.set(slot, lit.n);
+          } else {
+            slot_has.set(slot, false);
+            slot_vals.set(slot, 0 as i64);
+          }
+          let v_non_negative: bool = match v {
+            ir.Value.Int(n) => n >= (0 as i64),
+            ir.Value.Temp(vtid) => vtid >= 0 && vtid <= max_temp && non_negative.get(vtid),
+            _ => false,
+          };
+          slot_non_negative.set(slot, v_non_negative);
+          let v_not_signed_min: bool =
+            if v_non_negative {
+              true
+            } else {
+              match v {
+                ir.Value.Int(n) => int_literal_not_any_signed_min(n),
+                ir.Value.Temp(vtid) => vtid >= 0 && vtid <= max_temp && not_signed_min.get(vtid),
+                _ => false,
+              }
+            };
+          slot_not_signed_min.set(slot, v_not_signed_min);
+        }
+      } else if match ins { ir.Instr.Load(_tid, _ty, _slot) => true, _ => false } {
+        let tid: i32 = match ins { ir.Instr.Load(tid, _ty, _slot) => tid, _ => 0 };
+        let ty: i32 = match ins { ir.Instr.Load(_tid, ty, _slot) => ty, _ => 0 };
+        let slot: i32 = match ins { ir.Instr.Load(_tid, _ty, slot) => slot, _ => 0 };
+        if tid >= 0 && tid <= max_temp && slot >= 0 && slot < slot_has.len() {
+          let t: ir.Ty = ir.ty_pool_get(pool, ty);
+          if is_int_scalar_kind(t.kind) {
+            if slot_has.get(slot) && int_literal_always_fits_dst_kind(t.kind, slot_vals.get(slot), target_ptr_bits) {
+              let n: i64 = slot_vals.get(slot);
+              has.set(tid, true);
+              vals.set(tid, n);
+              if n >= (0 as i64) {
+                non_negative.set(tid, true);
+              }
+              if is_signed_int_kind(t.kind) {
+                let minv: IntConstValue = int_min_const_for_signed_kind(t.kind);
+                if minv.ok && n != minv.n {
+                  not_signed_min.set(tid, true);
+                }
+              }
+            }
+            if is_unsigned_int_kind(t.kind) {
+              non_negative.set(tid, true);
+              not_signed_min.set(tid, true);
+            } else {
+              if slot_non_negative.get(slot) {
+                non_negative.set(tid, true);
+                not_signed_min.set(tid, true);
+              } else if slot_not_signed_min.get(slot) {
+                not_signed_min.set(tid, true);
+              }
+            }
+          }
+        }
       }
       ii = ii + 1;
     }
@@ -286,6 +379,13 @@ fn int_min_const_for_signed_kind(kind: ir.TyKind) -> IntConstValue {
     ir.TyKind.I64 => IntConstValue { ok: true, n: ((-9223372036854775807 as i64) - (1 as i64)) },
     _ => IntConstValue { ok: false, n: 0 },
   };
+}
+
+fn int_literal_not_any_signed_min(n: i64) -> bool {
+  return n != (-128 as i64)
+    && n != (-32768 as i64)
+    && n != ((-2147483647 as i64) - (1 as i64))
+    && n != ((-9223372036854775807 as i64) - (1 as i64));
 }
 
 fn int_operand_is_definitely_not_signed_min(v: ir.Value, kind: ir.TyKind, int_consts: TempIntConstTable) -> bool {
@@ -2691,7 +2791,7 @@ pub fn emit_func_append_with_call_cache(
   } else {
     collect_locals(c_types, pool, f, keep_instrs, block_offsets, read_temps)
   };
-  let int_consts: TempIntConstTable = build_temp_int_const_table(pool, target_ptr_bits, f, locals.max_temp);
+  let int_consts: TempIntConstTable = build_temp_int_const_table(pool, target_ptr_bits, f, locals.max_temp, locals.max_slot);
   let slot_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.slots);
   let temp_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.temps);
   let block_order: Vec[i32] = block_name_order(f.blocks);
