@@ -340,6 +340,7 @@ Builtin end-state (agreed):
     - Landed: `src/vox/codegen/c_runtime.vox` 移除未被源码使用的 `vox_host_sys_write` 导出。
   - [x] A44-4 回归与文档：补齐 `std/sys` + `std/fs` + FFI 相关测试，文档明确“何时需要 NUL 适配缓冲、何时直接 `ptr+len`”。
     - Landed: `src/std/sys/sys_test.vox::test_sys_write_ptr_len_controls_written_bytes` + docs sync in `docs/internal/17-ffi-interop.md` and `docs/reference/language/attributes-ffi.md`.
+    - Landed: `src/vox/public_api_contract_test.vox` 增加 `test_public_api_sys_key_path_compile_target_{linux,darwin,windows}_amd64`，将 `std/sys` 跨目标 key-path compile 回归纳入 `test-active` 的 `*api*` 门禁。
   - [x] A44-5 阶段结论：`no-libc runtime` 作为后续 deferred 方向单独推进；Stage2 先完成 `std/*` 跨边界 `ptr+len` 收敛与 runtime 表面收缩。
   - Source: `docs/internal/17-ffi-interop.md`, `docs/internal/13-standard-library.md`, `docs/internal/16-platform-support.md`.
 

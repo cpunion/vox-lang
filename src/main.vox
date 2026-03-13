@@ -616,27 +616,46 @@ fn is_hidden_source_path(p: String) -> bool {
   return false;
 }
 
-fn filter_pkg_c_sources(paths: Vec[String]) -> Vec[String] {
+fn text_truthy(raw0: String) -> bool {
+  let raw: String = txt.trim_space(raw0);
+  if raw == "" { return false; }
+  let s: String = tc_ascii_lower(raw);
+  return s == "1" || s == "true" || s == "yes" || s == "on";
+}
+
+fn include_legacy_runtime_c_from_env() -> bool {
+  return text_truthy(osys.getenv("VOX_LEGACY_C_RUNTIME"));
+}
+
+fn is_legacy_runtime_c_source_path(p: String) -> bool {
+  return p == "src/vox/bootstrap/legacy_runtime/_preamble.c" ||
+    p == "src/vox/bootstrap/legacy_runtime/rt_core.c" ||
+    p == "src/vox/bootstrap/legacy_runtime/rt_atomic.c";
+}
+
+fn should_keep_pkg_c_source_path(p: String, include_legacy_runtime_c: bool) -> bool {
+  if !txt.has_prefix(p, "src/") { return false; }
+  if is_hidden_source_path(p) { return false; }
+  if is_legacy_runtime_c_source_path(p) && !include_legacy_runtime_c { return false; }
+  return true;
+}
+
+fn filter_pkg_c_sources_with_legacy(paths0: Vec[String], include_legacy_runtime_c: bool) -> Vec[String] {
+  let paths: Vec[String] = paths0;
   let mut out: Vec[String] = Vec();
-  let legacy_runtime_env: String = txt.trim_space(osys.getenv("VOX_LEGACY_C_RUNTIME"));
-  let include_legacy_runtime_c: bool = legacy_runtime_env == "1" || legacy_runtime_env == "true" || legacy_runtime_env == "yes";
   let mut i: i32 = 0;
   while i < paths.len() {
     let p: String = paths.get(i);
-    if txt.has_prefix(p, "src/") && !is_hidden_source_path(p) {
-      let is_legacy_runtime_c: bool =
-        p == "src/vox/bootstrap/legacy_runtime/_preamble.c" ||
-        p == "src/vox/bootstrap/legacy_runtime/rt_core.c" ||
-        p == "src/vox/bootstrap/legacy_runtime/rt_atomic.c";
-      if is_legacy_runtime_c && !include_legacy_runtime_c {
-        i = i + 1;
-        continue;
-      }
+    if should_keep_pkg_c_source_path(p, include_legacy_runtime_c) {
       out.push(p);
     }
     i = i + 1;
   }
   return out;
+}
+
+fn filter_pkg_c_sources(paths: Vec[String]) -> Vec[String] {
+  return filter_pkg_c_sources_with_legacy(paths, include_legacy_runtime_c_from_env());
 }
 
 fn dir_name(p: String) -> String {
@@ -810,10 +829,7 @@ fn format_duration_ns(ns0: i64) -> String {
 }
 
 fn env_truthy(raw0: String) -> bool {
-  let raw: String = txt.trim_space(raw0);
-  if raw == "" { return false; }
-  let s: String = tc_ascii_lower(raw);
-  return s == "1" || s == "true" || s == "yes" || s == "on";
+  return text_truthy(raw0);
 }
 
 fn build_cache_enabled_from_env(raw: String) -> bool {
@@ -1727,6 +1743,7 @@ fn load_deps_from_manifest_at(base: String, files0: Vec[ld.SourceFile], seen0: V
   let mut seen: Vec[String] = seen0;
   let mut resolved: Vec[mf.Dependency] = resolved0;
   let mut local_seen: Vec[String] = Vec();
+  let include_legacy_runtime_c: bool = include_legacy_runtime_c_from_env();
 
   let mut i: i32 = 0;
   while i < mr.m.deps.len() {
@@ -1884,25 +1901,13 @@ fn load_deps_from_manifest_at(base: String, files0: Vec[ld.SourceFile], seen0: V
       dep_files.push(ld.SourceFile { path: virt, text: fs.read_to_string(full) });
       j = j + 1;
     }
-    let c_rels: Vec[String] = srcw.walk_c_files(dep_root);
-    let legacy_runtime_env: String = txt.trim_space(osys.getenv("VOX_LEGACY_C_RUNTIME"));
-    let include_legacy_runtime_c: bool = legacy_runtime_env == "1" || legacy_runtime_env == "true" || legacy_runtime_env == "yes";
+    let c_rels: Vec[String] = filter_pkg_c_sources_with_legacy(srcw.walk_c_files(dep_root), include_legacy_runtime_c);
     let mut ci: i32 = 0;
     while ci < c_rels.len() {
       let c_rel: String = c_rels.get(ci);
-      if txt.has_prefix(c_rel, "src/") && !is_hidden_source_path(c_rel) {
-        let is_legacy_runtime_c: bool =
-          c_rel == "src/vox/bootstrap/legacy_runtime/_preamble.c" ||
-          c_rel == "src/vox/bootstrap/legacy_runtime/rt_core.c" ||
-          c_rel == "src/vox/bootstrap/legacy_runtime/rt_atomic.c";
-        if is_legacy_runtime_c && !include_legacy_runtime_c {
-          ci = ci + 1;
-          continue;
-        }
-        let c_full: String = path_join(dep_root, c_rel);
-        let c_virt: String = dep_name.concat("/").concat(c_rel);
-        dep_files.push(ld.SourceFile { path: c_virt, text: fs.read_to_string(c_full) });
-      }
+      let c_full: String = path_join(dep_root, c_rel);
+      let c_virt: String = dep_name.concat("/").concat(c_rel);
+      dep_files.push(ld.SourceFile { path: c_virt, text: fs.read_to_string(c_full) });
       ci = ci + 1;
     }
     let mut di: i32 = 0;

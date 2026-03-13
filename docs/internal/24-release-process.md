@@ -45,6 +45,10 @@
 
 - 必须提供 rolling bootstrap 二进制（`VOX_BOOTSTRAP` 或 `target/bootstrap/vox_prev`）。
 - 缺失 bootstrap 二进制时构建直接失败，不允许回退到 legacy fallback。
+- `VOX_LEGACY_C_RUNTIME` 仅作为 bootstrap 兼容开关保留：
+  - 显式设置时按用户值生效（truthy: `1/true/yes/on`）。
+  - 未设置时默认：`vox_prev[.exe] => 1`，其它 rolling/bootstrap 编译器 => `0`。
+  - 该开关只影响是否打包 legacy runtime C bridge，不改变 `BOOTSTRAP_MODE=rolling` 的发布链路约束。
 
 ## 3. 锁文件
 
