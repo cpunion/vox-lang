@@ -682,10 +682,10 @@ fn c_type_from_table(c_types: Vec[String], pool: ir.TyPool, ty_idx: i32) -> Stri
   return c_type(pool, ty_idx);
 }
 
-fn emit_instr_atomic_new(pool: ir.TyPool, tid: i32, elem_ty: i32, val: ir.Value, vn: ValueNameTables) -> Vec[String] {
+fn emit_instr_atomic_new_append(out0: Vec[String], pool: ir.TyPool, tid: i32, elem_ty: i32, val: ir.Value, vn: ValueNameTables) -> Vec[String] {
   let at: String = c_atomic_c_type(pool, elem_ty);
   let tmp: String = "_at_".concat(tid.to_string());
-  let mut out: Vec[String] = Vec();
+  let mut out: Vec[String] = out0;
   out.push("  ".concat(at).concat("* ").concat(tmp).concat(" = (").concat(at).concat("*)malloc(sizeof(").concat(at).concat("));"));
   out.push("  if (!".concat(tmp).concat(") { vox_host_panic(\"out of memory\"); }"));
   out.push("  atomic_init(".concat(tmp).concat(", ").concat(c_value_named(val, vn)).concat(");"));
@@ -693,14 +693,22 @@ fn emit_instr_atomic_new(pool: ir.TyPool, tid: i32, elem_ty: i32, val: ir.Value,
   return out;
 }
 
-fn emit_instr_atomic_cas(pool: ir.TyPool, tid: i32, elem_ty: i32, h: ir.Value, expected: ir.Value, desired: ir.Value, vn: ValueNameTables) -> Vec[String] {
+fn emit_instr_atomic_new(pool: ir.TyPool, tid: i32, elem_ty: i32, val: ir.Value, vn: ValueNameTables) -> Vec[String] {
+  return emit_instr_atomic_new_append(Vec(), pool, tid, elem_ty, val, vn);
+}
+
+fn emit_instr_atomic_cas_append(out0: Vec[String], pool: ir.TyPool, tid: i32, elem_ty: i32, h: ir.Value, expected: ir.Value, desired: ir.Value, vn: ValueNameTables) -> Vec[String] {
   let at: String = c_atomic_c_type(pool, elem_ty);
   let vt: String = c_atomic_val_c_type(pool, elem_ty);
   let tmp: String = "_cas_".concat(tid.to_string());
-  let mut out: Vec[String] = Vec();
+  let mut out: Vec[String] = out0;
   out.push("  ".concat(vt).concat(" ").concat(tmp).concat(" = ").concat(c_value_named(expected, vn)).concat(";"));
   out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = atomic_compare_exchange_strong_explicit((").concat(at).concat("*)").concat(c_value_named(h, vn)).concat(", &").concat(tmp).concat(", ").concat(c_value_named(desired, vn)).concat(", memory_order_seq_cst, memory_order_seq_cst);"));
   return out;
+}
+
+fn emit_instr_atomic_cas(pool: ir.TyPool, tid: i32, elem_ty: i32, h: ir.Value, expected: ir.Value, desired: ir.Value, vn: ValueNameTables) -> Vec[String] {
+  return emit_instr_atomic_cas_append(Vec(), pool, tid, elem_ty, h, expected, desired, vn);
 }
 
 fn is_int_scalar_kind(k: ir.TyKind) -> bool {
@@ -1611,6 +1619,12 @@ fn vec0() -> Vec[String] { return Vec(); }
 
 fn vec1(s: String) -> Vec[String] { let mut v: Vec[String] = Vec(); v.push(s); return v; }
 
+fn push_line(out0: Vec[String], line: String) -> Vec[String] {
+  let mut out: Vec[String] = out0;
+  out.push(line);
+  return out;
+}
+
 fn push_lines(out0: Vec[String], lines: Vec[String]) -> Vec[String] {
   let mut out: Vec[String] = out0;
   let mut i: i32 = 0;
@@ -1619,6 +1633,34 @@ fn push_lines(out0: Vec[String], lines: Vec[String]) -> Vec[String] {
     i = i + 1;
   }
   return out;
+}
+
+fn emit_instr_cmp_line(pool: ir.TyPool, tid: i32, op: ir.CmpKind, oty: i32, a: ir.Value, b: ir.Value, vn: ValueNameTables) -> String {
+  let t: ir.Ty = ir.ty_pool_get(pool, oty);
+  if t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified || t.kind == ir.TyKind.Ref {
+    return emit_instr_cmp_line(pool, tid, op, t.elem, a, b, vn);
+  }
+  if t.kind == ir.TyKind.String {
+    let cmpop: String = c_cmpop(op);
+    return "  ".concat(c_temp_name_named(vn, tid)).concat(" = (strcmp(").concat(c_value_named(a, vn)).concat(", ").concat(c_value_named(b, vn)).concat(") ").concat(cmpop).concat(" 0);");
+  }
+  if t.kind == ir.TyKind.Enum {
+    if op != ir.CmpKind.Eq && op != ir.CmpKind.Ne { panic("unsupported enum comparison"); }
+    let cal: String = c_enum_eq_fn_name(ty_qname(t)).concat("(").concat(c_value_named(a, vn)).concat(", ").concat(c_value_named(b, vn)).concat(")");
+    if op == ir.CmpKind.Eq {
+      return "  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(cal).concat(";");
+    }
+    return "  ".concat(c_temp_name_named(vn, tid)).concat(" = (!").concat(cal).concat(");");
+  }
+  if t.kind == ir.TyKind.Struct {
+    if op != ir.CmpKind.Eq && op != ir.CmpKind.Ne { panic("unsupported struct comparison"); }
+    let cal: String = c_struct_eq_fn_name(ty_qname(t)).concat("(").concat(c_value_named(a, vn)).concat(", ").concat(c_value_named(b, vn)).concat(")");
+    if op == ir.CmpKind.Eq {
+      return "  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(cal).concat(";");
+    }
+    return "  ".concat(c_temp_name_named(vn, tid)).concat(" = (!").concat(cal).concat(");");
+  }
+  return "  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_value_named(a, vn)).concat(" ").concat(c_cmpop(op)).concat(" ").concat(c_value_named(b, vn)).concat(");");
 }
 
 fn c_field_chain(fields: Vec[String]) -> String {
@@ -1632,31 +1674,7 @@ fn c_field_chain(fields: Vec[String]) -> String {
 }
 
 fn emit_instr_cmp(pool: ir.TyPool, tid: i32, op: ir.CmpKind, oty: i32, a: ir.Value, b: ir.Value, vn: ValueNameTables) -> Vec[String] {
-  let t: ir.Ty = ir.ty_pool_get(pool, oty);
-  if t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified || t.kind == ir.TyKind.Ref {
-    return emit_instr_cmp(pool, tid, op, t.elem, a, b, vn);
-  }
-  if t.kind == ir.TyKind.String {
-    let cmpop: String = c_cmpop(op);
-    return vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (strcmp(").concat(c_value_named(a, vn)).concat(", ").concat(c_value_named(b, vn)).concat(") ").concat(cmpop).concat(" 0);"));
-  }
-  if t.kind == ir.TyKind.Enum {
-    if op != ir.CmpKind.Eq && op != ir.CmpKind.Ne { panic("unsupported enum comparison"); }
-    let cal: String = c_enum_eq_fn_name(ty_qname(t)).concat("(").concat(c_value_named(a, vn)).concat(", ").concat(c_value_named(b, vn)).concat(")");
-    if op == ir.CmpKind.Eq {
-      return vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(cal).concat(";"));
-    }
-    return vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (!").concat(cal).concat(");"));
-  }
-  if t.kind == ir.TyKind.Struct {
-    if op != ir.CmpKind.Eq && op != ir.CmpKind.Ne { panic("unsupported struct comparison"); }
-    let cal: String = c_struct_eq_fn_name(ty_qname(t)).concat("(").concat(c_value_named(a, vn)).concat(", ").concat(c_value_named(b, vn)).concat(")");
-    if op == ir.CmpKind.Eq {
-      return vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(cal).concat(";"));
-    }
-    return vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (!").concat(cal).concat(");"));
-  }
-  return vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_value_named(a, vn)).concat(" ").concat(c_cmpop(op)).concat(" ").concat(c_value_named(b, vn)).concat(");"));
+  return vec1(emit_instr_cmp_line(pool, tid, op, oty, a, b, vn));
 }
 
 fn emit_instr_int_cast_checked(
@@ -1846,7 +1864,22 @@ fn emit_instr_int_cast_checked(
   return out;
 }
 
-fn emit_instr_struct_init(c_types: Vec[String], pool: ir.TyPool, tid: i32, ty: i32, fs: Vec[ir.StructInitField], vn: ValueNameTables) -> Vec[String] {
+fn emit_instr_int_cast_checked_append(
+  out0: Vec[String],
+  c_types: Vec[String],
+  pool: ir.TyPool,
+  target_ptr_bits: i32,
+  tid: i32,
+  dst_ty: i32,
+  src_ty: i32,
+  v: ir.Value,
+  int_consts: TempIntConstTable,
+  vn: ValueNameTables,
+) -> Vec[String] {
+  return push_lines(out0, emit_instr_int_cast_checked(c_types, pool, target_ptr_bits, tid, dst_ty, src_ty, v, int_consts, vn));
+}
+
+fn emit_instr_struct_init_line(c_types: Vec[String], pool: ir.TyPool, tid: i32, ty: i32, fs: Vec[ir.StructInitField], vn: ValueNameTables) -> String {
   let mut s: String = "  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, ty)).concat("){");
   let mut i: i32 = 0;
   while i < fs.len() {
@@ -1855,11 +1888,14 @@ fn emit_instr_struct_init(c_types: Vec[String], pool: ir.TyPool, tid: i32, ty: i
     s = s.concat(".").concat(c_ident(f.name)).concat(" = ").concat(c_value_named(f.val, vn));
     i = i + 1;
   }
-  s = s.concat("};");
-  return vec1(s);
+  return s.concat("};");
 }
 
-fn emit_instr_enum_init(c_types: Vec[String], pool: ir.TyPool, p: ir.Program, enum_order: Vec[i32], tid: i32, ty: i32, variant: String, payload: Vec[ir.Value], vn: ValueNameTables) -> Vec[String] {
+fn emit_instr_struct_init(c_types: Vec[String], pool: ir.TyPool, tid: i32, ty: i32, fs: Vec[ir.StructInitField], vn: ValueNameTables) -> Vec[String] {
+  return vec1(emit_instr_struct_init_line(c_types, pool, tid, ty, fs, vn));
+}
+
+fn emit_instr_enum_init_line(c_types: Vec[String], pool: ir.TyPool, p: ir.Program, enum_order: Vec[i32], tid: i32, ty: i32, variant: String, payload: Vec[ir.Value], vn: ValueNameTables) -> String {
   let enum_name: String = ty_qname(ir.ty_pool_get(pool, ty));
   let en_idx: i32 = find_enum_decl_index_ordered(p, enum_order, enum_name);
   if en_idx < 0 { panic("unknown enum in codegen"); }
@@ -1880,8 +1916,11 @@ fn emit_instr_enum_init(c_types: Vec[String], pool: ir.TyPool, p: ir.Program, en
     }
     s = s.concat("}");
   }
-  s = s.concat("};");
-  return vec1(s);
+  return s.concat("};");
+}
+
+fn emit_instr_enum_init(c_types: Vec[String], pool: ir.TyPool, p: ir.Program, enum_order: Vec[i32], tid: i32, ty: i32, variant: String, payload: Vec[ir.Value], vn: ValueNameTables) -> Vec[String] {
+  return vec1(emit_instr_enum_init_line(c_types, pool, p, enum_order, tid, ty, variant, payload, vn));
 }
 
 fn emit_instr_binop_int(
@@ -2038,8 +2077,23 @@ fn emit_instr_binop_int(
   panic("unknown binop");
 }
 
-fn emit_instr_vec_new(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, vn: ValueNameTables) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+fn emit_instr_binop_int_append(
+  out0: Vec[String],
+  c_types: Vec[String],
+  pool: ir.TyPool,
+  tid: i32,
+  op: ir.BinOpKind,
+  ty: i32,
+  a: ir.Value,
+  b: ir.Value,
+  int_consts: TempIntConstTable,
+  vn: ValueNameTables,
+) -> Vec[String] {
+  return push_lines(out0, emit_instr_binop_int(c_types, pool, tid, op, ty, a, b, int_consts, vn));
+}
+
+fn emit_instr_vec_new_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, vn: ValueNameTables) -> Vec[String] {
+  let mut out: Vec[String] = out0;
   out.push("  {");
   out.push("    vox_vec_data* h = vox_vec_data_new((int32_t)sizeof(".concat(c_type_from_table(c_types, pool, elem)).concat("));"));
   out.push("    ".concat(c_temp_name_named(vn, tid)).concat(" = (vox_vec){ .h = h, .len = 0 };"));
@@ -2047,10 +2101,12 @@ fn emit_instr_vec_new(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32
   return out;
 }
 
-fn emit_vec_grow_if_needed(out0: Vec[String], vname: String, need_expr: String) -> Vec[String] {
-  let mut out: Vec[String] = out0;
-  out.push("    vox_vec_grow_to(".concat(vname).concat(", ").concat(need_expr).concat(");"));
-  return out;
+fn emit_instr_vec_new(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, vn: ValueNameTables) -> Vec[String] {
+  return emit_instr_vec_new_append(Vec(), c_types, pool, tid, elem, vn);
+}
+
+fn emit_vec_grow_if_needed_append(out0: Vec[String], vname: String, need_expr: String) -> Vec[String] {
+  return push_line(out0, "    vox_vec_grow_to(".concat(vname).concat(", ").concat(need_expr).concat(");"));
 }
 
 fn vec_elem_store_line(c_types: Vec[String], pool: ir.TyPool, elem: i32, dst_ptr_expr: String, src_expr: String) -> String {
@@ -2063,25 +2119,29 @@ fn vec_elem_load_line(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32
   return "    ".concat(c_temp_name_named(vn, tid)).concat(" = *((").concat(ety).concat("*)(").concat(src_ptr_expr).concat("));");
 }
 
-fn emit_instr_vec_push(c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+fn emit_instr_vec_push_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
+  let mut out: Vec[String] = out0;
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name_named(vn, recv_slot)).concat(";"));
   out.push("    vox_vec_require_handle(vox_v, \"vec push invalid args\");");
-  out = emit_vec_grow_if_needed(out, "vox_v", "(int64_t)vox_v->len + 1");
+  out = emit_vec_grow_if_needed_append(out, "vox_v", "(int64_t)vox_v->len + 1");
   out.push(vec_elem_store_line(c_types, pool, elem, "vox_v->h->data + (size_t)vox_v->len * (size_t)vox_v->h->elem_size", c_value_named(v, vn)));
   out.push("    vox_v->len++;");
   out.push("  }");
   return out;
 }
 
-fn emit_instr_vec_insert(c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+fn emit_instr_vec_push(c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
+  return emit_instr_vec_push_append(Vec(), c_types, pool, recv_slot, elem, v, vn);
+}
+
+fn emit_instr_vec_insert_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
+  let mut out: Vec[String] = out0;
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name_named(vn, recv_slot)).concat(";"));
   out.push("    vox_vec_require_handle(vox_v, \"vec insert invalid args\");");
   out.push("    int32_t vox_idx = vox_vec_checked_insert_index(vox_v, (int32_t)".concat(c_value_named(idx, vn)).concat(", \"vec insert index out of bounds\");"));
-  out = emit_vec_grow_if_needed(out, "vox_v", "(int64_t)vox_v->len + 1");
+  out = emit_vec_grow_if_needed_append(out, "vox_v", "(int64_t)vox_v->len + 1");
   out.push("    uint8_t* vox_ptr = vox_v->h->data + (size_t)vox_idx * (size_t)vox_v->h->elem_size;");
   out.push("    int32_t vox_tail = vox_v->len - vox_idx;");
   out.push("    if (vox_tail > 0) {");
@@ -2093,8 +2153,12 @@ fn emit_instr_vec_insert(c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, 
   return out;
 }
 
-fn emit_instr_vec_set(c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+fn emit_instr_vec_insert(c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
+  return emit_instr_vec_insert_append(Vec(), c_types, pool, recv_slot, elem, idx, v, vn);
+}
+
+fn emit_instr_vec_set_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
+  let mut out: Vec[String] = out0;
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name_named(vn, recv_slot)).concat(";"));
   out.push("    vox_vec_require_handle(vox_v, \"vec set invalid args\");");
@@ -2104,8 +2168,12 @@ fn emit_instr_vec_set(c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, ele
   return out;
 }
 
-fn emit_instr_vec_clear(recv_slot: i32, vn: ValueNameTables) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+fn emit_instr_vec_set(c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
+  return emit_instr_vec_set_append(Vec(), c_types, pool, recv_slot, elem, idx, v, vn);
+}
+
+fn emit_instr_vec_clear_append(out0: Vec[String], recv_slot: i32, vn: ValueNameTables) -> Vec[String] {
+  let mut out: Vec[String] = out0;
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name_named(vn, recv_slot)).concat(";"));
   out.push("    if (vox_v) { vox_v->len = 0; }");
@@ -2113,8 +2181,12 @@ fn emit_instr_vec_clear(recv_slot: i32, vn: ValueNameTables) -> Vec[String] {
   return out;
 }
 
-fn emit_instr_vec_extend(recv_slot: i32, other_slot: i32, vn: ValueNameTables) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+fn emit_instr_vec_clear(recv_slot: i32, vn: ValueNameTables) -> Vec[String] {
+  return emit_instr_vec_clear_append(Vec(), recv_slot, vn);
+}
+
+fn emit_instr_vec_extend_append(out0: Vec[String], recv_slot: i32, other_slot: i32, vn: ValueNameTables) -> Vec[String] {
+  let mut out: Vec[String] = out0;
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name_named(vn, recv_slot)).concat(";"));
   out.push("    const vox_vec* vox_other = &".concat(c_slot_name_named(vn, other_slot)).concat(";"));
@@ -2124,7 +2196,7 @@ fn emit_instr_vec_extend(recv_slot: i32, other_slot: i32, vn: ValueNameTables) -
       out.push("      int64_t vox_need64 = (int64_t)vox_v->len + (int64_t)vox_other->len;");
       out.push("      if (vox_need64 > INT32_MAX) { vox_host_panic(\"vec too large\"); }");
       out.push("      int32_t vox_need = (int32_t)vox_need64;");
-  out = emit_vec_grow_if_needed(out, "vox_v", "vox_need64");
+  out = emit_vec_grow_if_needed_append(out, "vox_v", "vox_need64");
   out.push("      memcpy(vox_v->h->data + (size_t)vox_v->len * (size_t)vox_v->h->elem_size, vox_other->h->data, (size_t)vox_other->len * (size_t)vox_other->h->elem_size);");
   out.push("      vox_v->len = vox_need;");
   out.push("    }");
@@ -2132,8 +2204,12 @@ fn emit_instr_vec_extend(recv_slot: i32, other_slot: i32, vn: ValueNameTables) -
   return out;
 }
 
-fn emit_instr_vec_pop(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+fn emit_instr_vec_extend(recv_slot: i32, other_slot: i32, vn: ValueNameTables) -> Vec[String] {
+  return emit_instr_vec_extend_append(Vec(), recv_slot, other_slot, vn);
+}
+
+fn emit_instr_vec_pop_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
+  let mut out: Vec[String] = out0;
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name_named(vn, recv_slot)).concat(";"));
   out.push("    vox_vec_require_handle(vox_v, \"vec pop invalid args\");");
@@ -2147,8 +2223,12 @@ fn emit_instr_vec_pop(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32
   return out;
 }
 
-fn emit_instr_vec_remove(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+fn emit_instr_vec_pop(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
+  return emit_instr_vec_pop_append(Vec(), c_types, pool, tid, elem, recv_slot, load_dst, vn);
+}
+
+fn emit_instr_vec_remove_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
+  let mut out: Vec[String] = out0;
   out.push("  {");
   out.push("    vox_vec* vox_v = &".concat(c_slot_name_named(vn, recv_slot)).concat(";"));
   out.push("    vox_vec_require_handle(vox_v, \"vec remove invalid args\");");
@@ -2166,12 +2246,20 @@ fn emit_instr_vec_remove(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: 
   return out;
 }
 
-fn emit_instr_vec_len(tid: i32, recv_slot: i32, vn: ValueNameTables) -> Vec[String] {
-  return vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_slot_name_named(vn, recv_slot)).concat(".len;"));
+fn emit_instr_vec_remove(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
+  return emit_instr_vec_remove_append(Vec(), c_types, pool, tid, elem, recv_slot, idx, load_dst, vn);
 }
 
-fn emit_instr_vec_get(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
-  let mut out: Vec[String] = Vec();
+fn emit_instr_vec_len_line(tid: i32, recv_slot: i32, vn: ValueNameTables) -> String {
+  return "  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_slot_name_named(vn, recv_slot)).concat(".len;");
+}
+
+fn emit_instr_vec_len(tid: i32, recv_slot: i32, vn: ValueNameTables) -> Vec[String] {
+  return vec1(emit_instr_vec_len_line(tid, recv_slot, vn));
+}
+
+fn emit_instr_vec_get_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
+  let mut out: Vec[String] = out0;
   out.push("  {");
   out.push("    const vox_vec* vox_v = &".concat(c_slot_name_named(vn, recv_slot)).concat(";"));
   out.push("    vox_vec_require_handle(vox_v, \"vec get invalid args\");");
@@ -2181,6 +2269,10 @@ fn emit_instr_vec_get(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32
   }
   out.push("  }");
   return out;
+}
+
+fn emit_instr_vec_get(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
+  return emit_instr_vec_get_append(Vec(), c_types, pool, tid, elem, recv_slot, idx, load_dst, vn);
 }
 
 pub fn ffi_import_order(imports: Vec[ir.FfiImportDecl]) -> Vec[i32] {
@@ -2520,7 +2612,7 @@ fn emit_instr_append(
     ir.Instr.BinOp(tid, op, ty, a, b) => {
       let bt: ir.Ty = ir.ty_pool_get(pool, ty);
       if is_int_scalar_kind(bt.kind) {
-        push_lines(out, emit_instr_binop_int(c_types, pool, tid, op, ty, a, b, int_consts, vn))
+        emit_instr_binop_int_append(out, c_types, pool, tid, op, ty, a, b, int_consts, vn)
       } else if op == ir.BinOpKind.Mod && bt.kind == ir.TyKind.F32 {
         out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = fmodf(").concat(c_value_named(a, vn)).concat(", ").concat(c_value_named(b, vn)).concat(");"));
         out
@@ -2532,7 +2624,7 @@ fn emit_instr_append(
         out
       }
     },
-    ir.Instr.Cmp(tid, op, oty, a, b) => push_lines(out, emit_instr_cmp(pool, tid, op, oty, a, b, vn)),
+    ir.Instr.Cmp(tid, op, oty, a, b) => push_line(out, emit_instr_cmp_line(pool, tid, op, oty, a, b, vn)),
     ir.Instr.And(tid, a, b) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_value_named(a, vn)).concat(" && ").concat(c_value_named(b, vn)).concat(");")); out },
     ir.Instr.Or(tid, a, b) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_value_named(a, vn)).concat(" || ").concat(c_value_named(b, vn)).concat(");")); out },
     ir.Instr.Not(tid, a) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (!").concat(c_value_named(a, vn)).concat(");")); out },
@@ -2542,7 +2634,7 @@ fn emit_instr_append(
       out
     },
     ir.Instr.IntCastChecked(tid, dst_ty, src_ty, v) =>
-      push_lines(out, emit_instr_int_cast_checked(c_types, pool, target_ptr_bits, tid, dst_ty, src_ty, v, int_consts, vn)),
+      emit_instr_int_cast_checked_append(out, c_types, pool, target_ptr_bits, tid, dst_ty, src_ty, v, int_consts, vn),
     ir.Instr.FloatCast(tid, dst_ty, _src_ty, v) => {
       out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(c_value_named(v, vn)).concat(";"));
       out
@@ -2569,11 +2661,11 @@ fn emit_instr_append(
     ir.Instr.PtrWrite(ty, ptr, v) => { out.push("  *((".concat(c_type_from_table(c_types, pool, ty)).concat("*)").concat(c_value_named(ptr, vn)).concat(") = ").concat(c_value_named(v, vn)).concat(";")); out },
     ir.Instr.PtrOffset(tid, ptr, off) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (void*)((char*)").concat(c_value_named(ptr, vn)).concat(" + ").concat(c_value_named(off, vn)).concat(");")); out },
 
-    ir.Instr.StructInit(tid, ty, fs) => push_lines(out, emit_instr_struct_init(c_types, pool, tid, ty, fs, vn)),
+    ir.Instr.StructInit(tid, ty, fs) => push_line(out, emit_instr_struct_init_line(c_types, pool, tid, ty, fs, vn)),
     ir.Instr.FieldGet(tid, _ty, recv, field) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_value_named(recv, vn)).concat(".").concat(c_ident(field)).concat(";")); out },
     ir.Instr.StoreField(sid, field, v) => { out.push("  ".concat(c_slot_name_named(vn, sid)).concat(".").concat(c_ident(field)).concat(" = ").concat(c_value_named(v, vn)).concat(";")); out },
 
-    ir.Instr.EnumInit(tid, ty, variant, payload) => push_lines(out, emit_instr_enum_init(c_types, pool, p, enum_order, tid, ty, variant, payload, vn)),
+    ir.Instr.EnumInit(tid, ty, variant, payload) => push_line(out, emit_instr_enum_init_line(c_types, pool, p, enum_order, tid, ty, variant, payload, vn)),
     ir.Instr.EnumTag(tid, recv) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_value_named(recv, vn)).concat(".tag;")); out },
     ir.Instr.EnumPayload(tid, _ty, recv, variant, idx) => {
       out.push("  "
@@ -2588,23 +2680,23 @@ fn emit_instr_append(
       out
     },
 
-    ir.Instr.VecNew(tid, _vty, elem) => push_lines(out, emit_instr_vec_new(c_types, pool, tid, elem, vn)),
-    ir.Instr.VecPush(recv_slot, elem, v) => push_lines(out, emit_instr_vec_push(c_types, pool, recv_slot, elem, v, vn)),
-    ir.Instr.VecInsert(recv_slot, elem, idx, v) => push_lines(out, emit_instr_vec_insert(c_types, pool, recv_slot, elem, idx, v, vn)),
-    ir.Instr.VecSet(recv_slot, elem, idx, v) => push_lines(out, emit_instr_vec_set(c_types, pool, recv_slot, elem, idx, v, vn)),
-    ir.Instr.VecClear(recv_slot) => push_lines(out, emit_instr_vec_clear(recv_slot, vn)),
-    ir.Instr.VecExtend(recv_slot, other_slot) => push_lines(out, emit_instr_vec_extend(recv_slot, other_slot, vn)),
-    ir.Instr.VecPop(tid, elem, recv_slot) => push_lines(out, emit_instr_vec_pop(c_types, pool, tid, elem, recv_slot, temp_is_read(tid, read_temps), vn)),
-    ir.Instr.VecRemove(tid, elem, recv_slot, idx) => push_lines(out, emit_instr_vec_remove(c_types, pool, tid, elem, recv_slot, idx, temp_is_read(tid, read_temps), vn)),
-    ir.Instr.VecLen(tid, recv_slot) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_slot_name_named(vn, recv_slot)).concat(".len;")); out },
-    ir.Instr.VecGet(tid, elem, recv_slot, idx) => push_lines(out, emit_instr_vec_get(c_types, pool, tid, elem, recv_slot, idx, temp_is_read(tid, read_temps), vn)),
+    ir.Instr.VecNew(tid, _vty, elem) => emit_instr_vec_new_append(out, c_types, pool, tid, elem, vn),
+    ir.Instr.VecPush(recv_slot, elem, v) => emit_instr_vec_push_append(out, c_types, pool, recv_slot, elem, v, vn),
+    ir.Instr.VecInsert(recv_slot, elem, idx, v) => emit_instr_vec_insert_append(out, c_types, pool, recv_slot, elem, idx, v, vn),
+    ir.Instr.VecSet(recv_slot, elem, idx, v) => emit_instr_vec_set_append(out, c_types, pool, recv_slot, elem, idx, v, vn),
+    ir.Instr.VecClear(recv_slot) => emit_instr_vec_clear_append(out, recv_slot, vn),
+    ir.Instr.VecExtend(recv_slot, other_slot) => emit_instr_vec_extend_append(out, recv_slot, other_slot, vn),
+    ir.Instr.VecPop(tid, elem, recv_slot) => emit_instr_vec_pop_append(out, c_types, pool, tid, elem, recv_slot, temp_is_read(tid, read_temps), vn),
+    ir.Instr.VecRemove(tid, elem, recv_slot, idx) => emit_instr_vec_remove_append(out, c_types, pool, tid, elem, recv_slot, idx, temp_is_read(tid, read_temps), vn),
+    ir.Instr.VecLen(tid, recv_slot) => push_line(out, emit_instr_vec_len_line(tid, recv_slot, vn)),
+    ir.Instr.VecGet(tid, elem, recv_slot, idx) => emit_instr_vec_get_append(out, c_types, pool, tid, elem, recv_slot, idx, temp_is_read(tid, read_temps), vn),
 
-    ir.Instr.AtomicNew(tid, elem_ty, val) => push_lines(out, emit_instr_atomic_new(pool, tid, elem_ty, val, vn)),
+    ir.Instr.AtomicNew(tid, elem_ty, val) => emit_instr_atomic_new_append(out, pool, tid, elem_ty, val, vn),
     ir.Instr.AtomicLoad(tid, elem_ty, h) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = atomic_load_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", memory_order_seq_cst);")); out },
     ir.Instr.AtomicStore(elem_ty, h, val) => { out.push("  atomic_store_explicit((".concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", ").concat(c_value_named(val, vn)).concat(", memory_order_seq_cst);")); out },
     ir.Instr.AtomicFetchAdd(tid, elem_ty, h, delta) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = atomic_fetch_add_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", ").concat(c_value_named(delta, vn)).concat(", memory_order_seq_cst);")); out },
     ir.Instr.AtomicSwap(tid, elem_ty, h, val) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = atomic_exchange_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", ").concat(c_value_named(val, vn)).concat(", memory_order_seq_cst);")); out },
-    ir.Instr.AtomicCAS(tid, elem_ty, h, expected, desired) => push_lines(out, emit_instr_atomic_cas(pool, tid, elem_ty, h, expected, desired, vn)),
+    ir.Instr.AtomicCAS(tid, elem_ty, h, expected, desired) => emit_instr_atomic_cas_append(out, pool, tid, elem_ty, h, expected, desired, vn),
     ir.Instr.AtomicDrop(_elem_ty, h) => { out.push("  free((void*)".concat(c_value_named(h, vn)).concat(");")); out },
 
     ir.Instr.Call(has_dst, tid, ret_ty, name, args) => push_lines(out, emit_instr_call(call_names, has_dst, tid, ret_ty, name, args, read_temps, vn)),
