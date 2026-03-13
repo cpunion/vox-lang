@@ -124,6 +124,16 @@ struct ValueNameTables {
   slots: Vec[String],
 }
 
+struct TempIntConstTable {
+  has: Vec[bool],
+  vals: Vec[i64],
+}
+
+struct IntConstValue {
+  ok: bool,
+  n: i64,
+}
+
 fn build_indexed_names(prefix: String, max_id: i32) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   let mut i: i32 = 0;
@@ -141,6 +151,59 @@ fn build_value_name_tables(param_len: i32, max_temp: i32, max_slot: i32) -> Valu
     params: build_indexed_names("p", param_max),
     temps: build_indexed_names("t", max_temp),
     slots: build_indexed_names("v", max_slot),
+  };
+}
+
+fn temp_int_const_table_empty() -> TempIntConstTable {
+  return TempIntConstTable { has: Vec(), vals: Vec() };
+}
+
+fn build_temp_int_const_table(pool: ir.TyPool, f: ir.Func, max_temp: i32) -> TempIntConstTable {
+  if max_temp < 0 { return temp_int_const_table_empty(); }
+  let mut has: Vec[bool] = Vec();
+  let mut vals: Vec[i64] = Vec();
+  let mut i0: i32 = 0;
+  while i0 <= max_temp {
+    has.push(false);
+    vals.push(0 as i64);
+    i0 = i0 + 1;
+  }
+  let mut bi: i32 = 0;
+  while bi < f.blocks.len() {
+    let b: ir.Block = f.blocks.get(bi);
+    let mut ii: i32 = 0;
+    while ii < b.instrs.len() {
+      let ins: ir.Instr = b.instrs.get(ii);
+      if match ins { ir.Instr.Const(_tid, _ty, ir.Value.Int(_n)) => true, _ => false } {
+        let tid: i32 = match ins { ir.Instr.Const(tid, _ty, _v) => tid, _ => 0 };
+        if tid >= 0 && tid <= max_temp {
+          let ty: i32 = match ins { ir.Instr.Const(_tid, ty, _v) => ty, _ => 0 };
+          let t: ir.Ty = ir.ty_pool_get(pool, ty);
+          if is_int_scalar_kind(t.kind) {
+            let n: i64 = match ins { ir.Instr.Const(_tid, _ty, ir.Value.Int(n)) => n, _ => 0 as i64 };
+            has.set(tid, true);
+            vals.set(tid, n);
+          }
+        }
+      }
+      ii = ii + 1;
+    }
+    bi = bi + 1;
+  }
+  return TempIntConstTable { has: has, vals: vals };
+}
+
+fn int_const_value_from_operand(v: ir.Value, int_consts: TempIntConstTable) -> IntConstValue {
+  return match v {
+    ir.Value.Int(n) => IntConstValue { ok: true, n: n },
+    ir.Value.Temp(tid) => {
+      if tid >= 0 && tid < int_consts.has.len() && int_consts.has.get(tid) {
+        IntConstValue { ok: true, n: int_consts.vals.get(tid) }
+      } else {
+        IntConstValue { ok: false, n: 0 }
+      }
+    },
+    _ => IntConstValue { ok: false, n: 0 },
   };
 }
 
@@ -1221,6 +1284,7 @@ fn emit_instr_int_cast_checked(
   dst_ty: i32,
   src_ty: i32,
   v: ir.Value,
+  int_consts: TempIntConstTable,
   vn: ValueNameTables,
 ) -> Vec[String] {
   let dst: ir.Ty = ir.ty_pool_get(pool, dst_ty);
@@ -1230,17 +1294,10 @@ fn emit_instr_int_cast_checked(
   let dst_is_unsigned: bool = is_unsigned_int_kind(dst.kind);
   let src_is_unsigned: bool = is_unsigned_int_kind(src.kind);
   let src_is_float: bool = src.kind == ir.TyKind.F32 || src.kind == ir.TyKind.F64;
-  let src_is_int_lit: bool = match v {
-    ir.Value.Int(_n) => true,
-    _ => false,
-  };
-  let src_int_lit: i64 = match v {
-    ir.Value.Int(n) => n,
-    _ => 0,
-  };
+  let src_int_lit: IntConstValue = int_const_value_from_operand(v, int_consts);
 
   let mut out: Vec[String] = Vec();
-  if !src_is_float && src_is_int_lit && int_literal_always_fits_dst_kind(dst.kind, src_int_lit, target_ptr_bits) {
+  if !src_is_float && src_int_lit.ok && int_literal_always_fits_dst_kind(dst.kind, src_int_lit.n, target_ptr_bits) {
     out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
     return out;
   }
@@ -1894,6 +1951,7 @@ fn emit_instr(
   enum_order: Vec[i32],
   ins: ir.Instr,
   read_temps: Vec[bool],
+  int_consts: TempIntConstTable,
   vn: ValueNameTables,
 ) -> Vec[String] {
   return match ins {
@@ -1919,7 +1977,7 @@ fn emit_instr(
     ir.Instr.IntCast(tid, dst_ty, _src_ty, v) =>
       vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(c_value_named(v, vn)).concat(";")),
     ir.Instr.IntCastChecked(tid, dst_ty, src_ty, v) =>
-      emit_instr_int_cast_checked(c_types, pool, target_ptr_bits, tid, dst_ty, src_ty, v, vn),
+      emit_instr_int_cast_checked(c_types, pool, target_ptr_bits, tid, dst_ty, src_ty, v, int_consts, vn),
     ir.Instr.FloatCast(tid, dst_ty, _src_ty, v) =>
       vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(c_value_named(v, vn)).concat(";")),
     ir.Instr.RangeCheck(ty, v, lo, hi) => vec1(
@@ -2499,6 +2557,7 @@ pub fn emit_func_append_with_call_cache(
   } else {
     collect_locals(c_types, pool, f, keep_instrs, block_offsets, read_temps)
   };
+  let int_consts: TempIntConstTable = build_temp_int_const_table(pool, f, locals.max_temp);
   let slot_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.slots);
   let temp_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.temps);
   let block_order: Vec[i32] = block_name_order(f.blocks);
@@ -2573,7 +2632,7 @@ pub fn emit_func_append_with_call_cache(
               call_cache = cr.cache;
               cr.lines
             },
-            _ => emit_instr(c_types, pool, target_ptr_bits, p, call_names, enum_order, ins, read_temps, vn),
+            _ => emit_instr(c_types, pool, target_ptr_bits, p, call_names, enum_order, ins, read_temps, int_consts, vn),
           };
         let mut li: i32 = 0;
         while li < lines.len() { out.push(lines.get(li)); li = li + 1; }
