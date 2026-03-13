@@ -1054,6 +1054,13 @@ fn gen_expr_unary(g0: Gen, op: ast.UnaryOp, a: i32, out_ty: i32) -> GenExprResul
   return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid2), ty: out_ty };
 }
 
+fn is_std_time_duration_ty(ctx: tc.Ctx, ty: i32) -> bool {
+  let base: i32 = tc.strip_ref(ctx, tc.strip_range(ctx, ty));
+  if base == -1 { return false; }
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  return t.kind == ir.TyKind.Struct && tc.ty_mod(t) == "std/time" && tc.ty_name(t) == "Duration";
+}
+
 fn gen_expr_binary(g0: Gen, op: ast.BinaryOp, l: i32, r: i32, out_ty: i32) -> GenExprResult {
   let mut g: Gen = g0;
   let lr: GenExprResult = gen_expr(g, l, -1);
@@ -1066,9 +1073,45 @@ fn gen_expr_binary(g0: Gen, op: ast.BinaryOp, l: i32, r: i32, out_ty: i32) -> Ge
     return gen_expr_short_circuit_logic(g, op, lr.val, r, out_ty);
   }
 
-  let rr: GenExprResult = gen_expr(g, r, lr.ty);
+  let duration_mul_out: bool = match op { ast.BinaryOp.Mul => true, _ => false } && is_std_time_duration_ty(g.ctx, out_ty);
+  let rr: GenExprResult = gen_expr(g, r, if duration_mul_out { -1 } else { lr.ty });
   if !rr.ok { return rr; }
   g = rr.g;
+
+  if duration_mul_out {
+    let l_is_dur: bool = is_std_time_duration_ty(g.ctx, lr.ty);
+    let r_is_dur: bool = is_std_time_duration_ty(g.ctx, rr.ty);
+    let l_is_int: bool = tc.is_int_like_ty(g.ctx, lr.ty);
+    let r_is_int: bool = tc.is_int_like_ty(g.ctx, rr.ty);
+    if (l_is_dur && r_is_int) || (r_is_dur && l_is_int) {
+      let dur_v: ir.Value = if l_is_dur { lr.val } else { rr.val };
+      let num_v0: ir.Value = if l_is_dur { rr.val } else { lr.val };
+      let num_ty: i32 = if l_is_dur { rr.ty } else { lr.ty };
+      let mut num_v: ir.Value = num_v0;
+      if num_ty != g.ctx.ty_i64 {
+        let c64: GenNewIdResult = gen_new_temp(g);
+        g = c64.g;
+        let num64: i32 = c64.id;
+        g = gen_emit(g, ir.Instr.IntCastChecked(num64, g.ctx.ty_i64, num_ty, num_v0));
+        num_v = ir.v_temp(num64);
+      }
+      let rns: GenNewIdResult = gen_new_temp(g);
+      g = rns.g;
+      let tid_ns: i32 = rns.id;
+      g = gen_emit(g, ir.Instr.FieldGet(tid_ns, g.ctx.ty_i64, dur_v, "ns"));
+      let rmul: GenNewIdResult = gen_new_temp(g);
+      g = rmul.g;
+      let tid_mul: i32 = rmul.id;
+      g = gen_emit(g, ir.Instr.BinOp(tid_mul, ir.BinOpKind.Mul, g.ctx.ty_i64, ir.v_temp(tid_ns), num_v));
+      let rout: GenNewIdResult = gen_new_temp(g);
+      g = rout.g;
+      let tid_out: i32 = rout.id;
+      let mut fs: Vec[ir.StructInitField] = Vec();
+      fs.push(ir.StructInitField { name: "ns", val: ir.v_temp(tid_mul) });
+      g = gen_emit(g, ir.Instr.StructInit(tid_out, out_ty, fs));
+      return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(tid_out), ty: out_ty };
+    }
+  }
 
   // Special-case: enum equality against unit variants lowers to tag comparison.
   let is_eqop: bool = match op { ast.BinaryOp.Eq => true, ast.BinaryOp.Ne => true, _ => false };
