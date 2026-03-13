@@ -923,6 +923,13 @@ fn is_enum_unit_value(ctx: Ctx, mod_path: String, imps: Imports, exprs: ast.Expr
   return enum_unit_tag_in_enum(ctx, enum_ty, var_name) != -1;
 }
 
+fn is_std_time_duration_ty(ctx: Ctx, ty: i32) -> bool {
+  let base: i32 = strip_ref(ctx, strip_range(ctx, ty));
+  if base == -1 { return false; }
+  let t: ir.Ty = ir.ty_pool_get(ctx.pool, base);
+  return t.kind == ir.TyKind.Struct && ty_mod(t) == "std/time" && ty_name(t) == "Duration";
+}
+
 fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, op: ast.BinaryOp, l: i32, r: i32, expected: i32) -> ExprTyResult {
   // bool results
   let is_cmp: bool = match op { ast.BinaryOp.Lt => true, ast.BinaryOp.Le => true, ast.BinaryOp.Gt => true, ast.BinaryOp.Ge => true, _ => false };
@@ -1074,6 +1081,23 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
     }
     if expected != -1 && expected != ctx.ty_bool { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
     return ExprTyResult { ok: true, ty: ctx.ty_bool, err: TcError.None };
+  }
+
+  // Duration arithmetic sugar (without general operator overloading):
+  // `int * Duration` and `Duration * int` produce `Duration`.
+  let is_mul: bool = match op { ast.BinaryOp.Mul => true, _ => false };
+  if is_mul {
+    let lbase_d: i32 = strip_ref(ctx, strip_range(ctx, lr.ty));
+    let rbase_d: i32 = strip_ref(ctx, strip_range(ctx, rr.ty));
+    let l_is_dur: bool = is_std_time_duration_ty(ctx, lbase_d);
+    let r_is_dur: bool = is_std_time_duration_ty(ctx, rbase_d);
+    let l_is_int: bool = is_int_like_ty(ctx, lbase_d);
+    let r_is_int: bool = is_int_like_ty(ctx, rbase_d);
+    if (l_is_dur && r_is_int) || (r_is_dur && l_is_int) {
+      let out_dur: i32 = if l_is_dur { lbase_d } else { rbase_d };
+      if expected != -1 && !assignable_to(ctx, expected, out_dur) { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+      return ExprTyResult { ok: true, ty: out_dur, err: TcError.None };
+    }
   }
 
   // arithmetic
