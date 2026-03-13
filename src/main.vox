@@ -1685,6 +1685,49 @@ fn load_deps_from_manifest_with_c_text(load_c_text: bool) -> DepsResult {
 
 struct DepsResult { ok: bool, err: String, files: Vec[ld.SourceFile], seen: Vec[String], resolved: Vec[mf.Dependency] }
 
+struct SeedProjectFilesResult {
+  ok: bool,
+  err: String,
+  files: Vec[ld.SourceFile],
+  resolved: Vec[mf.Dependency],
+}
+
+fn seed_project_files(has_std: bool, has_vox: bool, load_std_c_text: bool, load_dep_c_text: bool) -> SeedProjectFilesResult {
+  let mut files: Vec[ld.SourceFile] = if has_std { Vec() } else { load_stage1_std_with_c_text(load_std_c_text) };
+  if !has_vox {
+    let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
+    let mut pvi: i32 = 0;
+    while pvi < preload_vox.len() {
+      files.push(preload_vox.get(pvi));
+      pvi = pvi + 1;
+    }
+  }
+  let dr: DepsResult = load_deps_from_manifest_with_c_text(load_dep_c_text);
+  if !dr.ok {
+    return SeedProjectFilesResult { ok: false, err: dr.err, files: Vec(), resolved: Vec() };
+  }
+  let mut di: i32 = 0;
+  while di < dr.files.len() {
+    files.push(dr.files.get(di));
+    di = di + 1;
+  }
+  return SeedProjectFilesResult { ok: true, err: "", files: files, resolved: dr.resolved };
+}
+
+struct LockVerifyWriteResult {
+  ok: bool,
+  err: String,
+}
+
+fn verify_and_write_lockfile_or_err(resolved: Vec[mf.Dependency]) -> LockVerifyWriteResult {
+  let vr: LockVerifyResult = verify_lockfile_or_ok(resolved);
+  if !vr.ok {
+    return LockVerifyWriteResult { ok: false, err: vr.err };
+  }
+  write_lockfile_from_lock_deps(vr.lock_deps);
+  return LockVerifyWriteResult { ok: true, err: "" };
+}
+
 fn deps_err(msg: String) -> DepsResult {
   return DepsResult { ok: false, err: msg, files: Vec(), seen: Vec(), resolved: Vec() };
 }
@@ -2992,22 +3035,12 @@ fn main() -> i32 {
     };
     let src_presence: SrcPresenceResult = detect_src_presence(list_paths);
     let paths: Vec[String] = src_presence.paths;
-    let mut files: Vec[ld.SourceFile] = if src_presence.has_std { Vec() } else { load_stage1_std_with_c_text(false) };
-    if !src_presence.has_vox {
-      let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
-      let mut pvi: i32 = 0;
-      while pvi < preload_vox.len() {
-        files.push(preload_vox.get(pvi));
-        pvi = pvi + 1;
-      }
-    }
-    let dr: DepsResult = load_deps_from_manifest_with_c_text(false);
-    if !dr.ok {
-      print("invalid vox.toml: ".concat(dr.err).concat("\n"));
+    let seeded: SeedProjectFilesResult = seed_project_files(src_presence.has_std, src_presence.has_vox, false, false);
+    if !seeded.ok {
+      print("invalid vox.toml: ".concat(seeded.err).concat("\n"));
       return 1;
     }
-    let mut di: i32 = 0;
-    while di < dr.files.len() { files.push(dr.files.get(di)); di = di + 1; }
+    let mut files: Vec[ld.SourceFile] = seeded.files;
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
@@ -3115,29 +3148,18 @@ fn main() -> i32 {
     let src_presence: SrcPresenceResult = detect_src_presence(srcw.walk_src_non_test_vox_files("."));
     let paths: Vec[String] = src_presence.paths;
     let is_self_std: bool = src_presence.has_std;
-    let mut files: Vec[ld.SourceFile] = if is_self_std { Vec() } else { load_stage1_std() };
-    if !src_presence.has_vox {
-      let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
-      let mut pvi: i32 = 0;
-      while pvi < preload_vox.len() {
-        files.push(preload_vox.get(pvi));
-        pvi = pvi + 1;
-      }
-    }
-    let dr: DepsResult = load_deps_from_manifest();
-    if !dr.ok {
-      print("invalid vox.toml: ".concat(dr.err).concat("\n"));
+    let seeded: SeedProjectFilesResult = seed_project_files(src_presence.has_std, src_presence.has_vox, true, true);
+    if !seeded.ok {
+      print("invalid vox.toml: ".concat(seeded.err).concat("\n"));
       return 1;
     }
-    let vr: LockVerifyResult = verify_lockfile_or_ok(dr.resolved);
-    if !vr.ok {
-      print("invalid vox.lock: ".concat(vr.err).concat("\n"));
+    let lock_check: LockVerifyWriteResult = verify_and_write_lockfile_or_err(seeded.resolved);
+    if !lock_check.ok {
+      print("invalid vox.lock: ".concat(lock_check.err).concat("\n"));
       print("hint: refresh lockfile after dependency changes: remove vox.lock then rerun build/test.\n");
       return 1;
     }
-    write_lockfile_from_lock_deps(vr.lock_deps);
-    let mut di: i32 = 0;
-    while di < dr.files.len() { files.push(dr.files.get(di)); di = di + 1; }
+    let mut files: Vec[ld.SourceFile] = seeded.files;
     let user: Vec[ld.SourceFile] = load_files(paths);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
@@ -4137,29 +4159,18 @@ fn main() -> i32 {
       return 0;
     }
 
-    let mut files: Vec[ld.SourceFile] = if src_presence_test.has_std { Vec() } else { load_stage1_std() };
-    if !src_presence_test.has_vox {
-      let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
-      let mut pvi: i32 = 0;
-      while pvi < preload_vox.len() {
-        files.push(preload_vox.get(pvi));
-        pvi = pvi + 1;
-      }
-    }
-    let dr: DepsResult = load_deps_from_manifest();
-    if !dr.ok {
-      print("invalid vox.toml: ".concat(dr.err).concat("\n"));
+    let seeded: SeedProjectFilesResult = seed_project_files(src_presence_test.has_std, src_presence_test.has_vox, true, true);
+    if !seeded.ok {
+      print("invalid vox.toml: ".concat(seeded.err).concat("\n"));
       return 1;
     }
-    let vr: LockVerifyResult = verify_lockfile_or_ok(dr.resolved);
-    if !vr.ok {
-      print("invalid vox.lock: ".concat(vr.err).concat("\n"));
+    let lock_check: LockVerifyWriteResult = verify_and_write_lockfile_or_err(seeded.resolved);
+    if !lock_check.ok {
+      print("invalid vox.lock: ".concat(lock_check.err).concat("\n"));
       print("hint: refresh lockfile after dependency changes: remove vox.lock then rerun build/test.\n");
       return 1;
     }
-    write_lockfile_from_lock_deps(vr.lock_deps);
-    let mut di: i32 = 0;
-    while di < dr.files.len() { files.push(dr.files.get(di)); di = di + 1; }
+    let mut files: Vec[ld.SourceFile] = seeded.files;
     let user: Vec[ld.SourceFile] = load_files_with_cached(paths, cached_discovery_files);
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
