@@ -24,6 +24,16 @@ fn ptr_write_u8_next(p: rawptr, b: u8) -> rawptr {
   return ptr_next(p);
 }
 
+fn byte_from_i32(n: i32) -> u8 {
+  if n < 0 || n > 255 { panic("byte out of range"); }
+  return n as u8;
+}
+
+fn hex_ascii_digit(n: i32) -> u8 {
+  let code: i32 = if n < 10 { n + 48 } else { n - 10 + 97 };
+  return byte_from_i32(code);
+}
+
 impl String {
   fn len(s: String) -> i32 {
     let n: usize = sys.strlen(s);
@@ -46,23 +56,20 @@ impl String {
     let n: i32 = s.len();
     if start < 0 || end < start || end > n { panic("string slice out of bounds"); }
     let m: i32 = end - start;
-    let m_usize: usize = m as usize;
-    let out: rawptr = sys.malloc(m_usize + (1 as usize));
-    if (out as isize) == (0 as isize) { panic("out of memory"); }
     let src: rawptr = ptr_add_i32(str_as_ptr(s), start);
-    let _: rawptr = sys.memcpy(out, src as const rawptr, m_usize);
-    @ptr_write[u8](ptr_add_i32(out, m), 0 as u8);
+    let out: rawptr = sys.dup_i32(src as const rawptr, m);
+    if (out as isize) == (0 as isize) { panic("out of memory"); }
     return out as String;
   }
 
   fn concat(s: String, other: String) -> String {
     let la: i32 = s.len();
     let lb: i32 = other.len();
-    let out: rawptr = sys.malloc(((la + lb) as usize) + (1 as usize));
+    let total: i32 = la + lb;
+    let out: rawptr = sys.alloc_buf(total);
     if (out as isize) == (0 as isize) { panic("out of memory"); }
-    let _: rawptr = sys.memcpy(out, str_as_ptr(s) as const rawptr, la as usize);
-    let _: rawptr = sys.memcpy(ptr_add_i32(out, la), str_as_ptr(other) as const rawptr, lb as usize);
-    @ptr_write[u8](ptr_add_i32(out, la + lb), 0 as u8);
+    let _: rawptr = sys.memcpy_i32(out, str_as_ptr(s) as const rawptr, la);
+    let _: rawptr = sys.memcpy_i32(ptr_add_i32(out, la), str_as_ptr(other) as const rawptr, lb);
     return out as String;
   }
 
@@ -171,25 +178,22 @@ impl String {
     let n: i32 = s.len();
     let mut in_p: rawptr = str_as_ptr(s);
     // Pass 1: count output size.
-    let mut out_n64: i64 = 0 as i64;
+    let mut out_n: usize = 0 as usize;
     let mut i: i32 = 0;
     while i < n {
       let ch: i32 = @ptr_read[u8](in_p) as i32;
       if ch == 92 || ch == 34 || ch == 10 || ch == 13 || ch == 9 {
-        out_n64 = out_n64 + (2 as i64);
+        out_n = out_n + (2 as usize);
       } else if ch >= 32 && ch <= 126 {
-        out_n64 = out_n64 + (1 as i64);
+        out_n = out_n + (1 as usize);
       } else {
-        out_n64 = out_n64 + (4 as i64);
+        out_n = out_n + (4 as usize);
       }
       in_p = ptr_next(in_p);
       i = i + 1;
     }
     // Pass 2: allocate and fill.
-    if out_n64 < 0 as i64 { panic("string too long"); }
-    let alloc_n64: i64 = out_n64 + (1 as i64);
-    if alloc_n64 <= 0 as i64 { panic("string too long"); }
-    let out: rawptr = sys.malloc(alloc_n64 as usize);
+    let out: rawptr = sys.malloc(out_n + (1 as usize));
     if (out as isize) == (0 as isize) { panic("out of memory"); }
     in_p = str_as_ptr(s);
     let mut out_p: rawptr = out;
@@ -212,15 +216,15 @@ impl String {
         out_p = ptr_write_u8_next(out_p, 92 as u8);
         out_p = ptr_write_u8_next(out_p, 116 as u8);
       } else if ch >= 32 && ch <= 126 {
-        out_p = ptr_write_u8_next(out_p, ch as u8);
+        out_p = ptr_write_u8_next(out_p, byte_from_i32(ch));
       } else {
         // \xHH encoding
         out_p = ptr_write_u8_next(out_p, 92 as u8);
         out_p = ptr_write_u8_next(out_p, 120 as u8);
         let hi: i32 = (ch / 16) % 16;
         let lo: i32 = ch % 16;
-        out_p = ptr_write_u8_next(out_p, (if hi < 10 { hi + 48 } else { hi - 10 + 97 }) as u8);
-        out_p = ptr_write_u8_next(out_p, (if lo < 10 { lo + 48 } else { lo - 10 + 97 }) as u8);
+        out_p = ptr_write_u8_next(out_p, hex_ascii_digit(hi));
+        out_p = ptr_write_u8_next(out_p, hex_ascii_digit(lo));
       }
       in_p = ptr_next(in_p);
       i = i + 1;
@@ -240,7 +244,7 @@ fn fmt_u64(v0: u64) -> String {
   let mut n: usize = 0 as usize;
   while true {
     let d: i32 = (v % (10 as u64)) as i32;
-    rev_p = ptr_write_u8_next(rev_p, (48 + d) as u8);
+    rev_p = ptr_write_u8_next(rev_p, byte_from_i32(48 + d));
     n = n + (1 as usize);
     v = v / (10 as u64);
     if v == (0 as u64) { break; }
