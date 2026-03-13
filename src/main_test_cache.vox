@@ -147,12 +147,20 @@ fn test_build_cache_state_with_tests(out: String, key: String, cpath: String, ob
   let selected: Vec[String] = selected0;
   let mut compiled: Vec[String] = Vec();
   let meta: String = out.concat(".test.cache.key");
-  if fs.exists(meta) && fs.exists(cpath) {
-    let cur: String = txt.trim_space(fs.read_to_string(meta));
-    if cur == key {
-      let tests_path: String = out.concat(".test.cache.tests");
-      if fs.exists(tests_path) {
+  if fs.exists(cpath) {
+    let tests_path: String = out.concat(".test.cache.tests");
+    if fs.exists(tests_path) {
+      let mut meta_ok: bool = true;
+      if fs.exists(meta) {
+        let cur: String = txt.trim_space(fs.read_to_string(meta));
+        meta_ok = cur == key;
+      }
+      if meta_ok {
         compiled = parse_test_build_cache_tests(fs.read_to_string(tests_path));
+        if compiled.len() > 0 && !fs.exists(meta) {
+          fs.mkdir_p(dir_name(meta));
+          let _: bool = write_string_if_changed(meta, key.concat("\n"));
+        }
       }
     }
   }
@@ -761,10 +769,13 @@ struct BuildSemCacheReadResult {
 }
 
 fn build_sem_cache_read_with_deps(key: String) -> BuildSemCacheReadResult {
+  if key == "" { return BuildSemCacheReadResult { hit: false, deps: Vec() }; }
   let meta: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.key");
-  if !fs.exists(meta) { return BuildSemCacheReadResult { hit: false, deps: Vec() }; }
-  let cur: String = txt.trim_space(fs.read_to_string(meta));
-  if cur != key { return BuildSemCacheReadResult { hit: false, deps: Vec() }; }
+  let has_meta: bool = fs.exists(meta);
+  if has_meta {
+    let cur: String = txt.trim_space(fs.read_to_string(meta));
+    if cur != key { return BuildSemCacheReadResult { hit: false, deps: Vec() }; }
+  }
   let deps_path: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.deps");
   if !fs.exists(deps_path) { return BuildSemCacheReadResult { hit: false, deps: Vec() }; }
   let lines: Vec[String] = txt.split_lines(fs.read_to_string(deps_path));
@@ -783,6 +794,10 @@ fn build_sem_cache_read_with_deps(key: String) -> BuildSemCacheReadResult {
   }
   if !build_cache_sem_dep_hashes_sorted_unique(deps) {
     return BuildSemCacheReadResult { hit: false, deps: Vec() };
+  }
+  if !has_meta {
+    fs.mkdir_p(dir_name(meta));
+    let _: bool = write_string_if_changed(meta, key.concat("\n"));
   }
   return BuildSemCacheReadResult { hit: true, deps: deps };
 }
@@ -1115,27 +1130,46 @@ fn build_cache_key_pair_source_sig_from_pkg_source_keys_keep(
 }
 
 fn build_link_cache_hit(key: String, bin: String) -> bool {
+  if key == "" { return false; }
   let meta: String = path_join(path_join(path_join("target", "cache"), "link-v1"), key).concat(".build.cache.key");
-  if !fs.exists(meta) { return false; }
   let has_bin: bool = fs.exists(bin) || fs.exists(bin.concat(".exe"));
   if !has_bin { return false; }
-  let cur: String = txt.trim_space(fs.read_to_string(meta));
-  return cur == key;
+  if fs.exists(meta) {
+    let cur: String = txt.trim_space(fs.read_to_string(meta));
+    return cur == key;
+  }
+  fs.mkdir_p(dir_name(meta));
+  let _: bool = write_string_if_changed(meta, key.concat("\n"));
+  return true;
 }
 
 fn build_cache_c_hit(key: String, cpath: String) -> bool {
+  if key == "" { return false; }
   let meta: String = path_join(path_join(path_join("target", "cache"), "pkg-obj-v1"), key).concat(".build.cache.key");
-  if !fs.exists(meta) { return false; }
   if !fs.exists(cpath) { return false; }
-  let cur: String = txt.trim_space(fs.read_to_string(meta));
-  return cur == key;
+  if fs.exists(meta) {
+    let cur: String = txt.trim_space(fs.read_to_string(meta));
+    return cur == key;
+  }
+  fs.mkdir_p(dir_name(meta));
+  let _: bool = write_string_if_changed(meta, key.concat("\n"));
+  return true;
 }
 
 fn build_sem_cache_hit(key: String) -> bool {
+  if key == "" { return false; }
   let meta: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.key");
-  if !fs.exists(meta) { return false; }
-  let cur: String = txt.trim_space(fs.read_to_string(meta));
-  return cur == key;
+  let deps_path: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.deps");
+  let c_ref_path: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.c-ref");
+  if fs.exists(meta) {
+    let cur: String = txt.trim_space(fs.read_to_string(meta));
+    if cur != key { return false; }
+    return true;
+  }
+  if !fs.exists(deps_path) && !fs.exists(c_ref_path) { return false; }
+  fs.mkdir_p(dir_name(meta));
+  let _: bool = write_string_if_changed(meta, key.concat("\n"));
+  return true;
 }
 
 fn discover_tests_with_paths(paths0: Vec[String], use_cache: bool) -> DiscoverTestsResult {

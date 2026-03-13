@@ -835,6 +835,23 @@ fn test_build_sem_cache_read_with_deps_roundtrip_smoke() -> () {
   t.assert(build_cache_sem_dep_hashes_equal(read.deps, deps_expected));
 }
 
+fn test_build_sem_cache_read_with_deps_backfills_missing_meta_smoke() -> () {
+  let seed_key: String = build_cache_test_unused_key("sem-read-backfill-meta-seed");
+  let key: String = build_cache_test_unused_key("sem-read-backfill-meta");
+  let deps_write: Vec[q.ParseLoadDepHash] = build_cache_test_sem_deps_main_dep();
+  write_build_sem_cache_with_deps(seed_key, deps_write);
+  let seed_deps_path: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), seed_key).concat(".build.cache.deps");
+  let deps_path: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.deps");
+  fs.mkdir_p(dir_name(deps_path));
+  fs.write_string(deps_path, fs.read_to_string(seed_deps_path));
+  let meta: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.key");
+  t.assert(!fs.exists(meta));
+  let read: BuildSemCacheReadResult = build_sem_cache_read_with_deps(key);
+  t.assert(read.hit);
+  t.assert(fs.exists(meta));
+  t.assert_eq(fs.read_to_string(meta), key.concat("\n"));
+}
+
 fn test_build_sem_cache_hit_with_deps_keep_preserves_deps_smoke() -> () {
   let key: String = build_cache_test_unused_key("sem-hit-keep");
   write_build_sem_cache_with_deps(key, build_cache_test_sem_deps_main_dep());
@@ -1113,6 +1130,18 @@ fn test_build_cache_c_hit_without_obj_smoke() -> () {
   t.assert(!build_cache_test_obj_hit(key, cpath, obj));
 }
 
+fn test_build_cache_c_hit_backfills_missing_meta_smoke() -> () {
+  let key: String = build_cache_test_unused_key("key-c-hit-backfill-meta");
+  let cpath: String = build_cache_obj_path_for_key(key, ".c");
+  let meta: String = path_join(path_join(path_join("target", "cache"), "pkg-obj-v1"), key).concat(".build.cache.key");
+  fs.mkdir_p(dir_name(cpath));
+  fs.write_string(cpath, "/*c*/");
+  t.assert(!fs.exists(meta));
+  t.assert(build_cache_c_hit(key, cpath));
+  t.assert(fs.exists(meta));
+  t.assert_eq(fs.read_to_string(meta), key.concat("\n"));
+}
+
 fn test_build_link_cache_hit_does_not_require_cpath_smoke() -> () {
   let key: String = build_cache_test_unused_key("key-link-no-cpath");
   let cpath: String = build_cache_obj_path_for_key(key, ".c");
@@ -1125,6 +1154,33 @@ fn test_build_link_cache_hit_does_not_require_cpath_smoke() -> () {
   fs.mkdir_p(dir_name(link_meta));
   let _: bool = write_string_if_changed(link_meta, key.concat("\n"));
   t.assert(build_link_cache_hit(key, bin));
+}
+
+fn test_build_link_cache_hit_backfills_missing_meta_smoke() -> () {
+  let key: String = build_cache_test_unused_key("key-link-backfill-meta");
+  let bin: String = build_cache_bin_for_key(key, "linux");
+  let link_meta: String = path_join(path_join(path_join("target", "cache"), "link-v1"), key).concat(".build.cache.key");
+  fs.mkdir_p(dir_name(bin));
+  fs.write_string(bin, "bin");
+  t.assert(!fs.exists(link_meta));
+  t.assert(build_link_cache_hit(key, bin));
+  t.assert(fs.exists(link_meta));
+  t.assert_eq(fs.read_to_string(link_meta), key.concat("\n"));
+}
+
+fn test_build_sem_cache_hit_backfills_missing_meta_from_deps_smoke() -> () {
+  let seed_key: String = build_cache_test_unused_key("key-sem-hit-backfill-meta-seed");
+  let key: String = build_cache_test_unused_key("key-sem-hit-backfill-meta");
+  write_build_sem_cache_with_deps(seed_key, build_cache_test_sem_deps_main_dep());
+  let seed_deps_path: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), seed_key).concat(".build.cache.deps");
+  let deps_path: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.deps");
+  fs.mkdir_p(dir_name(deps_path));
+  fs.write_string(deps_path, fs.read_to_string(seed_deps_path));
+  let meta: String = path_join(path_join(path_join("target", "cache"), "pkg-sem-v1"), key).concat(".build.cache.key");
+  t.assert(!fs.exists(meta));
+  t.assert(build_sem_cache_hit(key));
+  t.assert(fs.exists(meta));
+  t.assert_eq(fs.read_to_string(meta), key.concat("\n"));
 }
 
 fn test_build_cache_paths_use_split_link_and_obj_roots() -> () {
@@ -1445,6 +1501,35 @@ fn test_test_build_cache_hit_subset_smoke() -> () {
   let mut need_c: Vec[String] = Vec();
   need_c.push("root.test_c");
   t.assert(!test_build_cache_state_with_tests(out, key, cpath, obj, bin, need_c).hit);
+}
+
+fn test_test_build_cache_state_backfills_missing_meta_smoke() -> () {
+  let key: String = build_cache_test_unused_key_for_test_cache("test-state-backfill-meta");
+  let out: String = path_join(path_join(path_join("target", "cache"), "test-link-v1"), key);
+  let cpath: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".c");
+  let obj: String = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), key).concat(".o");
+  let bin: String = out;
+  fs.mkdir_p(dir_name(cpath));
+  fs.mkdir_p(dir_name(bin));
+  fs.write_string(cpath, "/*c*/");
+  fs.write_string(obj, "obj");
+  fs.write_string(bin, "bin");
+  let mut compiled: Vec[String] = Vec();
+  compiled.push("root.test_a");
+  let formatted: FormatTestsResult = format_test_build_cache_tests_with_tests(compiled);
+  compiled = formatted.tests;
+  fs.write_string(out.concat(".test.cache.tests"), formatted.text);
+  t.assert_eq(compiled.len(), 1);
+  let meta: String = out.concat(".test.cache.key");
+  t.assert(!fs.exists(meta));
+  let mut need_a: Vec[String] = Vec();
+  need_a.push("root.test_a");
+  let st: TestBuildCacheStateResult = test_build_cache_state_with_tests(out, key, cpath, obj, bin, need_a);
+  t.assert(st.c_hit);
+  t.assert(st.obj_hit);
+  t.assert(st.hit);
+  t.assert(fs.exists(meta));
+  t.assert_eq(fs.read_to_string(meta), key.concat("\n"));
 }
 
 fn test_test_build_cache_state_c_hit_without_bin_smoke() -> () {
