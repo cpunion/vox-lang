@@ -93,6 +93,7 @@ CI 步骤：
 6. 同宿主平台产物可执行 `vox version` 且输出内嵌版本号；非宿主交叉包跳过执行校验。
 7. tag 发布时上传全量资产到 GitHub Release。
 8. 自制源码包 `vox-lang-src-<version>.tar.gz` 与其 `.sha256` 产出并通过校验。
+9. `test-active` 中 `check-legacy-runtime-switch` 通过，确保 `VOX_LEGACY_C_RUNTIME` 判定在 CI/release 脚本间保持一致。
 
 ## 6. 锁版本维护流程
 
