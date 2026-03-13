@@ -696,7 +696,8 @@ Drop（迁出）：
 
 仍待完成（下一批）：
 
-- `NIO-04`（延伸）：`walk_vox_files` 语义继续从标准库边界收敛到编译器内部实现（`vox/internal/*`），标准库仅保留通用文件遍历语义。
+- [x] `NIO-04`（延伸）：`walk_vox_files` 语义继续从标准库边界收敛到编译器内部实现（`vox/internal/*`）。
+  - `vox/internal/source` 现以内部筛选逻辑主导：`walk_vox_files` 仅返回 `src/**` 与 `tests/**` 下 `.vox`，`walk_src_vox_files` 基于内部过滤得到，`walk_c_files` 优先内部过滤 `src/**.c` 并保留兼容 fallback。
 - [x] `NIO-LANG-01`：已支持 `time` 数值后缀糖（`3.seconds`/`3.second`/`3.milliseconds`/`3.microseconds`/`3.nanoseconds`），按纳秒 `i64` 结果类型归一化，并在 typecheck 增加溢出诊断（`time literal out of range`）。
 - [x] `NIO-LANG-02`：已支持 Go 风格 `3 * time.s -> time.Duration`（不依赖操作符重载）：`std/time` 的 `ns/us/ms/s` 现在为 `Duration` 常量，编译器二元算术新增 `int * Duration` / `Duration * int -> Duration` 规则并完成 IR lowering。
 - `NIO-LANG-03`：操作符重载能力（如 trait/协议驱动的 `+ - * / ==`）单独立项；当前 `time.Duration` 方案不依赖该能力。
