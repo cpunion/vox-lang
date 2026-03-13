@@ -1876,7 +1876,174 @@ fn emit_instr_int_cast_checked_append(
   int_consts: TempIntConstTable,
   vn: ValueNameTables,
 ) -> Vec[String] {
-  return push_lines(out0, emit_instr_int_cast_checked(c_types, pool, target_ptr_bits, tid, dst_ty, src_ty, v, int_consts, vn));
+  let dst: ir.Ty = ir.ty_pool_get(pool, dst_ty);
+  let src: ir.Ty = ir.ty_pool_get(pool, src_ty);
+  let v_text: String = c_value_named(v, vn);
+
+  let dst_is_unsigned: bool = is_unsigned_int_kind(dst.kind);
+  let src_is_unsigned: bool = is_unsigned_int_kind(src.kind);
+  let src_is_float: bool = src.kind == ir.TyKind.F32 || src.kind == ir.TyKind.F64;
+  let src_int_lit: IntConstValue = int_const_value_from_operand(v, int_consts);
+  let src_non_negative: bool = int_operand_is_definitely_non_negative(v, int_consts);
+
+  let mut out: Vec[String] = out0;
+  if !src_is_float && src_int_lit.ok && int_literal_always_fits_dst_kind(dst.kind, src_int_lit.n, target_ptr_bits) {
+    out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
+    return out;
+  }
+  if !src_is_float && !int_cast_needs_runtime_check(dst.kind, src.kind, target_ptr_bits) {
+    out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
+    return out;
+  }
+
+  let src_name: String = match src.kind {
+    ir.TyKind.I8 => "i8",
+    ir.TyKind.U8 => "u8",
+    ir.TyKind.I16 => "i16",
+    ir.TyKind.U16 => "u16",
+    ir.TyKind.I32 => "i32",
+    ir.TyKind.U32 => "u32",
+    ir.TyKind.I64 => "i64",
+    ir.TyKind.U64 => "u64",
+    ir.TyKind.ISize => "isize",
+    ir.TyKind.USize => "usize",
+    _ => "?",
+  };
+  let dst_name: String = match dst.kind {
+    ir.TyKind.I8 => "i8",
+    ir.TyKind.U8 => "u8",
+    ir.TyKind.I16 => "i16",
+    ir.TyKind.U16 => "u16",
+    ir.TyKind.I32 => "i32",
+    ir.TyKind.U32 => "u32",
+    ir.TyKind.I64 => "i64",
+    ir.TyKind.U64 => "u64",
+    ir.TyKind.ISize => "isize",
+    ir.TyKind.USize => "usize",
+    _ => "?",
+  };
+  let msg: String = src_name.concat(" to ").concat(dst_name).concat(" overflow");
+
+  let dst_max: String =
+    match dst.kind {
+      ir.TyKind.I8 => "INT8_MAX",
+      ir.TyKind.U8 => "UINT8_MAX",
+      ir.TyKind.I16 => "INT16_MAX",
+      ir.TyKind.U16 => "UINT16_MAX",
+      ir.TyKind.I32 => "INT32_MAX",
+      ir.TyKind.U32 => "UINT32_MAX",
+      ir.TyKind.I64 => "INT64_MAX",
+      ir.TyKind.U64 => "UINT64_MAX",
+      ir.TyKind.ISize => "INTPTR_MAX",
+      ir.TyKind.USize => "UINTPTR_MAX",
+      _ => "",
+    };
+  if dst_max.len() == 0 { panic("int_cast_checked dst must be int"); }
+  let dst_min: String =
+    match dst.kind {
+      ir.TyKind.I8 => "INT8_MIN",
+      ir.TyKind.I16 => "INT16_MIN",
+      ir.TyKind.I32 => "INT32_MIN",
+      ir.TyKind.I64 => "INT64_MIN",
+      ir.TyKind.ISize => "INTPTR_MIN",
+      _ => "0",
+    };
+
+  if src_is_float {
+    if dst_is_unsigned {
+      out.push("  if (!isfinite((double)".concat(v_text)
+        .concat(") || (double)")
+        .concat(v_text)
+        .concat(" < 0.0 || (long double)")
+        .concat(v_text)
+        .concat(" > (long double)")
+        .concat(dst_max)
+        .concat(") { vox_host_panic(")
+        .concat(c_str_lit(msg))
+        .concat("); }"));
+    } else {
+      out.push("  if (!isfinite((double)".concat(v_text)
+        .concat(") || (long double)")
+        .concat(v_text)
+        .concat(" < (long double)")
+        .concat(dst_min)
+        .concat(" || (long double)")
+        .concat(v_text)
+        .concat(" > (long double)")
+        .concat(dst_max)
+        .concat(") { vox_host_panic(")
+        .concat(c_str_lit(msg))
+        .concat("); }"));
+    }
+  } else {
+    if dst_is_unsigned {
+      if src_is_unsigned {
+        if dst.kind == ir.TyKind.U64 {
+        } else if dst.kind == ir.TyKind.USize && src.kind == ir.TyKind.U64 {
+          out.push("  if (vox_u64_exceeds_uintptr_max((uint64_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+        } else if dst.kind == ir.TyKind.U32 && src.kind == ir.TyKind.USize {
+          out.push("  if (vox_uptr_exceeds_u32_max((uintptr_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+        } else {
+          out.push("  if ((uint64_t)".concat(v_text).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+        }
+      } else {
+        if dst.kind == ir.TyKind.U64 {
+          if !src_non_negative {
+            out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+          }
+        } else if dst.kind == ir.TyKind.U32 && src.kind == ir.TyKind.ISize {
+          if !src_non_negative {
+            out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+          }
+          out.push("  if (vox_iptr_exceeds_u32_max((intptr_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+        } else if int_cast_signed_to_unsigned_needs_upper_check(dst.kind, src.kind, target_ptr_bits) {
+          if dst.kind == ir.TyKind.USize && src.kind == ir.TyKind.I64 {
+            if !src_non_negative {
+              out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+            }
+            out.push("  if (vox_u64_exceeds_uintptr_max((uint64_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+          } else {
+            if src_non_negative {
+              out.push("  if ((uint64_t)".concat(v_text).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+            } else {
+              out.push("  if (".concat(v_text).concat(" < 0 || (uint64_t)").concat(v_text).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+            }
+          }
+        } else {
+          if !src_non_negative {
+            out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+          }
+        }
+      }
+    } else {
+      if src_is_unsigned {
+        if dst.kind == ir.TyKind.ISize && src.kind == ir.TyKind.U32 {
+          out.push("  if (vox_u32_exceeds_intptr_max((uint32_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+        } else if dst.kind == ir.TyKind.I64 && src.kind == ir.TyKind.USize {
+          out.push("  if (vox_uptr_exceeds_i64_max((uintptr_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+        } else {
+          out.push("  if ((uint64_t)".concat(v_text).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+        }
+      } else {
+        if dst.kind == ir.TyKind.ISize && src.kind == ir.TyKind.I64 {
+          out.push("  if (vox_i64_outside_intptr_range((int64_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+        } else {
+          out.push("  if (((int64_t)".concat(v_text)
+            .concat(" < (int64_t)")
+            .concat(dst_min)
+            .concat(") || ((int64_t)")
+            .concat(v_text)
+            .concat(" > (int64_t)")
+            .concat(dst_max)
+            .concat(")) { vox_host_panic(")
+            .concat(c_str_lit(msg))
+            .concat("); }"));
+        }
+      }
+    }
+  }
+  out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
+  return out;
 }
 
 fn emit_instr_struct_init_line(c_types: Vec[String], pool: ir.TyPool, tid: i32, ty: i32, fs: Vec[ir.StructInitField], vn: ValueNameTables) -> String {
@@ -2089,7 +2256,141 @@ fn emit_instr_binop_int_append(
   int_consts: TempIntConstTable,
   vn: ValueNameTables,
 ) -> Vec[String] {
-  return push_lines(out0, emit_instr_binop_int(c_types, pool, tid, op, ty, a, b, int_consts, vn));
+  let t: ir.Ty = ir.ty_pool_get(pool, ty);
+  if !is_int_scalar_kind(t.kind) { panic("binop int helper expects int type"); }
+  let dst_cty: String = c_type_from_table(c_types, pool, ty);
+  let a_text: String = c_value_named(a, vn);
+  let b_text: String = c_value_named(b, vn);
+  let a_int_lit_v: IntConstValue = int_const_value_from_operand(a, int_consts);
+  let b_int_lit_v: IntConstValue = int_const_value_from_operand(b, int_consts);
+  let a_is_int_lit: bool = a_int_lit_v.ok;
+  let b_is_int_lit: bool = b_int_lit_v.ok;
+  let a_int_lit: i64 = if a_is_int_lit { a_int_lit_v.n } else { 0 as i64 };
+  let b_int_lit: i64 = if b_is_int_lit { b_int_lit_v.n } else { 0 as i64 };
+
+  let is_mul: bool = match op { ir.BinOpKind.Mul => true, _ => false };
+  let is_add: bool = match op { ir.BinOpKind.Add => true, _ => false };
+  let is_sub: bool = match op { ir.BinOpKind.Sub => true, _ => false };
+  let is_bit: bool = match op { ir.BinOpKind.BitAnd => true, ir.BinOpKind.BitOr => true, ir.BinOpKind.BitXor => true, _ => false };
+  let mut out: Vec[String] = out0;
+  if is_add || is_sub || is_mul || is_bit {
+    if !is_signed_int_kind(t.kind) {
+      let uty: String = unsigned_peer_c_type(t.kind);
+      let uexpr: String = "((".concat(uty).concat(")((((").concat(uty).concat(")").concat(a_text).concat(") ")
+        .concat(c_binop(op)).concat(" ((").concat(uty).concat(")").concat(b_text).concat("))))");
+      out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(dst_cty).concat(")").concat(uexpr).concat(";"));
+      return out;
+    }
+    let uty: String = unsigned_peer_c_type(t.kind);
+    let bitcast_fn: String = signed_from_unsigned_bitcast_fn(t.kind);
+    if bitcast_fn == "" { panic("missing signed bitcast helper"); }
+    let expr: String = bitcast_fn
+      .concat("((").concat(uty).concat(")((((").concat(uty).concat(")").concat(a_text).concat(") ")
+      .concat(c_binop(op)).concat(" ((").concat(uty).concat(")").concat(b_text).concat("))))");
+    out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(expr).concat(";"));
+    return out;
+  }
+
+  let is_shl: bool = match op { ir.BinOpKind.Shl => true, _ => false };
+  let is_shr: bool = match op { ir.BinOpKind.Shr => true, _ => false };
+  if is_shl || is_shr {
+    let bits_expr: String = int_bits_expr(t.kind);
+    let bits_const: i32 = int_bits(t.kind);
+    let uty: String = unsigned_peer_c_type(t.kind);
+    let bitcast_fn: String = signed_from_unsigned_bitcast_fn(t.kind);
+    out.push("  {");
+    out.push("    ".concat(uty).concat(" ua = (").concat(uty).concat(")").concat(a_text).concat(";"));
+    if is_signed_int_kind(t.kind) {
+      if b_is_int_lit && bits_const > 0 {
+        if b_int_lit < 0 || b_int_lit >= (bits_const as i64) {
+          out.push("    vox_host_panic(\"shift count out of range\");");
+          out.push("    uint64_t n = 0;");
+        } else {
+          out.push("    uint64_t n = (uint64_t)".concat(b_int_lit.to_string()).concat(";"));
+        }
+      } else {
+        out.push("    int64_t sh = (int64_t)".concat(b_text).concat(";"));
+        out.push("    if (sh < 0 || sh >= (int64_t)".concat(bits_expr).concat(") { vox_host_panic(\"shift count out of range\"); }"));
+        out.push("    uint64_t n = (uint64_t)sh;");
+      }
+    } else {
+      if b_is_int_lit && bits_const > 0 {
+        if b_int_lit < 0 || b_int_lit >= (bits_const as i64) {
+          out.push("    vox_host_panic(\"shift count out of range\");");
+          out.push("    uint64_t n = 0;");
+        } else {
+          out.push("    uint64_t n = (uint64_t)".concat(b_int_lit.to_string()).concat(";"));
+        }
+      } else {
+        out.push("    uint64_t n = (uint64_t)".concat(b_text).concat(";"));
+        out.push("    if (n >= (uint64_t)".concat(bits_expr).concat(") { vox_host_panic(\"shift count out of range\"); }"));
+      }
+    }
+    if is_shl {
+      out.push("    ".concat(uty).concat(" ur = (").concat(uty).concat(")(ua << n);"));
+    } else if is_signed_int_kind(t.kind) {
+      out.push("    ".concat(uty).concat(" ur;"));
+      out.push("    if (n == 0) {");
+      out.push("      ur = ua;");
+      let lsign: String = "    } else if ((ua & ".concat(int_sign_high_bit_expr(t.kind)).concat(") != 0) {");
+      out.push(lsign);
+      out.push("      ".concat(uty).concat(" m = ~(((").concat(uty).concat(")~(").concat(uty).concat(")0) >> n);"));
+      out.push("      ur = (".concat(uty).concat(")((ua >> n) | m);"));
+      out.push("    } else {");
+      out.push("      ur = (".concat(uty).concat(")(ua >> n);"));
+      out.push("    }");
+    } else {
+      out.push("    ".concat(uty).concat(" ur = (").concat(uty).concat(")(ua >> n);"));
+    }
+    if is_signed_int_kind(t.kind) {
+      if bitcast_fn == "" { panic("missing signed bitcast helper"); }
+      out.push("    ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(bitcast_fn).concat("(ur);"));
+    } else {
+      out.push("    ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(dst_cty).concat(")ur;"));
+    }
+    out.push("  }");
+    return out;
+  }
+
+  let is_div: bool = match op { ir.BinOpKind.Div => true, _ => false };
+  let is_mod: bool = match op { ir.BinOpKind.Mod => true, _ => false };
+  if is_div || is_mod {
+    if b_is_int_lit {
+      if b_int_lit == 0 {
+        out.push("  vox_host_panic(\"division by zero\");");
+      }
+    } else {
+      out.push("  if (".concat(b_text).concat(" == (").concat(dst_cty).concat(")0) { vox_host_panic(\"division by zero\"); }"));
+    }
+    if is_signed_int_kind(t.kind) {
+      let minm: String = signed_min_macro(t.kind);
+      let maxm: String = signed_max_macro(t.kind);
+      if minm.len() == 0 || maxm.len() == 0 { panic("missing signed min/max macro"); }
+      if b_is_int_lit {
+        if b_int_lit == -1 {
+          if int_operand_is_definitely_not_signed_min(a, t.kind, int_consts) {
+          } else if a_is_int_lit {
+            let a_min: IntConstValue = int_min_const_for_signed_kind(t.kind);
+            if !a_min.ok {
+              out.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
+            } else if a_int_lit == a_min.n {
+              out.push("  vox_host_panic(\"division overflow\");");
+            } else {
+              out.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
+            }
+          } else {
+            out.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
+          }
+        }
+      } else {
+        out.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(" && ").concat(b_text).concat(" == (").concat(dst_cty).concat(")-1) { vox_host_panic(\"division overflow\"); }"));
+      }
+    }
+    out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(dst_cty).concat(")(").concat(a_text).concat(" ").concat(c_binop(op)).concat(" ").concat(b_text).concat(");"));
+    return out;
+  }
+
+  panic("unknown binop");
 }
 
 fn emit_instr_vec_new_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, vn: ValueNameTables) -> Vec[String] {
@@ -2699,7 +3000,11 @@ fn emit_instr_append(
     ir.Instr.AtomicCAS(tid, elem_ty, h, expected, desired) => emit_instr_atomic_cas_append(out, pool, tid, elem_ty, h, expected, desired, vn),
     ir.Instr.AtomicDrop(_elem_ty, h) => { out.push("  free((void*)".concat(c_value_named(h, vn)).concat(");")); out },
 
-    ir.Instr.Call(has_dst, tid, ret_ty, name, args) => push_lines(out, emit_instr_call(call_names, has_dst, tid, ret_ty, name, args, read_temps, vn)),
+    ir.Instr.Call(has_dst, tid, ret_ty, name, args) => {
+      let cr: EmitInstrCallCachedLineResult = emit_instr_call_cached_line(call_names, Vec(), has_dst, tid, ret_ty, name, args, read_temps, vn);
+      out.push(cr.line);
+      out
+    },
   };
 }
 
