@@ -11,6 +11,7 @@ import "vox/compile" as c
 import "vox/loader" as ld
 import "vox/codegen" as cg
 import "vox/macroexpand" as mx
+import "std/fs" as fs
 
 fn lex_err_none(e: lex.LexError) -> bool {
   return match e { lex.LexError.None => true, _ => false, };
@@ -382,4 +383,113 @@ fn test_public_api_async_match_expr_with_await_in_arms_compile_smoke() -> () {
     c_sources: Vec(),
   });
   t.assert_with(r.ok, r.err);
+}
+
+fn compile_public_api_sys_key_path_for_target(target_os: String, target_arch: String) -> c.CompileResult {
+  let mut files: Vec[ld.SourceFile] = Vec();
+  let mut prelude_paths: Vec[String] = Vec();
+  prelude_paths.push("src/std/prelude/assert.vox");
+  prelude_paths.push("src/std/prelude/caller.vox");
+  prelude_paths.push("src/std/prelude/io.vox");
+  prelude_paths.push("src/std/prelude/string.vox");
+  prelude_paths.push("src/std/prelude/traits.vox");
+  prelude_paths.push("src/std/prelude/vec.vox");
+  let mut pi: i32 = 0;
+  while pi < prelude_paths.len() {
+    let p: String = prelude_paths.get(pi);
+    files.push(ld.SourceFile { path: p, text: fs.read_to_string(p) });
+    pi = pi + 1;
+  }
+  let mut sys_paths: Vec[String] = Vec();
+  sys_paths.push("src/std/sys/ptr_32.vox");
+  sys_paths.push("src/std/sys/ptr_64.vox");
+  sys_paths.push("src/std/sys/sys_common.vox");
+  sys_paths.push("src/std/sys/now_linux.vox");
+  sys_paths.push("src/std/sys/now_darwin.vox");
+  sys_paths.push("src/std/sys/now_windows.vox");
+  sys_paths.push("src/std/sys/now_wasm.vox");
+  sys_paths.push("src/std/sys/poll_linux.vox");
+  sys_paths.push("src/std/sys/poll_darwin.vox");
+  sys_paths.push("src/std/sys/poll_windows.vox");
+  sys_paths.push("src/std/sys/poll_wasm.vox");
+  sys_paths.push("src/std/sys/sock_linux.vox");
+  sys_paths.push("src/std/sys/sock_darwin.vox");
+  sys_paths.push("src/std/sys/sock_windows.vox");
+  sys_paths.push("src/std/sys/sock_wasm.vox");
+  sys_paths.push("src/std/sys/sys_linux.vox");
+  sys_paths.push("src/std/sys/sys_darwin.vox");
+  sys_paths.push("src/std/sys/sys_windows.vox");
+  sys_paths.push("src/std/sys/sys_windows_x86.vox");
+  sys_paths.push("src/std/sys/sys_wasm.vox");
+  let mut si: i32 = 0;
+  while si < sys_paths.len() {
+    let p: String = sys_paths.get(si);
+    files.push(ld.SourceFile { path: p, text: fs.read_to_string(p) });
+    si = si + 1;
+  }
+  files.push(ld.SourceFile {
+    path: "src/main.vox",
+    text: """
+      import "std/sys" as sys
+
+      fn main() -> i32 {
+        let path: String = "target/public_api_sys_key_path_target.tmp";
+        let _mk: i32 = sys.mkdir("target", 493);
+        let fdw: i32 = sys.creat(path, 384);
+        if fdw >= 0 {
+          let _nw: isize = sys.write(fdw, "vox" as const rawptr, 3 as usize);
+          let _cw: i32 = sys.close(fdw);
+          _nw;
+          _cw;
+        }
+        let fdr: i32 = sys.open_read(path);
+        if fdr >= 0 {
+          let buf: rawptr = sys.calloc(1 as usize, 8 as usize);
+          let _nr: isize = sys.read(fdr, buf, 3 as usize);
+          let _cr: i32 = sys.close(fdr);
+          sys.free(buf);
+          _nr;
+          _cr;
+        }
+        let _ac: i32 = sys.access(path, 0);
+        let _wr: bool = sys.wait_read(-1 as isize, 0);
+        let _ww: bool = sys.wait_write(-1 as isize, 0);
+        _ac;
+        _wr;
+        _ww;
+        return 0;
+      }
+    """,
+  });
+  return c.compile_files_to_c_profile_for_target(
+    files,
+    cg.EmitOptions {
+      emit_driver_main: true,
+      driver_main_kind: cg.DriverMainKind.User,
+      emit_test_main: false,
+      test_funcs: Vec(),
+      c_sources: Vec(),
+    },
+    64,
+    target_os,
+    target_arch,
+  ).r;
+}
+
+fn test_public_api_sys_key_path_compile_target_linux_amd64() -> () {
+  let r: c.CompileResult = compile_public_api_sys_key_path_for_target("linux", "amd64");
+  t.assert_with(r.ok, r.err);
+  t.assert(r.c.contains("epoll_create"));
+}
+
+fn test_public_api_sys_key_path_compile_target_darwin_amd64() -> () {
+  let r: c.CompileResult = compile_public_api_sys_key_path_for_target("darwin", "amd64");
+  t.assert_with(r.ok, r.err);
+  t.assert(r.c.contains("kqueue"));
+}
+
+fn test_public_api_sys_key_path_compile_target_windows_amd64() -> () {
+  let r: c.CompileResult = compile_public_api_sys_key_path_for_target("windows", "amd64");
+  t.assert_with(r.ok, r.err);
+  t.assert(r.c.contains("_sopen_s"));
 }
