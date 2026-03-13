@@ -11,28 +11,99 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$WORK_DIR/src" "$WORK_DIR/tests"
-cat > "$WORK_DIR/src/main.vox" <<'VOX'
+mk_project() {
+  local dir="$1"
+  mkdir -p "$dir/src" "$dir/tests"
+  cat > "$dir/vox.toml" <<'TOML'
+[package]
+name = "incr_gate"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+TOML
+  cat > "$dir/src/main.vox" <<'VOX'
 fn main() -> i32 { return 0; }
 VOX
-cat > "$WORK_DIR/tests/smoke_test.vox" <<'VOX'
+  cat > "$dir/tests/smoke_test.vox" <<'VOX'
 fn test_smoke() -> () {}
 VOX
+}
 
-(
-  cd "$WORK_DIR"
-
-  VOX_INCREMENTAL=0 VOX_CACHE_TRACE=1 "$COMPILER_BIN" test --list >/dev/null
-  if [[ -e target/debug/.vox_test_discover.key || -e target/debug/.vox_test_discover.list ]]; then
-    echo "[incremental-gate] expected no discovery cache sidecars when VOX_INCREMENTAL=0" >&2
+require_no_file() {
+  local path="$1"
+  local why="$2"
+  if [[ -e "$path" ]]; then
+    echo "[incremental-gate] unexpected file exists: $path ($why)" >&2
     exit 1
   fi
+}
 
-  VOX_INCREMENTAL=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" test --list >/dev/null
-  if [[ ! -e target/debug/.vox_test_discover.key || ! -e target/debug/.vox_test_discover.list ]]; then
-    echo "[incremental-gate] expected discovery cache sidecars when VOX_INCREMENTAL=1" >&2
+require_any_file_in_dir() {
+  local dir="$1"
+  local why="$2"
+  if [[ ! -d "$dir" ]]; then
+    echo "[incremental-gate] expected directory missing: $dir ($why)" >&2
+    exit 1
+  fi
+  if ! find "$dir" -type f | grep -q .; then
+    echo "[incremental-gate] expected files under directory: $dir ($why)" >&2
+    exit 1
+  fi
+}
+
+INCR0="$WORK_DIR/incr0"
+INCR1="$WORK_DIR/incr1"
+mk_project "$INCR0"
+mk_project "$INCR1"
+
+(
+  cd "$INCR0"
+
+  VOX_INCREMENTAL=0 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build.log 2>&1
+  VOX_INCREMENTAL=0 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" test --list > list.log 2>&1
+
+  require_no_file "target/debug/.vox_test_discover.key" "VOX_INCREMENTAL=0 should disable test discovery sidecar writes"
+  require_no_file "target/debug/.vox_test_discover.list" "VOX_INCREMENTAL=0 should disable test discovery sidecar writes"
+  if [[ -d target/cache ]]; then
+    if find target/cache -type f | grep -q .; then
+      echo "[incremental-gate] expected no target/cache artifacts when VOX_INCREMENTAL=0" >&2
+      exit 1
+    fi
+  fi
+  if rg -n "\[query-shadow\]" build.log list.log >/dev/null 2>&1; then
+    echo "[incremental-gate] query-shadow logs should be absent when VOX_INCREMENTAL=0" >&2
     exit 1
   fi
 )
 
-echo "[incremental-gate] ok: VOX_INCREMENTAL gates test discovery cache reuse"
+(
+  cd "$INCR1"
+
+  VOX_INCREMENTAL=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build1.log 2>&1
+  VOX_INCREMENTAL=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build2.log 2>&1
+  VOX_INCREMENTAL=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" test --list > list.log 2>&1
+
+  if [[ ! -e target/debug/.vox_test_discover.key || ! -e target/debug/.vox_test_discover.list ]]; then
+    echo "[incremental-gate] expected test discovery sidecars when VOX_INCREMENTAL=1" >&2
+    exit 1
+  fi
+  require_any_file_in_dir "target/cache/pkg-sem-v1" "VOX_INCREMENTAL=1 should enable semantic cache artifacts"
+  require_any_file_in_dir "target/cache/pkg-obj-v1" "VOX_INCREMENTAL=1 should enable object cache artifacts"
+  require_any_file_in_dir "target/cache/link-v1" "VOX_INCREMENTAL=1 should enable link cache artifacts"
+
+  if ! rg -n "\[cache\] mode=build cache=on incremental=on" build1.log build2.log >/dev/null 2>&1; then
+    echo "[incremental-gate] expected cache=on incremental=on trace line for VOX_INCREMENTAL=1 build" >&2
+    exit 1
+  fi
+  if ! rg -n "\[query-shadow\] phase=build" build1.log build2.log >/dev/null 2>&1; then
+    echo "[incremental-gate] expected query-shadow build trace when VOX_QUERY_SHADOW=1 and VOX_INCREMENTAL=1" >&2
+    exit 1
+  fi
+  if [[ ! -d target/cache/pkg-sem-v1/parse-load-shadow-v1 ]]; then
+    echo "[incremental-gate] expected parse-load-shadow artifacts when VOX_QUERY_SHADOW=1 and VOX_INCREMENTAL=1" >&2
+    exit 1
+  fi
+)
+
+echo "[incremental-gate] ok: VOX_INCREMENTAL gates build/test/list cache + query-shadow behavior"
