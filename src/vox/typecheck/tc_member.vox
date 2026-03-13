@@ -1,6 +1,14 @@
 import "vox/ast" as ast
 import "vox/ir" as ir
 
+fn time_literal_unit_ns(name: String) -> i64 {
+  if name == "nanosecond" || name == "nanoseconds" { return 1; }
+  if name == "microsecond" || name == "microseconds" { return 1000; }
+  if name == "millisecond" || name == "milliseconds" { return 1000000; }
+  if name == "second" || name == "seconds" { return 1000000000; }
+  return 0;
+}
+
 fn find_enum_for_member(ctx: Ctx, enum_mod: String, enum_name: String, expected: i32) -> FindEnumResult {
   let fe0: FindEnumResult = find_enum(ctx, enum_mod, enum_name);
   if fe0.found { return fe0; }
@@ -46,12 +54,27 @@ fn tc_expr_member(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
   let recv_sp: ast.Span = ast.expr_pool_span(exprs, recv);
 
   // 1) Field access: `value.field`
+  let recv_node: ast.ExprNode = ast.expr_pool_get(exprs, recv);
   let rr: ExprTyResult = tc_expr(ctx, w, mod_path, imps, exprs, l0, recv, -1);
   let mut recv_ty: i32 = rr.ty;
   while rr.ok {
     let rt: ir.Ty = ir.ty_pool_get(ctx.pool, recv_ty);
     if rt.kind != ir.TyKind.Ref { break; }
     recv_ty = rt.elem;
+  }
+  let unit_ns: i64 = time_literal_unit_ns(name);
+  if rr.ok && unit_ns != 0 && match recv_node { ast.ExprNode.Int(_text) => true, _ => false } {
+    let lit_text: String = match recv_node { ast.ExprNode.Int(s) => s, _ => "" };
+    let pr: ParseI64DecResult = parse_i64_dec(lit_text);
+    if !pr.ok { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(recv_sp, "time literal out of range") }; }
+    let max_i64: i64 = 9223372036854775807;
+    if pr.val > max_i64 / unit_ns {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(recv_sp, "time literal out of range") };
+    }
+    if expected != -1 && !assignable_to(ctx, expected, ctx.ty_i64) {
+      return ExprTyResult { ok: false, ty: ctx.ty_bad, err: member_type_mismatch_error(ctx, recv_sp, expected, ctx.ty_i64) };
+    }
+    return ExprTyResult { ok: true, ty: ctx.ty_i64, err: TcError.None };
   }
   if rr.ok && is_struct_ty(ctx, recv_ty) {
     let t: ir.Ty = ir.ty_pool_get(ctx.pool, recv_ty);

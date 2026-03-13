@@ -697,7 +697,7 @@ Drop（迁出）：
 仍待完成（下一批）：
 
 - `NIO-04`（延伸）：`walk_vox_files` 语义继续从标准库边界收敛到编译器内部实现（`vox/internal/*`），标准库仅保留通用文件遍历语义。
-- `NIO-LANG-01`：`time` 数值后缀糖（`3.seconds`）目前在 typecheck 报 `invalid member access`，需编译器新增“数值字面量成员单位糖”支持后才能启用。
+- [x] `NIO-LANG-01`：已支持 `time` 数值后缀糖（`3.seconds`/`3.second`/`3.milliseconds`/`3.microseconds`/`3.nanoseconds`），按纳秒 `i64` 结果类型归一化，并在 typecheck 增加溢出诊断（`time literal out of range`）。
 - `NIO-LANG-02`：支持 Go 风格 `3 * time.s -> time.Duration`（不依赖操作符重载）：单位常量为 `Duration`，并补齐常量/字面量到 `Duration` 的二元算术类型规则。
 - `NIO-LANG-03`：操作符重载能力（如 trait/协议驱动的 `+ - * / ==`）单独立项；当前 `time.Duration` 方案不依赖该能力。
 

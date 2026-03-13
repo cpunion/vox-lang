@@ -2,14 +2,34 @@ import "vox/ast" as ast
 import "vox/ir" as ir
 import "vox/typecheck" as tc
 
+fn time_literal_unit_ns(name: String) -> i64 {
+  if name == "nanosecond" || name == "nanoseconds" { return 1; }
+  if name == "microsecond" || name == "microseconds" { return 1000; }
+  if name == "millisecond" || name == "milliseconds" { return 1000000; }
+  if name == "second" || name == "seconds" { return 1000000000; }
+  return 0;
+}
+
 fn gen_expr_member(g0: Gen, recv: i32, name: String, out_ty: i32) -> GenExprResult {
   // Struct field get or unit enum variant value.
+  let recv_node: ast.ExprNode = ast.expr_pool_get(g0.exprs, recv);
   let rty: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.imps, g0.exprs, g0.locals, recv, -1);
   let mut recv_ty: i32 = rty.ty;
   while rty.ok {
     let rt_ty: ir.Ty = ir.ty_pool_get(g0.ctx.pool, recv_ty);
     if rt_ty.kind != ir.TyKind.Ref { break; }
     recv_ty = rt_ty.elem;
+  }
+  let unit_ns: i64 = time_literal_unit_ns(name);
+  if rty.ok && unit_ns != 0 && out_ty == g0.ctx.ty_i64 && match recv_node { ast.ExprNode.Int(_text) => true, _ => false } {
+    let rr_num: GenExprResult = gen_expr(g0, recv, g0.ctx.ty_i64);
+    if !rr_num.ok { return rr_num; }
+    let mut g_num: Gen = rr_num.g;
+    let rt_num: GenNewIdResult = gen_new_temp(g_num);
+    g_num = rt_num.g;
+    let tid_num: i32 = rt_num.id;
+    g_num = gen_emit(g_num, ir.Instr.BinOp(tid_num, ir.BinOpKind.Mul, g0.ctx.ty_i64, rr_num.val, ir.v_i64(unit_ns)));
+    return GenExprResult { ok: true, err: "", g: g_num, val: ir.v_temp(tid_num), ty: g0.ctx.ty_i64 };
   }
   if rty.ok && tc.is_struct_ty(g0.ctx, recv_ty) {
     let rr: GenExprResult = gen_expr(g0, recv, -1);
