@@ -952,6 +952,25 @@ fn binary_op_trait_method(op: ast.BinaryOp) -> String {
   };
 }
 
+fn binary_cmp_trait_method(op: ast.BinaryOp) -> String {
+  return match op {
+    ast.BinaryOp.Lt => "lt",
+    ast.BinaryOp.Le => "le",
+    ast.BinaryOp.Gt => "gt",
+    ast.BinaryOp.Ge => "ge",
+    _ => "",
+  };
+}
+
+fn find_trait_mod_for_binary(ctx: Ctx, mod_path: String, trait_name: String) -> String {
+  let tf_local: FindTraitResult = find_trait(ctx, mod_path, trait_name);
+  if tf_local.found { return mod_path; }
+  let prelude: String = "std/prelude";
+  let tf_prelude: FindTraitResult = find_trait(ctx, prelude, trait_name);
+  if tf_prelude.found { return prelude; }
+  return "";
+}
+
 fn tc_expr_binary_try_trait_overload(
   ctx: Ctx,
   w: World,
@@ -984,17 +1003,89 @@ fn tc_expr_binary_try_trait_overload(
   args.push(l);
   args.push(r);
 
-  let tf_local: FindTraitResult = find_trait(ctx, mod_path, trait_name);
-  if tf_local.found {
-    return tc_call_trait_static(ctx, w, mod_path, imps, exprs, l0, call_sp, mod_path, trait_name, method, Vec(), args, expected);
-  }
-
-  let prelude: String = "std/prelude";
-  let tf_prelude: FindTraitResult = find_trait(ctx, prelude, trait_name);
-  if tf_prelude.found {
-    return tc_call_trait_static(ctx, w, mod_path, imps, exprs, l0, call_sp, prelude, trait_name, method, Vec(), args, expected);
+  let trait_mod: String = find_trait_mod_for_binary(ctx, mod_path, trait_name);
+  if trait_mod != "" {
+    return tc_call_trait_static(ctx, w, mod_path, imps, exprs, l0, call_sp, trait_mod, trait_name, method, Vec(), args, expected);
   }
   return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+}
+
+fn tc_expr_binary_try_cmp_trait_overload(
+  ctx: Ctx,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  op: ast.BinaryOp,
+  l: i32,
+  r: i32,
+  expected: i32,
+  lhs_ty: i32,
+  rhs_ty: i32,
+) -> ExprTyResult {
+  let method: String = binary_cmp_trait_method(op);
+  if method == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+  let lbase: i32 = strip_ref(ctx, strip_range(ctx, lhs_ty));
+  let rbase: i32 = strip_ref(ctx, strip_range(ctx, rhs_ty));
+  if lbase != rbase { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if is_int_like_ty(ctx, lbase) || is_float_ty(ctx, lbase) || lbase == ctx.ty_string {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+  }
+
+  let trait_name: String = "Ord";
+  let trait_mod: String = find_trait_mod_for_binary(ctx, mod_path, trait_name);
+  if trait_mod == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+  let mut args: Vec[i32] = Vec();
+  args.push(l);
+  args.push(r);
+  return tc_call_trait_static(ctx, w, mod_path, imps, exprs, l0, call_sp, trait_mod, trait_name, method, Vec(), args, expected);
+}
+
+fn tc_expr_binary_try_eq_trait_overload(
+  ctx: Ctx,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  l: i32,
+  r: i32,
+  expected: i32,
+  lhs_ty: i32,
+  rhs_ty: i32,
+) -> ExprTyResult {
+  let lbase: i32 = strip_ref(ctx, strip_range(ctx, lhs_ty));
+  let rbase: i32 = strip_ref(ctx, strip_range(ctx, rhs_ty));
+  if lbase != rbase { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+  if is_int_like_ty(ctx, lbase) || is_float_ty(ctx, lbase) || lbase == ctx.ty_bool || lbase == ctx.ty_string {
+    return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None };
+  }
+
+  let trait_name: String = "Eq";
+  let trait_mod: String = find_trait_mod_for_binary(ctx, mod_path, trait_name);
+  if trait_mod == "" { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+  // Preserve existing structural equality for concrete nominal types when no
+  // explicit Eq impl is available.
+  let lt: ir.Ty = ir.ty_pool_get(ctx.pool, lbase);
+  let mut should_try: bool = false;
+  if lt.kind == ir.TyKind.Param {
+    should_try = locals_has_type_param_bound(ctx, l0, lt.name, trait_mod, trait_name);
+  } else {
+    let fi: FindImplForTyResult = find_impl_for_ty(ctx, trait_mod, trait_name, lbase);
+    if fi.found || fi.ambiguous { should_try = true; }
+  }
+  if !should_try { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+
+  let mut args: Vec[i32] = Vec();
+  args.push(l);
+  args.push(r);
+  return tc_call_trait_static(ctx, w, mod_path, imps, exprs, l0, call_sp, trait_mod, trait_name, "eq", Vec(), args, expected);
 }
 
 fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, call_sp: ast.Span, op: ast.BinaryOp, l: i32, r: i32, expected: i32) -> ExprTyResult {
@@ -1083,6 +1174,13 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
     let lbase: i32 = strip_range(ctx, lr.ty);
     let rbase: i32 = strip_range(ctx, rr.ty);
     if lbase != rbase { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: TcError.None }; }
+    let tr_cmp: ExprTyResult = tc_expr_binary_try_cmp_trait_overload(
+      ctx, w, mod_path, imps, exprs, l0, call_sp, op, l, r, expected, lr.ty, rr.ty
+    );
+    if tr_cmp.ok || tr_cmp.err != TcError.None {
+      return tr_cmp;
+    }
+
     if !is_int_like_ty(ctx, lbase) && !is_float_ty(ctx, lbase) && lbase != ctx.ty_string {
       // Generic ordered comparison is allowed when the type parameter has an
       // explicit Ord bound (local trait path or prelude fallback).
@@ -1127,6 +1225,13 @@ fn tc_expr_binary(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: as
         _ => false,
       };
     if !ok_prim {
+      let tr_eq: ExprTyResult = tc_expr_binary_try_eq_trait_overload(
+        ctx, w, mod_path, imps, exprs, l0, call_sp, l, r, expected, lr.ty, rr.ty
+      );
+      if tr_eq.ok || tr_eq.err != TcError.None {
+        return tr_eq;
+      }
+
       // Generic type parameter equality is allowed when the type param is
       // explicitly bounded by Eq (local trait or prelude fallback).
       if lt.kind == ir.TyKind.Param {
