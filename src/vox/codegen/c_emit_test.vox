@@ -1292,6 +1292,95 @@ fn emit_int_cast_checked_i32_to_usize_from_call_c(call_name: String, target_ptr_
   );
 }
 
+fn emit_int_cast_checked_i32_to_usize_from_call_via_slot_c(call_name: String, target_ptr_bits: i32) -> String {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r_i32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r_i32.pool;
+  let ty_i32: i32 = r_i32.idx;
+  let r_usize: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_usize());
+  pool = r_usize.pool;
+  let ty_usize: i32 = r_usize.idx;
+  let mut p0: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.SlotDecl(0, ty_i32));
+  instrs.push(ir.Instr.Call(true, 0, ty_i32, call_name, Vec()));
+  instrs.push(ir.Instr.Store(0, ir.v_temp(0)));
+  instrs.push(ir.Instr.IntCastChecked(1, ty_usize, ty_i32, ir.v_slot(0)));
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(true, ir.v_temp(1)) });
+  p0.funcs.push(ir.Func { name: "main", params: Vec(), ret: ty_usize, blocks: blocks });
+  return cg.emit_c_for_target_ptr_bits(
+    p0,
+    cg.EmitOptions {
+      emit_driver_main: false,
+      driver_main_kind: cg.DriverMainKind.User,
+      emit_test_main: false,
+      test_funcs: Vec(),
+      c_sources: Vec(),
+    },
+    target_ptr_bits,
+  );
+}
+
+fn emit_int_cast_checked_i32_to_usize_from_call_via_slot_across_blocks_c(call_name: String, target_ptr_bits: i32) -> String {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r_bool: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_bool());
+  pool = r_bool.pool;
+  let ty_bool: i32 = r_bool.idx;
+  let r_i32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r_i32.pool;
+  let ty_i32: i32 = r_i32.idx;
+  let r_usize: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_usize());
+  pool = r_usize.pool;
+  let ty_usize: i32 = r_usize.idx;
+  let mut p0: ir.Program = ir.program(pool);
+
+  let mut b_entry_instrs: Vec[ir.Instr] = Vec();
+  b_entry_instrs.push(ir.Instr.SlotDecl(0, ty_i32));
+  b_entry_instrs.push(ir.Instr.Call(true, 0, ty_i32, call_name, Vec()));
+  b_entry_instrs.push(ir.Instr.Store(0, ir.v_temp(0)));
+
+  let b_entry: ir.Block = ir.Block {
+    name: "entry",
+    instrs: b_entry_instrs,
+    has_term: true,
+    term: ir.Term.CondBr(ir.v_param(0), "panic_blk", "cont"),
+  };
+  let b_panic: ir.Block = ir.Block {
+    name: "panic_blk",
+    instrs: Vec(),
+    has_term: true,
+    term: ir.Term.Panic(ir.v_str("x")),
+  };
+  let mut b_cont_instrs: Vec[ir.Instr] = Vec();
+  b_cont_instrs.push(ir.Instr.Load(1, ty_i32, 0));
+  b_cont_instrs.push(ir.Instr.IntCastChecked(2, ty_usize, ty_i32, ir.v_temp(1)));
+  let b_cont: ir.Block = ir.Block {
+    name: "cont",
+    instrs: b_cont_instrs,
+    has_term: true,
+    term: ir.Term.Ret(true, ir.v_temp(2)),
+  };
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(b_entry);
+  blocks.push(b_panic);
+  blocks.push(b_cont);
+  let mut params: Vec[ir.Param] = Vec();
+  params.push(ir.Param { name: "flag", ty: ty_bool });
+  p0.funcs.push(ir.Func { name: "main", params: params, ret: ty_usize, blocks: blocks });
+  return cg.emit_c_for_target_ptr_bits(
+    p0,
+    cg.EmitOptions {
+      emit_driver_main: false,
+      driver_main_kind: cg.DriverMainKind.User,
+      emit_test_main: false,
+      test_funcs: Vec(),
+      c_sources: Vec(),
+    },
+    target_ptr_bits,
+  );
+}
+
 fn test_codegen_int_cast_checked_i32_to_usize_from_checked_u32_skips_negative_guard() -> () {
   let c64: String = emit_int_cast_checked_i32_to_usize_from_checked_u32_temp_c(64);
   t.assert(!contains(c64, "i32 to usize overflow"));
@@ -1317,6 +1406,34 @@ fn test_codegen_int_cast_checked_i32_to_usize_from_nonstd_len_like_call_keeps_ne
   let c64: String = emit_int_cast_checked_i32_to_usize_from_call_c("main::impl$inherent$len$1", 64);
   t.assert(contains(c64, "i32 to usize overflow"));
   let c32: String = emit_int_cast_checked_i32_to_usize_from_call_c("main::impl$inherent$len$1", 32);
+  t.assert(contains(c32, "i32 to usize overflow"));
+}
+
+fn test_codegen_int_cast_checked_i32_to_usize_from_std_len_call_via_slot_skips_negative_guard() -> () {
+  let c64: String = emit_int_cast_checked_i32_to_usize_from_call_via_slot_c("std.prelude::impl$inherent$len$36000", 64);
+  t.assert(!contains(c64, "i32 to usize overflow"));
+  let c32: String = emit_int_cast_checked_i32_to_usize_from_call_via_slot_c("std.prelude::impl$inherent$len$36000", 32);
+  t.assert(!contains(c32, "i32 to usize overflow"));
+}
+
+fn test_codegen_int_cast_checked_i32_to_usize_from_nonstd_len_like_call_via_slot_keeps_negative_guard() -> () {
+  let c64: String = emit_int_cast_checked_i32_to_usize_from_call_via_slot_c("main::impl$inherent$len$1", 64);
+  t.assert(contains(c64, "i32 to usize overflow"));
+  let c32: String = emit_int_cast_checked_i32_to_usize_from_call_via_slot_c("main::impl$inherent$len$1", 32);
+  t.assert(contains(c32, "i32 to usize overflow"));
+}
+
+fn test_codegen_int_cast_checked_i32_to_usize_from_std_len_call_via_slot_across_blocks_skips_negative_guard() -> () {
+  let c64: String = emit_int_cast_checked_i32_to_usize_from_call_via_slot_across_blocks_c("std.prelude::impl$inherent$len$36000", 64);
+  t.assert(!contains(c64, "i32 to usize overflow"));
+  let c32: String = emit_int_cast_checked_i32_to_usize_from_call_via_slot_across_blocks_c("std.prelude::impl$inherent$len$36000", 32);
+  t.assert(!contains(c32, "i32 to usize overflow"));
+}
+
+fn test_codegen_int_cast_checked_i32_to_usize_from_nonstd_len_like_call_via_slot_across_blocks_keeps_negative_guard() -> () {
+  let c64: String = emit_int_cast_checked_i32_to_usize_from_call_via_slot_across_blocks_c("main::impl$inherent$len$1", 64);
+  t.assert(contains(c64, "i32 to usize overflow"));
+  let c32: String = emit_int_cast_checked_i32_to_usize_from_call_via_slot_across_blocks_c("main::impl$inherent$len$1", 32);
   t.assert(contains(c32, "i32 to usize overflow"));
 }
 
