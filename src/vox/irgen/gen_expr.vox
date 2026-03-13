@@ -1061,17 +1061,83 @@ fn is_std_time_duration_ty(ctx: tc.Ctx, ty: i32) -> bool {
   return t.kind == ir.TyKind.Struct && tc.ty_mod(t) == "std/time" && tc.ty_name(t) == "Duration";
 }
 
+fn gen_binary_trait_name(op: ast.BinaryOp) -> String {
+  return match op {
+    ast.BinaryOp.Add => "Add",
+    ast.BinaryOp.Sub => "Sub",
+    ast.BinaryOp.Mul => "Mul",
+    ast.BinaryOp.Div => "Div",
+    ast.BinaryOp.Mod => "Mod",
+    _ => "",
+  };
+}
+
+fn gen_binary_trait_method(op: ast.BinaryOp) -> String {
+  return match op {
+    ast.BinaryOp.Add => "add",
+    ast.BinaryOp.Sub => "sub",
+    ast.BinaryOp.Mul => "mul",
+    ast.BinaryOp.Div => "div",
+    ast.BinaryOp.Mod => "modulo",
+    _ => "",
+  };
+}
+
+fn gen_expr_binary_try_trait_overload(g0: Gen, op: ast.BinaryOp, l: i32, r: i32, out_ty: i32) -> GenExprResult {
+  let trait_name: String = gen_binary_trait_name(op);
+  if trait_name == "" { return GenExprResult { ok: false, err: "", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+  let method: String = gen_binary_trait_method(op);
+
+  let ltr: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.imps, g0.exprs, g0.locals, l, -1);
+  if !ltr.ok { return GenExprResult { ok: false, err: tc.tc_error_to_string(ltr.err), g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+  let rtr: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.imps, g0.exprs, g0.locals, r, -1);
+  if !rtr.ok { return GenExprResult { ok: false, err: tc.tc_error_to_string(rtr.err), g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad }; }
+
+  let lbase: i32 = tc.strip_ref(g0.ctx, tc.strip_range(g0.ctx, ltr.ty));
+  let rbase: i32 = tc.strip_ref(g0.ctx, tc.strip_range(g0.ctx, rtr.ty));
+  if lbase != rbase {
+    return GenExprResult { ok: false, err: "", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+  }
+  if tc.is_int_like_ty(g0.ctx, lbase) || tc.is_float_ty(g0.ctx, lbase) || lbase == g0.ctx.ty_bool || lbase == g0.ctx.ty_string {
+    return GenExprResult { ok: false, err: "", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+  }
+
+  let mut args: Vec[i32] = Vec();
+  args.push(l);
+  args.push(r);
+
+  let tf_local: tc.FindTraitResult = tc.find_trait(g0.ctx, g0.mod_path, trait_name);
+  if tf_local.found {
+    return gen_call_trait_static(g0, g0.mod_path, trait_name, method, Vec(), args, out_ty);
+  }
+  let prelude: String = "std/prelude";
+  let tf_prelude: tc.FindTraitResult = tc.find_trait(g0.ctx, prelude, trait_name);
+  if tf_prelude.found {
+    return gen_call_trait_static(g0, prelude, trait_name, method, Vec(), args, out_ty);
+  }
+  return GenExprResult { ok: false, err: "", g: g0, val: ir.v_int(0), ty: g0.ctx.ty_bad };
+}
+
 fn gen_expr_binary(g0: Gen, op: ast.BinaryOp, l: i32, r: i32, out_ty: i32) -> GenExprResult {
   let mut g: Gen = g0;
-  let lr: GenExprResult = gen_expr(g, l, -1);
-  if !lr.ok { return lr; }
-  g = lr.g;
 
   // Short-circuit logical ops: do not evaluate RHS eagerly.
   let is_logic: bool = match op { ast.BinaryOp.AndAnd => true, ast.BinaryOp.OrOr => true, _ => false };
   if is_logic {
-    return gen_expr_short_circuit_logic(g, op, lr.val, r, out_ty);
+    let lr0: GenExprResult = gen_expr(g, l, -1);
+    if !lr0.ok { return lr0; }
+    g = lr0.g;
+    return gen_expr_short_circuit_logic(g, op, lr0.val, r, out_ty);
   }
+
+  let tr_over: GenExprResult = gen_expr_binary_try_trait_overload(g, op, l, r, out_ty);
+  if tr_over.ok || tr_over.err != "" {
+    return tr_over;
+  }
+
+  let lr: GenExprResult = gen_expr(g, l, -1);
+  if !lr.ok { return lr; }
+  g = lr.g;
 
   let duration_mul_out: bool = match op { ast.BinaryOp.Mul => true, _ => false } && is_std_time_duration_ty(g.ctx, out_ty);
   let rr: GenExprResult = gen_expr(g, r, if duration_mul_out { -1 } else { lr.ty });
