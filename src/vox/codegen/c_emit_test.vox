@@ -1170,12 +1170,12 @@ fn test_codegen_range_cast_emits_bounds_check_usize() -> () {
 
 fn test_codegen_int_cast_checked_uses_ptr_bounds_for_isize_usize() -> () {
   let src: String = """
-    fn main() -> i32 {
-      let a: i64 = 7;
+    fn cast(a: i64) -> i32 {
       let b: isize = a as isize;
       let c: usize = b as usize;
       return c as i32;
     }
+    fn main() -> i32 { return cast(7 as i64); }
   """;
   let c: String = compile_to_c(src);
   t.assert(contains(c, "INTPTR_MAX"));
@@ -1185,11 +1185,11 @@ fn test_codegen_int_cast_checked_uses_ptr_bounds_for_isize_usize() -> () {
 
 fn test_codegen_int_cast_checked_i32_to_usize_avoids_redundant_upper_check() -> () {
   let src: String = """
-    fn main() -> i32 {
-      let a: i32 = 7;
+    fn cast(a: i32) -> i32 {
       let b: usize = a as usize;
       return b as i32;
     }
+    fn main() -> i32 { return cast(7); }
   """;
   let c: String = compile_to_c(src);
   t.assert(contains(c, "< 0) { vox_host_panic(\"i32 to usize overflow\"); }"));
@@ -1229,10 +1229,52 @@ fn emit_int_cast_checked_i32_to_usize_from_checked_u32_temp_c(target_ptr_bits: i
   );
 }
 
+fn emit_int_cast_checked_i32_to_usize_from_checked_u32_via_slot_c(target_ptr_bits: i32) -> String {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r_u32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_u32());
+  pool = r_u32.pool;
+  let ty_u32: i32 = r_u32.idx;
+  let r_i32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r_i32.pool;
+  let ty_i32: i32 = r_i32.idx;
+  let r_usize: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_usize());
+  pool = r_usize.pool;
+  let ty_usize: i32 = r_usize.idx;
+  let mut p0: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.Const(0, ty_u32, ir.v_int(7)));
+  instrs.push(ir.Instr.IntCastChecked(1, ty_i32, ty_u32, ir.v_temp(0)));
+  instrs.push(ir.Instr.SlotDecl(0, ty_i32));
+  instrs.push(ir.Instr.Store(0, ir.v_temp(1)));
+  instrs.push(ir.Instr.Load(2, ty_i32, 0));
+  instrs.push(ir.Instr.IntCastChecked(3, ty_usize, ty_i32, ir.v_temp(2)));
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(true, ir.v_temp(3)) });
+  p0.funcs.push(ir.Func { name: "main", params: Vec(), ret: ty_usize, blocks: blocks });
+  return cg.emit_c_for_target_ptr_bits(
+    p0,
+    cg.EmitOptions {
+      emit_driver_main: false,
+      driver_main_kind: cg.DriverMainKind.User,
+      emit_test_main: false,
+      test_funcs: Vec(),
+      c_sources: Vec(),
+    },
+    target_ptr_bits,
+  );
+}
+
 fn test_codegen_int_cast_checked_i32_to_usize_from_checked_u32_skips_negative_guard() -> () {
   let c64: String = emit_int_cast_checked_i32_to_usize_from_checked_u32_temp_c(64);
   t.assert(!contains(c64, "i32 to usize overflow"));
   let c32: String = emit_int_cast_checked_i32_to_usize_from_checked_u32_temp_c(32);
+  t.assert(!contains(c32, "i32 to usize overflow"));
+}
+
+fn test_codegen_int_cast_checked_i32_to_usize_from_checked_u32_via_slot_skips_negative_guard() -> () {
+  let c64: String = emit_int_cast_checked_i32_to_usize_from_checked_u32_via_slot_c(64);
+  t.assert(!contains(c64, "i32 to usize overflow"));
+  let c32: String = emit_int_cast_checked_i32_to_usize_from_checked_u32_via_slot_c(32);
   t.assert(!contains(c32, "i32 to usize overflow"));
 }
 
@@ -1252,11 +1294,11 @@ fn test_codegen_int_cast_checked_isize_to_usize_avoids_redundant_upper_check() -
 
 fn test_codegen_int_cast_checked_i64_to_usize_uses_ptr_width_guard_for_upper_check() -> () {
   let src: String = """
-    fn main() -> i32 {
-      let a: i64 = 7;
+    fn cast(a: i64) -> i32 {
       let b: usize = a as usize;
       return b as i32;
     }
+    fn main() -> i32 { return cast(7 as i64); }
   """;
   let c: String = compile_to_c(src);
   t.assert(contains(c, "< 0) { vox_host_panic(\"i64 to usize overflow\"); }"));
@@ -1266,10 +1308,8 @@ fn test_codegen_int_cast_checked_i64_to_usize_uses_ptr_width_guard_for_upper_che
 
 fn test_codegen_int_cast_checked_i64_to_u64_avoids_redundant_upper_check() -> () {
   let src: String = """
-    fn main() -> u64 {
-      let a: i64 = 7;
-      return a as u64;
-    }
+    fn cast(a: i64) -> u64 { return a as u64; }
+    fn main() -> u64 { return cast(7 as i64); }
   """;
   let c: String = compile_to_c(src);
   t.assert(contains(c, "< 0) { vox_host_panic(\"i64 to u64 overflow\"); }"));
@@ -1278,10 +1318,8 @@ fn test_codegen_int_cast_checked_i64_to_u64_avoids_redundant_upper_check() -> ()
 
 fn test_codegen_int_cast_checked_i32_to_u64_avoids_redundant_upper_check() -> () {
   let src: String = """
-    fn main() -> u64 {
-      let a: i32 = 7;
-      return a as u64;
-    }
+    fn cast(a: i32) -> u64 { return a as u64; }
+    fn main() -> u64 { return cast(7); }
   """;
   let c: String = compile_to_c(src);
   t.assert(contains(c, "< 0) { vox_host_panic(\"i32 to u64 overflow\"); }"));
@@ -1471,6 +1509,34 @@ fn emit_div_i32_checked_cast_u32_temp_minus_one_c() -> String {
   });
 }
 
+fn emit_div_i32_checked_cast_u32_temp_minus_one_via_slot_c() -> String {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r_u32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_u32());
+  pool = r_u32.pool;
+  let ty_u32: i32 = r_u32.idx;
+  let r_i32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r_i32.pool;
+  let ty_i32: i32 = r_i32.idx;
+  let mut p0: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.Const(0, ty_u32, ir.v_int(7)));
+  instrs.push(ir.Instr.IntCastChecked(1, ty_i32, ty_u32, ir.v_temp(0)));
+  instrs.push(ir.Instr.SlotDecl(0, ty_i32));
+  instrs.push(ir.Instr.Store(0, ir.v_temp(1)));
+  instrs.push(ir.Instr.Load(2, ty_i32, 0));
+  instrs.push(ir.Instr.BinOp(3, ir.BinOpKind.Div, ty_i32, ir.v_temp(2), ir.v_int(-1)));
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(true, ir.v_temp(3)) });
+  p0.funcs.push(ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks });
+  return cg.emit_c(p0, cg.EmitOptions {
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+    c_sources: Vec(),
+  });
+}
+
 fn emit_div_i32_checked_cast_i16_param_minus_one_c() -> String {
   let mut pool: ir.TyPool = ir.ty_pool();
   let r_i16: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i16());
@@ -1556,6 +1622,11 @@ fn test_codegen_int_div_const_temp_minus_one_non_min_skips_overflow_check_ir_smo
 
 fn test_codegen_int_div_checked_cast_u32_temp_minus_one_skips_overflow_check_ir_smoke() -> () {
   let c: String = emit_div_i32_checked_cast_u32_temp_minus_one_c();
+  t.assert(!contains(c, "division overflow"));
+}
+
+fn test_codegen_int_div_checked_cast_u32_temp_minus_one_via_slot_skips_overflow_check_ir_smoke() -> () {
+  let c: String = emit_div_i32_checked_cast_u32_temp_minus_one_via_slot_c();
   t.assert(!contains(c, "division overflow"));
 }
 
