@@ -1384,6 +1384,28 @@ fn emit_div_i32_c(a: ir.Value, b: ir.Value) -> String {
   });
 }
 
+fn emit_div_i32_const_temp_c(a_n: i64, b_n: i64) -> String {
+  let mut pool: ir.TyPool = ir.ty_pool();
+  let r_i32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
+  pool = r_i32.pool;
+  let ty_i32: i32 = r_i32.idx;
+  let mut p0: ir.Program = ir.program(pool);
+  let mut instrs: Vec[ir.Instr] = Vec();
+  instrs.push(ir.Instr.Const(0, ty_i32, ir.v_i64(a_n)));
+  instrs.push(ir.Instr.Const(1, ty_i32, ir.v_i64(b_n)));
+  instrs.push(ir.Instr.BinOp(2, ir.BinOpKind.Div, ty_i32, ir.v_temp(0), ir.v_temp(1)));
+  let mut blocks: Vec[ir.Block] = Vec();
+  blocks.push(ir.Block { name: "entry", instrs: instrs, has_term: true, term: ir.Term.Ret(true, ir.v_temp(2)) });
+  p0.funcs.push(ir.Func { name: "main", params: Vec(), ret: ty_i32, blocks: blocks });
+  return cg.emit_c(p0, cg.EmitOptions {
+    emit_driver_main: false,
+    driver_main_kind: cg.DriverMainKind.User,
+    emit_test_main: false,
+    test_funcs: Vec(),
+    c_sources: Vec(),
+  });
+}
+
 fn emit_shift_i32_c(op: ir.BinOpKind, a: ir.Value, b: ir.Value) -> String {
   let mut pool: ir.TyPool = ir.ty_pool();
   let r_i32: ir.AddTyResult = ir.ty_pool_add(pool, ir.ty_i32());
@@ -1414,10 +1436,31 @@ fn test_codegen_int_div_const_non_minus_one_skips_overflow_check() -> () {
   t.assert(!contains(c, "division overflow"));
 }
 
-fn test_codegen_int_div_const_minus_one_keeps_overflow_check() -> () {
+fn test_codegen_int_div_const_minus_one_non_min_skips_overflow_check() -> () {
   let c: String = emit_div_i32_c(ir.v_int(42), ir.v_int(-1));
+  t.assert(!contains(c, "division overflow"));
+  t.assert(!contains(c, "division by zero"));
+}
+
+fn test_codegen_int_div_const_minus_one_min_keeps_overflow_check() -> () {
+  let c: String = emit_div_i32_c(ir.v_i64(((-2147483647 as i64) - (1 as i64))), ir.v_int(-1));
   t.assert(contains(c, "division overflow"));
   t.assert(!contains(c, "division by zero"));
+}
+
+fn test_codegen_int_div_non_const_minus_one_keeps_overflow_check() -> () {
+  let c: String = compile_to_c("fn main(a: i32) -> i32 { return a / -1; }");
+  t.assert(contains(c, "division overflow"));
+}
+
+fn test_codegen_int_div_const_temp_nonzero_skips_div0_check_ir_smoke() -> () {
+  let c: String = emit_div_i32_const_temp_c(42, 2);
+  t.assert(!contains(c, "division by zero"));
+}
+
+fn test_codegen_int_div_const_temp_minus_one_non_min_skips_overflow_check_ir_smoke() -> () {
+  let c: String = emit_div_i32_const_temp_c(42, -1);
+  t.assert(!contains(c, "division overflow"));
 }
 
 fn test_codegen_int_mod_emits_div0_check_unsigned() -> () {
