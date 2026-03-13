@@ -233,11 +233,6 @@ fn fs_err_io(msg: String) -> FsError {
 
 fn fs_default_file_perm() -> u16 { return 420 as u16; } // 0o644
 
-fn isize_to_i32_or_panic(n: isize, msg: String) -> i32 {
-  if n < -2147483648 as isize || n > 2147483647 as isize { panic(msg); }
-  return n as i32;
-}
-
 fn fs_read_to_string_sys(path: String) -> String {
   let fd: i32 = sys.open_read(path);
   if fd < 0 { panic("read_file open failed: ".concat(path)); }
@@ -247,34 +242,42 @@ fn fs_read_to_string_sys(path: String) -> String {
     panic("read_file lseek failed: ".concat(path));
   }
   let _: i64 = sys.lseek(fd, 0 as i64, sys.seek_set());
-  let size: i32 = size64 as i32;
-  let buf: rawptr = sys.alloc_buf(size);
+  let size: isize = size64 as isize;
+  let buf: rawptr = sys.alloc_buf_isize(size);
   // Single read: rawptr has no pointer arithmetic, so we cannot advance
   // the buffer on partial reads. For regular files (compiler sources) a
   // single read always returns the full content.
-  let got: isize = sys.read(fd, buf, sys.count_from_i32(size));
+  let got: isize = sys.read(fd, buf, sys.count_from_isize(size));
   let _: i32 = sys.close(fd);
   if got < 0 {
     panic("read_file read failed: ".concat(path));
   }
-  return sys.buf_to_string(buf, isize_to_i32_or_panic(got, "read_file size out of i32 range"));
+  return sys.buf_to_string_isize(buf, got);
 }
 
 fn fs_write_string_sys(path: String, text: String) -> () {
   let fd: i32 = sys.creat(path, fs_default_file_perm());
   if fd < 0 { panic("write_file open failed: ".concat(path)); }
 
-  let total: i32 = text.len();
-  let mut off: i32 = 0;
-  while off < total {
-    let chunk: String = text.slice(off, total);
-    let wrote: isize = sys.write(fd, chunk as const rawptr, chunk.len() as usize);
+  let mut cur: rawptr = (text as const rawptr) as isize as rawptr;
+  let mut remaining: usize = sys.count_from_i32(text.len());
+  while remaining > (0 as usize) {
+    let wrote: isize = sys.write(fd, cur as const rawptr, remaining);
     if wrote <= 0 {
       let _rc0: i32 = sys.close(fd);
       panic("write_file write failed: ".concat(path));
     }
-    let step: i32 = isize_to_i32_or_panic(wrote, "write_file wrote size out of i32 range");
-    off = off + step;
+    let step: usize = sys.count_from_isize(wrote);
+    if step >= remaining {
+      remaining = 0 as usize;
+    } else {
+      remaining = remaining - step;
+      let mut adv: usize = step;
+      while adv > (0 as usize) {
+        cur = @ptr_offset(cur, 1 as isize);
+        adv = adv - (1 as usize);
+      }
+    }
   }
 
   let rc: i32 = sys.close(fd);

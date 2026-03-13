@@ -4,24 +4,32 @@ fn c_system(cmd: const rawptr) -> i32;
 @ffi_import("c", "getenv")
 fn c_getenv(key: const rawptr) -> rawptr;
 
-fn ptr_offset_usize(p: rawptr, off: usize) -> rawptr {
+fn ptr_offset_i32(p: rawptr, off: i32) -> rawptr {
   return @ptr_offset(p, off as isize);
+}
+
+fn ptr_next(p: rawptr) -> rawptr {
+  return @ptr_offset(p, 1 as isize);
 }
 
 pub fn count_from_i32(n: i32) -> usize {
   if n < 0 { panic("negative count"); }
-  let wide: i64 = n as i64;
-  return wide as usize;
+  return n as usize;
+}
+
+pub fn count_from_isize(n: isize) -> usize {
+  if n < 0 as isize { panic("negative count"); }
+  return n as usize;
 }
 
 pub fn c_string_dup_nul(s: String) -> rawptr {
-  let n: usize = s.len() as usize;
-  let p: rawptr = malloc(n + (1 as usize));
+  let n: i32 = strlen_i32(s);
+  let p: rawptr = malloc(count_from_i32(n) + (1 as usize));
   if (p as isize) == (0 as isize) { return p; }
-  if n > (0 as usize) {
-    let _: rawptr = memcpy(p, s as const rawptr, n);
+  if n > 0 {
+    let _: rawptr = memcpy_i32(p, s as const rawptr, n);
   }
-  @ptr_write[u8](ptr_offset_usize(p, n), 0 as u8);
+  @ptr_write[u8](ptr_offset_i32(p, n), 0 as u8);
   return p;
 }
 
@@ -76,10 +84,23 @@ pub fn alloc_buf(size: i32) -> rawptr {
   return calloc(1 as usize, n);
 }
 
+pub fn alloc_buf_isize(size: isize) -> rawptr {
+  let n: usize = if size < 0 as isize { 1 as usize } else { count_from_isize(size) + (1 as usize) };
+  return calloc(1 as usize, n);
+}
+
 pub fn buf_to_string(buf: rawptr, len: i32) -> String {
   if (buf as isize) == (0 as isize) { return ""; }
   let actual_len: i32 = if len < 0 { 0 } else { len };
   let end: rawptr = @ptr_offset(buf, actual_len as isize);
+  @ptr_write[u8](end, 0 as u8);
+  return buf as String;
+}
+
+pub fn buf_to_string_isize(buf: rawptr, len: isize) -> String {
+  if (buf as isize) == (0 as isize) { return ""; }
+  let actual_len: isize = if len < 0 as isize { 0 as isize } else { len };
+  let end: rawptr = @ptr_offset(buf, actual_len);
   @ptr_write[u8](end, 0 as u8);
   return buf as String;
 }
@@ -108,8 +129,19 @@ pub fn seek_end() -> i32 { return 2; }
 pub fn strlen(s: String) -> usize {
   let p: rawptr = (s as const rawptr) as isize as rawptr;
   let mut i: usize = 0 as usize;
-  while @ptr_read[u8](ptr_offset_usize(p, i)) != (0 as u8) {
+  let mut cur: rawptr = p;
+  while @ptr_read[u8](cur) != (0 as u8) {
+    cur = ptr_next(cur);
     i = i + (1 as usize);
+  }
+  return i;
+}
+
+pub fn strlen_i32(s: String) -> i32 {
+  let p: rawptr = (s as const rawptr) as isize as rawptr;
+  let mut i: i32 = 0;
+  while @ptr_read[u8](ptr_offset_i32(p, i)) != (0 as u8) {
+    i = i + 1;
   }
   return i;
 }
@@ -136,11 +168,15 @@ pub fn calloc(nmemb: usize, size: usize) -> rawptr {
 }
 
 pub fn memcpy(dest: rawptr, src: const rawptr, n: usize) -> rawptr {
-  let mut i: usize = 0 as usize;
-  while i < n {
-    let b: u8 = @ptr_read[u8](ptr_offset_usize(src as isize as rawptr, i));
-    @ptr_write[u8](ptr_offset_usize(dest, i), b);
-    i = i + (1 as usize);
+  let mut src_p: rawptr = src as isize as rawptr;
+  let mut dest_p: rawptr = dest;
+  let mut rem: usize = n;
+  while rem > (0 as usize) {
+    let b: u8 = @ptr_read[u8](src_p);
+    @ptr_write[u8](dest_p, b);
+    src_p = ptr_next(src_p);
+    dest_p = ptr_next(dest_p);
+    rem = rem - (1 as usize);
   }
   return dest;
 }
