@@ -127,6 +127,8 @@ struct ValueNameTables {
 struct TempIntConstTable {
   has: Vec[bool],
   vals: Vec[i64],
+  not_signed_min: Vec[bool],
+  non_negative: Vec[bool],
 }
 
 struct IntConstValue {
@@ -155,17 +157,21 @@ fn build_value_name_tables(param_len: i32, max_temp: i32, max_slot: i32) -> Valu
 }
 
 fn temp_int_const_table_empty() -> TempIntConstTable {
-  return TempIntConstTable { has: Vec(), vals: Vec() };
+  return TempIntConstTable { has: Vec(), vals: Vec(), not_signed_min: Vec(), non_negative: Vec() };
 }
 
-fn build_temp_int_const_table(pool: ir.TyPool, f: ir.Func, max_temp: i32) -> TempIntConstTable {
+fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func, max_temp: i32) -> TempIntConstTable {
   if max_temp < 0 { return temp_int_const_table_empty(); }
   let mut has: Vec[bool] = Vec();
   let mut vals: Vec[i64] = Vec();
+  let mut not_signed_min: Vec[bool] = Vec();
+  let mut non_negative: Vec[bool] = Vec();
   let mut i0: i32 = 0;
   while i0 <= max_temp {
     has.push(false);
     vals.push(0 as i64);
+    not_signed_min.push(false);
+    non_negative.push(false);
     i0 = i0 + 1;
   }
   let mut bi: i32 = 0;
@@ -183,6 +189,71 @@ fn build_temp_int_const_table(pool: ir.TyPool, f: ir.Func, max_temp: i32) -> Tem
             let n: i64 = match ins { ir.Instr.Const(_tid, _ty, ir.Value.Int(n)) => n, _ => 0 as i64 };
             has.set(tid, true);
             vals.set(tid, n);
+            if n >= (0 as i64) {
+              non_negative.set(tid, true);
+            }
+            if is_signed_int_kind(t.kind) {
+              let minv: IntConstValue = int_min_const_for_signed_kind(t.kind);
+              if minv.ok && n != minv.n {
+                not_signed_min.set(tid, true);
+              }
+            }
+          }
+        }
+      } else if match ins { ir.Instr.VecLen(_tid, _recv_slot) => true, _ => false } {
+        let tid: i32 = match ins { ir.Instr.VecLen(tid, _recv_slot) => tid, _ => 0 };
+        if tid >= 0 && tid <= max_temp {
+          non_negative.set(tid, true);
+          not_signed_min.set(tid, true);
+        }
+      } else if match ins { ir.Instr.IntCastChecked(_tid, _dst_ty, _src_ty, _v) => true, _ => false } {
+        let tid: i32 = match ins { ir.Instr.IntCastChecked(tid, _dst_ty, _src_ty, _v) => tid, _ => 0 };
+        if tid >= 0 && tid <= max_temp {
+          let dst_ty: i32 = match ins { ir.Instr.IntCastChecked(_tid, dst_ty, _src_ty, _v) => dst_ty, _ => 0 };
+          let src_ty: i32 = match ins { ir.Instr.IntCastChecked(_tid, _dst_ty, src_ty, _v) => src_ty, _ => 0 };
+          let v: ir.Value = match ins { ir.Instr.IntCastChecked(_tid, _dst_ty, _src_ty, v) => v, _ => ir.v_int(0) };
+          let dst_t: ir.Ty = ir.ty_pool_get(pool, dst_ty);
+          let src_t: ir.Ty = ir.ty_pool_get(pool, src_ty);
+          if is_int_scalar_kind(dst_t.kind) {
+            let lit: IntConstValue = match v {
+              ir.Value.Int(n) => IntConstValue { ok: true, n: n },
+              ir.Value.Temp(vtid) =>
+                if vtid >= 0 && vtid <= max_temp && has.get(vtid) {
+                  IntConstValue { ok: true, n: vals.get(vtid) }
+                } else {
+                  IntConstValue { ok: false, n: 0 }
+                },
+              _ => IntConstValue { ok: false, n: 0 },
+            };
+            if lit.ok && int_literal_always_fits_dst_kind(dst_t.kind, lit.n, target_ptr_bits) {
+              has.set(tid, true);
+              vals.set(tid, lit.n);
+              if lit.n >= (0 as i64) {
+                non_negative.set(tid, true);
+              }
+              if is_signed_int_kind(dst_t.kind) {
+                let minv: IntConstValue = int_min_const_for_signed_kind(dst_t.kind);
+                if minv.ok && lit.n != minv.n {
+                  not_signed_min.set(tid, true);
+                }
+              }
+            } else {
+              if is_unsigned_int_kind(dst_t.kind) {
+                non_negative.set(tid, true);
+              } else if is_unsigned_int_kind(src_t.kind) {
+                non_negative.set(tid, true);
+                not_signed_min.set(tid, true);
+              } else if match v { ir.Value.Temp(vtid) => vtid >= 0 && vtid <= max_temp && non_negative.get(vtid), _ => false } {
+                non_negative.set(tid, true);
+              }
+              if is_signed_int_kind(dst_t.kind) {
+                let smax_bits: i32 = int_bits_max_for_target(src_t.kind, target_ptr_bits);
+                let dmin_bits: i32 = int_bits_min_for_target(dst_t.kind, target_ptr_bits);
+                if smax_bits > 0 && dmin_bits > 0 && smax_bits < dmin_bits {
+                  not_signed_min.set(tid, true);
+                }
+              }
+            }
           }
         }
       }
@@ -190,7 +261,7 @@ fn build_temp_int_const_table(pool: ir.TyPool, f: ir.Func, max_temp: i32) -> Tem
     }
     bi = bi + 1;
   }
-  return TempIntConstTable { has: has, vals: vals };
+  return TempIntConstTable { has: has, vals: vals, not_signed_min: not_signed_min, non_negative: non_negative };
 }
 
 fn int_const_value_from_operand(v: ir.Value, int_consts: TempIntConstTable) -> IntConstValue {
@@ -214,6 +285,25 @@ fn int_min_const_for_signed_kind(kind: ir.TyKind) -> IntConstValue {
     ir.TyKind.I32 => IntConstValue { ok: true, n: ((-2147483647 as i64) - (1 as i64)) },
     ir.TyKind.I64 => IntConstValue { ok: true, n: ((-9223372036854775807 as i64) - (1 as i64)) },
     _ => IntConstValue { ok: false, n: 0 },
+  };
+}
+
+fn int_operand_is_definitely_not_signed_min(v: ir.Value, kind: ir.TyKind, int_consts: TempIntConstTable) -> bool {
+  if !is_signed_int_kind(kind) { return false; }
+  let minv: IntConstValue = int_min_const_for_signed_kind(kind);
+  if !minv.ok { return false; }
+  return match v {
+    ir.Value.Int(n) => n != minv.n,
+    ir.Value.Temp(tid) => tid >= 0 && tid < int_consts.not_signed_min.len() && int_consts.not_signed_min.get(tid),
+    _ => false,
+  };
+}
+
+fn int_operand_is_definitely_non_negative(v: ir.Value, int_consts: TempIntConstTable) -> bool {
+  return match v {
+    ir.Value.Int(n) => n >= (0 as i64),
+    ir.Value.Temp(tid) => tid >= 0 && tid < int_consts.non_negative.len() && int_consts.non_negative.get(tid),
+    _ => false,
   };
 }
 
@@ -1305,6 +1395,7 @@ fn emit_instr_int_cast_checked(
   let src_is_unsigned: bool = is_unsigned_int_kind(src.kind);
   let src_is_float: bool = src.kind == ir.TyKind.F32 || src.kind == ir.TyKind.F64;
   let src_int_lit: IntConstValue = int_const_value_from_operand(v, int_consts);
+  let src_non_negative: bool = int_operand_is_definitely_non_negative(v, int_consts);
 
   let mut out: Vec[String] = Vec();
   if !src_is_float && src_int_lit.ok && int_literal_always_fits_dst_kind(dst.kind, src_int_lit.n, target_ptr_bits) {
@@ -1413,19 +1504,31 @@ fn emit_instr_int_cast_checked(
       } else {
         // Signed -> u64 only needs non-negative check.
         if dst.kind == ir.TyKind.U64 {
-          out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+          if !src_non_negative {
+            out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+          }
         } else if dst.kind == ir.TyKind.U32 && src.kind == ir.TyKind.ISize {
-          out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+          if !src_non_negative {
+            out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+          }
           out.push("  if (vox_iptr_exceeds_u32_max((intptr_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
         } else if int_cast_signed_to_unsigned_needs_upper_check(dst.kind, src.kind, target_ptr_bits) {
           if dst.kind == ir.TyKind.USize && src.kind == ir.TyKind.I64 {
-            out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+            if !src_non_negative {
+              out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+            }
             out.push("  if (vox_u64_exceeds_uintptr_max((uint64_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
           } else {
-            out.push("  if (".concat(v_text).concat(" < 0 || (uint64_t)").concat(v_text).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+            if src_non_negative {
+              out.push("  if ((uint64_t)".concat(v_text).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+            } else {
+              out.push("  if (".concat(v_text).concat(" < 0 || (uint64_t)").concat(v_text).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+            }
           }
         } else {
-          out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+          if !src_non_negative {
+            out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
+          }
         }
       }
     } else {
@@ -1626,12 +1729,16 @@ fn emit_instr_binop_int(
       if minm.len() == 0 || maxm.len() == 0 { panic("missing signed min/max macro"); }
       if b_is_int_lit {
         if b_int_lit == -1 {
-          if a_is_int_lit {
+          if int_operand_is_definitely_not_signed_min(a, t.kind, int_consts) {
+            // proven `a != MIN`, no overflow on `a / -1`
+          } else if a_is_int_lit {
             let a_min: IntConstValue = int_min_const_for_signed_kind(t.kind);
             if !a_min.ok {
               out2.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
             } else if a_int_lit == a_min.n {
               out2.push("  vox_host_panic(\"division overflow\");");
+            } else {
+              out2.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
             }
           } else {
             out2.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
@@ -2584,7 +2691,7 @@ pub fn emit_func_append_with_call_cache(
   } else {
     collect_locals(c_types, pool, f, keep_instrs, block_offsets, read_temps)
   };
-  let int_consts: TempIntConstTable = build_temp_int_const_table(pool, f, locals.max_temp);
+  let int_consts: TempIntConstTable = build_temp_int_const_table(pool, target_ptr_bits, f, locals.max_temp);
   let slot_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.slots);
   let temp_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.temps);
   let block_order: Vec[i32] = block_name_order(f.blocks);
