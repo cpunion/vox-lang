@@ -1676,7 +1676,11 @@ fn write_failed_tests(names: Vec[String]) -> Vec[String] {
 }
 
 fn load_deps_from_manifest() -> DepsResult {
-  return load_deps_from_manifest_at(".", Vec(), Vec(), Vec());
+  return load_deps_from_manifest_at(".", Vec(), Vec(), Vec(), true);
+}
+
+fn load_deps_from_manifest_with_c_text(load_c_text: bool) -> DepsResult {
+  return load_deps_from_manifest_at(".", Vec(), Vec(), Vec(), load_c_text);
 }
 
 struct DepsResult { ok: bool, err: String, files: Vec[ld.SourceFile], seen: Vec[String], resolved: Vec[mf.Dependency] }
@@ -1733,7 +1737,13 @@ fn dep_cache_root(base: String) -> String {
   return path_join(base, ".vox/deps");
 }
 
-fn load_deps_from_manifest_at(base: String, files0: Vec[ld.SourceFile], seen0: Vec[String], resolved0: Vec[mf.Dependency]) -> DepsResult {
+fn load_deps_from_manifest_at(
+  base: String,
+  files0: Vec[ld.SourceFile],
+  seen0: Vec[String],
+  resolved0: Vec[mf.Dependency],
+  load_c_text: bool,
+) -> DepsResult {
   let mani_path: String = path_join(base, "vox.toml");
   let mt: String = fs.read_to_string(mani_path);
   let mr: mf.ParseResult = mf.parse(mt);
@@ -1907,13 +1917,14 @@ fn load_deps_from_manifest_at(base: String, files0: Vec[ld.SourceFile], seen0: V
       let c_rel: String = c_rels.get(ci);
       let c_full: String = path_join(dep_root, c_rel);
       let c_virt: String = dep_name.concat("/").concat(c_rel);
-      dep_files.push(ld.SourceFile { path: c_virt, text: fs.read_to_string(c_full) });
+      let c_text: String = if load_c_text { fs.read_to_string(c_full) } else { "" };
+      dep_files.push(ld.SourceFile { path: c_virt, text: c_text });
       ci = ci + 1;
     }
     let mut di: i32 = 0;
     while di < dep_files.len() { files.push(dep_files.get(di)); di = di + 1; }
 
-    let rr: DepsResult = load_deps_from_manifest_at(dep_root, files, seen, resolved);
+    let rr: DepsResult = load_deps_from_manifest_at(dep_root, files, seen, resolved, load_c_text);
     if !rr.ok { return rr; }
     files = rr.files;
     seen = rr.seen;
@@ -2105,7 +2116,7 @@ fn normalize_std_search_root(root0: String) -> String {
   return root;
 }
 
-fn load_stage1_std_from_root(root0: String) -> Vec[ld.SourceFile] {
+fn load_stage1_std_from_root_with_c_text(root0: String, load_c_text: bool) -> Vec[ld.SourceFile] {
   let root: String = normalize_std_search_root(root0);
   let rels: Vec[String] = srcw.walk_src_non_test_vox_files(root);
   let mut out: Vec[ld.SourceFile] = Vec();
@@ -2124,48 +2135,53 @@ fn load_stage1_std_from_root(root0: String) -> Vec[ld.SourceFile] {
     let c_rel: String = c_rels.get(ci);
     if txt.has_prefix(c_rel, "src/std/") && !is_hidden_source_path(c_rel) {
       let c_full: String = path_join(root, c_rel);
-      out.push(ld.SourceFile { path: c_rel, text: fs.read_to_string(c_full) });
+      let c_text: String = if load_c_text { fs.read_to_string(c_full) } else { "" };
+      out.push(ld.SourceFile { path: c_rel, text: c_text });
     }
     ci = ci + 1;
   }
   return out;
 }
 
-fn load_stage1_std() -> Vec[ld.SourceFile] {
+fn load_stage1_std_with_c_text(load_c_text: bool) -> Vec[ld.SourceFile] {
   let env_vox_root: String = txt.trim_space(osys.getenv("VOX_ROOT"));
   if env_vox_root != "" {
-    let from_root_env: Vec[ld.SourceFile] = load_stage1_std_from_root(env_vox_root);
+    let from_root_env: Vec[ld.SourceFile] = load_stage1_std_from_root_with_c_text(env_vox_root, load_c_text);
     if from_root_env.len() > 0 { return from_root_env; }
   }
 
   let env_root: String = txt.trim_space(osys.getenv("VOX_STDLIB"));
   if env_root != "" {
-    let from_env: Vec[ld.SourceFile] = load_stage1_std_from_root(env_root);
+    let from_env: Vec[ld.SourceFile] = load_stage1_std_from_root_with_c_text(env_root, load_c_text);
     if from_env.len() > 0 { return from_env; }
   }
 
   // Prefer bundled std layout next to installed binary: <bin>/../src/std.
   let exe: String = normalize_host_fs_path(osys.exe_path());
   let bin_dir: String = dir_name(exe);
-  let from_bin_near: Vec[ld.SourceFile] = load_stage1_std_from_root(path_join(bin_dir, "../src/std"));
+  let from_bin_near: Vec[ld.SourceFile] = load_stage1_std_from_root_with_c_text(path_join(bin_dir, "../src/std"), load_c_text);
   if from_bin_near.len() > 0 { return from_bin_near; }
 
   // Then fallback to build-time embedded source root.
   let embed_root: String = txt.trim_space(pth.to_forward_slashes(bi.build_source_root()));
   if embed_root != "" {
-    let from_embed: Vec[ld.SourceFile] = load_stage1_std_from_root(embed_root);
+    let from_embed: Vec[ld.SourceFile] = load_stage1_std_from_root_with_c_text(embed_root, load_c_text);
     if from_embed.len() > 0 { return from_embed; }
   }
 
   // Finally use runtime-derived repo roots for local developer builds.
   let root: String = stage1_root();
-  let from_root: Vec[ld.SourceFile] = load_stage1_std_from_root(root);
+  let from_root: Vec[ld.SourceFile] = load_stage1_std_from_root_with_c_text(root, load_c_text);
   if from_root.len() > 0 { return from_root; }
-  let from_src: Vec[ld.SourceFile] = load_stage1_std_from_root(path_join(root, "src"));
+  let from_src: Vec[ld.SourceFile] = load_stage1_std_from_root_with_c_text(path_join(root, "src"), load_c_text);
   if from_src.len() > 0 { return from_src; }
-  let from_lib: Vec[ld.SourceFile] = load_stage1_std_from_root(path_join(root, "lib"));
+  let from_lib: Vec[ld.SourceFile] = load_stage1_std_from_root_with_c_text(path_join(root, "lib"), load_c_text);
   if from_lib.len() > 0 { return from_lib; }
   return Vec();
+}
+
+fn load_stage1_std() -> Vec[ld.SourceFile] {
+  return load_stage1_std_with_c_text(true);
 }
 
 fn load_stage1_vox() -> Vec[ld.SourceFile] {
@@ -2976,7 +2992,7 @@ fn main() -> i32 {
     };
     let src_presence: SrcPresenceResult = detect_src_presence(list_paths);
     let paths: Vec[String] = src_presence.paths;
-    let mut files: Vec[ld.SourceFile] = if src_presence.has_std { Vec() } else { load_stage1_std() };
+    let mut files: Vec[ld.SourceFile] = if src_presence.has_std { Vec() } else { load_stage1_std_with_c_text(false) };
     if !src_presence.has_vox {
       let preload_vox: Vec[ld.SourceFile] = load_stage1_vox();
       let mut pvi: i32 = 0;
@@ -2985,7 +3001,7 @@ fn main() -> i32 {
         pvi = pvi + 1;
       }
     }
-    let dr: DepsResult = load_deps_from_manifest();
+    let dr: DepsResult = load_deps_from_manifest_with_c_text(false);
     if !dr.ok {
       print("invalid vox.toml: ".concat(dr.err).concat("\n"));
       return 1;
@@ -2996,7 +3012,13 @@ fn main() -> i32 {
     let mut ui: i32 = 0;
     while ui < user.len() { files.push(user.get(ui)); ui = ui + 1; }
     let c_all: Vec[String] = filter_pkg_c_sources(srcw.walk_c_files("."));
-    let c_user: Vec[ld.SourceFile] = load_files(c_all);
+    let mut c_user: Vec[ld.SourceFile] = Vec();
+    let mut cui_load: i32 = 0;
+    while cui_load < c_all.len() {
+      let c_path: String = c_all.get(cui_load);
+      c_user.push(ld.SourceFile { path: c_path, text: "" });
+      cui_load = cui_load + 1;
+    }
     let mut cui: i32 = 0;
     while cui < c_user.len() { files.push(c_user.get(cui)); cui = cui + 1; }
 
