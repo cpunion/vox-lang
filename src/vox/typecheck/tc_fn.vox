@@ -839,110 +839,89 @@ fn expr_value_move_sources(ctx: Ctx, w: World, mod_path: String, l0: Locals, imp
   };
 }
 
-fn release_move_sources_collect_from_stmt(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, st: ast.Stmt, out0: Vec[String]) -> Vec[String] {
+fn release_move_exists_from_stmt(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, st: ast.Stmt) -> bool {
   return match st {
-    ast.Stmt.Let(_sp, _m, _name, _has_ann, _ann, init) => release_move_sources_collect(ctx, l0, imps, exprs, init, out0),
-    ast.Stmt.Assign(_sp, _name, rhs) => release_move_sources_collect(ctx, l0, imps, exprs, rhs, out0),
-    ast.Stmt.AssignField(_sp, _recv, _field, rhs) => release_move_sources_collect(ctx, l0, imps, exprs, rhs, out0),
-    ast.Stmt.ExprStmt(_sp, eid) => release_move_sources_collect(ctx, l0, imps, exprs, eid, out0),
+    ast.Stmt.Let(_sp, _m, _name, _has_ann, _ann, init) => release_move_exists(ctx, l0, imps, exprs, init),
+    ast.Stmt.Assign(_sp, _name, rhs) => release_move_exists(ctx, l0, imps, exprs, rhs),
+    ast.Stmt.AssignField(_sp, _recv, _field, rhs) => release_move_exists(ctx, l0, imps, exprs, rhs),
+    ast.Stmt.ExprStmt(_sp, eid) => release_move_exists(ctx, l0, imps, exprs, eid),
     ast.Stmt.IfStmt(_sp, cond, then_b, has_else, else_b) => {
-      let mut out: Vec[String] = release_move_sources_collect(ctx, l0, imps, exprs, cond, out0);
-      out = release_move_sources_collect_from_block(ctx, l0, imps, exprs, then_b, out);
-      if has_else { out = release_move_sources_collect_from_block(ctx, l0, imps, exprs, else_b, out); }
-      out
+      if release_move_exists(ctx, l0, imps, exprs, cond) { true } else if release_move_exists_from_block(ctx, l0, imps, exprs, then_b) { true } else if has_else { release_move_exists_from_block(ctx, l0, imps, exprs, else_b) } else { false }
     },
     ast.Stmt.WhileStmt(_sp, cond, body) => {
-      let mut out: Vec[String] = release_move_sources_collect(ctx, l0, imps, exprs, cond, out0);
-      out = release_move_sources_collect_from_block(ctx, l0, imps, exprs, body, out);
-      out
+      if release_move_exists(ctx, l0, imps, exprs, cond) { true } else { release_move_exists_from_block(ctx, l0, imps, exprs, body) }
     },
-    ast.Stmt.ReturnStmt(_sp, has, eid) => if has { release_move_sources_collect(ctx, l0, imps, exprs, eid, out0) } else { out0 },
-    _ => out0,
+    ast.Stmt.ReturnStmt(_sp, has, eid) => if has { release_move_exists(ctx, l0, imps, exprs, eid) } else { false },
+    _ => false,
   };
 }
 
-fn release_move_sources_collect_from_block(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, b: ast.Block, out0: Vec[String]) -> Vec[String] {
-  let mut out: Vec[String] = out0;
+fn release_move_exists_from_block(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, b: ast.Block) -> bool {
   let mut i: i32 = 0;
   while i < b.stmts.len() {
-    out = release_move_sources_collect_from_stmt(ctx, l0, imps, exprs, b.stmts.get(i), out);
+    if release_move_exists_from_stmt(ctx, l0, imps, exprs, b.stmts.get(i)) { return true; }
     i = i + 1;
   }
-  return out;
+  return false;
 }
 
-fn release_move_sources_collect(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, eid: i32, out0: Vec[String]) -> Vec[String] {
+fn release_move_exists(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, eid: i32) -> bool {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
   return match n {
     ast.ExprNode.Call(callee, _type_args, args) => {
-      let mut out: Vec[String] = out0;
       let rm: ReleaseMoveSourceResult = release_move_from_call(ctx, l0, imps, exprs, callee, args);
-      if rm.found { out = move_names_collect_add(out, rm.name); }
-      out = release_move_sources_collect(ctx, l0, imps, exprs, callee, out);
+      if rm.found { return true; }
+      if release_move_exists(ctx, l0, imps, exprs, callee) { return true; }
       let mut i: i32 = 0;
       while i < args.len() {
-        out = release_move_sources_collect(ctx, l0, imps, exprs, args.get(i), out);
+        if release_move_exists(ctx, l0, imps, exprs, args.get(i)) { return true; }
         i = i + 1;
       }
-      out
+      false
     },
     ast.ExprNode.MacroCall(callee, _type_args, args) => {
-      let mut out: Vec[String] = release_move_sources_collect(ctx, l0, imps, exprs, callee, out0);
+      if release_move_exists(ctx, l0, imps, exprs, callee) { return true; }
       let mut i: i32 = 0;
       while i < args.len() {
-        out = release_move_sources_collect(ctx, l0, imps, exprs, args.get(i), out);
+        if release_move_exists(ctx, l0, imps, exprs, args.get(i)) { return true; }
         i = i + 1;
       }
-      out
+      false
     },
-    ast.ExprNode.Unary(_op, a) => release_move_sources_collect(ctx, l0, imps, exprs, a, out0),
-    ast.ExprNode.As(a, _ty) => release_move_sources_collect(ctx, l0, imps, exprs, a, out0),
+    ast.ExprNode.Unary(_op, a) => release_move_exists(ctx, l0, imps, exprs, a),
+    ast.ExprNode.As(a, _ty) => release_move_exists(ctx, l0, imps, exprs, a),
     ast.ExprNode.Binary(_op, a, b) => {
-      let mut out: Vec[String] = release_move_sources_collect(ctx, l0, imps, exprs, a, out0);
-      out = release_move_sources_collect(ctx, l0, imps, exprs, b, out);
-      out
+      if release_move_exists(ctx, l0, imps, exprs, a) { true } else { release_move_exists(ctx, l0, imps, exprs, b) }
     },
-    ast.ExprNode.Member(recv, _name) => release_move_sources_collect(ctx, l0, imps, exprs, recv, out0),
+    ast.ExprNode.Member(recv, _name) => release_move_exists(ctx, l0, imps, exprs, recv),
     ast.ExprNode.If(cond, then_id, else_id) => {
-      let mut out: Vec[String] = release_move_sources_collect(ctx, l0, imps, exprs, cond, out0);
-      out = release_move_sources_collect(ctx, l0, imps, exprs, then_id, out);
-      out = release_move_sources_collect(ctx, l0, imps, exprs, else_id, out);
-      out
+      if release_move_exists(ctx, l0, imps, exprs, cond) { true } else if release_move_exists(ctx, l0, imps, exprs, then_id) { true } else { release_move_exists(ctx, l0, imps, exprs, else_id) }
     },
     ast.ExprNode.Block(eb) => {
-      let mut out: Vec[String] = release_move_sources_collect_from_block(ctx, l0, imps, exprs, ast.Block { stmts: eb.stmts }, out0);
-      if eb.has_tail {
-        out = release_move_sources_collect(ctx, l0, imps, exprs, eb.tail, out);
-      }
-      out
+      if release_move_exists_from_block(ctx, l0, imps, exprs, ast.Block { stmts: eb.stmts }) { true } else if eb.has_tail { release_move_exists(ctx, l0, imps, exprs, eb.tail) } else { false }
     },
-    ast.ExprNode.TryBlock(bid) => release_move_sources_collect(ctx, l0, imps, exprs, bid, out0),
-    ast.ExprNode.Try(a) => release_move_sources_collect(ctx, l0, imps, exprs, a, out0),
+    ast.ExprNode.TryBlock(bid) => release_move_exists(ctx, l0, imps, exprs, bid),
+    ast.ExprNode.Try(a) => release_move_exists(ctx, l0, imps, exprs, a),
     ast.ExprNode.StructLit(tyexpr, fields) => {
-      let mut out: Vec[String] = release_move_sources_collect(ctx, l0, imps, exprs, tyexpr, out0);
+      if release_move_exists(ctx, l0, imps, exprs, tyexpr) { return true; }
       let mut i: i32 = 0;
       while i < fields.len() {
-        out = release_move_sources_collect(ctx, l0, imps, exprs, fields.get(i).expr, out);
+        if release_move_exists(ctx, l0, imps, exprs, fields.get(i).expr) { return true; }
         i = i + 1;
       }
-      out
+      false
     },
     ast.ExprNode.Match(scrut, arms) => {
-      let mut out: Vec[String] = release_move_sources_collect(ctx, l0, imps, exprs, scrut, out0);
+      if release_move_exists(ctx, l0, imps, exprs, scrut) { return true; }
       let mut i: i32 = 0;
       while i < arms.len() {
-        out = release_move_sources_collect(ctx, l0, imps, exprs, arms.get(i).expr, out);
+        if release_move_exists(ctx, l0, imps, exprs, arms.get(i).expr) { return true; }
         i = i + 1;
       }
-      out
+      false
     },
-    _ => out0,
+    _ => false,
   };
-}
-
-fn release_move_sources(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, eid: i32) -> Vec[String] {
-  let collected: Vec[String] = release_move_sources_collect(ctx, l0, imps, exprs, eid, Vec());
-  return move_names_sort_unique(collected);
 }
 
 fn expr_move_sources_collect_from_stmt(
@@ -1112,8 +1091,7 @@ fn is_release_call_expr(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool
   if match n { ast.ExprNode.Call(callee, _type_args, _args) => is_std_release_module_call(imps, exprs, callee), _ => false } {
     return true;
   }
-  let names: Vec[String] = release_move_sources(ctx, l0, imps, exprs, eid);
-  return names.len() > 0;
+  return release_move_exists(ctx, l0, imps, exprs, eid);
 }
 
 fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, eid: i32) -> TcStmtResult {
