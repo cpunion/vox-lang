@@ -207,6 +207,16 @@ fn int_const_value_from_operand(v: ir.Value, int_consts: TempIntConstTable) -> I
   };
 }
 
+fn int_min_const_for_signed_kind(kind: ir.TyKind) -> IntConstValue {
+  return match kind {
+    ir.TyKind.I8 => IntConstValue { ok: true, n: -128 as i64 },
+    ir.TyKind.I16 => IntConstValue { ok: true, n: -32768 as i64 },
+    ir.TyKind.I32 => IntConstValue { ok: true, n: ((-2147483647 as i64) - (1 as i64)) },
+    ir.TyKind.I64 => IntConstValue { ok: true, n: ((-9223372036854775807 as i64) - (1 as i64)) },
+    _ => IntConstValue { ok: false, n: 0 },
+  };
+}
+
 fn c_param_name_named(vn: ValueNameTables, i: i32) -> String {
   if i >= 0 && i < vn.params.len() { return vn.params.get(i); }
   return c_param_name(i);
@@ -1488,20 +1498,28 @@ fn emit_instr_enum_init(c_types: Vec[String], pool: ir.TyPool, p: ir.Program, en
   return vec1(s);
 }
 
-fn emit_instr_binop_int(c_types: Vec[String], pool: ir.TyPool, tid: i32, op: ir.BinOpKind, ty: i32, a: ir.Value, b: ir.Value, vn: ValueNameTables) -> Vec[String] {
+fn emit_instr_binop_int(
+  c_types: Vec[String],
+  pool: ir.TyPool,
+  tid: i32,
+  op: ir.BinOpKind,
+  ty: i32,
+  a: ir.Value,
+  b: ir.Value,
+  int_consts: TempIntConstTable,
+  vn: ValueNameTables,
+) -> Vec[String] {
   let t: ir.Ty = ir.ty_pool_get(pool, ty);
   if !is_int_scalar_kind(t.kind) { panic("binop int helper expects int type"); }
   let dst_cty: String = c_type_from_table(c_types, pool, ty);
   let a_text: String = c_value_named(a, vn);
   let b_text: String = c_value_named(b, vn);
-  let b_is_int_lit: bool = match b {
-    ir.Value.Int(_n) => true,
-    _ => false,
-  };
-  let b_int_lit: i64 = match b {
-    ir.Value.Int(n) => n,
-    _ => 0,
-  };
+  let a_int_lit_v: IntConstValue = int_const_value_from_operand(a, int_consts);
+  let b_int_lit_v: IntConstValue = int_const_value_from_operand(b, int_consts);
+  let a_is_int_lit: bool = a_int_lit_v.ok;
+  let b_is_int_lit: bool = b_int_lit_v.ok;
+  let a_int_lit: i64 = if a_is_int_lit { a_int_lit_v.n } else { 0 as i64 };
+  let b_int_lit: i64 = if b_is_int_lit { b_int_lit_v.n } else { 0 as i64 };
 
   // + - * and bitwise ops: wrap on integer bit width. Avoid signed overflow UB by operating on unsigned peers.
   let is_mul: bool = match op { ir.BinOpKind.Mul => true, _ => false };
@@ -1608,7 +1626,16 @@ fn emit_instr_binop_int(c_types: Vec[String], pool: ir.TyPool, tid: i32, op: ir.
       if minm.len() == 0 || maxm.len() == 0 { panic("missing signed min/max macro"); }
       if b_is_int_lit {
         if b_int_lit == -1 {
-          out2.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
+          if a_is_int_lit {
+            let a_min: IntConstValue = int_min_const_for_signed_kind(t.kind);
+            if !a_min.ok {
+              out2.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
+            } else if a_int_lit == a_min.n {
+              out2.push("  vox_host_panic(\"division overflow\");");
+            }
+          } else {
+            out2.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
+          }
         }
       } else {
         out2.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(" && ").concat(b_text).concat(" == (").concat(dst_cty).concat(")-1) { vox_host_panic(\"division overflow\"); }"));
@@ -1960,7 +1987,7 @@ fn emit_instr(
     ir.Instr.Const(tid, _ty, v) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_value_named(v, vn)).concat(";")),
     ir.Instr.BinOp(tid, op, ty, a, b) => {
       let bt: ir.Ty = ir.ty_pool_get(pool, ty);
-      if is_int_scalar_kind(bt.kind) { emit_instr_binop_int(c_types, pool, tid, op, ty, a, b, vn) }
+      if is_int_scalar_kind(bt.kind) { emit_instr_binop_int(c_types, pool, tid, op, ty, a, b, int_consts, vn) }
       else if op == ir.BinOpKind.Mod && bt.kind == ir.TyKind.F32 {
         vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = fmodf(").concat(c_value_named(a, vn)).concat(", ").concat(c_value_named(b, vn)).concat(");"))
       } else if op == ir.BinOpKind.Mod && bt.kind == ir.TyKind.F64 {
