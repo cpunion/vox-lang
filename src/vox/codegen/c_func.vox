@@ -129,6 +129,8 @@ struct TempIntConstTable {
   vals: Vec[i64],
   not_signed_min: Vec[bool],
   non_negative: Vec[bool],
+  slot_not_signed_min: Vec[bool],
+  slot_non_negative: Vec[bool],
 }
 
 struct IntConstValue {
@@ -157,7 +159,14 @@ fn build_value_name_tables(param_len: i32, max_temp: i32, max_slot: i32) -> Valu
 }
 
 fn temp_int_const_table_empty() -> TempIntConstTable {
-  return TempIntConstTable { has: Vec(), vals: Vec(), not_signed_min: Vec(), non_negative: Vec() };
+  return TempIntConstTable {
+    has: Vec(),
+    vals: Vec(),
+    not_signed_min: Vec(),
+    non_negative: Vec(),
+    slot_not_signed_min: Vec(),
+    slot_non_negative: Vec(),
+  };
 }
 
 fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func, max_temp: i32, max_slot: i32) -> TempIntConstTable {
@@ -174,6 +183,66 @@ fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func,
     non_negative.push(false);
     i0 = i0 + 1;
   }
+  let slot_w: i32 = if max_slot >= 0 { max_slot + 1 } else { 0 };
+  let mut slot_seen_store_global: Vec[bool] = Vec();
+  let mut slot_all_non_negative_global: Vec[bool] = Vec();
+  let mut slot_all_not_signed_min_global: Vec[bool] = Vec();
+  let mut gsi0: i32 = 0;
+  while gsi0 < slot_w {
+    slot_seen_store_global.push(false);
+    slot_all_non_negative_global.push(true);
+    slot_all_not_signed_min_global.push(true);
+    gsi0 = gsi0 + 1;
+  }
+  let mut block_preds: Vec[Vec[i32]] = Vec();
+  let mut bpi: i32 = 0;
+  while bpi < f.blocks.len() {
+    block_preds.push(Vec());
+    bpi = bpi + 1;
+  }
+  bpi = 0;
+  while bpi < f.blocks.len() {
+    let b0: ir.Block = f.blocks.get(bpi);
+    if b0.has_term {
+      if match b0.term { ir.Term.Br(_dst) => true, _ => false } {
+        let dst: String = match b0.term { ir.Term.Br(dst) => dst, _ => "" };
+        let di: i32 = find_block_idx_by_name(f.blocks, dst);
+        if di >= 0 && di < block_preds.len() {
+          let mut ps: Vec[i32] = block_preds.get(di);
+          ps.push(bpi);
+          block_preds.set(di, ps);
+        }
+      } else if match b0.term { ir.Term.CondBr(_cond, _then_name, _else_name) => true, _ => false } {
+        let then_name: String = match b0.term { ir.Term.CondBr(_cond, then_name, _else_name) => then_name, _ => "" };
+        let else_name: String = match b0.term { ir.Term.CondBr(_cond, _then_name, else_name) => else_name, _ => "" };
+        let d0: i32 = find_block_idx_by_name(f.blocks, then_name);
+        if d0 >= 0 && d0 < block_preds.len() {
+          let mut ps0: Vec[i32] = block_preds.get(d0);
+          ps0.push(bpi);
+          block_preds.set(d0, ps0);
+        }
+        let d1: i32 = find_block_idx_by_name(f.blocks, else_name);
+        if d1 >= 0 && d1 < block_preds.len() {
+          let mut ps1: Vec[i32] = block_preds.get(d1);
+          ps1.push(bpi);
+          block_preds.set(d1, ps1);
+        }
+      }
+    }
+    bpi = bpi + 1;
+  }
+  let mut block_slot_non_negative_out: Vec[bool] = Vec();
+  let mut block_slot_not_signed_min_out: Vec[bool] = Vec();
+  let mut boi: i32 = 0;
+  while boi < f.blocks.len() {
+    let mut si0: i32 = 0;
+    while si0 < slot_w {
+      block_slot_non_negative_out.push(false);
+      block_slot_not_signed_min_out.push(false);
+      si0 = si0 + 1;
+    }
+    boi = boi + 1;
+  }
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
     let b: ir.Block = f.blocks.get(bi);
@@ -188,6 +257,21 @@ fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func,
       slot_not_signed_min.push(false);
       slot_non_negative.push(false);
       si0 = si0 + 1;
+    }
+    if slot_w > 0 && bi < block_preds.len() {
+      let ps: Vec[i32] = block_preds.get(bi);
+      if ps.len() == 1 {
+        let pred: i32 = ps.get(0);
+        if pred >= 0 && pred < bi {
+          let mut si1: i32 = 0;
+          while si1 < slot_w {
+            let pi: i32 = pred * slot_w + si1;
+            slot_non_negative.set(si1, block_slot_non_negative_out.get(pi));
+            slot_not_signed_min.set(si1, block_slot_not_signed_min_out.get(pi));
+            si1 = si1 + 1;
+          }
+        }
+      }
     }
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
@@ -275,6 +359,9 @@ fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func,
           slot_vals.set(slot, 0 as i64);
           slot_not_signed_min.set(slot, false);
           slot_non_negative.set(slot, false);
+          slot_seen_store_global.set(slot, false);
+          slot_all_non_negative_global.set(slot, true);
+          slot_all_not_signed_min_global.set(slot, true);
         }
       } else if match ins { ir.Instr.Store(_slot, _v) => true, _ => false } {
         let slot: i32 = match ins { ir.Instr.Store(slot, _v) => slot, _ => 0 };
@@ -314,6 +401,13 @@ fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func,
               }
             };
           slot_not_signed_min.set(slot, v_not_signed_min);
+          slot_seen_store_global.set(slot, true);
+          if !v_non_negative {
+            slot_all_non_negative_global.set(slot, false);
+          }
+          if !v_not_signed_min {
+            slot_all_not_signed_min_global.set(slot, false);
+          }
         }
       } else if match ins { ir.Instr.Load(_tid, _ty, _slot) => true, _ => false } {
         let tid: i32 = match ins { ir.Instr.Load(tid, _ty, _slot) => tid, _ => 0 };
@@ -340,10 +434,14 @@ fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func,
               non_negative.set(tid, true);
               not_signed_min.set(tid, true);
             } else {
-              if slot_non_negative.get(slot) {
+              let slot_non_negative_global: bool =
+                slot_seen_store_global.get(slot) && slot_all_non_negative_global.get(slot);
+              let slot_not_signed_min_global: bool =
+                slot_seen_store_global.get(slot) && slot_all_not_signed_min_global.get(slot);
+              if slot_non_negative.get(slot) || slot_non_negative_global {
                 non_negative.set(tid, true);
                 not_signed_min.set(tid, true);
-              } else if slot_not_signed_min.get(slot) {
+              } else if slot_not_signed_min.get(slot) || slot_not_signed_min_global {
                 not_signed_min.set(tid, true);
               }
             }
@@ -364,9 +462,33 @@ fn build_temp_int_const_table(pool: ir.TyPool, target_ptr_bits: i32, f: ir.Func,
       }
       ii = ii + 1;
     }
+    if slot_w > 0 {
+      let mut si2: i32 = 0;
+      while si2 < slot_w {
+        let oi: i32 = bi * slot_w + si2;
+        block_slot_non_negative_out.set(oi, slot_non_negative.get(si2));
+        block_slot_not_signed_min_out.set(oi, slot_not_signed_min.get(si2));
+        si2 = si2 + 1;
+      }
+    }
     bi = bi + 1;
   }
-  return TempIntConstTable { has: has, vals: vals, not_signed_min: not_signed_min, non_negative: non_negative };
+  let mut slot_non_negative_global_final: Vec[bool] = Vec();
+  let mut slot_not_signed_min_global_final: Vec[bool] = Vec();
+  let mut gsi1: i32 = 0;
+  while gsi1 < slot_w {
+    slot_non_negative_global_final.push(slot_seen_store_global.get(gsi1) && slot_all_non_negative_global.get(gsi1));
+    slot_not_signed_min_global_final.push(slot_seen_store_global.get(gsi1) && slot_all_not_signed_min_global.get(gsi1));
+    gsi1 = gsi1 + 1;
+  }
+  return TempIntConstTable {
+    has: has,
+    vals: vals,
+    not_signed_min: not_signed_min,
+    non_negative: non_negative,
+    slot_not_signed_min: slot_not_signed_min_global_final,
+    slot_non_negative: slot_non_negative_global_final,
+  };
 }
 
 fn int_const_value_from_operand(v: ir.Value, int_consts: TempIntConstTable) -> IntConstValue {
@@ -403,7 +525,18 @@ fn int_literal_not_any_signed_min(n: i64) -> bool {
 fn call_result_is_definitely_non_negative(name: String) -> bool {
   // std.prelude inherent `len` returns i32 length and is semantically non-negative.
   if name.starts_with("std.prelude::impl$inherent$len$") { return true; }
+  if name.starts_with("std/prelude::impl$inherent$len$") { return true; }
+  if name.starts_with("std::prelude::impl$inherent$len$") { return true; }
   return false;
+}
+
+fn find_block_idx_by_name(blocks: Vec[ir.Block], name: String) -> i32 {
+  let mut i: i32 = 0;
+  while i < blocks.len() {
+    if blocks.get(i).name == name { return i; }
+    i = i + 1;
+  }
+  return -1;
 }
 
 fn int_operand_is_definitely_not_signed_min(v: ir.Value, kind: ir.TyKind, int_consts: TempIntConstTable) -> bool {
@@ -413,6 +546,7 @@ fn int_operand_is_definitely_not_signed_min(v: ir.Value, kind: ir.TyKind, int_co
   return match v {
     ir.Value.Int(n) => n != minv.n,
     ir.Value.Temp(tid) => tid >= 0 && tid < int_consts.not_signed_min.len() && int_consts.not_signed_min.get(tid),
+    ir.Value.Slot(slot) => slot >= 0 && slot < int_consts.slot_not_signed_min.len() && int_consts.slot_not_signed_min.get(slot),
     _ => false,
   };
 }
@@ -421,6 +555,7 @@ fn int_operand_is_definitely_non_negative(v: ir.Value, int_consts: TempIntConstT
   return match v {
     ir.Value.Int(n) => n >= (0 as i64),
     ir.Value.Temp(tid) => tid >= 0 && tid < int_consts.non_negative.len() && int_consts.non_negative.get(tid),
+    ir.Value.Slot(slot) => slot >= 0 && slot < int_consts.slot_non_negative.len() && int_consts.slot_non_negative.get(slot),
     _ => false,
   };
 }
