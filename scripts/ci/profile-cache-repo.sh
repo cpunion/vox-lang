@@ -34,7 +34,7 @@ cache_file_count() {
     printf '0'
     return
   fi
-  find "$dir" -type f | wc -l | awk '{print $1}'
+  find "$dir" -type f | grep -c . || true
 }
 
 print_cache_counts() {
@@ -48,7 +48,7 @@ print_cache_counts() {
 
 print_profile_excerpt() {
   local log="$1"
-  rg '^\[profile\] (cache(|-prep)|compile total:|compile typecheck:|compile irgen:|compile codegen:|cc-obj:|link:)' "$log" || true
+  rg '^\[profile\] (cache(-prep)?|compile (total|typecheck|irgen|codegen):|cc-obj:|link:)' "$log" || true
 }
 
 export_snapshot() {
