@@ -52,6 +52,26 @@ require_any_file_in_dir() {
   fi
 }
 
+require_no_matching_files() {
+  local dir="$1"
+  local pattern="$2"
+  local why="$3"
+  if [[ -d "$dir" ]] && find "$dir" -maxdepth 1 -name "$pattern" -type f | grep -q .; then
+    echo "[incremental-gate] unexpected files matching $pattern under $dir ($why)" >&2
+    exit 1
+  fi
+}
+
+require_matching_files() {
+  local dir="$1"
+  local pattern="$2"
+  local why="$3"
+  if [[ ! -d "$dir" ]] || ! find "$dir" -maxdepth 1 -name "$pattern" -type f | grep -q .; then
+    echo "[incremental-gate] expected files matching $pattern under $dir ($why)" >&2
+    exit 1
+  fi
+}
+
 INCR0="$WORK_DIR/incr0"
 INCR1="$WORK_DIR/incr1"
 INCR1_FAST="$WORK_DIR/incr1-fast"
@@ -65,8 +85,7 @@ mk_project "$INCR1_FAST"
   VOX_INCREMENTAL=0 VOX_PROFILE=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build.log 2>&1
   VOX_INCREMENTAL=0 VOX_PROFILE=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" test --list > list.log 2>&1
 
-  require_no_file "target/debug/.vox_test_discover.key" "VOX_INCREMENTAL=0 should disable test discovery sidecar writes"
-  require_no_file "target/debug/.vox_test_discover.list" "VOX_INCREMENTAL=0 should disable test discovery sidecar writes"
+  require_no_matching_files "target/debug" ".vox_test_discover.*.list" "VOX_INCREMENTAL=0 should disable keyed test discovery cache writes"
   if [[ -d target/cache ]]; then
     if find target/cache -type f | grep -q .; then
       echo "[incremental-gate] expected no target/cache artifacts when VOX_INCREMENTAL=0" >&2
@@ -94,10 +113,7 @@ mk_project "$INCR1_FAST"
   VOX_INCREMENTAL=1 VOX_PROFILE=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build2.log 2>&1
   VOX_INCREMENTAL=1 VOX_PROFILE=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" test --list > list.log 2>&1
 
-  if [[ ! -e target/debug/.vox_test_discover.key || ! -e target/debug/.vox_test_discover.list ]]; then
-    echo "[incremental-gate] expected test discovery sidecars when VOX_INCREMENTAL=1" >&2
-    exit 1
-  fi
+  require_matching_files "target/debug" ".vox_test_discover.*.list" "VOX_INCREMENTAL=1 should enable keyed test discovery cache artifacts"
   require_any_file_in_dir "target/cache/pkg-sem-v1" "VOX_INCREMENTAL=1 should enable semantic cache artifacts"
   require_any_file_in_dir "target/cache/pkg-obj-v1" "VOX_INCREMENTAL=1 should enable object cache artifacts"
   require_any_file_in_dir "target/cache/link-v1" "VOX_INCREMENTAL=1 should enable link cache artifacts"
