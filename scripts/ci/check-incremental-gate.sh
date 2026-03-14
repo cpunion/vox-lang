@@ -54,8 +54,10 @@ require_any_file_in_dir() {
 
 INCR0="$WORK_DIR/incr0"
 INCR1="$WORK_DIR/incr1"
+INCR1_FAST="$WORK_DIR/incr1-fast"
 mk_project "$INCR0"
 mk_project "$INCR1"
+mk_project "$INCR1_FAST"
 
 (
   cd "$INCR0"
@@ -108,6 +110,14 @@ mk_project "$INCR1"
     echo "[incremental-gate] expected profile cache build summary for VOX_INCREMENTAL=1 build" >&2
     exit 1
   fi
+  if ! rg -n "\[profile\] cache build: cache=on incremental=on sem=miss c=miss obj=miss link=miss" build1.log >/dev/null 2>&1; then
+    echo "[incremental-gate] expected cold query-shadow build to report sem=miss with cold cache state" >&2
+    exit 1
+  fi
+  if ! rg -n "\[profile\] cache build: cache=on incremental=on sem=hit c=hit obj=hit link=hit" build2.log >/dev/null 2>&1; then
+    echo "[incremental-gate] expected warm query-shadow build to report sem=hit with cache hits" >&2
+    exit 1
+  fi
   if ! rg -n "\[profile\] cache test-list: cache=on incremental=on" list.log >/dev/null 2>&1; then
     echo "[incremental-gate] expected profile cache test-list summary for VOX_INCREMENTAL=1 list" >&2
     exit 1
@@ -118,6 +128,22 @@ mk_project "$INCR1"
   fi
   if [[ ! -d target/cache/pkg-sem-v1/parse-load-shadow-v1 ]]; then
     echo "[incremental-gate] expected parse-load-shadow artifacts when VOX_QUERY_SHADOW=1 and VOX_INCREMENTAL=1" >&2
+    exit 1
+  fi
+)
+
+(
+  cd "$INCR1_FAST"
+
+  VOX_INCREMENTAL=1 VOX_PROFILE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build1.log 2>&1
+  VOX_INCREMENTAL=1 VOX_PROFILE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build2.log 2>&1
+
+  if ! rg -n "\[profile\] cache build: cache=on incremental=on sem=miss c=miss obj=miss link=miss" build1.log >/dev/null 2>&1; then
+    echo "[incremental-gate] expected cold non-query-shadow build to report sem=miss with cold cache state" >&2
+    exit 1
+  fi
+  if ! rg -n "\[profile\] cache build: cache=on incremental=on sem=skip c=hit obj=hit link=hit" build2.log >/dev/null 2>&1; then
+    echo "[incremental-gate] expected warm non-query-shadow build to report sem=skip with cache hits" >&2
     exit 1
   fi
 )
