@@ -693,10 +693,6 @@ fn emit_instr_atomic_new_append(out0: Vec[String], pool: ir.TyPool, tid: i32, el
   return out;
 }
 
-fn emit_instr_atomic_new(pool: ir.TyPool, tid: i32, elem_ty: i32, val: ir.Value, vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_atomic_new_append(Vec(), pool, tid, elem_ty, val, vn);
-}
-
 fn emit_instr_atomic_cas_append(out0: Vec[String], pool: ir.TyPool, tid: i32, elem_ty: i32, h: ir.Value, expected: ir.Value, desired: ir.Value, vn: ValueNameTables) -> Vec[String] {
   let at: String = c_atomic_c_type(pool, elem_ty);
   let vt: String = c_atomic_val_c_type(pool, elem_ty);
@@ -705,10 +701,6 @@ fn emit_instr_atomic_cas_append(out0: Vec[String], pool: ir.TyPool, tid: i32, el
   out.push("  ".concat(vt).concat(" ").concat(tmp).concat(" = ").concat(c_value_named(expected, vn)).concat(";"));
   out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = atomic_compare_exchange_strong_explicit((").concat(at).concat("*)").concat(c_value_named(h, vn)).concat(", &").concat(tmp).concat(", ").concat(c_value_named(desired, vn)).concat(", memory_order_seq_cst, memory_order_seq_cst);"));
   return out;
-}
-
-fn emit_instr_atomic_cas(pool: ir.TyPool, tid: i32, elem_ty: i32, h: ir.Value, expected: ir.Value, desired: ir.Value, vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_atomic_cas_append(Vec(), pool, tid, elem_ty, h, expected, desired, vn);
 }
 
 fn is_int_scalar_kind(k: ir.TyKind) -> bool {
@@ -1673,197 +1665,6 @@ fn c_field_chain(fields: Vec[String]) -> String {
   return out;
 }
 
-fn emit_instr_cmp(pool: ir.TyPool, tid: i32, op: ir.CmpKind, oty: i32, a: ir.Value, b: ir.Value, vn: ValueNameTables) -> Vec[String] {
-  return vec1(emit_instr_cmp_line(pool, tid, op, oty, a, b, vn));
-}
-
-fn emit_instr_int_cast_checked(
-  c_types: Vec[String],
-  pool: ir.TyPool,
-  target_ptr_bits: i32,
-  tid: i32,
-  dst_ty: i32,
-  src_ty: i32,
-  v: ir.Value,
-  int_consts: TempIntConstTable,
-  vn: ValueNameTables,
-) -> Vec[String] {
-  let dst: ir.Ty = ir.ty_pool_get(pool, dst_ty);
-  let src: ir.Ty = ir.ty_pool_get(pool, src_ty);
-  let v_text: String = c_value_named(v, vn);
-
-  let dst_is_unsigned: bool = is_unsigned_int_kind(dst.kind);
-  let src_is_unsigned: bool = is_unsigned_int_kind(src.kind);
-  let src_is_float: bool = src.kind == ir.TyKind.F32 || src.kind == ir.TyKind.F64;
-  let src_int_lit: IntConstValue = int_const_value_from_operand(v, int_consts);
-  let src_non_negative: bool = int_operand_is_definitely_non_negative(v, int_consts);
-
-  let mut out: Vec[String] = Vec();
-  if !src_is_float && src_int_lit.ok && int_literal_always_fits_dst_kind(dst.kind, src_int_lit.n, target_ptr_bits) {
-    out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
-    return out;
-  }
-  if !src_is_float && !int_cast_needs_runtime_check(dst.kind, src.kind, target_ptr_bits) {
-    out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
-    return out;
-  }
-
-  let src_name: String = match src.kind {
-    ir.TyKind.I8 => "i8",
-    ir.TyKind.U8 => "u8",
-    ir.TyKind.I16 => "i16",
-    ir.TyKind.U16 => "u16",
-    ir.TyKind.I32 => "i32",
-    ir.TyKind.U32 => "u32",
-    ir.TyKind.I64 => "i64",
-    ir.TyKind.U64 => "u64",
-    ir.TyKind.ISize => "isize",
-    ir.TyKind.USize => "usize",
-    _ => "?",
-  };
-  let dst_name: String = match dst.kind {
-    ir.TyKind.I8 => "i8",
-    ir.TyKind.U8 => "u8",
-    ir.TyKind.I16 => "i16",
-    ir.TyKind.U16 => "u16",
-    ir.TyKind.I32 => "i32",
-    ir.TyKind.U32 => "u32",
-    ir.TyKind.I64 => "i64",
-    ir.TyKind.U64 => "u64",
-    ir.TyKind.ISize => "isize",
-    ir.TyKind.USize => "usize",
-    _ => "?",
-  };
-  let msg: String = src_name.concat(" to ").concat(dst_name).concat(" overflow");
-
-  let dst_max: String =
-    match dst.kind {
-      ir.TyKind.I8 => "INT8_MAX",
-      ir.TyKind.U8 => "UINT8_MAX",
-      ir.TyKind.I16 => "INT16_MAX",
-      ir.TyKind.U16 => "UINT16_MAX",
-      ir.TyKind.I32 => "INT32_MAX",
-      ir.TyKind.U32 => "UINT32_MAX",
-      ir.TyKind.I64 => "INT64_MAX",
-      ir.TyKind.U64 => "UINT64_MAX",
-      ir.TyKind.ISize => "INTPTR_MAX",
-      ir.TyKind.USize => "UINTPTR_MAX",
-      _ => "",
-    };
-  if dst_max.len() == 0 { panic("int_cast_checked dst must be int"); }
-  let dst_min: String =
-    match dst.kind {
-      ir.TyKind.I8 => "INT8_MIN",
-      ir.TyKind.I16 => "INT16_MIN",
-      ir.TyKind.I32 => "INT32_MIN",
-      ir.TyKind.I64 => "INT64_MIN",
-      ir.TyKind.ISize => "INTPTR_MIN",
-      _ => "0",
-    };
-
-  if src_is_float {
-    if dst_is_unsigned {
-      let line0: String = "  if (!isfinite((double)".concat(v_text)
-        .concat(") || (double)")
-        .concat(v_text)
-        .concat(" < 0.0 || (long double)")
-        .concat(v_text)
-        .concat(" > (long double)")
-        .concat(dst_max)
-        .concat(") { vox_host_panic(")
-        .concat(c_str_lit(msg))
-        .concat("); }");
-      out.push(line0);
-    } else {
-      let line1: String = "  if (!isfinite((double)".concat(v_text)
-        .concat(") || (long double)")
-        .concat(v_text)
-        .concat(" < (long double)")
-        .concat(dst_min)
-        .concat(" || (long double)")
-        .concat(v_text)
-        .concat(" > (long double)")
-        .concat(dst_max)
-        .concat(") { vox_host_panic(")
-        .concat(c_str_lit(msg))
-        .concat("); }");
-      out.push(line1);
-    }
-  } else {
-    if dst_is_unsigned {
-      if src_is_unsigned {
-        // Any unsigned source always fits into u64: skip redundant upper check.
-        if dst.kind == ir.TyKind.U64 {
-          // no check
-        } else if dst.kind == ir.TyKind.USize && src.kind == ir.TyKind.U64 {
-          out.push("  if (vox_u64_exceeds_uintptr_max((uint64_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-        } else if dst.kind == ir.TyKind.U32 && src.kind == ir.TyKind.USize {
-          out.push("  if (vox_uptr_exceeds_u32_max((uintptr_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-        } else {
-          out.push("  if ((uint64_t)".concat(v_text).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-        }
-      } else {
-        // Signed -> u64 only needs non-negative check.
-        if dst.kind == ir.TyKind.U64 {
-          if !src_non_negative {
-            out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-          }
-        } else if dst.kind == ir.TyKind.U32 && src.kind == ir.TyKind.ISize {
-          if !src_non_negative {
-            out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-          }
-          out.push("  if (vox_iptr_exceeds_u32_max((intptr_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-        } else if int_cast_signed_to_unsigned_needs_upper_check(dst.kind, src.kind, target_ptr_bits) {
-          if dst.kind == ir.TyKind.USize && src.kind == ir.TyKind.I64 {
-            if !src_non_negative {
-              out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-            }
-            out.push("  if (vox_u64_exceeds_uintptr_max((uint64_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-          } else {
-            if src_non_negative {
-              out.push("  if ((uint64_t)".concat(v_text).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-            } else {
-              out.push("  if (".concat(v_text).concat(" < 0 || (uint64_t)").concat(v_text).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-            }
-          }
-        } else {
-          if !src_non_negative {
-            out.push("  if (".concat(v_text).concat(" < 0) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-          }
-        }
-      }
-    } else {
-      if src_is_unsigned {
-        if dst.kind == ir.TyKind.ISize && src.kind == ir.TyKind.U32 {
-          out.push("  if (vox_u32_exceeds_intptr_max((uint32_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-        } else if dst.kind == ir.TyKind.I64 && src.kind == ir.TyKind.USize {
-          out.push("  if (vox_uptr_exceeds_i64_max((uintptr_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-        } else {
-          out.push("  if ((uint64_t)".concat(v_text).concat(" > (uint64_t)").concat(dst_max).concat(") { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-        }
-      } else {
-        if dst.kind == ir.TyKind.ISize && src.kind == ir.TyKind.I64 {
-          out.push("  if (vox_i64_outside_intptr_range((int64_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
-        } else {
-          let line2: String = "  if (((int64_t)".concat(v_text)
-            .concat(" < (int64_t)")
-            .concat(dst_min)
-            .concat(") || ((int64_t)")
-            .concat(v_text)
-            .concat(" > (int64_t)")
-            .concat(dst_max)
-            .concat(")) { vox_host_panic(")
-            .concat(c_str_lit(msg))
-            .concat("); }");
-          out.push(line2);
-        }
-      }
-    }
-  }
-  out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
-  return out;
-}
-
 fn emit_instr_int_cast_checked_append(
   out0: Vec[String],
   c_types: Vec[String],
@@ -2058,10 +1859,6 @@ fn emit_instr_struct_init_line(c_types: Vec[String], pool: ir.TyPool, tid: i32, 
   return s.concat("};");
 }
 
-fn emit_instr_struct_init(c_types: Vec[String], pool: ir.TyPool, tid: i32, ty: i32, fs: Vec[ir.StructInitField], vn: ValueNameTables) -> Vec[String] {
-  return vec1(emit_instr_struct_init_line(c_types, pool, tid, ty, fs, vn));
-}
-
 fn emit_instr_enum_init_line(c_types: Vec[String], pool: ir.TyPool, p: ir.Program, enum_order: Vec[i32], tid: i32, ty: i32, variant: String, payload: Vec[ir.Value], vn: ValueNameTables) -> String {
   let enum_name: String = ty_qname(ir.ty_pool_get(pool, ty));
   let en_idx: i32 = find_enum_decl_index_ordered(p, enum_order, enum_name);
@@ -2084,164 +1881,6 @@ fn emit_instr_enum_init_line(c_types: Vec[String], pool: ir.TyPool, p: ir.Progra
     s = s.concat("}");
   }
   return s.concat("};");
-}
-
-fn emit_instr_enum_init(c_types: Vec[String], pool: ir.TyPool, p: ir.Program, enum_order: Vec[i32], tid: i32, ty: i32, variant: String, payload: Vec[ir.Value], vn: ValueNameTables) -> Vec[String] {
-  return vec1(emit_instr_enum_init_line(c_types, pool, p, enum_order, tid, ty, variant, payload, vn));
-}
-
-fn emit_instr_binop_int(
-  c_types: Vec[String],
-  pool: ir.TyPool,
-  tid: i32,
-  op: ir.BinOpKind,
-  ty: i32,
-  a: ir.Value,
-  b: ir.Value,
-  int_consts: TempIntConstTable,
-  vn: ValueNameTables,
-) -> Vec[String] {
-  let t: ir.Ty = ir.ty_pool_get(pool, ty);
-  if !is_int_scalar_kind(t.kind) { panic("binop int helper expects int type"); }
-  let dst_cty: String = c_type_from_table(c_types, pool, ty);
-  let a_text: String = c_value_named(a, vn);
-  let b_text: String = c_value_named(b, vn);
-  let a_int_lit_v: IntConstValue = int_const_value_from_operand(a, int_consts);
-  let b_int_lit_v: IntConstValue = int_const_value_from_operand(b, int_consts);
-  let a_is_int_lit: bool = a_int_lit_v.ok;
-  let b_is_int_lit: bool = b_int_lit_v.ok;
-  let a_int_lit: i64 = if a_is_int_lit { a_int_lit_v.n } else { 0 as i64 };
-  let b_int_lit: i64 = if b_is_int_lit { b_int_lit_v.n } else { 0 as i64 };
-
-  // + - * and bitwise ops: wrap on integer bit width. Avoid signed overflow UB by operating on unsigned peers.
-  let is_mul: bool = match op { ir.BinOpKind.Mul => true, _ => false };
-  let is_add: bool = match op { ir.BinOpKind.Add => true, _ => false };
-  let is_sub: bool = match op { ir.BinOpKind.Sub => true, _ => false };
-  let is_bit: bool = match op { ir.BinOpKind.BitAnd => true, ir.BinOpKind.BitOr => true, ir.BinOpKind.BitXor => true, _ => false };
-  if is_add || is_sub || is_mul || is_bit {
-    if !is_signed_int_kind(t.kind) {
-      // Unsigned arithmetic is well-defined modulo 2^N; keep operation at native width.
-      let uty: String = unsigned_peer_c_type(t.kind);
-      let uexpr: String = "((".concat(uty).concat(")((((").concat(uty).concat(")").concat(a_text).concat(") ")
-        .concat(c_binop(op)).concat(" ((").concat(uty).concat(")").concat(b_text).concat("))))");
-      return vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(dst_cty).concat(")").concat(uexpr).concat(";"));
-    }
-    let uty: String = unsigned_peer_c_type(t.kind);
-    let bitcast_fn: String = signed_from_unsigned_bitcast_fn(t.kind);
-    if bitcast_fn == "" { panic("missing signed bitcast helper"); }
-    let expr: String = bitcast_fn
-      .concat("((").concat(uty).concat(")((((").concat(uty).concat(")").concat(a_text).concat(") ")
-      .concat(c_binop(op)).concat(" ((").concat(uty).concat(")").concat(b_text).concat("))))");
-    return vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(expr).concat(";"));
-  }
-
-  // << >> panics on invalid shift counts; right shift on signed types is arithmetic.
-  let is_shl: bool = match op { ir.BinOpKind.Shl => true, _ => false };
-  let is_shr: bool = match op { ir.BinOpKind.Shr => true, _ => false };
-  if is_shl || is_shr {
-    let bits_expr: String = int_bits_expr(t.kind);
-    let bits_const: i32 = int_bits(t.kind);
-    let uty: String = unsigned_peer_c_type(t.kind);
-    let bitcast_fn: String = signed_from_unsigned_bitcast_fn(t.kind);
-    let mut out3: Vec[String] = Vec();
-    out3.push("  {");
-    out3.push("    ".concat(uty).concat(" ua = (").concat(uty).concat(")").concat(a_text).concat(";"));
-    if is_signed_int_kind(t.kind) {
-      if b_is_int_lit && bits_const > 0 {
-        if b_int_lit < 0 || b_int_lit >= (bits_const as i64) {
-          out3.push("    vox_host_panic(\"shift count out of range\");");
-          out3.push("    uint64_t n = 0;");
-        } else {
-          out3.push("    uint64_t n = (uint64_t)".concat(b_int_lit.to_string()).concat(";"));
-        }
-      } else {
-        out3.push("    int64_t sh = (int64_t)".concat(b_text).concat(";"));
-        let lchk: String = "    if (sh < 0 || sh >= (int64_t)".concat(bits_expr).concat(") { vox_host_panic(\"shift count out of range\"); }");
-        out3.push(lchk);
-        out3.push("    uint64_t n = (uint64_t)sh;");
-      }
-    } else {
-      if b_is_int_lit && bits_const > 0 {
-        if b_int_lit < 0 || b_int_lit >= (bits_const as i64) {
-          out3.push("    vox_host_panic(\"shift count out of range\");");
-          out3.push("    uint64_t n = 0;");
-        } else {
-          out3.push("    uint64_t n = (uint64_t)".concat(b_int_lit.to_string()).concat(";"));
-        }
-      } else {
-        out3.push("    uint64_t n = (uint64_t)".concat(b_text).concat(";"));
-        let lchk2: String = "    if (n >= (uint64_t)".concat(bits_expr).concat(") { vox_host_panic(\"shift count out of range\"); }");
-        out3.push(lchk2);
-      }
-    }
-    if is_shl {
-      out3.push("    ".concat(uty).concat(" ur = (").concat(uty).concat(")(ua << n);"));
-    } else if is_signed_int_kind(t.kind) {
-      out3.push("    ".concat(uty).concat(" ur;"));
-      out3.push("    if (n == 0) {");
-      out3.push("      ur = ua;");
-      let lsign: String = "    } else if ((ua & ".concat(int_sign_high_bit_expr(t.kind)).concat(") != 0) {");
-      out3.push(lsign);
-      out3.push("      ".concat(uty).concat(" m = ~(((").concat(uty).concat(")~(").concat(uty).concat(")0) >> n);"));
-      out3.push("      ur = (".concat(uty).concat(")((ua >> n) | m);"));
-      out3.push("    } else {");
-      out3.push("      ur = (".concat(uty).concat(")(ua >> n);"));
-      out3.push("    }");
-    } else {
-      out3.push("    ".concat(uty).concat(" ur = (").concat(uty).concat(")(ua >> n);"));
-    }
-    if is_signed_int_kind(t.kind) {
-      if bitcast_fn == "" { panic("missing signed bitcast helper"); }
-      out3.push("    ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(bitcast_fn).concat("(ur);"));
-    } else {
-      out3.push("    ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(dst_cty).concat(")ur;"));
-    }
-    out3.push("  }");
-    return out3;
-  }
-
-  // / % panics on division by zero; signed also panics on MIN/-1 overflow.
-  let is_div: bool = match op { ir.BinOpKind.Div => true, _ => false };
-  let is_mod: bool = match op { ir.BinOpKind.Mod => true, _ => false };
-  if is_div || is_mod {
-    let mut out2: Vec[String] = Vec();
-    if b_is_int_lit {
-      if b_int_lit == 0 {
-        out2.push("  vox_host_panic(\"division by zero\");");
-      }
-    } else {
-      out2.push("  if (".concat(b_text).concat(" == (").concat(dst_cty).concat(")0) { vox_host_panic(\"division by zero\"); }"));
-    }
-    if is_signed_int_kind(t.kind) {
-      let minm: String = signed_min_macro(t.kind);
-      let maxm: String = signed_max_macro(t.kind);
-      if minm.len() == 0 || maxm.len() == 0 { panic("missing signed min/max macro"); }
-      if b_is_int_lit {
-        if b_int_lit == -1 {
-          if int_operand_is_definitely_not_signed_min(a, t.kind, int_consts) {
-            // proven `a != MIN`, no overflow on `a / -1`
-          } else if a_is_int_lit {
-            let a_min: IntConstValue = int_min_const_for_signed_kind(t.kind);
-            if !a_min.ok {
-              out2.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
-            } else if a_int_lit == a_min.n {
-              out2.push("  vox_host_panic(\"division overflow\");");
-            } else {
-              out2.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
-            }
-          } else {
-            out2.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(") { vox_host_panic(\"division overflow\"); }"));
-          }
-        }
-      } else {
-        out2.push("  if (".concat(a_text).concat(" == ").concat(minm).concat(" && ").concat(b_text).concat(" == (").concat(dst_cty).concat(")-1) { vox_host_panic(\"division overflow\"); }"));
-      }
-    }
-    out2.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(dst_cty).concat(")(").concat(a_text).concat(" ").concat(c_binop(op)).concat(" ").concat(b_text).concat(");"));
-    return out2;
-  }
-
-  panic("unknown binop");
 }
 
 fn emit_instr_binop_int_append(
@@ -2402,10 +2041,6 @@ fn emit_instr_vec_new_append(out0: Vec[String], c_types: Vec[String], pool: ir.T
   return out;
 }
 
-fn emit_instr_vec_new(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_vec_new_append(Vec(), c_types, pool, tid, elem, vn);
-}
-
 fn emit_vec_grow_if_needed_append(out0: Vec[String], vname: String, need_expr: String) -> Vec[String] {
   return push_line(out0, "    vox_vec_grow_to(".concat(vname).concat(", ").concat(need_expr).concat(");"));
 }
@@ -2432,10 +2067,6 @@ fn emit_instr_vec_push_append(out0: Vec[String], c_types: Vec[String], pool: ir.
   return out;
 }
 
-fn emit_instr_vec_push(c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_vec_push_append(Vec(), c_types, pool, recv_slot, elem, v, vn);
-}
-
 fn emit_instr_vec_insert_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
   let mut out: Vec[String] = out0;
   out.push("  {");
@@ -2454,10 +2085,6 @@ fn emit_instr_vec_insert_append(out0: Vec[String], c_types: Vec[String], pool: i
   return out;
 }
 
-fn emit_instr_vec_insert(c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_vec_insert_append(Vec(), c_types, pool, recv_slot, elem, idx, v, vn);
-}
-
 fn emit_instr_vec_set_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
   let mut out: Vec[String] = out0;
   out.push("  {");
@@ -2469,10 +2096,6 @@ fn emit_instr_vec_set_append(out0: Vec[String], c_types: Vec[String], pool: ir.T
   return out;
 }
 
-fn emit_instr_vec_set(c_types: Vec[String], pool: ir.TyPool, recv_slot: i32, elem: i32, idx: ir.Value, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_vec_set_append(Vec(), c_types, pool, recv_slot, elem, idx, v, vn);
-}
-
 fn emit_instr_vec_clear_append(out0: Vec[String], recv_slot: i32, vn: ValueNameTables) -> Vec[String] {
   let mut out: Vec[String] = out0;
   out.push("  {");
@@ -2480,10 +2103,6 @@ fn emit_instr_vec_clear_append(out0: Vec[String], recv_slot: i32, vn: ValueNameT
   out.push("    if (vox_v) { vox_v->len = 0; }");
   out.push("  }");
   return out;
-}
-
-fn emit_instr_vec_clear(recv_slot: i32, vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_vec_clear_append(Vec(), recv_slot, vn);
 }
 
 fn emit_instr_vec_extend_append(out0: Vec[String], recv_slot: i32, other_slot: i32, vn: ValueNameTables) -> Vec[String] {
@@ -2505,10 +2124,6 @@ fn emit_instr_vec_extend_append(out0: Vec[String], recv_slot: i32, other_slot: i
   return out;
 }
 
-fn emit_instr_vec_extend(recv_slot: i32, other_slot: i32, vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_vec_extend_append(Vec(), recv_slot, other_slot, vn);
-}
-
 fn emit_instr_vec_pop_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
   let mut out: Vec[String] = out0;
   out.push("  {");
@@ -2522,10 +2137,6 @@ fn emit_instr_vec_pop_append(out0: Vec[String], c_types: Vec[String], pool: ir.T
   out.push("    vox_v->len = vox_idx;");
   out.push("  }");
   return out;
-}
-
-fn emit_instr_vec_pop(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_vec_pop_append(Vec(), c_types, pool, tid, elem, recv_slot, load_dst, vn);
 }
 
 fn emit_instr_vec_remove_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
@@ -2547,16 +2158,8 @@ fn emit_instr_vec_remove_append(out0: Vec[String], c_types: Vec[String], pool: i
   return out;
 }
 
-fn emit_instr_vec_remove(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_vec_remove_append(Vec(), c_types, pool, tid, elem, recv_slot, idx, load_dst, vn);
-}
-
 fn emit_instr_vec_len_line(tid: i32, recv_slot: i32, vn: ValueNameTables) -> String {
   return "  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_slot_name_named(vn, recv_slot)).concat(".len;");
-}
-
-fn emit_instr_vec_len(tid: i32, recv_slot: i32, vn: ValueNameTables) -> Vec[String] {
-  return vec1(emit_instr_vec_len_line(tid, recv_slot, vn));
 }
 
 fn emit_instr_vec_get_append(out0: Vec[String], c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
@@ -2570,10 +2173,6 @@ fn emit_instr_vec_get_append(out0: Vec[String], c_types: Vec[String], pool: ir.T
   }
   out.push("  }");
   return out;
-}
-
-fn emit_instr_vec_get(c_types: Vec[String], pool: ir.TyPool, tid: i32, elem: i32, recv_slot: i32, idx: ir.Value, load_dst: bool, vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_vec_get_append(Vec(), c_types, pool, tid, elem, recv_slot, idx, load_dst, vn);
 }
 
 pub fn ffi_import_order(imports: Vec[ir.FfiImportDecl]) -> Vec[i32] {
@@ -2704,20 +2303,6 @@ fn call_name_lookup_cached(global_entries: Vec[CallNameEntry], cache0: Vec[CallN
   return CallNameLookupCachedResult { sym: sym, cache: cache };
 }
 
-fn emit_instr_call_with_sym(has_dst: bool, tid: i32, ret_ty: i32, sym: String, args: Vec[ir.Value], read_temps: Vec[bool], vn: ValueNameTables) -> Vec[String] {
-  let mut s: String = "  ";
-  if call_dst_is_read(has_dst, tid, read_temps) && ret_ty != -1 { s = s.concat(c_temp_name_named(vn, tid)).concat(" = "); }
-  s = s.concat(sym).concat("(");
-  let mut i: i32 = 0;
-  while i < args.len() {
-    if i != 0 { s = s.concat(", "); }
-    s = s.concat(c_value_named(args.get(i), vn));
-    i = i + 1;
-  }
-  s = s.concat(");");
-  return vec1(s);
-}
-
 fn emit_instr_call_line_with_sym(has_dst: bool, tid: i32, ret_ty: i32, sym: String, args: Vec[ir.Value], read_temps: Vec[bool], vn: ValueNameTables) -> String {
   let mut s: String = "  ";
   if call_dst_is_read(has_dst, tid, read_temps) && ret_ty != -1 { s = s.concat(c_temp_name_named(vn, tid)).concat(" = "); }
@@ -2731,39 +2316,9 @@ fn emit_instr_call_line_with_sym(has_dst: bool, tid: i32, ret_ty: i32, sym: Stri
   return s.concat(");");
 }
 
-struct EmitInstrCallCachedResult {
-  lines: Vec[String],
-  cache: Vec[CallNameEntry],
-}
-
 struct EmitInstrCallCachedLineResult {
   line: String,
   cache: Vec[CallNameEntry],
-}
-
-fn emit_instr_call_cached(
-  call_names: Vec[CallNameEntry],
-  cache0: Vec[CallNameEntry],
-  has_dst: bool,
-  tid: i32,
-  ret_ty: i32,
-  name: String,
-  args: Vec[ir.Value],
-  read_temps: Vec[bool],
-  vn: ValueNameTables,
-) -> EmitInstrCallCachedResult {
-  if name == "panic" {
-    if args.len() != 1 { panic("panic expects 1 arg"); }
-    return EmitInstrCallCachedResult {
-      lines: vec1("  vox_host_panic(".concat(c_value_named(args.get(0), vn)).concat(");")),
-      cache: cache0,
-    };
-  }
-  let cr: CallNameLookupCachedResult = call_name_lookup_cached(call_names, cache0, name);
-  return EmitInstrCallCachedResult {
-    lines: emit_instr_call_with_sym(has_dst, tid, ret_ty, cr.sym, args, read_temps, vn),
-    cache: cr.cache,
-  };
 }
 
 fn emit_instr_call_cached_line(
@@ -2788,107 +2343,6 @@ fn emit_instr_call_cached_line(
   return EmitInstrCallCachedLineResult {
     line: emit_instr_call_line_with_sym(has_dst, tid, ret_ty, cr.sym, args, read_temps, vn),
     cache: cr.cache,
-  };
-}
-
-fn emit_instr_call(call_names: Vec[CallNameEntry], has_dst: bool, tid: i32, ret_ty: i32, name: String, args: Vec[ir.Value], read_temps: Vec[bool], vn: ValueNameTables) -> Vec[String] {
-  return emit_instr_call_cached(call_names, Vec(), has_dst, tid, ret_ty, name, args, read_temps, vn).lines;
-}
-
-fn emit_instr(
-  c_types: Vec[String],
-  pool: ir.TyPool,
-  target_ptr_bits: i32,
-  p: ir.Program,
-  call_names: Vec[CallNameEntry],
-  enum_order: Vec[i32],
-  ins: ir.Instr,
-  read_temps: Vec[bool],
-  int_consts: TempIntConstTable,
-  vn: ValueNameTables,
-) -> Vec[String] {
-  return match ins {
-    ir.Instr.SlotDecl(_sid, _ty) => vec0(),
-
-    ir.Instr.Const(tid, _ty, v) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_value_named(v, vn)).concat(";")),
-    ir.Instr.BinOp(tid, op, ty, a, b) => {
-      let bt: ir.Ty = ir.ty_pool_get(pool, ty);
-      if is_int_scalar_kind(bt.kind) { emit_instr_binop_int(c_types, pool, tid, op, ty, a, b, int_consts, vn) }
-      else if op == ir.BinOpKind.Mod && bt.kind == ir.TyKind.F32 {
-        vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = fmodf(").concat(c_value_named(a, vn)).concat(", ").concat(c_value_named(b, vn)).concat(");"))
-      } else if op == ir.BinOpKind.Mod && bt.kind == ir.TyKind.F64 {
-        vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = fmod(").concat(c_value_named(a, vn)).concat(", ").concat(c_value_named(b, vn)).concat(");"))
-      } else {
-        vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_value_named(a, vn)).concat(" ").concat(c_binop(op)).concat(" ").concat(c_value_named(b, vn)).concat(";"))
-      }
-    },
-    ir.Instr.Cmp(tid, op, oty, a, b) => emit_instr_cmp(pool, tid, op, oty, a, b, vn),
-    ir.Instr.And(tid, a, b) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_value_named(a, vn)).concat(" && ").concat(c_value_named(b, vn)).concat(");")),
-    ir.Instr.Or(tid, a, b) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_value_named(a, vn)).concat(" || ").concat(c_value_named(b, vn)).concat(");")),
-    ir.Instr.Not(tid, a) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (!").concat(c_value_named(a, vn)).concat(");")),
-
-    ir.Instr.IntCast(tid, dst_ty, _src_ty, v) =>
-      vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(c_value_named(v, vn)).concat(";")),
-    ir.Instr.IntCastChecked(tid, dst_ty, src_ty, v) =>
-      emit_instr_int_cast_checked(c_types, pool, target_ptr_bits, tid, dst_ty, src_ty, v, int_consts, vn),
-    ir.Instr.FloatCast(tid, dst_ty, _src_ty, v) =>
-      vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(c_value_named(v, vn)).concat(";")),
-    ir.Instr.RangeCheck(ty, v, lo, hi) => vec1(
-      "  if (".concat(c_value_named(v, vn)).concat(" < (").concat(c_type_from_table(c_types, pool, ty)).concat(")").concat(lo.to_string())
-        .concat(" || ").concat(c_value_named(v, vn)).concat(" > (").concat(c_type_from_table(c_types, pool, ty)).concat(")").concat(hi.to_string())
-        .concat(") { vox_host_panic(\"range check failed\"); }"),
-    ),
-
-    ir.Instr.Store(sid, v) => vec1("  ".concat(c_slot_name_named(vn, sid)).concat(" = ").concat(c_value_named(v, vn)).concat(";")),
-    ir.Instr.Load(tid, _ty, sid) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_slot_name_named(vn, sid)).concat(";")),
-    ir.Instr.GlobalLoad(tid, _ty, name) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_static_name(name)).concat(";")),
-    ir.Instr.GlobalStore(_ty, name, v) => vec1("  ".concat(c_static_name(name)).concat(" = ").concat(c_value_named(v, vn)).concat(";")),
-    ir.Instr.AddrOfSlot(tid, _ty, sid) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = &").concat(c_slot_name_named(vn, sid)).concat(";")),
-    ir.Instr.AddrOfFieldChain(tid, _ty, sid, fields) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = &").concat(c_slot_name_named(vn, sid)).concat(c_field_chain(fields)).concat(";")),
-    ir.Instr.RefLoad(tid, _ty, recv) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (*").concat(c_value_named(recv, vn)).concat(");")),
-    ir.Instr.RefStore(_ty, recv, v) => vec1("  (*".concat(c_value_named(recv, vn)).concat(") = ").concat(c_value_named(v, vn)).concat(";")),
-
-    ir.Instr.PtrRead(tid, ty, ptr) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = *(").concat(c_type_from_table(c_types, pool, ty)).concat("*)").concat(c_value_named(ptr, vn)).concat(";")),
-    ir.Instr.PtrWrite(ty, ptr, v) => vec1("  *((".concat(c_type_from_table(c_types, pool, ty)).concat("*)").concat(c_value_named(ptr, vn)).concat(") = ").concat(c_value_named(v, vn)).concat(";")),
-    ir.Instr.PtrOffset(tid, ptr, off) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = (void*)((char*)").concat(c_value_named(ptr, vn)).concat(" + ").concat(c_value_named(off, vn)).concat(");")),
-
-    ir.Instr.StructInit(tid, ty, fs) => emit_instr_struct_init(c_types, pool, tid, ty, fs, vn),
-    ir.Instr.FieldGet(tid, _ty, recv, field) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_value_named(recv, vn)).concat(".").concat(c_ident(field)).concat(";")),
-    ir.Instr.StoreField(sid, field, v) => vec1("  ".concat(c_slot_name_named(vn, sid)).concat(".").concat(c_ident(field)).concat(" = ").concat(c_value_named(v, vn)).concat(";")),
-
-    ir.Instr.EnumInit(tid, ty, variant, payload) => emit_instr_enum_init(c_types, pool, p, enum_order, tid, ty, variant, payload, vn),
-    ir.Instr.EnumTag(tid, recv) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = ").concat(c_value_named(recv, vn)).concat(".tag;")),
-    ir.Instr.EnumPayload(tid, _ty, recv, variant, idx) =>
-      vec1("  "
-        .concat(c_temp_name_named(vn, tid))
-        .concat(" = ")
-        .concat(c_value_named(recv, vn))
-        .concat(".payload.")
-        .concat(c_ident(variant))
-        .concat("._")
-        .concat(idx.to_string())
-        .concat(";")),
-
-    ir.Instr.VecNew(tid, _vty, elem) => emit_instr_vec_new(c_types, pool, tid, elem, vn),
-    ir.Instr.VecPush(recv_slot, elem, v) => emit_instr_vec_push(c_types, pool, recv_slot, elem, v, vn),
-    ir.Instr.VecInsert(recv_slot, elem, idx, v) => emit_instr_vec_insert(c_types, pool, recv_slot, elem, idx, v, vn),
-    ir.Instr.VecSet(recv_slot, elem, idx, v) => emit_instr_vec_set(c_types, pool, recv_slot, elem, idx, v, vn),
-    ir.Instr.VecClear(recv_slot) => emit_instr_vec_clear(recv_slot, vn),
-    ir.Instr.VecExtend(recv_slot, other_slot) => emit_instr_vec_extend(recv_slot, other_slot, vn),
-    ir.Instr.VecPop(tid, elem, recv_slot) => emit_instr_vec_pop(c_types, pool, tid, elem, recv_slot, temp_is_read(tid, read_temps), vn),
-    ir.Instr.VecRemove(tid, elem, recv_slot, idx) => emit_instr_vec_remove(c_types, pool, tid, elem, recv_slot, idx, temp_is_read(tid, read_temps), vn),
-    ir.Instr.VecLen(tid, recv_slot) => emit_instr_vec_len(tid, recv_slot, vn),
-    ir.Instr.VecGet(tid, elem, recv_slot, idx) => emit_instr_vec_get(c_types, pool, tid, elem, recv_slot, idx, temp_is_read(tid, read_temps), vn),
-
-    ir.Instr.AtomicNew(tid, elem_ty, val) => emit_instr_atomic_new(pool, tid, elem_ty, val, vn),
-    ir.Instr.AtomicLoad(tid, elem_ty, h) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = atomic_load_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", memory_order_seq_cst);")),
-    ir.Instr.AtomicStore(elem_ty, h, val) => vec1("  atomic_store_explicit((".concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", ").concat(c_value_named(val, vn)).concat(", memory_order_seq_cst);")),
-    ir.Instr.AtomicFetchAdd(tid, elem_ty, h, delta) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = atomic_fetch_add_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", ").concat(c_value_named(delta, vn)).concat(", memory_order_seq_cst);")),
-    ir.Instr.AtomicSwap(tid, elem_ty, h, val) => vec1("  ".concat(c_temp_name_named(vn, tid)).concat(" = atomic_exchange_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", ").concat(c_value_named(val, vn)).concat(", memory_order_seq_cst);")),
-    ir.Instr.AtomicCAS(tid, elem_ty, h, expected, desired) => emit_instr_atomic_cas(pool, tid, elem_ty, h, expected, desired, vn),
-    ir.Instr.AtomicDrop(_elem_ty, h) => vec1("  free((void*)".concat(c_value_named(h, vn)).concat(");")),
-
-    ir.Instr.Call(has_dst, tid, ret_ty, name, args) => emit_instr_call(call_names, has_dst, tid, ret_ty, name, args, read_temps, vn),
   };
 }
 
@@ -3005,31 +2459,6 @@ fn emit_instr_append(
       out.push(cr.line);
       out
     },
-  };
-}
-
-fn emit_term_ret(has: bool, v: ir.Value, vn: ValueNameTables) -> Vec[String] {
-  if has { return vec1("  return ".concat(c_value_named(v, vn)).concat(";")); }
-  return vec1("  return;");
-}
-
-fn emit_term(t: ir.Term, fallthrough: String, vn: ValueNameTables) -> Vec[String] {
-  return match t {
-    ir.Term.Ret(has, v) => emit_term_ret(has, v, vn),
-    ir.Term.Br(target) => if target == fallthrough { Vec() } else { vec1("  goto ".concat(c_label_name(target)).concat(";")) },
-    ir.Term.CondBr(cond, t, e) =>
-      if t == e {
-        if t == fallthrough { Vec() } else { vec1("  goto ".concat(c_label_name(t)).concat(";")) }
-      } else if t == fallthrough && e == fallthrough {
-        Vec()
-      } else if t == fallthrough {
-        vec1("  if (!(".concat(c_value_named(cond, vn)).concat(")) goto ").concat(c_label_name(e)).concat(";"))
-      } else if e == fallthrough {
-        vec1("  if (".concat(c_value_named(cond, vn)).concat(") goto ").concat(c_label_name(t)).concat(";"))
-      } else {
-        vec1("  if (".concat(c_value_named(cond, vn)).concat(") goto ").concat(c_label_name(t)).concat("; else goto ").concat(c_label_name(e)).concat(";"))
-      },
-    ir.Term.Panic(msg) => vec1("  vox_host_panic(".concat(c_value_named(msg, vn)).concat(");")),
   };
 }
 
