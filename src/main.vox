@@ -1475,6 +1475,7 @@ fn json_report_text(
   failed_tests: Vec[String],
   hint: String,
   message: String,
+  rerun_cache_path: String,
   passed: i32,
   failed: i32,
   skipped: i32,
@@ -1510,7 +1511,7 @@ fn json_report_text(
     };
   let mut out: String = "{";
   out = out.concat("\"report_version\":1");
-  out = out.concat(",\"rerun_cache_path\":").concat(json_quote(failed_tests_path()));
+  out = out.concat(",\"rerun_cache_path\":").concat(json_quote(rerun_cache_path));
   out = out.concat(",\"rerun_cache_version\":1");
   out = out.concat(",\"selection\":{");
   out = out.concat("\"discovered\":").concat(discovered.to_string());
@@ -1529,7 +1530,7 @@ fn json_report_text(
   if rerun_failed {
     out = out.concat(",\"rerun_failed\":").concat(json_bool(true));
     out = out.concat(",\"prev_failed_count\":").concat(rerun_failed_count.to_string());
-    out = out.concat(",\"rerun_cache_path\":").concat(json_quote(failed_tests_path()));
+    out = out.concat(",\"rerun_cache_path\":").concat(json_quote(rerun_cache_path));
   }
   out = out.concat("}");
   out = out.concat(",\"list_only\":").concat(json_bool(list_only));
@@ -1658,6 +1659,7 @@ fn print_json_report(
   failed_tests: Vec[String],
   hint: String,
   message: String,
+  rerun_cache_path: String,
   passed: i32,
   failed: i32,
   skipped: i32,
@@ -1683,6 +1685,7 @@ fn print_json_report(
       failed_tests,
       hint,
       message,
+      rerun_cache_path,
       passed,
       failed,
       skipped,
@@ -1691,8 +1694,14 @@ fn print_json_report(
   );
 }
 
-fn failed_tests_path() -> String {
-  return "target/debug/.vox_last_failed_tests";
+fn failed_tests_path(out: String) -> String {
+  let base0: String = sanitize_path_part(pth.base_name(out));
+  let base: String = if base0 != "" { base0 } else { "out" };
+  let mut h: u64 = 1469598103934665603 as u64;
+  h = lock_hash_text(h, "failed-tests-cache-v1\n");
+  h = lock_hash_text(h, out);
+  h = lock_hash_text(h, "\n");
+  return path_join("target/debug", ".vox_last_failed_tests.".concat(base).concat(".").concat(h.to_string()).concat(".json"));
 }
 
 fn normalize_failed_tests(names: Vec[String]) -> Vec[String] {
@@ -1741,7 +1750,7 @@ fn index_of_from(s: String, needle: String, start: i32) -> i32 {
   return -1;
 }
 
-fn write_failed_tests(names: Vec[String]) -> Vec[String] {
+fn write_failed_tests(out_path: String, names: Vec[String]) -> Vec[String] {
   fs.mkdir_p("target/debug");
   let canon: Vec[String] = normalize_failed_tests(names);
   let mut tests_json: String = "[";
@@ -1753,13 +1762,13 @@ fn write_failed_tests(names: Vec[String]) -> Vec[String] {
   }
   tests_json = tests_json.concat("]");
   let updated_us: i64 = tm.now_ns() / 1000;
-  let mut out: String = "{";
-  out = out.concat("\"version\":1");
-  out = out.concat(",\"updated_unix_us\":").concat(updated_us.to_string());
-  out = out.concat(",\"tests\":").concat(tests_json.slice(0, tests_json.len()));
-  out = out.concat(",\"failed_tests\":").concat(tests_json);
-  out = out.concat("}\n");
-  fs.write_string(failed_tests_path(), out);
+  let mut meta: String = "{";
+  meta = meta.concat("\"version\":1");
+  meta = meta.concat(",\"updated_unix_us\":").concat(updated_us.to_string());
+  meta = meta.concat(",\"tests\":").concat(tests_json.slice(0, tests_json.len()));
+  meta = meta.concat(",\"failed_tests\":").concat(tests_json);
+  meta = meta.concat("}\n");
+  fs.write_string(failed_tests_path(out_path), meta);
   return canon;
 }
 
@@ -4059,8 +4068,9 @@ fn main() -> i32 {
       paths = src_presence_test.paths;
     }
 
+    let rerun_cache_path: String = failed_tests_path(out);
     let prev_failed: Vec[String] = if test_rerun_failed {
-      let p: String = failed_tests_path();
+      let p: String = rerun_cache_path;
       if !fs.exists(p) {
         Vec()
       } else {
@@ -4114,7 +4124,7 @@ fn main() -> i32 {
     } else { Vec() };
     if test_rerun_failed && prev_failed.len() == 0 {
       if test_json {
-        print_json_report(0, 0, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, true, 0, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", "no previous failed tests", 0, 0, 0, 0);
+        print_json_report(0, 0, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, true, 0, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", "no previous failed tests", rerun_cache_path, 0, 0, 0, 0);
       } else {
         print("[test] no previous failed tests\n");
       }
@@ -4276,6 +4286,7 @@ fn main() -> i32 {
             Vec(),
             "",
             "",
+            rerun_cache_path,
             0,
             0,
             0,
@@ -4319,11 +4330,11 @@ fn main() -> i32 {
     }
     if tests.len() == 0 {
       if test_json {
-        print_json_report(discovered_count, 0, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed_count } else { 0 }, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", "no tests found", 0, 0, 0, 0);
+        print_json_report(discovered_count, 0, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed_count } else { 0 }, false, Vec(), Vec(), Vec(), Vec(), Vec(), Vec(), "", "no tests found", rerun_cache_path, 0, 0, 0, 0);
       } else {
         print("[test] no tests found\n");
       }
-      write_failed_tests(Vec());
+      write_failed_tests(out, Vec());
       return 0;
     }
 
@@ -5052,7 +5063,7 @@ fn main() -> i32 {
     let results_sorted: Vec[TestRunResult] = sort_test_results(results);
     let module_summaries_sorted: Vec[ModuleSummary] = sort_module_summaries_if_needed(module_summaries);
     let module_details_sorted: Vec[ModuleDetail] = sort_module_details(module_details);
-    let failed_names_sorted: Vec[String] = write_failed_tests(failed_names);
+    let failed_names_sorted: Vec[String] = write_failed_tests(out, failed_names);
     let hint: String = if failed != 0 {
       let exe_name: String = pth.base_name(osys.exe_path());
       let mut cmd: String = exe_name.concat(" test --rerun-failed");
@@ -5067,7 +5078,7 @@ fn main() -> i32 {
       ""
     };
     if test_json {
-      print_json_report(discovered_count, total_tests, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed_count } else { 0 }, false, tests_for_json_report, results_sorted, module_summaries_sorted, module_details_sorted, slowest, failed_names_sorted, hint, "", passed, failed, skipped, total_ns);
+      print_json_report(discovered_count, total_tests, test_module_pat, test_run_pat, test_filter, test_jobs, test_fail_fast, test_rerun_failed, if test_rerun_failed { prev_failed_count } else { 0 }, false, tests_for_json_report, results_sorted, module_summaries_sorted, module_details_sorted, slowest, failed_names_sorted, hint, "", rerun_cache_path, passed, failed, skipped, total_ns);
     } else {
       let mut msi: i32 = 0;
       while msi < module_summaries_sorted.len() {
