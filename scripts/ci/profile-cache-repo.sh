@@ -81,12 +81,18 @@ run_sem_c_reuse_build() {
   local query_shadow="$3"
   local sem_ref compile_key sem_key source_sig fake_key
   local current_c current_obj current_meta current_out current_out_c current_out_obj
-  sem_ref="$(find "$dir/target/cache/pkg-obj-v1" -name '*.build.cache.sem-ref' | head -n 1)"
-  if [[ "$sem_ref" == "" ]]; then
+  local refs=()
+  mapfile -t refs < <(find "$dir/target/cache/pkg-obj-v1" -name '*.build.cache.sem-ref')
+  if [[ "${#refs[@]}" -eq 0 ]]; then
     echo "[cache-repo] skip $label (no sem-ref found)"
     return
   fi
-  compile_key="$(basename "$sem_ref" .build.cache.sem-ref)"
+  if [[ "${#refs[@]}" -gt 1 ]]; then
+    echo "[cache-repo] skip $label (multiple sem-refs found)" >&2
+    return
+  fi
+  sem_ref="${refs[0]}"
+  compile_key="$(basename -- "$sem_ref" .build.cache.sem-ref)"
   sem_key="$(sed -n '2p' "$sem_ref" | tr -d '\r')"
   source_sig="$(sed -n '3p' "$sem_ref" | tr -d '\r')"
   if [[ "$compile_key" == "" || "$sem_key" == "" || "$source_sig" == "" ]]; then
