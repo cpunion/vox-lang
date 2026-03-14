@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-syntax test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-frozen-builtins test-intrinsics test-reference test-build-style test-runtime-alias test-legacy-runtime-switch test-no-legacy-runtime-bridge test-incremental-gate profile-cache-matrix \
+.PHONY: fmt fmt-check test test-syntax test-rolling test-selfhost-build test-selfhost-gate test-selfhost-smoke test-public-api test-frozen-builtins test-intrinsics test-reference test-build-style test-runtime-alias test-legacy-runtime-switch test-no-legacy-runtime-bridge test-incremental-gate profile-cache-matrix profile-cache-repo \
 	test-examples test-active audit-vox-lines release-bundle release-verify release-dry-run \
 	release-source-bundle release-source-verify
 
@@ -75,6 +75,10 @@ test-incremental-gate:
 # Warm/cold cache summary probe for build/list/test --list.
 profile-cache-matrix:
 	./scripts/ci/profile-cache-matrix.sh
+
+# Warm/cold cache summary probe for an isolated snapshot of this repository.
+profile-cache-repo:
+	./scripts/ci/profile-cache-repo.sh
 
 # Stable public library API contract gate.
 test-public-api:
