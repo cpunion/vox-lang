@@ -110,8 +110,8 @@ mk_project "$INCR1_FAST"
     echo "[incremental-gate] expected profile cache build summary for VOX_INCREMENTAL=1 build" >&2
     exit 1
   fi
-  if ! rg -n "\[profile\] cache build: cache=on incremental=on sem=miss" build1.log >/dev/null 2>&1; then
-    echo "[incremental-gate] expected cold query-shadow build to report sem=miss" >&2
+  if ! rg -n "\[profile\] cache build: cache=on incremental=on sem=miss c=miss obj=miss link=miss" build1.log >/dev/null 2>&1; then
+    echo "[incremental-gate] expected cold query-shadow build to report sem=miss with cold cache state" >&2
     exit 1
   fi
   if ! rg -n "\[profile\] cache build: cache=on incremental=on sem=hit c=hit obj=hit link=hit" build2.log >/dev/null 2>&1; then
