@@ -283,45 +283,50 @@ fn qname(mod_path: String, name: String) -> String {
   return mod_path.concat("::").concat(name);
 }
 
-fn imports_cache_entry_eq(ce: ImportsCacheEntry, mod_path: String, file: String) -> bool {
-  return ce.mod_path == mod_path && ce.file == file;
+fn imports_cache_entry_cmp(ce: ImportsCacheEntry, mod_path: String, file: String) -> i32 {
+  if ce.mod_path < mod_path { return -1; }
+  if ce.mod_path > mod_path { return 1; }
+  if ce.file < file { return -1; }
+  if ce.file > file { return 1; }
+  return 0;
 }
 
-fn imports_cache_entry_less(ce: ImportsCacheEntry, mod_path: String, file: String) -> bool {
-  if ce.mod_path < mod_path { return true; }
-  if ce.mod_path > mod_path { return false; }
-  return ce.file < file;
+fn imports_cache_set_last(cache0: ImportsCache, mod_path: String, file: String, imps: Imports) -> ImportsCache {
+  let mut cache: ImportsCache = cache0;
+  cache.last_mod_path = mod_path;
+  cache.last_file = file;
+  cache.last_imps = imps;
+  cache.has_last = true;
+  return cache;
+}
+
+fn imports_cache_hit(cache0: ImportsCache, mod_path: String, file: String, imps: Imports) -> FindImportsCachedResult {
+  let cache: ImportsCache = imports_cache_set_last(cache0, mod_path, file, imps);
+  return FindImportsCachedResult {
+    cache: cache,
+    ar: ImportsResult { ok: true, err: TcError.None, imps: imps },
+  };
 }
 
 fn build_imports_cached(w: World, mod_path: String, mod_imports: Vec[ast.ImportDecl], file: String, cache0: ImportsCache) -> FindImportsCachedResult {
   let mut cache: ImportsCache = cache0;
   if cache.has_last && cache.last_mod_path == mod_path && cache.last_file == file {
-    return FindImportsCachedResult {
-      cache: cache,
-      ar: ImportsResult { ok: true, err: TcError.None, imps: cache.last_imps },
-    };
+    return imports_cache_hit(cache, mod_path, file, cache.last_imps);
   }
   if cache.entries.len() > 0 {
     let last: ImportsCacheEntry = cache.entries.get(cache.entries.len() - 1);
-    if imports_cache_entry_eq(last, mod_path, file) {
-      cache.last_mod_path = mod_path;
-      cache.last_file = file;
-      cache.last_imps = last.imps;
-      cache.has_last = true;
-      return FindImportsCachedResult {
-        cache: cache,
-        ar: ImportsResult { ok: true, err: TcError.None, imps: last.imps },
-      };
+    let tail_ord: i32 = imports_cache_entry_cmp(last, mod_path, file);
+    if tail_ord == 0 {
+      return imports_cache_hit(cache, mod_path, file, last.imps);
     }
-    if imports_cache_entry_less(last, mod_path, file) {
+    if tail_ord < 0 {
       let ar0: ImportsResult = build_imports(w, mod_path, mod_imports, file);
       if !ar0.ok { return FindImportsCachedResult { cache: cache, ar: ar0 }; }
       cache.entries.push(ImportsCacheEntry { mod_path: mod_path, file: file, imps: ar0.imps });
-      cache.last_mod_path = mod_path;
-      cache.last_file = file;
-      cache.last_imps = ar0.imps;
-      cache.has_last = true;
-      return FindImportsCachedResult { cache: cache, ar: ar0 };
+      return FindImportsCachedResult {
+        cache: imports_cache_set_last(cache, mod_path, file, ar0.imps),
+        ar: ar0,
+      };
     }
   }
 
@@ -330,17 +335,11 @@ fn build_imports_cached(w: World, mod_path: String, mod_imports: Vec[ast.ImportD
   while lo < hi {
     let mid: i32 = lo + ((hi - lo) / 2);
     let ce: ImportsCacheEntry = cache.entries.get(mid);
-    if imports_cache_entry_eq(ce, mod_path, file) {
-      cache.last_mod_path = mod_path;
-      cache.last_file = file;
-      cache.last_imps = ce.imps;
-      cache.has_last = true;
-      return FindImportsCachedResult {
-        cache: cache,
-        ar: ImportsResult { ok: true, err: TcError.None, imps: ce.imps },
-      };
+    let ord: i32 = imports_cache_entry_cmp(ce, mod_path, file);
+    if ord == 0 {
+      return imports_cache_hit(cache, mod_path, file, ce.imps);
     }
-    if imports_cache_entry_less(ce, mod_path, file) {
+    if ord < 0 {
       lo = mid + 1;
     } else {
       hi = mid;
@@ -350,11 +349,10 @@ fn build_imports_cached(w: World, mod_path: String, mod_imports: Vec[ast.ImportD
   let ar: ImportsResult = build_imports(w, mod_path, mod_imports, file);
   if !ar.ok { return FindImportsCachedResult { cache: cache, ar: ar }; }
   cache.entries.insert(lo, ImportsCacheEntry { mod_path: mod_path, file: file, imps: ar.imps });
-  cache.last_mod_path = mod_path;
-  cache.last_file = file;
-  cache.last_imps = ar.imps;
-  cache.has_last = true;
-  return FindImportsCachedResult { cache: cache, ar: ar };
+  return FindImportsCachedResult {
+    cache: imports_cache_set_last(cache, mod_path, file, ar.imps),
+    ar: ar,
+  };
 }
 
 fn contains_alias(aliases: Vec[ImportAlias], name: String) -> bool {
