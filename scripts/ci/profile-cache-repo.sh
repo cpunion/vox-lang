@@ -75,6 +75,44 @@ run_build() {
   print_cache_counts "$dir"
 }
 
+run_sem_c_reuse_build() {
+  local label="$1"
+  local dir="$2"
+  local query_shadow="$3"
+  local sem_ref compile_key sem_key source_sig fake_key
+  local current_c current_obj current_meta current_out current_out_c current_out_obj
+  local refs=()
+  mapfile -t refs < <(find "$dir/target/cache/pkg-obj-v1" -name '*.build.cache.sem-ref')
+  if [[ "${#refs[@]}" -eq 0 ]]; then
+    echo "[cache-repo] skip $label (no sem-ref found)"
+    return
+  fi
+  if [[ "${#refs[@]}" -gt 1 ]]; then
+    echo "[cache-repo] skip $label (multiple sem-refs found)" >&2
+    return
+  fi
+  sem_ref="${refs[0]}"
+  compile_key="$(basename -- "$sem_ref" .build.cache.sem-ref)"
+  sem_key="$(sed -n '2p' "$sem_ref" | tr -d '\r')"
+  source_sig="$(sed -n '3p' "$sem_ref" | tr -d '\r')"
+  if [[ "$compile_key" == "" || "$sem_key" == "" || "$source_sig" == "" ]]; then
+    echo "[cache-repo] skip $label (incomplete sem-ref)"
+    return
+  fi
+  fake_key="${compile_key}-semreuse"
+  current_c="$dir/target/cache/pkg-obj-v1/${compile_key}.c"
+  current_obj="$dir/target/cache/pkg-obj-v1/${compile_key}.o"
+  current_meta="$dir/target/cache/pkg-obj-v1/${compile_key}.build.cache.key"
+  current_out="$dir/target/debug/vox_repo_profile"
+  current_out_c="$current_out.c"
+  current_out_obj="$current_out.o"
+  cp "$current_c" "$dir/target/cache/pkg-obj-v1/${fake_key}.c"
+  printf 'v1\n%s\n%s\n' "$fake_key" "$source_sig" > "$dir/target/cache/pkg-sem-v1/${sem_key}.build.cache.c-ref"
+  rm -f "$current_c" "$current_obj" "$current_meta" "$current_out" "$current_out_c" "$current_out_obj"
+  rm -rf "$dir/target/cache/link-v1"
+  run_build "$label" "$dir" "$query_shadow"
+}
+
 run_mode() {
   local query_shadow="$1"
   local mode_dir="$WORK_DIR/query-shadow-$query_shadow"
@@ -83,6 +121,9 @@ run_mode() {
   echo "[cache-repo] query-shadow: $query_shadow"
   run_build "$prefix-cold-build" "$mode_dir" "$query_shadow"
   run_build "$prefix-warm-build" "$mode_dir" "$query_shadow"
+  if [[ "$query_shadow" == "1" ]]; then
+    run_sem_c_reuse_build "$prefix-sem-c-reuse-build" "$mode_dir" "$query_shadow"
+  fi
 }
 
 echo "[cache-repo] compiler: $COMPILER_BIN"
