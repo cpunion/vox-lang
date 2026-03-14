@@ -60,8 +60,8 @@ mk_project "$INCR1"
 (
   cd "$INCR0"
 
-  VOX_INCREMENTAL=0 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build.log 2>&1
-  VOX_INCREMENTAL=0 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" test --list > list.log 2>&1
+  VOX_INCREMENTAL=0 VOX_PROFILE=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build.log 2>&1
+  VOX_INCREMENTAL=0 VOX_PROFILE=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" test --list > list.log 2>&1
 
   require_no_file "target/debug/.vox_test_discover.key" "VOX_INCREMENTAL=0 should disable test discovery sidecar writes"
   require_no_file "target/debug/.vox_test_discover.list" "VOX_INCREMENTAL=0 should disable test discovery sidecar writes"
@@ -75,14 +75,22 @@ mk_project "$INCR1"
     echo "[incremental-gate] query-shadow logs should be absent when VOX_INCREMENTAL=0" >&2
     exit 1
   fi
+  if ! rg -n "\[profile\] cache build: cache=off incremental=off" build.log >/dev/null 2>&1; then
+    echo "[incremental-gate] expected profile cache build summary for VOX_INCREMENTAL=0" >&2
+    exit 1
+  fi
+  if ! rg -n "\[profile\] cache test-list: cache=off incremental=off" list.log >/dev/null 2>&1; then
+    echo "[incremental-gate] expected profile cache test-list summary for VOX_INCREMENTAL=0" >&2
+    exit 1
+  fi
 )
 
 (
   cd "$INCR1"
 
-  VOX_INCREMENTAL=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build1.log 2>&1
-  VOX_INCREMENTAL=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build2.log 2>&1
-  VOX_INCREMENTAL=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" test --list > list.log 2>&1
+  VOX_INCREMENTAL=1 VOX_PROFILE=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build1.log 2>&1
+  VOX_INCREMENTAL=1 VOX_PROFILE=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" build --driver=tool > build2.log 2>&1
+  VOX_INCREMENTAL=1 VOX_PROFILE=1 VOX_QUERY_SHADOW=1 VOX_QUERY_SHADOW_TRACE=1 VOX_CACHE_TRACE=1 "$COMPILER_BIN" test --list > list.log 2>&1
 
   if [[ ! -e target/debug/.vox_test_discover.key || ! -e target/debug/.vox_test_discover.list ]]; then
     echo "[incremental-gate] expected test discovery sidecars when VOX_INCREMENTAL=1" >&2
@@ -94,6 +102,14 @@ mk_project "$INCR1"
 
   if ! rg -n "\[cache\] mode=build cache=on incremental=on" build1.log build2.log >/dev/null 2>&1; then
     echo "[incremental-gate] expected cache=on incremental=on trace line for VOX_INCREMENTAL=1 build" >&2
+    exit 1
+  fi
+  if ! rg -n "\[profile\] cache build: cache=on incremental=on" build1.log build2.log >/dev/null 2>&1; then
+    echo "[incremental-gate] expected profile cache build summary for VOX_INCREMENTAL=1 build" >&2
+    exit 1
+  fi
+  if ! rg -n "\[profile\] cache test-list: cache=on incremental=on" list.log >/dev/null 2>&1; then
+    echo "[incremental-gate] expected profile cache test-list summary for VOX_INCREMENTAL=1 list" >&2
     exit 1
   fi
   if ! rg -n "\[query-shadow\] phase=build" build1.log build2.log >/dev/null 2>&1; then
