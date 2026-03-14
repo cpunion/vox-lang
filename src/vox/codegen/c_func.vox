@@ -1674,6 +1674,56 @@ fn c_field_store_line(base: String, field: String, rhs: String) -> String {
   return parts.join("");
 }
 
+fn c_guard_float_cast_unsigned_line(v_text: String, dst_max: String, msg: String) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push("  if (!isfinite((double)");
+  parts.push(v_text);
+  parts.push(") || (double)");
+  parts.push(v_text);
+  parts.push(" < 0.0 || (long double)");
+  parts.push(v_text);
+  parts.push(" > (long double)");
+  parts.push(dst_max);
+  parts.push(") { vox_host_panic(");
+  parts.push(c_str_lit(msg));
+  parts.push("); }");
+  return parts.join("");
+}
+
+fn c_guard_float_cast_signed_line(v_text: String, dst_min: String, dst_max: String, msg: String) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push("  if (!isfinite((double)");
+  parts.push(v_text);
+  parts.push(") || (long double)");
+  parts.push(v_text);
+  parts.push(" < (long double)");
+  parts.push(dst_min);
+  parts.push(" || (long double)");
+  parts.push(v_text);
+  parts.push(" > (long double)");
+  parts.push(dst_max);
+  parts.push(") { vox_host_panic(");
+  parts.push(c_str_lit(msg));
+  parts.push("); }");
+  return parts.join("");
+}
+
+fn c_guard_signed_cast_bounds_line(v_text: String, dst_min: String, dst_max: String, msg: String) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push("  if (((int64_t)");
+  parts.push(v_text);
+  parts.push(" < (int64_t)");
+  parts.push(dst_min);
+  parts.push(") || ((int64_t)");
+  parts.push(v_text);
+  parts.push(" > (int64_t)");
+  parts.push(dst_max);
+  parts.push(")) { vox_host_panic(");
+  parts.push(c_str_lit(msg));
+  parts.push("); }");
+  return parts.join("");
+}
+
 fn emit_instr_cmp_line(pool: ir.TyPool, tid: i32, op: ir.CmpKind, oty: i32, a: ir.Value, b: ir.Value, vn: ValueNameTables) -> String {
   let t: ir.Ty = ir.ty_pool_get(pool, oty);
   if t.kind == ir.TyKind.Range || t.kind == ir.TyKind.Verified || t.kind == ir.TyKind.Ref {
@@ -1736,11 +1786,11 @@ fn emit_instr_int_cast_checked_append(
 
   let mut out: Vec[String] = out0;
   if !src_is_float && src_int_lit.ok && int_literal_always_fits_dst_kind(dst.kind, src_int_lit.n, target_ptr_bits) {
-    out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
+    out.push(c_assign_cast_line(c_temp_name_named(vn, tid), c_type_from_table(c_types, pool, dst_ty), v_text));
     return out;
   }
   if !src_is_float && !int_cast_needs_runtime_check(dst.kind, src.kind, target_ptr_bits) {
-    out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
+    out.push(c_assign_cast_line(c_temp_name_named(vn, tid), c_type_from_table(c_types, pool, dst_ty), v_text));
     return out;
   }
 
@@ -1799,29 +1849,9 @@ fn emit_instr_int_cast_checked_append(
 
   if src_is_float {
     if dst_is_unsigned {
-      out.push("  if (!isfinite((double)".concat(v_text)
-        .concat(") || (double)")
-        .concat(v_text)
-        .concat(" < 0.0 || (long double)")
-        .concat(v_text)
-        .concat(" > (long double)")
-        .concat(dst_max)
-        .concat(") { vox_host_panic(")
-        .concat(c_str_lit(msg))
-        .concat("); }"));
+      out.push(c_guard_float_cast_unsigned_line(v_text, dst_max, msg));
     } else {
-      out.push("  if (!isfinite((double)".concat(v_text)
-        .concat(") || (long double)")
-        .concat(v_text)
-        .concat(" < (long double)")
-        .concat(dst_min)
-        .concat(" || (long double)")
-        .concat(v_text)
-        .concat(" > (long double)")
-        .concat(dst_max)
-        .concat(") { vox_host_panic(")
-        .concat(c_str_lit(msg))
-        .concat("); }"));
+      out.push(c_guard_float_cast_signed_line(v_text, dst_min, dst_max, msg));
     }
   } else {
     if dst_is_unsigned {
@@ -1876,21 +1906,12 @@ fn emit_instr_int_cast_checked_append(
         if dst.kind == ir.TyKind.ISize && src.kind == ir.TyKind.I64 {
           out.push("  if (vox_i64_outside_intptr_range((int64_t)".concat(v_text).concat(")) { vox_host_panic(").concat(c_str_lit(msg)).concat("); }"));
         } else {
-          out.push("  if (((int64_t)".concat(v_text)
-            .concat(" < (int64_t)")
-            .concat(dst_min)
-            .concat(") || ((int64_t)")
-            .concat(v_text)
-            .concat(" > (int64_t)")
-            .concat(dst_max)
-            .concat(")) { vox_host_panic(")
-            .concat(c_str_lit(msg))
-            .concat("); }"));
+          out.push(c_guard_signed_cast_bounds_line(v_text, dst_min, dst_max, msg));
         }
       }
     }
   }
-  out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = (").concat(c_type_from_table(c_types, pool, dst_ty)).concat(")").concat(v_text).concat(";"));
+  out.push(c_assign_cast_line(c_temp_name_named(vn, tid), c_type_from_table(c_types, pool, dst_ty), v_text));
   return out;
 }
 
