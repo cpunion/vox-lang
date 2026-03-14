@@ -82,6 +82,7 @@ enum TaskKind { Normal, Inst }
 
 struct FuncTask {
   kind: TaskKind,
+  qname: String,
   mod_path: String,
   mod_idx: i32,      // module index in world.mods when known, -1 as fallback
   func_idx: i32,     // for Normal (-1 otherwise)
@@ -864,6 +865,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       if fd.type_params.len() == 0 && fd.const_params.len() == 0 && fd.ffi_imports.len() == 0 {
         tasks.push(FuncTask {
           kind: TaskKind.Normal,
+          qname: qname_with_prefix(mod_qprefix_by_idx.get(mi), fd.name),
           mod_path: m.path,
           mod_idx: mi,
           func_idx: fi,
@@ -903,6 +905,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         }
         tasks.push(FuncTask {
           kind: TaskKind.Normal,
+          qname: qname_with_prefix(mod_qprefix_by_idx.get(mi), mr0.lowered_name),
           mod_path: m.path,
           mod_idx: mi,
           func_idx: -1,
@@ -939,6 +942,13 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
   let mut ti: i32 = 0;
   while ti < tasks.len() {
     let t: FuncTask = tasks.get(ti);
+    let want_name: String = t.qname;
+    let want_find: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
+    if want_find >= 0 {
+      ti = ti + 1;
+      continue;
+    }
+    let want_insert_pos: i32 = 0 - (want_find + 1);
 
     let mut mod_idx: i32 = t.mod_idx;
     if mod_idx < 0 {
@@ -948,10 +958,8 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
     }
     if mod_idx < 0 { return err0(p, "missing module for task"); }
     let m2: tc.WorldModule = w.mods.get(mod_idx);
-    let mut want_name: String = "";
     let mut imps: tc.Imports = tc.Imports { aliases: Vec(), named_funcs: Vec(), named_consts: Vec(), named_types: Vec() };
     let mut r: GenFuncResult = GenFuncResult { ok: false, err: "", ctx: ctx, f: ir.Func { name: "", params: Vec(), ret: ctx.ty_bad, blocks: Vec() }, extras: Vec(), pending: Vec() };
-    let mut want_insert_pos: i32 = -1;
     // Vox match arms only support single expressions (no block arms yet),
     // so branch on a structural invariant instead of matching on TaskKind.
     if t.func_idx != -1 {
@@ -967,10 +975,6 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         hot_imps_cached = true;
       }
       imps = hot_imps;
-      want_name = qname_with_prefix(mod_qprefix_by_idx.get(mod_idx), fd.name);
-      let want_find: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
-      if want_find >= 0 { ti = ti + 1; continue; }
-      want_insert_pos = 0 - (want_find + 1);
       r = gen_func(ctx, w, t.mod_path, imps, m2.prog.exprs, fd);
     } else if t.impl_idx != -1 {
       // Impl method task.
@@ -1055,10 +1059,6 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         hot_imps_cached = true;
       }
       imps = hot_imps;
-      want_name = qname_with_prefix(mod_qprefix_by_idx.get(mod_idx), ms_task.lowered_name);
-      let want_find0: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
-      if want_find0 >= 0 { ti = ti + 1; continue; }
-      want_insert_pos = 0 - (want_find0 + 1);
       if md.is_async {
         // Lower async impl methods (including from-default) through the instantiation path
         // so body module and target symbol module can differ.
@@ -1118,10 +1118,6 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         hot_imps_cached = true;
       }
       imps = hot_imps;
-      want_name = qname_with_prefix(mod_qprefix_by_idx.get(mod_idx), t.inst_name);
-      let want_find1: i32 = find_str_sorted_idx_or_insert(emitted_sorted, want_name);
-      if want_find1 >= 0 { ti = ti + 1; continue; }
-      want_insert_pos = 0 - (want_find1 + 1);
       r = gen_func_inst(ctx, w, bmod.path, t.mod_path, imps, bmod.prog.exprs, fd_for_inst, t.inst_name, t.inst_sig, t.subs, t.const_subs);
     }
 
@@ -1173,6 +1169,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
       }
       tasks.push(FuncTask {
         kind: TaskKind.Inst,
+        qname: pend_name,
         mod_path: pend.mod_path,
         mod_idx: pend_mod_idx,
         func_idx: -1,
