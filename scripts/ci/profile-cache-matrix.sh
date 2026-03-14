@@ -6,7 +6,7 @@ COMPILER_BIN="${VOX_PROFILE_COMPILER_BIN:-$("$ROOT/scripts/ci/resolve-selfhost-b
 TMP_BASE="${TMPDIR:-/tmp}"
 WORK_DIR="$(mktemp -d "$TMP_BASE/vox-cache-matrix.XXXXXX")"
 KEEP_WORK="${VOX_PROFILE_KEEP_WORKDIR:-0}"
-QUERY_SHADOW="${VOX_QUERY_SHADOW:-0}"
+QUERY_SHADOW="${VOX_QUERY_SHADOW:-}"
 
 cleanup() {
   if [[ "$KEEP_WORK" == "1" ]]; then
@@ -65,13 +65,14 @@ run_profile() {
   local label="$1"
   local cmd="$2"
   local dir="$3"
+  local query_shadow="$4"
   local log="$dir/${label}.log"
   (
     cd "$dir"
     env \
       VOX_INCREMENTAL=1 \
       VOX_PROFILE=1 \
-      VOX_QUERY_SHADOW="$QUERY_SHADOW" \
+      VOX_QUERY_SHADOW="$query_shadow" \
       "$COMPILER_BIN" $cmd > "$log" 2>&1
   )
   printf '[cache-matrix] %s\n' "$label"
@@ -79,15 +80,25 @@ run_profile() {
   print_cache_counts "$dir"
 }
 
-PROJECT_DIR="$WORK_DIR/project"
-mk_project "$PROJECT_DIR"
-
 echo "[cache-matrix] compiler: $COMPILER_BIN"
-echo "[cache-matrix] query-shadow: $QUERY_SHADOW"
 
-run_profile "cold-build" "build --driver=tool" "$PROJECT_DIR"
-run_profile "warm-build" "build --driver=tool" "$PROJECT_DIR"
-run_profile "cold-list" "list" "$PROJECT_DIR"
-run_profile "warm-list" "list" "$PROJECT_DIR"
-run_profile "cold-test-list" "test --list" "$PROJECT_DIR"
-run_profile "warm-test-list" "test --list" "$PROJECT_DIR"
+run_mode() {
+  local query_shadow="$1"
+  local mode_dir="$WORK_DIR/query-shadow-$query_shadow"
+  local prefix="q${query_shadow}"
+  mk_project "$mode_dir/project"
+  echo "[cache-matrix] query-shadow: $query_shadow"
+  run_profile "$prefix-cold-build" "build --driver=tool" "$mode_dir/project" "$query_shadow"
+  run_profile "$prefix-warm-build" "build --driver=tool" "$mode_dir/project" "$query_shadow"
+  run_profile "$prefix-cold-list" "list" "$mode_dir/project" "$query_shadow"
+  run_profile "$prefix-warm-list" "list" "$mode_dir/project" "$query_shadow"
+  run_profile "$prefix-cold-test-list" "test --list" "$mode_dir/project" "$query_shadow"
+  run_profile "$prefix-warm-test-list" "test --list" "$mode_dir/project" "$query_shadow"
+}
+
+if [[ "$QUERY_SHADOW" == "" ]]; then
+  run_mode 0
+  run_mode 1
+else
+  run_mode "$QUERY_SHADOW"
+fi
