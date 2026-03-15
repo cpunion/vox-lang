@@ -1516,45 +1516,87 @@ fn has_self_assoc_prefix(name: String) -> bool {
   return name.len() > 5 && name.slice(0, 5) == "Self.";
 }
 
-fn subst_self_ty(ctx: Ctx, ty: i32, recv_ty: i32) -> i32 {
+struct SubstSelfMemoEntry {
+  src_ty: i32,
+  dst_ty: i32,
+}
+
+struct SubstSelfTyResult {
+  ty: i32,
+  memo: Vec[SubstSelfMemoEntry],
+}
+
+fn subst_self_memo_lookup(memo: Vec[SubstSelfMemoEntry], src_ty: i32) -> i32 {
+  let mut i: i32 = memo.len() - 1;
+  while i >= 0 {
+    let e: SubstSelfMemoEntry = memo.get(i);
+    if e.src_ty == src_ty { return e.dst_ty; }
+    i = i - 1;
+  }
+  return -2;
+}
+
+fn subst_self_ty(ctx: Ctx, ty: i32, recv_ty: i32, memo0: Vec[SubstSelfMemoEntry]) -> SubstSelfTyResult {
+  // Method/default-method signatures often repeat the same `Self`-shaped wrappers
+  // across params/ret/variadic slots; reuse those substitutions within one call.
+  let cached: i32 = subst_self_memo_lookup(memo0, ty);
+  if cached != -2 {
+    return SubstSelfTyResult { ty: cached, memo: memo0 };
+  }
   let t: ir.Ty = ir.ty_pool_get(ctx.pool, ty);
+  let mut memo: Vec[SubstSelfMemoEntry] = memo0;
+  let mut out_ty: i32 = ty;
   if t.kind == ir.TyKind.Param {
-    if t.name == "Self" { return recv_ty; }
-    if has_self_assoc_prefix(t.name) {
+    if t.name == "Self" {
+      out_ty = recv_ty;
+    } else if has_self_assoc_prefix(t.name) {
       let rt: ir.Ty = ir.ty_pool_get(ctx.pool, recv_ty);
       if rt.kind == ir.TyKind.Param {
         let want: String = rt.name.concat(t.name.slice(4, t.name.len()));
         let pty: i32 = find_param_ty_idx(ctx, want);
-        if pty != -1 { return pty; }
+        if pty != -1 { out_ty = pty; }
       }
     }
-    return ty;
+  } else if t.kind == ir.TyKind.Vec {
+    let er: SubstSelfTyResult = subst_self_ty(ctx, t.elem, recv_ty, memo);
+    memo = er.memo;
+    if er.ty != t.elem {
+      let v: i32 = find_vec_ty_idx_local(ctx, er.ty);
+      if v != -1 {
+        out_ty = v;
+      } else {
+        out_ty = ctx.ty_bad;
+      }
+    }
+  } else if t.kind == ir.TyKind.Range {
+    let er: SubstSelfTyResult = subst_self_ty(ctx, t.elem, recv_ty, memo);
+    memo = er.memo;
+    if er.ty != t.elem {
+      let r: i32 = find_range_ty_idx_local(ctx, er.ty, t.lo, t.hi);
+      if r != -1 {
+        out_ty = r;
+      } else {
+        out_ty = ctx.ty_bad;
+      }
+    }
+  } else if t.kind == ir.TyKind.Verified {
+    let er: SubstSelfTyResult = subst_self_ty(ctx, t.elem, recv_ty, memo);
+    memo = er.memo;
+    if er.ty != t.elem {
+      let v: i32 = find_verified_ty_idx_local(ctx, er.ty, t.mod_path, t.name);
+      if v != -1 {
+        out_ty = v;
+      } else {
+        out_ty = ctx.ty_bad;
+      }
+    }
   }
-  if t.kind == ir.TyKind.Vec {
-    let e: i32 = subst_self_ty(ctx, t.elem, recv_ty);
-    if e == t.elem { return ty; }
-    let v: i32 = find_vec_ty_idx_local(ctx, e);
-    if v != -1 { return v; }
-    return ctx.ty_bad;
-  }
-  if t.kind == ir.TyKind.Range {
-    let e2: i32 = subst_self_ty(ctx, t.elem, recv_ty);
-    if e2 == t.elem { return ty; }
-    let r: i32 = find_range_ty_idx_local(ctx, e2, t.lo, t.hi);
-    if r != -1 { return r; }
-    return ctx.ty_bad;
-  }
-  if t.kind == ir.TyKind.Verified {
-    let e2: i32 = subst_self_ty(ctx, t.elem, recv_ty);
-    if e2 == t.elem { return ty; }
-    let v: i32 = find_verified_ty_idx_local(ctx, e2, t.mod_path, t.name);
-    if v != -1 { return v; }
-    return ctx.ty_bad;
-  }
-  return ty;
+  memo.push(SubstSelfMemoEntry { src_ty: ty, dst_ty: out_ty });
+  return SubstSelfTyResult { ty: out_ty, memo: memo };
 }
 
 fn subst_self_in_sig(ctx: Ctx, sig: FuncSig, recv_ty: i32) -> FuncSig {
+  let mut memo: Vec[SubstSelfMemoEntry] = Vec();
   let mut ps: Vec[i32] = Vec();
   let mut i: i32 = 0;
   while i < sig.params.len() {
@@ -1564,11 +1606,22 @@ fn subst_self_in_sig(ctx: Ctx, sig: FuncSig, recv_ty: i32) -> FuncSig {
     // underlying base type so `Self` substitution works inside `&Self`.
     let pty0: i32 = sig.params.get(i);
     let pty: i32 = strip_ref(ctx, pty0);
-    ps.push(subst_self_ty(ctx, pty, recv_ty));
+    let pr: SubstSelfTyResult = subst_self_ty(ctx, pty, recv_ty, memo);
+    memo = pr.memo;
+    ps.push(pr.ty);
     i = i + 1;
   }
-  let rr: i32 = subst_self_ty(ctx, sig.ret, recv_ty);
-  let ve: i32 = if sig.has_variadic { subst_self_ty(ctx, sig.variadic_elem, recv_ty) } else { sig.variadic_elem };
+  let rr0: SubstSelfTyResult = subst_self_ty(ctx, sig.ret, recv_ty, memo);
+  memo = rr0.memo;
+  let rr: i32 = rr0.ty;
+  let ve: i32 =
+    if sig.has_variadic {
+      let vr: SubstSelfTyResult = subst_self_ty(ctx, sig.variadic_elem, recv_ty, memo);
+      memo = vr.memo;
+      vr.ty
+    } else {
+      sig.variadic_elem
+    };
   return FuncSig {
     params: ps,
     param_borrow_kinds: sig.param_borrow_kinds,
