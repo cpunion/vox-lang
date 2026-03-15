@@ -1,6 +1,7 @@
 import "vox/ir" as ir
 
 struct IdTy { id: i32, ty: String }
+
 struct IdTySeq { id: i32, ty: String, seq: i32 }
 
 fn idty_add(v0: Vec[IdTy], id: i32, ty: String) -> Vec[IdTy] {
@@ -1674,6 +1675,102 @@ fn c_field_store_line(base: String, field: String, rhs: String) -> String {
   return parts.join("");
 }
 
+fn c_addr_of_expr(target: String) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push("&");
+  parts.push(target);
+  return parts.join("");
+}
+
+fn c_deref_expr(expr: String) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push("(*");
+  parts.push(expr);
+  parts.push(")");
+  return parts.join("");
+}
+
+fn c_ptr_read_expr(ty: String, ptr_expr: String) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push("*(");
+  parts.push(ty);
+  parts.push("*)");
+  parts.push(ptr_expr);
+  return parts.join("");
+}
+
+fn c_ptr_write_line(ty: String, ptr_expr: String, rhs: String) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push("  *((");
+  parts.push(ty);
+  parts.push("*)");
+  parts.push(ptr_expr);
+  parts.push(") = ");
+  parts.push(rhs);
+  parts.push(";");
+  return parts.join("");
+}
+
+fn c_ptr_offset_expr(ptr_expr: String, off_expr: String) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push("(void*)((char*)");
+  parts.push(ptr_expr);
+  parts.push(" + ");
+  parts.push(off_expr);
+  parts.push(")");
+  return parts.join("");
+}
+
+fn c_field_access_expr(base: String, field: String) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push(base);
+  parts.push(".");
+  parts.push(c_ident(field));
+  return parts.join("");
+}
+
+fn c_enum_payload_expr(base: String, variant: String, idx: i32) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push(base);
+  parts.push(".payload.");
+  parts.push(c_ident(variant));
+  parts.push("._");
+  parts.push(idx.to_string());
+  return parts.join("");
+}
+
+fn c_atomic_call_expr(fn_name: String, atomic_ty: String, handle_expr: String, arg_exprs: Vec[String]) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push(fn_name);
+  parts.push("((");
+  parts.push(atomic_ty);
+  parts.push("*)");
+  parts.push(handle_expr);
+  let mut i: i32 = 0;
+  while i < arg_exprs.len() {
+    parts.push(", ");
+    parts.push(arg_exprs.get(i));
+    i = i + 1;
+  }
+  parts.push(", memory_order_seq_cst)");
+  return parts.join("");
+}
+
+fn c_call_stmt_line(fn_name: String, arg_exprs: Vec[String]) -> String {
+  let mut parts: Vec[String] = Vec();
+  parts.push("  ");
+  parts.push(fn_name);
+  parts.push("(");
+  let mut i: i32 = 0;
+  while i < arg_exprs.len() {
+    if i != 0 { parts.push(", "); }
+    parts.push(arg_exprs.get(i));
+    i = i + 1;
+  }
+  parts.push(");");
+  return parts.join("");
+}
+
 fn c_guard_float_cast_unsigned_line(v_text: String, dst_max: String, msg: String) -> String {
   let mut parts: Vec[String] = Vec();
   parts.push("  if (!isfinite((double)");
@@ -2275,9 +2372,9 @@ fn emit_instr_vec_extend_append(out0: Vec[String], recv_slot: i32, other_slot: i
   out.push("    if (!vox_v || !vox_v->h || !vox_other || !vox_other->h) {");
   out.push("      /* no-op */");
   out.push("    } else if (vox_other->len > 0) {");
-      out.push("      int64_t vox_need64 = (int64_t)vox_v->len + (int64_t)vox_other->len;");
-      out.push("      if (vox_need64 > INT32_MAX) { vox_host_panic(\"vec too large\"); }");
-      out.push("      int32_t vox_need = (int32_t)vox_need64;");
+  out.push("      int64_t vox_need64 = (int64_t)vox_v->len + (int64_t)vox_other->len;");
+  out.push("      if (vox_need64 > INT32_MAX) { vox_host_panic(\"vec too large\"); }");
+  out.push("      int32_t vox_need = (int32_t)vox_need64;");
   out = emit_vec_grow_if_needed_append(out, "vox_v", "vox_need64");
   out.push("      memcpy(vox_v->h->data + (size_t)vox_v->len * (size_t)vox_v->h->elem_size, vox_other->h->data, (size_t)vox_other->len * (size_t)vox_other->h->elem_size);");
   out.push("      vox_v->len = vox_need;");
@@ -2575,33 +2672,22 @@ fn emit_instr_append(
     ir.Instr.Load(tid, _ty, sid) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_slot_name_named(vn, sid))); out },
     ir.Instr.GlobalLoad(tid, _ty, name) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_static_name(name))); out },
     ir.Instr.GlobalStore(_ty, name, v) => { out.push(c_store_line(c_static_name(name), c_value_named(v, vn))); out },
-    ir.Instr.AddrOfSlot(tid, _ty, sid) => { out.push(c_assign_line(c_temp_name_named(vn, tid), "&".concat(c_slot_name_named(vn, sid)))); out },
-    ir.Instr.AddrOfFieldChain(tid, _ty, sid, fields) => { out.push(c_assign_line(c_temp_name_named(vn, tid), "&".concat(c_slot_name_named(vn, sid)).concat(c_field_chain(fields)))); out },
-    ir.Instr.RefLoad(tid, _ty, recv) => { out.push(c_assign_line(c_temp_name_named(vn, tid), "(*".concat(c_value_named(recv, vn)).concat(")"))); out },
-    ir.Instr.RefStore(_ty, recv, v) => { out.push("  (*".concat(c_value_named(recv, vn)).concat(") = ").concat(c_value_named(v, vn)).concat(";")); out },
+    ir.Instr.AddrOfSlot(tid, _ty, sid) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_addr_of_expr(c_slot_name_named(vn, sid)))); out },
+    ir.Instr.AddrOfFieldChain(tid, _ty, sid, fields) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_addr_of_expr(c_slot_name_named(vn, sid).concat(c_field_chain(fields))))); out },
+    ir.Instr.RefLoad(tid, _ty, recv) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_deref_expr(c_value_named(recv, vn)))); out },
+    ir.Instr.RefStore(_ty, recv, v) => { out.push(c_store_line(c_deref_expr(c_value_named(recv, vn)), c_value_named(v, vn))); out },
 
-    ir.Instr.PtrRead(tid, ty, ptr) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = *(").concat(c_type_from_table(c_types, pool, ty)).concat("*)").concat(c_value_named(ptr, vn)).concat(";")); out },
-    ir.Instr.PtrWrite(ty, ptr, v) => { out.push("  *((".concat(c_type_from_table(c_types, pool, ty)).concat("*)").concat(c_value_named(ptr, vn)).concat(") = ").concat(c_value_named(v, vn)).concat(";")); out },
-    ir.Instr.PtrOffset(tid, ptr, off) => { out.push(c_assign_line(c_temp_name_named(vn, tid), "(void*)((char*)".concat(c_value_named(ptr, vn)).concat(" + ").concat(c_value_named(off, vn)).concat(")"))); out },
+    ir.Instr.PtrRead(tid, ty, ptr) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_ptr_read_expr(c_type_from_table(c_types, pool, ty), c_value_named(ptr, vn)))); out },
+    ir.Instr.PtrWrite(ty, ptr, v) => { out.push(c_ptr_write_line(c_type_from_table(c_types, pool, ty), c_value_named(ptr, vn), c_value_named(v, vn))); out },
+    ir.Instr.PtrOffset(tid, ptr, off) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_ptr_offset_expr(c_value_named(ptr, vn), c_value_named(off, vn)))); out },
 
     ir.Instr.StructInit(tid, ty, fs) => push_line(out, emit_instr_struct_init_line(c_types, pool, tid, ty, fs, vn)),
-    ir.Instr.FieldGet(tid, _ty, recv, field) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_value_named(recv, vn).concat(".").concat(c_ident(field)))); out },
+    ir.Instr.FieldGet(tid, _ty, recv, field) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_field_access_expr(c_value_named(recv, vn), field))); out },
     ir.Instr.StoreField(sid, field, v) => { out.push(c_field_store_line(c_slot_name_named(vn, sid), field, c_value_named(v, vn))); out },
 
     ir.Instr.EnumInit(tid, ty, variant, payload) => push_line(out, emit_instr_enum_init_line(c_types, pool, p, enum_order, tid, ty, variant, payload, vn)),
-    ir.Instr.EnumTag(tid, recv) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_value_named(recv, vn).concat(".tag"))); out },
-    ir.Instr.EnumPayload(tid, _ty, recv, variant, idx) => {
-      out.push("  "
-        .concat(c_temp_name_named(vn, tid))
-        .concat(" = ")
-        .concat(c_value_named(recv, vn))
-        .concat(".payload.")
-        .concat(c_ident(variant))
-        .concat("._")
-        .concat(idx.to_string())
-        .concat(";"));
-      out
-    },
+    ir.Instr.EnumTag(tid, recv) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_field_access_expr(c_value_named(recv, vn), "tag"))); out },
+    ir.Instr.EnumPayload(tid, _ty, recv, variant, idx) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_enum_payload_expr(c_value_named(recv, vn), variant, idx))); out },
 
     ir.Instr.VecNew(tid, _vty, elem) => emit_instr_vec_new_append(out, c_types, pool, tid, elem, vn),
     ir.Instr.VecPush(recv_slot, elem, v) => emit_instr_vec_push_append(out, c_types, pool, recv_slot, elem, v, vn),
@@ -2615,12 +2701,24 @@ fn emit_instr_append(
     ir.Instr.VecGet(tid, elem, recv_slot, idx) => emit_instr_vec_get_append(out, c_types, pool, tid, elem, recv_slot, idx, temp_is_read(tid, read_temps), vn),
 
     ir.Instr.AtomicNew(tid, elem_ty, val) => emit_instr_atomic_new_append(out, pool, tid, elem_ty, val, vn),
-    ir.Instr.AtomicLoad(tid, elem_ty, h) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = atomic_load_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", memory_order_seq_cst);")); out },
-    ir.Instr.AtomicStore(elem_ty, h, val) => { out.push("  atomic_store_explicit((".concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", ").concat(c_value_named(val, vn)).concat(", memory_order_seq_cst);")); out },
-    ir.Instr.AtomicFetchAdd(tid, elem_ty, h, delta) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = atomic_fetch_add_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", ").concat(c_value_named(delta, vn)).concat(", memory_order_seq_cst);")); out },
-    ir.Instr.AtomicSwap(tid, elem_ty, h, val) => { out.push("  ".concat(c_temp_name_named(vn, tid)).concat(" = atomic_exchange_explicit((").concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)).concat(", ").concat(c_value_named(val, vn)).concat(", memory_order_seq_cst);")); out },
+    ir.Instr.AtomicLoad(tid, elem_ty, h) => { out.push(c_assign_line(c_temp_name_named(vn, tid), c_atomic_call_expr("atomic_load_explicit", c_atomic_c_type(pool, elem_ty), c_value_named(h, vn), Vec()))); out },
+    ir.Instr.AtomicStore(elem_ty, h, val) => {
+      let mut xs: Vec[String] = Vec();
+      xs.push("(".concat(c_atomic_c_type(pool, elem_ty)).concat("*)").concat(c_value_named(h, vn)));
+      xs.push(c_value_named(val, vn));
+      xs.push("memory_order_seq_cst");
+      out.push(c_call_stmt_line("atomic_store_explicit", xs));
+      out
+    },
+    ir.Instr.AtomicFetchAdd(tid, elem_ty, h, delta) => { let mut xs: Vec[String] = Vec(); xs.push(c_value_named(delta, vn)); out.push(c_assign_line(c_temp_name_named(vn, tid), c_atomic_call_expr("atomic_fetch_add_explicit", c_atomic_c_type(pool, elem_ty), c_value_named(h, vn), xs))); out },
+    ir.Instr.AtomicSwap(tid, elem_ty, h, val) => { let mut xs: Vec[String] = Vec(); xs.push(c_value_named(val, vn)); out.push(c_assign_line(c_temp_name_named(vn, tid), c_atomic_call_expr("atomic_exchange_explicit", c_atomic_c_type(pool, elem_ty), c_value_named(h, vn), xs))); out },
     ir.Instr.AtomicCAS(tid, elem_ty, h, expected, desired) => emit_instr_atomic_cas_append(out, pool, tid, elem_ty, h, expected, desired, vn),
-    ir.Instr.AtomicDrop(_elem_ty, h) => { out.push("  free((void*)".concat(c_value_named(h, vn)).concat(");")); out },
+    ir.Instr.AtomicDrop(_elem_ty, h) => {
+      let mut xs: Vec[String] = Vec();
+      xs.push("(void*)".concat(c_value_named(h, vn)));
+      out.push(c_call_stmt_line("free", xs));
+      out
+    },
 
     ir.Instr.Call(has_dst, tid, ret_ty, name, args) => {
       let cr: EmitInstrCallCachedLineResult = emit_instr_call_cached_line(call_names, Vec(), has_dst, tid, ret_ty, name, args, read_temps, vn);
