@@ -316,14 +316,12 @@ struct FindImportsCachedResult { cache: Vec[ImportsCacheEntry], ar: tc.ImportsRe
 struct GenericFindNameIndexEntry { name: String, res: FindFuncDeclResult }
 
 struct GenericFindModuleIndex {
-  decl_impl_sig_idx: Vec[i32],
-  method_decl_indexes: Vec[Vec[ImplMethodDeclIndexEntry]],
   generic_name_index: Vec[GenericFindNameIndexEntry],
 }
 
 struct ModImplDeclIndexes {
   decl_impl_sig_idx: Vec[i32],
-  method_decl_indexes: Vec[Vec[ImplMethodDeclIndexEntry]],
+  method_sig_decl_idx: Vec[Vec[i32]],
 }
 
 struct GenericFindIndexCacheByModEntry { ready: bool, mix: GenericFindModuleIndex }
@@ -374,20 +372,33 @@ fn build_mod_impl_decl_indexes(ctx: tc.Ctx, w: tc.World, impl_sig_index: Vec[Imp
       di = di + 1;
     }
 
-    let mut method_decl_indexes: Vec[Vec[ImplMethodDeclIndexEntry]] = Vec();
+    let mut method_sig_decl_idx: Vec[Vec[i32]] = Vec();
     let mut ii: i32 = 0;
     while ii < m.prog.impls.len() {
-      method_decl_indexes.push(build_impl_method_decl_index(m.prog.impls.get(ii)));
+      let method_decl_index: Vec[ImplMethodDeclIndexEntry] = build_impl_method_decl_index(m.prog.impls.get(ii));
       let ir0: FindImplSigResult = find_impl_sig_from_index(ctx, impl_sig_index, m.path, ii);
+      let mut sig_to_decl: Vec[i32] = Vec();
       if ir0.found {
         decl_impl_sig_idx.set(ii, ir0.idx);
+        let isg: tc.ImplSig = ctx.impls.get(ir0.idx);
+        let mut msi: i32 = 0;
+        while msi < isg.methods.len() {
+          let ms: tc.ImplMethodSig = isg.methods.get(msi);
+          if ms.from_default {
+            sig_to_decl.push(-1);
+          } else {
+            sig_to_decl.push(find_impl_method_decl_idx_from_index(method_decl_index, ms.name));
+          }
+          msi = msi + 1;
+        }
       }
+      method_sig_decl_idx.push(sig_to_decl);
       ii = ii + 1;
     }
 
     out.push(ModImplDeclIndexes {
       decl_impl_sig_idx: decl_impl_sig_idx,
-      method_decl_indexes: method_decl_indexes,
+      method_sig_decl_idx: method_sig_decl_idx,
     });
     mi = mi + 1;
   }
@@ -396,7 +407,7 @@ fn build_mod_impl_decl_indexes(ctx: tc.Ctx, w: tc.World, impl_sig_index: Vec[Imp
 
 fn build_generic_find_module_index(ctx: tc.Ctx, m: tc.WorldModule, mx: ModImplDeclIndexes) -> GenericFindModuleIndex {
   let decl_impl_sig_idx: Vec[i32] = mx.decl_impl_sig_idx;
-  let method_decl_indexes: Vec[Vec[ImplMethodDeclIndexEntry]] = mx.method_decl_indexes;
+  let method_sig_decl_idx: Vec[Vec[i32]] = mx.method_sig_decl_idx;
 
   let mut seen_names: Vec[String] = Vec();
   let mut generic_name_index: Vec[GenericFindNameIndexEntry] = Vec();
@@ -432,7 +443,7 @@ fn build_generic_find_module_index(ctx: tc.Ctx, m: tc.WorldModule, mx: ModImplDe
   while ii < m.prog.impls.len() {
     let sig_idx: i32 = decl_impl_sig_idx.get(ii);
     if sig_idx != -1 {
-      let method_decl_index: Vec[ImplMethodDeclIndexEntry] = method_decl_indexes.get(ii);
+      let sig_to_decl: Vec[i32] = method_sig_decl_idx.get(ii);
       let isg: tc.ImplSig = ctx.impls.get(sig_idx);
       let mut mi: i32 = 0;
       while mi < isg.methods.len() {
@@ -459,7 +470,7 @@ fn build_generic_find_module_index(ctx: tc.Ctx, m: tc.WorldModule, mx: ModImplDe
                 },
               }, ins);
             } else {
-              let mdi: i32 = find_impl_method_decl_idx_from_index(method_decl_index, ms.name);
+              let mdi: i32 = sig_to_decl.get(mi);
               if mdi != -1 {
                 let ins: i32 = 0 - (pos + 1);
                 seen_names = insert_str_sorted_at(seen_names, ms.lowered_name, ins);
@@ -488,8 +499,6 @@ fn build_generic_find_module_index(ctx: tc.Ctx, m: tc.WorldModule, mx: ModImplDe
   }
 
   return GenericFindModuleIndex {
-    decl_impl_sig_idx: decl_impl_sig_idx,
-    method_decl_indexes: method_decl_indexes,
     generic_name_index: generic_name_index,
   };
 }
@@ -604,7 +613,7 @@ fn find_mod_idx_cached(mod_index: Vec[ModIndexEntry], path: String, cache0: Vec[
 }
 
 fn empty_generic_find_module_index() -> GenericFindModuleIndex {
-  return GenericFindModuleIndex { decl_impl_sig_idx: Vec(), method_decl_indexes: Vec(), generic_name_index: Vec() };
+  return GenericFindModuleIndex { generic_name_index: Vec() };
 }
 
 fn ensure_generic_find_index_cache_by_mod_len(cache0: Vec[GenericFindIndexCacheByModEntry], need_len: i32) -> Vec[GenericFindIndexCacheByModEntry] {
@@ -950,7 +959,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
     while ii < m.prog.impls.len() {
       let sig_idx: i32 = mod_impl_ix.decl_impl_sig_idx.get(ii);
       if sig_idx < 0 { return err0(p, "missing impl signature"); }
-      let method_decl_index: Vec[ImplMethodDeclIndexEntry] = mod_impl_ix.method_decl_indexes.get(ii);
+      let sig_to_decl: Vec[i32] = mod_impl_ix.method_sig_decl_idx.get(ii);
       let ir0: FindImplSigResult = FindImplSigResult { found: true, idx: sig_idx, sig: ctx.impls.get(sig_idx) };
 
       let mut msi: i32 = 0;
@@ -962,7 +971,7 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         }
         let mut mdi: i32 = -1;
         if !mr0.from_default {
-          mdi = find_impl_method_decl_idx_from_index(method_decl_index, mr0.name);
+          mdi = sig_to_decl.get(msi);
           if mdi == -1 { return err0(p, "missing impl method decl"); }
         }
         tasks.push(FuncTask {
