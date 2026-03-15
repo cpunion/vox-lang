@@ -42,6 +42,7 @@ pub struct Ctx {
   pub enum_lookup_index: Vec[SymLookupIndexEntry],
   pub trait_lookup_index: Vec[SymLookupIndexEntry],
   pub async_fn_lookup_index: Vec[SymLookupIndexEntry],
+  pub type_alias_lookup_index: Vec[SymLookupIndexEntry],
   pub const_lookup_index: Vec[SymLookupIndexEntry],
   pub static_lookup_index: Vec[SymLookupIndexEntry],
   pub impl_trait_lookup_index: Vec[SymLookupIndexEntry],
@@ -52,6 +53,7 @@ pub struct Ctx {
   pub enum_lookup_index_src_len: i32,
   pub trait_lookup_index_src_len: i32,
   pub async_fn_lookup_index_src_len: i32,
+  pub type_alias_lookup_index_src_len: i32,
   pub const_lookup_index_src_len: i32,
   pub static_lookup_index_src_len: i32,
   pub impl_trait_lookup_index_src_len: i32,
@@ -236,6 +238,21 @@ fn build_async_fn_lookup_index(asigs: Vec[AsyncFnSig]) -> Vec[SymLookupIndexEntr
   return sym_lookup_index_unique_sorted(sym_lookup_index_sort_by_key_and_idx(ws));
 }
 
+fn build_type_alias_lookup_index(asigs: Vec[TypeAliasSig]) -> Vec[SymLookupIndexEntry] {
+  let mut ws: Vec[SymLookupIndexEntry] = Vec();
+  let mut i: i32 = 0;
+  while i < asigs.len() {
+    let a: TypeAliasSig = asigs.get(i);
+    ws.push(SymLookupIndexEntry {
+      mod_path: sym_lookup_norm_mod_path(a.mod_path),
+      name: a.name,
+      idx: i,
+    });
+    i = i + 1;
+  }
+  return sym_lookup_index_unique_sorted(sym_lookup_index_sort_by_key_and_idx(ws));
+}
+
 fn build_const_lookup_index(cs: Vec[ConstSig]) -> Vec[SymLookupIndexEntry] {
   let mut ws: Vec[SymLookupIndexEntry] = Vec();
   let mut i: i32 = 0;
@@ -397,6 +414,7 @@ pub fn ctx_rebuild_sym_lookup_indexes(ctx0: Ctx) -> Ctx {
   c.enum_lookup_index = build_enum_lookup_index(c.enums);
   c.trait_lookup_index = build_trait_lookup_index(c.traits);
   c.async_fn_lookup_index = build_async_fn_lookup_index(c.async_fns);
+  c.type_alias_lookup_index = build_type_alias_lookup_index(c.type_aliases);
   c.const_lookup_index = build_const_lookup_index(c.consts);
   c.static_lookup_index = build_static_lookup_index(c.statics);
   c.impl_trait_lookup_index = build_impl_trait_lookup_index(c.impls);
@@ -407,6 +425,7 @@ pub fn ctx_rebuild_sym_lookup_indexes(ctx0: Ctx) -> Ctx {
   c.enum_lookup_index_src_len = c.enums.len();
   c.trait_lookup_index_src_len = c.traits.len();
   c.async_fn_lookup_index_src_len = c.async_fns.len();
+  c.type_alias_lookup_index_src_len = c.type_aliases.len();
   c.const_lookup_index_src_len = c.consts.len();
   c.static_lookup_index_src_len = c.statics.len();
   c.impl_trait_lookup_index_src_len = c.impls.len();
@@ -574,6 +593,7 @@ pub fn new_ctx_with_target(bits0: i32, target_os0: String, target_arch0: String)
     enum_lookup_index: Vec(),
     trait_lookup_index: Vec(),
     async_fn_lookup_index: Vec(),
+    type_alias_lookup_index: Vec(),
     const_lookup_index: Vec(),
     static_lookup_index: Vec(),
     impl_trait_lookup_index: Vec(),
@@ -584,6 +604,7 @@ pub fn new_ctx_with_target(bits0: i32, target_os0: String, target_arch0: String)
     enum_lookup_index_src_len: 0,
     trait_lookup_index_src_len: 0,
     async_fn_lookup_index_src_len: 0,
+    type_alias_lookup_index_src_len: 0,
     const_lookup_index_src_len: 0,
     static_lookup_index_src_len: 0,
     impl_trait_lookup_index_src_len: 0,
@@ -702,11 +723,20 @@ pub struct ResolveTyResult { pub ctx: Ctx, pub ok: bool, pub idx: i32 }
 
 pub struct TypeBind { pub name: String, pub ty: i32 }
 
-fn find_type_alias(type_aliases: Vec[TypeAliasSig], mod_path: String, name: String) -> TypeAliasSig {
+fn find_type_alias(ctx: Ctx, mod_path: String, name: String) -> TypeAliasSig {
+  let asigs: Vec[TypeAliasSig] = ctx.type_aliases;
+  let want_mod_path: String = sym_lookup_norm_mod_path(mod_path);
+  if ctx.type_alias_lookup_index_src_len == asigs.len() && ctx.type_alias_lookup_index.len() > 0 {
+    let idx: i32 = sym_lookup_index_find_ctx(ctx.type_alias_lookup_index, want_mod_path, name);
+    if idx != -1 {
+      return asigs.get(idx);
+    }
+    return TypeAliasSig { mod_path: "", name: "", vis: ast.vis_private(), is_pub: false, ty: -1 };
+  }
   let mut i: i32 = 0;
-  while i < type_aliases.len() {
-    let a: TypeAliasSig = type_aliases.get(i);
-    if a.mod_path == mod_path && a.name == name { return a; }
+  while i < asigs.len() {
+    let a: TypeAliasSig = asigs.get(i);
+    if sym_lookup_norm_mod_path(a.mod_path) == want_mod_path && a.name == name { return a; }
     i = i + 1;
   }
   return TypeAliasSig { mod_path: "", name: "", vis: ast.vis_private(), is_pub: false, ty: -1 };
@@ -1432,7 +1462,7 @@ fn resolve_type_bound(ctx: Ctx, w: World, cur_mod: String, imps: Imports, type_p
     return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad };
   }
   // Type aliases (type-only).
-  let ta: TypeAliasSig = find_type_alias(c.type_aliases, mod_path, name);
+  let ta: TypeAliasSig = find_type_alias(c, mod_path, name);
   if ta.name != "" {
     if tn.args.len() != 0 { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
     if !vis_allows(ta.vis, mod_path, cur_mod) { return ResolveTyResult { ctx: c, ok: false, idx: c.ty_bad }; }
