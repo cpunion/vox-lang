@@ -46,7 +46,7 @@ pub struct Ctx {
   pub const_lookup_index: Vec[SymLookupIndexEntry],
   pub static_lookup_index: Vec[SymLookupIndexEntry],
   pub impl_trait_lookup_index: Vec[SymLookupIndexEntry],
-  pub impl_method_lookup_index: Vec[SymLookupIndexEntry],
+  pub impl_method_lookup_index: Vec[ImplMethodLookupIndexEntry],
   pub trait_method_lookup_index: Vec[TraitMethodLookupIndexEntry],
   pub func_lookup_index_src_len: i32,
   pub struct_lookup_index_src_len: i32,
@@ -72,6 +72,12 @@ pub struct TraitMethodLookupIndexEntry {
   pub trait_name: String,
   pub method_name: String,
   pub trait_idx: i32,
+  pub method_idx: i32,
+}
+
+pub struct ImplMethodLookupIndexEntry {
+  pub method_name: String,
+  pub impl_idx: i32,
   pub method_idx: i32,
 }
 
@@ -300,8 +306,49 @@ fn build_impl_trait_lookup_index(isigs: Vec[ImplSig]) -> Vec[SymLookupIndexEntry
   return sym_lookup_index_sort_by_key_and_idx(ws);
 }
 
-fn build_impl_method_lookup_index(isigs: Vec[ImplSig]) -> Vec[SymLookupIndexEntry] {
-  let mut ws: Vec[SymLookupIndexEntry] = Vec();
+fn impl_method_lookup_entry_less(a: ImplMethodLookupIndexEntry, b: ImplMethodLookupIndexEntry) -> bool {
+  if a.method_name < b.method_name { return true; }
+  if a.method_name > b.method_name { return false; }
+  if a.impl_idx < b.impl_idx { return true; }
+  if a.impl_idx > b.impl_idx { return false; }
+  return a.method_idx < b.method_idx;
+}
+
+fn impl_method_lookup_index_sort(xs0: Vec[ImplMethodLookupIndexEntry]) -> Vec[ImplMethodLookupIndexEntry] {
+  let mut xs: Vec[ImplMethodLookupIndexEntry] = xs0;
+  if xs.len() < 2 { return xs; }
+  let mut already_sorted: bool = true;
+  let mut si: i32 = 1;
+  while si < xs.len() {
+    if impl_method_lookup_entry_less(xs.get(si), xs.get(si - 1)) {
+      already_sorted = false;
+      break;
+    }
+    si = si + 1;
+  }
+  if already_sorted { return xs; }
+  let mut gap: i32 = xs.len() / 2;
+  while gap > 0 {
+    let mut i: i32 = gap;
+    while i < xs.len() {
+      let keep: ImplMethodLookupIndexEntry = xs.get(i);
+      let mut j: i32 = i;
+      while j >= gap {
+        let prev: ImplMethodLookupIndexEntry = xs.get(j - gap);
+        if !impl_method_lookup_entry_less(keep, prev) { break; }
+        xs.set(j, prev);
+        j = j - gap;
+      }
+      xs.set(j, keep);
+      i = i + 1;
+    }
+    gap = gap / 2;
+  }
+  return xs;
+}
+
+fn build_impl_method_lookup_index(isigs: Vec[ImplSig]) -> Vec[ImplMethodLookupIndexEntry] {
+  let mut ws: Vec[ImplMethodLookupIndexEntry] = Vec();
   let mut i: i32 = 0;
   while i < isigs.len() {
     let isg: ImplSig = isigs.get(i);
@@ -309,17 +356,17 @@ fn build_impl_method_lookup_index(isigs: Vec[ImplSig]) -> Vec[SymLookupIndexEntr
       let mut mi: i32 = 0;
       while mi < isg.methods.len() {
         let m: ImplMethodSig = isg.methods.get(mi);
-        ws.push(SymLookupIndexEntry {
-          mod_path: "",
-          name: m.name,
-          idx: i,
+        ws.push(ImplMethodLookupIndexEntry {
+          method_name: m.name,
+          impl_idx: i,
+          method_idx: mi,
         });
         mi = mi + 1;
       }
     }
     i = i + 1;
   }
-  return sym_lookup_index_sort_by_key_and_idx(ws);
+  return impl_method_lookup_index_sort(ws);
 }
 
 fn trait_method_lookup_entry_less(a: TraitMethodLookupIndexEntry, b: TraitMethodLookupIndexEntry) -> bool {

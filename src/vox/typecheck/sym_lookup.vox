@@ -339,12 +339,22 @@ fn impl_method_index_range(ctx: Ctx, name: String) -> ImplTraitIndexRange {
   if ctx.impl_method_lookup_index_src_len != ctx.impls.len() || ctx.impl_method_lookup_index.len() == 0 {
     return ImplTraitIndexRange { use_index: false, lo: 0, hi: 0 };
   }
-  let xs: Vec[SymLookupIndexEntry] = ctx.impl_method_lookup_index;
-  let lo: i32 = impl_trait_index_lower_bound(xs, "", name);
+  let xs: Vec[ImplMethodLookupIndexEntry] = ctx.impl_method_lookup_index;
+  let mut lo: i32 = 0;
+  let mut hi0: i32 = xs.len();
+  while lo < hi0 {
+    let mid: i32 = lo + (hi0 - lo) / 2;
+    let e0: ImplMethodLookupIndexEntry = xs.get(mid);
+    if e0.method_name < name {
+      lo = mid + 1;
+    } else {
+      hi0 = mid;
+    }
+  }
   let mut hi: i32 = lo;
   while hi < xs.len() {
-    let e: SymLookupIndexEntry = xs.get(hi);
-    if e.mod_path != "" || e.name != name { break; }
+    let e: ImplMethodLookupIndexEntry = xs.get(hi);
+    if e.method_name != name { break; }
     hi = hi + 1;
   }
   return ImplTraitIndexRange { use_index: true, lo: lo, hi: hi };
@@ -824,12 +834,12 @@ pub fn find_trait_dispatch_method(ctx: Ctx, cur_mod: String, recv_ty: i32, name:
   let mut out_m: ImplMethodSig = empty_impl_method_sig();
 
   let r: ImplTraitIndexRange = impl_method_index_range(ctx, name);
-  let xs: Vec[SymLookupIndexEntry] = ctx.impl_method_lookup_index;
+  let xs: Vec[ImplMethodLookupIndexEntry] = ctx.impl_method_lookup_index;
   let mut i: i32 = if r.use_index { r.lo } else { 0 };
   while true {
     let idx: i32 = if r.use_index {
       if i >= r.hi { break; }
-      xs.get(i).idx
+      xs.get(i).impl_idx
     } else {
       if i >= ctx.impls.len() { break; }
       i
@@ -845,7 +855,12 @@ pub fn find_trait_dispatch_method(ctx: Ctx, cur_mod: String, recv_ty: i32, name:
     }
     let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
     if !ur.ok { i = i + 1; continue; }
-    let mf: FindImplMethodResult = find_impl_method(isg, name);
+    let mf: FindImplMethodResult = if r.use_index {
+      let me: ImplMethodLookupIndexEntry = xs.get(i);
+      FindImplMethodResult { found: true, m: isg.methods.get(me.method_idx) }
+    } else {
+      find_impl_method(isg, name)
+    };
     if !mf.found { i = i + 1; continue; }
     let mut bounds_ok: bool = true;
     let mut bi: i32 = 0;
@@ -941,12 +956,12 @@ pub fn find_inherent_dispatch_method(ctx: Ctx, recv_ty: i32, name: String) -> Fi
   let mut out_m: ImplMethodSig = empty_impl_method_sig();
 
   let r: ImplTraitIndexRange = impl_method_index_range(ctx, name);
-  let xs: Vec[SymLookupIndexEntry] = ctx.impl_method_lookup_index;
+  let xs: Vec[ImplMethodLookupIndexEntry] = ctx.impl_method_lookup_index;
   let mut i: i32 = if r.use_index { r.lo } else { 0 };
   while true {
     let idx: i32 = if r.use_index {
       if i >= r.hi { break; }
-      xs.get(i).idx
+      xs.get(i).impl_idx
     } else {
       if i >= ctx.impls.len() { break; }
       i
@@ -959,7 +974,12 @@ pub fn find_inherent_dispatch_method(ctx: Ctx, recv_ty: i32, name: String) -> Fi
     if !isg.is_inherent || isg.is_negative { i = i + 1; continue; }
     let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
     if !ur.ok { i = i + 1; continue; }
-    let mf: FindImplMethodResult = find_impl_method(isg, name);
+    let mf: FindImplMethodResult = if r.use_index {
+      let me: ImplMethodLookupIndexEntry = xs.get(i);
+      FindImplMethodResult { found: true, m: isg.methods.get(me.method_idx) }
+    } else {
+      find_impl_method(isg, name)
+    };
     if !mf.found { i = i + 1; continue; }
 
     let mut bounds_ok: bool = true;
