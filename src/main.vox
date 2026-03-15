@@ -2521,6 +2521,27 @@ fn replace_file_host_from_tmp(tmp_out: String, dst: String, trace: bool) -> bool
   return move_file_host(src, dst_out, trace);
 }
 
+fn publish_staged_artifact(stage_out: String, dst: String, trace: bool) -> bool {
+  if stage_out == dst { return true; }
+  if replace_file_host_from_tmp(stage_out, dst, trace) { return true; }
+  let mut src: String = stage_out;
+  if !fs.exists(src) && fs.exists(stage_out.concat(".exe")) {
+    src = stage_out.concat(".exe");
+  }
+  if !fs.exists(src) { return false; }
+  return copy_file_host(src, dst, trace);
+}
+
+fn publish_staged_artifact_keep_source(stage_out: String, dst: String, trace: bool) -> bool {
+  if stage_out == dst { return true; }
+  let mut src: String = stage_out;
+  if !fs.exists(src) && fs.exists(stage_out.concat(".exe")) {
+    src = stage_out.concat(".exe");
+  }
+  if !fs.exists(src) { return false; }
+  return copy_file_host(src, dst, trace);
+}
+
 fn cmd_lsp(trace: bool) -> i32 {
   let root: String = stage1_root();
   let p0: String = path_join(path_join(root, "tools"), "lsp/server.mjs");
@@ -4411,6 +4432,10 @@ fn main() -> i32 {
     let mut cpath: String = "";
     let mut obj: String = "";
     let mut bin: String = "";
+    let mut build_out: String = "";
+    let mut build_cpath: String = "";
+    let mut build_obj: String = "";
+    let mut build_bin: String = "";
     let mut tests_for_nocache: Vec[String] = Vec();
     let mut sem_cache_hit: bool = false;
     let mut sem_key_from_obj_ref: bool = false;
@@ -4424,6 +4449,10 @@ fn main() -> i32 {
       cpath = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), test_build_key).concat(".c");
       obj = path_join(path_join(path_join("target", "cache"), "test-pkg-obj-v1"), test_build_key).concat(test_obj_ext);
       bin = test_cache_out;
+      build_out = test_cache_out;
+      build_cpath = cpath;
+      build_obj = obj;
+      build_bin = bin;
     } else {
       let mut tni: i32 = 0;
       while tni < tests.len() {
@@ -4443,6 +4472,10 @@ fn main() -> i32 {
       cpath = test_cache_out.concat(".c");
       obj = test_cache_out.concat(test_obj_ext);
       bin = test_cache_out;
+      build_out = test_cache_out;
+      build_cpath = cpath;
+      build_obj = obj;
+      build_bin = bin;
     }
     let total_tests: i32 = tests.len();
     let mut tests_for_json_report: Vec[String] = Vec();
@@ -4646,6 +4679,28 @@ fn main() -> i32 {
       print_profile_cache_prep_summary("test", test_keys_ns, test_probe_ns, test_qshadow_ns);
     }
     if !cache_hit {
+      if cache_enabled {
+        let mut tests_for_stage: Vec[String] = Vec();
+        let mut tsi: i32 = 0;
+        while tsi < tests.len() {
+          tests_for_stage.push(tests.get(tsi));
+          tsi = tsi + 1;
+        }
+        let staged_out: String =
+          test_cache_stage_out_path(
+            test_cache_out,
+            tests_for_stage,
+            test_module_pat,
+            test_run_pat,
+            test_filter,
+            test_rerun_failed,
+            if test_rerun_failed { prev_failed_count } else { 0 },
+          );
+        build_out = staged_out;
+        build_bin = staged_out;
+        build_cpath = if cache_c_hit { cpath } else { staged_out.concat(".c") };
+        build_obj = if cache_obj_hit { obj } else { staged_out.concat(test_obj_ext) };
+      }
       if !cache_obj_hit {
         if !cache_c_hit {
           tests_for_compile = Vec();
@@ -4730,15 +4785,15 @@ fn main() -> i32 {
             print("[profile] test-compile codegen: ".concat(format_duration_ns(codegen_ns)).concat("\n"));
           }
 
-          fs.mkdir_p(dir_name(cpath));
-          fs.write_string(cpath, r.c);
-          if emit_c_enabled && emit_c_path != "" && emit_c_path != cpath {
+          fs.mkdir_p(dir_name(build_cpath));
+          fs.write_string(build_cpath, r.c);
+          if emit_c_enabled && emit_c_path != "" && emit_c_path != build_cpath {
             fs.mkdir_p(dir_name(emit_c_path));
             fs.write_string(emit_c_path, r.c);
           }
         }
 
-        fs.mkdir_p(dir_name(obj));
+        fs.mkdir_p(dir_name(build_obj));
         let cc_obj_tflags: String =
           cc_target_flags_for_target(
             cc_test_cmd,
@@ -4748,14 +4803,14 @@ fn main() -> i32 {
             target_arch.slice(0, target_arch.len()),
             target_triple.slice(0, target_triple.len()),
           );
-        let obj_tmp: String = tmp_artifact_path(obj);
+        let obj_tmp: String = tmp_artifact_path(build_obj);
         let cc_obj_cmdline: String =
           if cc_test_use_msvc {
             let mut cmd: String = cc_test_cmd;
             cmd = cmd.concat(" /nologo /TC /std:c11 /Od");
             cmd = cmd.concat(cc_debug_flags(true));
             cmd = cmd.concat(" /c ");
-            cmd = cmd.concat(cpath);
+            cmd = cmd.concat(build_cpath);
             cmd = cmd.concat(" /Fo:");
             cmd = cmd.concat(obj_tmp);
             cmd
@@ -4766,7 +4821,7 @@ fn main() -> i32 {
             cmd = cmd.concat(cc_debug_flags(false));
             cmd = cmd.concat(cc_common_flags_for_target(target_os.slice(0, target_os.len()), false));
             cmd = cmd.concat(" -c ");
-            cmd = cmd.concat(cpath);
+            cmd = cmd.concat(build_cpath);
             cmd = cmd.concat(" -o ");
             cmd = cmd.concat(obj_tmp);
             cmd
@@ -4780,13 +4835,13 @@ fn main() -> i32 {
           print("cc exit: ".concat(cc_obj_code.to_string()).concat("\n"));
           return 1;
         }
-        if !replace_file_host_from_tmp(obj_tmp, obj, trace_exec) {
-          print("test cc artifact replace failed: ".concat(obj_tmp).concat(" -> ").concat(obj).concat("\n"));
+        if !replace_file_host_from_tmp(obj_tmp, build_obj, trace_exec) {
+          print("test cc artifact replace failed: ".concat(obj_tmp).concat(" -> ").concat(build_obj).concat("\n"));
           return 1;
         }
       }
 
-      fs.mkdir_p(dir_name(bin));
+      fs.mkdir_p(dir_name(build_bin));
       let link_tflags: String =
         cc_target_flags_for_target(
           cc_test_cmd,
@@ -4796,12 +4851,12 @@ fn main() -> i32 {
           target_arch.slice(0, target_arch.len()),
           target_triple.slice(0, target_triple.len()),
         );
-      let bin_tmp: String = tmp_artifact_path(bin);
+      let bin_tmp: String = tmp_artifact_path(build_bin);
       let link_cmdline: String =
         if cc_test_use_msvc {
           let mut cmd: String = cc_test_cmd;
           cmd = cmd.concat(" /nologo ");
-          cmd = cmd.concat(obj);
+          cmd = cmd.concat(build_obj);
           cmd = cmd.concat(" /Fe:");
           cmd = cmd.concat(bin_tmp);
           cmd = cmd.concat(cc_link_flags_for_target(target_os.slice(0, target_os.len()), target_abi.slice(0, target_abi.len()), true, "exe"));
@@ -4810,7 +4865,7 @@ fn main() -> i32 {
           let mut cmd: String = cc_test_cmd;
           cmd = cmd.concat(link_tflags);
           cmd = cmd.concat(" ");
-          cmd = cmd.concat(obj);
+          cmd = cmd.concat(build_obj);
           cmd = cmd.concat(" -o ");
           cmd = cmd.concat(bin_tmp);
           cmd = cmd.concat(cc_link_flags_for_target(target_os.slice(0, target_os.len()), target_abi.slice(0, target_abi.len()), false, "exe"));
@@ -4825,9 +4880,23 @@ fn main() -> i32 {
         print("link exit: ".concat(link_code.to_string()).concat("\n"));
         return 1;
       }
-      if !replace_file_host_from_tmp(bin_tmp, bin, trace_exec) {
-        print("test link artifact replace failed: ".concat(bin_tmp).concat(" -> ").concat(bin).concat("\n"));
+      if !replace_file_host_from_tmp(bin_tmp, build_bin, trace_exec) {
+        print("test link artifact replace failed: ".concat(bin_tmp).concat(" -> ").concat(build_bin).concat("\n"));
         return 1;
+      }
+      if cache_enabled {
+        if !publish_staged_artifact(build_cpath, cpath, trace_exec) {
+          print("test staged C publish failed: ".concat(build_cpath).concat(" -> ").concat(cpath).concat("\n"));
+          return 1;
+        }
+        if !publish_staged_artifact(build_obj, obj, trace_exec) {
+          print("test staged obj publish failed: ".concat(build_obj).concat(" -> ").concat(obj).concat("\n"));
+          return 1;
+        }
+        if !publish_staged_artifact_keep_source(build_bin, bin, trace_exec) {
+          print("test staged bin publish failed: ".concat(build_bin).concat(" -> ").concat(bin).concat("\n"));
+          return 1;
+        }
       }
       if cache_enabled && (!cache_c_hit || cache_reused_sem_c) {
         tests = write_test_build_cache_with_tests(test_cache_out, test_build_key, tests);
@@ -4932,7 +5001,7 @@ fn main() -> i32 {
         let tag: String = qi.to_string().concat("_").concat(launch_seq.to_string());
         let rc_file: String = path_join(run_dir, "job_".concat(tag).concat(".rc"));
         let log_file: String = path_join(run_dir, "job_".concat(tag).concat(".log"));
-        let bin_exec: String = shell_exec_path(bin);
+        let bin_exec: String = shell_exec_path(build_bin);
         let mut cmd_head: String = shell_quote(bin_exec).concat(" ").concat(shell_quote(name));
         let mut cmd_head_win: String = bin_exec.concat(" ").concat(name);
         let trimmed_runner_cmd: String = txt.trim_space(test_runner_cmd);
