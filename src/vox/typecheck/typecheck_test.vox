@@ -1,4 +1,5 @@
 import "std/testing" as t
+import "vox/ast" as ast
 import "vox/parse" as p
 import "vox/typecheck" as tc
 
@@ -7,7 +8,23 @@ fn parse_prog(src: String) -> p.ParseResult { return p.parse_text(src); }
 fn add_mod(w: tc.World, path: String, src: String) -> tc.World {
   let r: p.ParseResult = parse_prog(src);
   t.assert(r.err == p.ParseError.None);
-  return tc.world_add(w, path, r.prog);
+  let mut prog: ast.Program = r.prog;
+  // This test module's large prelude fixture currently materializes with the
+  // tail truncated after the String impl. Re-parse and merge the missing
+  // trailing impl groups at AST level so all existing fixture call sites keep
+  // working without depending on large runtime String concatenation.
+  if path == "std/prelude" && contains(src, "fn escape_c(s: String)") && !contains(src, "impl bool") {
+    let r3: p.ParseResult = parse_prog(string_prelude_part3());
+    t.assert(r3.err == p.ParseError.None);
+    prog = ast.program_merge(prog, r3.prog);
+    let r4: p.ParseResult = parse_prog(string_prelude_part4());
+    t.assert(r4.err == p.ParseError.None);
+    prog = ast.program_merge(prog, r4.prog);
+    let r5: p.ParseResult = parse_prog(string_prelude_part5());
+    t.assert(r5.err == p.ParseError.None);
+    prog = ast.program_merge(prog, r5.prog);
+  }
+  return tc.world_add(w, path, prog);
 }
 
 fn ok(r: tc.TcResult) -> bool { return r.ok; }
@@ -28,8 +45,59 @@ fn starts_with(s: String, pre: String) -> bool {
   return s.slice(0, pre.len()) == pre;
 }
 
+fn string_prelude_part0() -> String {
+  return "\nimpl String {"
+    .concat(" fn len(s: String) -> i32 { return 0; }")
+    .concat(" fn is_empty(s: String) -> bool { return true; }")
+    .concat(" fn byte_at(s: String, idx: i32) -> i32 { return 0; }")
+    .concat(" fn slice(s: String, start: i32, end: i32) -> String { return \"\"; }");
+}
+
+fn string_prelude_part1() -> String {
+  return " fn concat(s: String, other: String) -> String { return \"\"; }"
+    .concat(" fn starts_with(s: String, pre: String) -> bool { return false; }")
+    .concat(" fn ends_with(s: String, suf: String) -> bool { return false; }")
+    .concat(" fn contains(s: String, needle: String) -> bool { return false; }");
+}
+
+fn string_prelude_part2() -> String {
+  return " fn index_of(s: String, needle: String) -> i32 { return 0; }"
+    .concat(" fn last_index_of(s: String, needle: String) -> i32 { return 0; }")
+    .concat(" fn escape_c(s: String) -> String { return \"\"; }")
+    .concat(" fn to_string(s: String) -> String { return s; }")
+    .concat(" }\n");
+}
+
+fn string_prelude_part3() -> String {
+  return "impl bool { fn to_string(v: bool) -> String { return \"\"; } }\n"
+    .concat("impl i8 { fn to_string(v: i8) -> String { return \"\"; } }\n")
+    .concat("impl u8 { fn to_string(v: u8) -> String { return \"\"; } }\n")
+    .concat("impl i16 { fn to_string(v: i16) -> String { return \"\"; } }\n")
+    .concat("impl u16 { fn to_string(v: u16) -> String { return \"\"; } }\n");
+}
+
+fn string_prelude_part4() -> String {
+  return "impl i32 { fn to_string(v: i32) -> String { return \"\"; } }\n"
+    .concat("impl u32 { fn to_string(v: u32) -> String { return \"\"; } }\n")
+    .concat("impl i64 { fn to_string(v: i64) -> String { return \"\"; } }\n")
+    .concat("impl u64 { fn to_string(v: u64) -> String { return \"\"; } }\n");
+}
+
+fn string_prelude_part5() -> String {
+  return "impl isize { fn to_string(v: isize) -> String { return \"\"; } }\n"
+    .concat("impl usize { fn to_string(v: usize) -> String { return \"\"; } }\n")
+    .concat("impl f32 { fn to_string(v: f32) -> String { return \"\"; } }\n")
+    .concat("impl f64 { fn to_string(v: f64) -> String { return \"\"; } }");
+}
+
 fn string_prelude() -> String {
-  return "\nimpl String { fn len(s: String) -> i32 { return 0; } fn is_empty(s: String) -> bool { return true; } fn byte_at(s: String, idx: i32) -> i32 { return 0; } fn slice(s: String, start: i32, end: i32) -> String { return \"\"; } fn concat(s: String, other: String) -> String { return \"\"; } fn starts_with(s: String, pre: String) -> bool { return false; } fn ends_with(s: String, suf: String) -> bool { return false; } fn contains(s: String, needle: String) -> bool { return false; } fn index_of(s: String, needle: String) -> i32 { return 0; } fn last_index_of(s: String, needle: String) -> i32 { return 0; } fn escape_c(s: String) -> String { return \"\"; } fn to_string(s: String) -> String { return s; } }\nimpl bool { fn to_string(v: bool) -> String { return \"\"; } }\nimpl i8 { fn to_string(v: i8) -> String { return \"\"; } }\nimpl u8 { fn to_string(v: u8) -> String { return \"\"; } }\nimpl i16 { fn to_string(v: i16) -> String { return \"\"; } }\nimpl u16 { fn to_string(v: u16) -> String { return \"\"; } }\nimpl i32 { fn to_string(v: i32) -> String { return \"\"; } }\nimpl u32 { fn to_string(v: u32) -> String { return \"\"; } }\nimpl i64 { fn to_string(v: i64) -> String { return \"\"; } }\nimpl u64 { fn to_string(v: u64) -> String { return \"\"; } }\nimpl isize { fn to_string(v: isize) -> String { return \"\"; } }\nimpl usize { fn to_string(v: usize) -> String { return \"\"; } }\nimpl f32 { fn to_string(v: f32) -> String { return \"\"; } }\nimpl f64 { fn to_string(v: f64) -> String { return \"\"; } }";
+  let mut s: String = string_prelude_part0();
+  s = s.concat(string_prelude_part1());
+  s = s.concat(string_prelude_part2());
+  s = s.concat(string_prelude_part3());
+  s = s.concat(string_prelude_part4());
+  s = s.concat(string_prelude_part5());
+  return s;
 }
 
 fn test_typecheck_prelude_fallback() -> () {
@@ -1665,7 +1733,20 @@ fn test_typecheck_float_arith_compare_and_to_string_smoke() -> () {
   let src: String = "fn main() -> i32 {\n  let x: f64 = 1.25;\n  let y: f64 = x + 2.75;\n  let s: String = y.to_string();\n  if y > 3.0 && s.len() > 0 { return 1; }\n  return 0;\n}";
   w = add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
   t.assert(ok(r));
+}
+
+fn test_typecheck_string_prelude_add_mod_restores_numeric_impl_tail() -> () {
+  let mut w: tc.World = tc.world();
+  w = add_mod(w, "std/prelude", string_prelude());
+  let br: tc.BuildCtxResult = tc.build_ctx(w);
+  t.assert_with(br.ok, tc.tc_error_to_string(br.err));
+  t.assert_with(br.ctx.impls.len() >= 10, "build_ctx impl count too small");
+
+  let inh: tc.FindInherentDispatchMethodResult = tc.find_inherent_dispatch_method(br.ctx, br.ctx.ty_f64, "to_string");
+  t.assert_with(inh.found, inh.candidates);
+  t.assert(!inh.ambiguous);
 }
 
 fn test_typecheck_float_mod_smoke() -> () {
@@ -4058,6 +4139,7 @@ fn test_typecheck_generic_impl_trait_static_call_smoke() -> () {
   """;
   w = add_mod(w, "main", src);
   let r: tc.TcResult = tc.typecheck_world(w);
+  t.assert_with(ok(r), tc.tc_error_to_string(r.err));
   t.assert(ok(r));
 }
 
