@@ -1190,6 +1190,35 @@ fn call_move_slots_from_sig(sig: FuncSig, arg_exprs: Vec[i32]) -> CallMoveSlotsR
   return call_move_slots_ok(out);
 }
 
+fn call_move_slots_from_sig_with_recv(sig: FuncSig, recv_expr: i32, arg_exprs: Vec[i32]) -> CallMoveSlotsResult {
+  let mut out: Vec[CallMoveSlot] = Vec();
+  let total_n: i32 = arg_exprs.len() + 1;
+  if !sig.has_variadic {
+    if total_n != sig.params.len() { return call_move_slots_fail(); }
+    out = call_move_slots_push(out, recv_expr, sig_param_borrow_kind(sig, 0));
+    let mut i: i32 = 0;
+    while i < arg_exprs.len() {
+      out = call_move_slots_push(out, arg_exprs.get(i), sig_param_borrow_kind(sig, i + 1));
+      i = i + 1;
+    }
+    return call_move_slots_ok(out);
+  }
+
+  if sig.params.len() == 0 { return call_move_slots_fail(); }
+  let fixed_n: i32 = sig.params.len() - 1;
+  if total_n < fixed_n { return call_move_slots_fail(); }
+
+  out = call_move_slots_push(out, recv_expr, sig_param_borrow_kind(sig, 0));
+  let mut i: i32 = 0;
+  while i < arg_exprs.len() {
+    let sig_i: i32 = i + 1;
+    let borrow_i: i32 = if sig_i < fixed_n { sig_i } else { fixed_n };
+    out = call_move_slots_push(out, arg_exprs.get(i), sig_param_borrow_kind(sig, borrow_i));
+    i = i + 1;
+  }
+  return call_move_slots_ok(out);
+}
+
 fn call_move_slots_enum_ctor(args: Vec[i32]) -> CallMoveSlotsResult {
   let mut out: Vec[CallMoveSlot] = Vec();
   let mut i: i32 = 0;
@@ -1356,40 +1385,19 @@ pub fn resolve_call_move_slots(
       if bm.cands.len() != 1 { return call_move_slots_fail(); }
       let c0: BoundMethodCand = bm.cands.get(0);
       let msig0: FuncSig = subst_self_in_sig(ctx, c0.sig, rty);
-      let mut all_args0: Vec[i32] = Vec();
-      all_args0.push(recv_id);
-      let mut aj0: i32 = 0;
-      while aj0 < args.len() {
-        all_args0.push(args.get(aj0));
-        aj0 = aj0 + 1;
-      }
-      return call_move_slots_from_sig(msig0, all_args0);
+      return call_move_slots_from_sig_with_recv(msig0, recv_id, args);
     }
 
     let inh: FindInherentDispatchMethodResult = find_inherent_dispatch_method(ctx, strip_range(ctx, rr.ty), mname);
     if inh.ambiguous { return call_move_slots_fail(); }
     if inh.found {
-      let mut all_args_inh: Vec[i32] = Vec();
-      all_args_inh.push(recv_id);
-      let mut ai_inh: i32 = 0;
-      while ai_inh < args.len() {
-        all_args_inh.push(args.get(ai_inh));
-        ai_inh = ai_inh + 1;
-      }
-      return call_move_slots_from_sig(inh.m.sig, all_args_inh);
+      return call_move_slots_from_sig_with_recv(inh.m.sig, recv_id, args);
     }
 
     let dm: FindTraitDispatchMethodResult = find_trait_dispatch_method(ctx, mod_path, strip_range(ctx, rr.ty), mname);
     if dm.ambiguous { return call_move_slots_fail(); }
     if dm.found {
-      let mut all_args: Vec[i32] = Vec();
-      all_args.push(recv_id);
-      let mut ai: i32 = 0;
-      while ai < args.len() {
-        all_args.push(args.get(ai));
-        ai = ai + 1;
-      }
-      return call_move_slots_from_sig(dm.m.sig, all_args);
+      return call_move_slots_from_sig_with_recv(dm.m.sig, recv_id, args);
     }
     return call_move_slots_fail();
   }
