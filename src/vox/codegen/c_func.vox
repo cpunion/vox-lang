@@ -1014,6 +1014,22 @@ struct SeedLivenessSummary {
   live_temps: Vec[bool],
   slot_candidates: Vec[i32],
   drop_temp_candidates: Vec[i32],
+  needs_int_const_table: bool,
+}
+
+fn instr_needs_int_const_table(ins: ir.Instr) -> bool {
+  return match ins {
+    ir.Instr.IntCastChecked(_tid, _dst_ty, _src_ty, _v) => true,
+    ir.Instr.BinOp(_tid, op, _ty, _a, _b) =>
+      match op {
+        ir.BinOpKind.Shl => true,
+        ir.BinOpKind.Shr => true,
+        ir.BinOpKind.Div => true,
+        ir.BinOpKind.Mod => true,
+        _ => false,
+      },
+    _ => false,
+  };
 }
 
 fn collect_seed_liveness_summary(pool: ir.TyPool, f: ir.Func) -> SeedLivenessSummary {
@@ -1021,12 +1037,16 @@ fn collect_seed_liveness_summary(pool: ir.TyPool, f: ir.Func) -> SeedLivenessSum
   let mut live_temps: Vec[bool] = Vec();
   let mut slot_candidates: Vec[i32] = Vec();
   let mut drop_temp_candidates: Vec[i32] = Vec();
+  let mut needs_int_const_table: bool = false;
   let mut bi: i32 = 0;
   while bi < f.blocks.len() {
     let b: ir.Block = f.blocks.get(bi);
     let mut ii: i32 = 0;
     while ii < b.instrs.len() {
       let ins: ir.Instr = b.instrs.get(ii);
+      if !needs_int_const_table && instr_needs_int_const_table(ins) {
+        needs_int_const_table = true;
+      }
       live_slots = mark_live_slot_values_from_instr(live_slots, ins);
       live_temps = mark_live_from_instr_operands(live_temps, ins);
       live_temps = match ins {
@@ -1057,6 +1077,7 @@ fn collect_seed_liveness_summary(pool: ir.TyPool, f: ir.Func) -> SeedLivenessSum
     live_temps: live_temps,
     slot_candidates: slot_candidates,
     drop_temp_candidates: drop_temp_candidates,
+    needs_int_const_table: needs_int_const_table,
   };
 }
 
@@ -3275,7 +3296,12 @@ pub fn emit_func_append_with_call_cache(
   } else {
     collect_locals(c_types, pool, f, keep_instrs, block_offsets, read_temps)
   };
-  let int_consts: TempIntConstTable = build_temp_int_const_table(pool, target_ptr_bits, f, locals.max_temp, locals.max_slot);
+  let int_consts: TempIntConstTable =
+    if seed.needs_int_const_table {
+      build_temp_int_const_table(pool, target_ptr_bits, f, locals.max_temp, locals.max_slot)
+    } else {
+      temp_int_const_table_empty()
+    };
   let slot_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.slots);
   let temp_locals: Vec[IdTy] = idty_unique_sorted_last_wins(locals.temps);
   let block_order: Vec[i32] = block_name_order(f.blocks);
