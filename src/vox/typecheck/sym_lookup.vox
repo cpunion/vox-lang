@@ -761,6 +761,13 @@ pub struct FindTraitDispatchMethodResult {
   pub m: ImplMethodSig,
 }
 
+pub struct FindTraitDispatchFuncSigResult {
+  pub found: bool,
+  pub ambiguous: bool,
+  pub impl_mod_path: String,
+  pub sig: FuncSig,
+}
+
 pub fn trait_impl_candidates_text(ctx: Ctx, trait_mod: String, trait_name: String) -> String {
   let nmax: i32 = 8;
   let mut rows: Vec[String] = Vec();
@@ -928,12 +935,132 @@ pub fn find_trait_dispatch_method(ctx: Ctx, cur_mod: String, recv_ty: i32, name:
   return FindTraitDispatchMethodResult { found: found, ambiguous: false, candidates: "", impl_mod_path: out_mod, m: out_m };
 }
 
+pub fn find_trait_dispatch_func_sig(ctx: Ctx, cur_mod: String, recv_ty: i32, name: String) -> FindTraitDispatchFuncSigResult {
+  let mut found: bool = false;
+  let mut first_trait_mod: String = "";
+  let mut first_trait: String = "";
+  let mut first_impl: ImplSig = ImplSig {
+    mod_path: "",
+    decl_idx: -1,
+    is_inherent: false,
+    is_negative: false,
+    trait_mod_path: "",
+    trait_name: "",
+    for_ty: -1,
+    head_type_params: Vec(),
+    head_type_param_bounds: Vec(),
+    head_const_where_bounds: Vec(),
+    assoc_types: Vec(),
+    methods: Vec(),
+  };
+  let mut out_mod: String = "";
+  let mut out_sig: FuncSig = empty_func_sig(-1);
+
+  let r: ImplTraitIndexRange = impl_method_index_range(ctx, name);
+  let xs: Vec[ImplMethodLookupIndexEntry] = ctx.impl_method_lookup_index;
+  let mut i: i32 = if r.use_index { r.lo } else { 0 };
+  while true {
+    let idx: i32 = if r.use_index {
+      if i >= r.hi { break; }
+      xs.get(i).impl_idx
+    } else {
+      if i >= ctx.impls.len() { break; }
+      i
+    };
+    if idx < 0 || idx >= ctx.impls.len() {
+      i = i + 1;
+      continue;
+    }
+    let isg: ImplSig = ctx.impls.get(idx);
+    if isg.is_inherent || isg.is_negative {
+      i = i + 1;
+      continue;
+    }
+    let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
+    if !ur.ok { i = i + 1; continue; }
+    let msig: FuncSig = if r.use_index {
+      let me: ImplMethodLookupIndexEntry = xs.get(i);
+      isg.methods.get(me.method_idx).sig
+    } else {
+      let mf: FindImplMethodResult = find_impl_method(isg, name);
+      if !mf.found {
+        i = i + 1;
+        continue;
+      }
+      mf.m.sig
+    };
+    let mut bounds_ok: bool = true;
+    let mut bi: i32 = 0;
+    while bi < isg.head_type_param_bounds.len() {
+      let b: TypeParamBoundSig = isg.head_type_param_bounds.get(bi);
+      let ty0: i32 = ty_sub_lookup(ur.subs, b.type_param);
+      if ty0 == -1 {
+        bounds_ok = false;
+        bi = isg.head_type_param_bounds.len();
+        continue;
+      }
+      let ty1: i32 = strip_range(ctx, ty0);
+      let key: String = impl_req_key(b.trait_mod_path, b.trait_name, ty1);
+      let mut stack0: Vec[String] = Vec();
+      stack0.push(key);
+      let fi_b: FindImplForTyResult = find_impl_for_ty_with_stack(ctx, b.trait_mod_path, b.trait_name, ty1, stack0);
+      if fi_b.ambiguous || !fi_b.found {
+        bounds_ok = false;
+        bi = isg.head_type_param_bounds.len();
+        continue;
+      }
+      bi = bi + 1;
+    }
+    if !bounds_ok { i = i + 1; continue; }
+    let cwr_h: ConstWhereCheckResult = check_const_where_bounds(ctx, isg.head_const_where_bounds, ur.subs, Vec());
+    if !cwr_h.ok { i = i + 1; continue; }
+    let tf: FindTraitResult = find_trait(ctx, isg.trait_mod_path, isg.trait_name);
+    if !tf.found { i = i + 1; continue; }
+    if !vis_allows(tf.sig.vis, isg.trait_mod_path, cur_mod) { i = i + 1; continue; }
+
+    if found {
+      if first_trait_mod == isg.trait_mod_path && first_trait == isg.trait_name {
+        let new_more: bool = impl_sig_more_specific(ctx, isg, first_impl);
+        let old_more: bool = impl_sig_more_specific(ctx, first_impl, isg);
+        if new_more && !old_more {
+          out_mod = isg.mod_path;
+          out_sig = msig;
+          first_impl = isg;
+          i = i + 1;
+          continue;
+        }
+        if old_more && !new_more {
+          i = i + 1;
+          continue;
+        }
+        return FindTraitDispatchFuncSigResult { found: false, ambiguous: true, impl_mod_path: "", sig: out_sig };
+      }
+      return FindTraitDispatchFuncSigResult { found: false, ambiguous: true, impl_mod_path: "", sig: out_sig };
+    }
+    found = true;
+    first_trait_mod = isg.trait_mod_path;
+    first_trait = isg.trait_name;
+    first_impl = isg;
+    out_mod = isg.mod_path;
+    out_sig = msig;
+    i = i + 1;
+  }
+  return FindTraitDispatchFuncSigResult { found: found, ambiguous: false, impl_mod_path: out_mod, sig: out_sig };
+}
+
 pub struct FindInherentDispatchMethodResult {
   pub found: bool,
   pub ambiguous: bool,
   pub candidates: String,
   pub impl_mod_path: String,
   pub m: ImplMethodSig,
+}
+
+pub struct FindInherentDispatchFuncSigResult {
+  pub found: bool,
+  pub ambiguous: bool,
+  pub impl_mod_path: String,
+  pub sig: FuncSig,
 }
 
 pub fn find_inherent_dispatch_method(ctx: Ctx, recv_ty: i32, name: String) -> FindInherentDispatchMethodResult {
@@ -1040,6 +1167,108 @@ pub fn find_inherent_dispatch_method(ctx: Ctx, recv_ty: i32, name: String) -> Fi
     i = i + 1;
   }
   return FindInherentDispatchMethodResult { found: found, ambiguous: false, candidates: "", impl_mod_path: out_mod, m: out_m };
+}
+
+pub fn find_inherent_dispatch_func_sig(ctx: Ctx, recv_ty: i32, name: String) -> FindInherentDispatchFuncSigResult {
+  let mut found: bool = false;
+  let mut first_impl: ImplSig = ImplSig {
+    mod_path: "",
+    decl_idx: -1,
+    is_inherent: false,
+    is_negative: false,
+    trait_mod_path: "",
+    trait_name: "",
+    for_ty: -1,
+    head_type_params: Vec(),
+    head_type_param_bounds: Vec(),
+    head_const_where_bounds: Vec(),
+    assoc_types: Vec(),
+    methods: Vec(),
+  };
+  let mut out_mod: String = "";
+  let mut out_sig: FuncSig = empty_func_sig(-1);
+
+  let r: ImplTraitIndexRange = impl_method_index_range(ctx, name);
+  let xs: Vec[ImplMethodLookupIndexEntry] = ctx.impl_method_lookup_index;
+  let mut i: i32 = if r.use_index { r.lo } else { 0 };
+  while true {
+    let idx: i32 = if r.use_index {
+      if i >= r.hi { break; }
+      xs.get(i).impl_idx
+    } else {
+      if i >= ctx.impls.len() { break; }
+      i
+    };
+    if idx < 0 || idx >= ctx.impls.len() {
+      i = i + 1;
+      continue;
+    }
+    let isg: ImplSig = ctx.impls.get(idx);
+    if !isg.is_inherent || isg.is_negative { i = i + 1; continue; }
+    let ur: UnifyResult = unify_ty(ctx, isg.for_ty, recv_ty, Vec());
+    if !ur.ok { i = i + 1; continue; }
+    let msig: FuncSig = if r.use_index {
+      let me: ImplMethodLookupIndexEntry = xs.get(i);
+      isg.methods.get(me.method_idx).sig
+    } else {
+      let mf: FindImplMethodResult = find_impl_method(isg, name);
+      if !mf.found {
+        i = i + 1;
+        continue;
+      }
+      mf.m.sig
+    };
+
+    let mut bounds_ok: bool = true;
+    let mut bi: i32 = 0;
+    while bi < isg.head_type_param_bounds.len() {
+      let b: TypeParamBoundSig = isg.head_type_param_bounds.get(bi);
+      let ty0: i32 = ty_sub_lookup(ur.subs, b.type_param);
+      if ty0 == -1 {
+        bounds_ok = false;
+        bi = isg.head_type_param_bounds.len();
+        continue;
+      }
+      let ty1: i32 = strip_range(ctx, ty0);
+      let key: String = impl_req_key(b.trait_mod_path, b.trait_name, ty1);
+      let mut stack0: Vec[String] = Vec();
+      stack0.push(key);
+      let fi_b: FindImplForTyResult = find_impl_for_ty_with_stack(ctx, b.trait_mod_path, b.trait_name, ty1, stack0);
+      if fi_b.ambiguous || !fi_b.found {
+        bounds_ok = false;
+        bi = isg.head_type_param_bounds.len();
+        continue;
+      }
+      bi = bi + 1;
+    }
+    if !bounds_ok { i = i + 1; continue; }
+    let cwr_h: ConstWhereCheckResult = check_const_where_bounds(ctx, isg.head_const_where_bounds, ur.subs, Vec());
+    if !cwr_h.ok { i = i + 1; continue; }
+
+    if found {
+      let new_more: bool = impl_sig_more_specific(ctx, isg, first_impl);
+      let old_more: bool = impl_sig_more_specific(ctx, first_impl, isg);
+      if new_more && !old_more {
+        out_mod = isg.mod_path;
+        out_sig = msig;
+        first_impl = isg;
+        i = i + 1;
+        continue;
+      }
+      if old_more && !new_more {
+        i = i + 1;
+        continue;
+      }
+      return FindInherentDispatchFuncSigResult { found: false, ambiguous: true, impl_mod_path: "", sig: out_sig };
+    }
+
+    found = true;
+    first_impl = isg;
+    out_mod = isg.mod_path;
+    out_sig = msig;
+    i = i + 1;
+  }
+  return FindInherentDispatchFuncSigResult { found: found, ambiguous: false, impl_mod_path: out_mod, sig: out_sig };
 }
 
 pub struct FindAsyncFnResult { pub found: bool, pub sig: AsyncFnSig }
