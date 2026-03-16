@@ -25,6 +25,13 @@ struct BoundMethodSearch {
   cands: Vec[BoundMethodCand],
 }
 
+struct BoundMethodQuickSearch {
+  seen_traits: Vec[String],
+  found: bool,
+  ambiguous: bool,
+  cand: BoundMethodCand,
+}
+
 fn contains_str_tc_call(xs: Vec[String], s: String) -> bool {
   let mut i: i32 = 0;
   while i < xs.len() {
@@ -1005,6 +1012,36 @@ fn search_bound_method_in_trait(ctx: Ctx, mod_path: String, trait_name: String, 
   return s;
 }
 
+fn search_bound_method_unique_in_trait(ctx: Ctx, mod_path: String, trait_name: String, method: String, s0: BoundMethodQuickSearch) -> BoundMethodQuickSearch {
+  let mut s: BoundMethodQuickSearch = s0;
+  if s.ambiguous { return s; }
+  let key: String = method_cand_key(mod_path, trait_name);
+  if contains_str_tc_call(s.seen_traits, key) { return s; }
+  s.seen_traits.push(key);
+
+  let tf: FindTraitResult = find_trait(ctx, mod_path, trait_name);
+  if !tf.found { return s; }
+  let tm: FindTraitMethodResult = find_trait_method_ctx(ctx, mod_path, trait_name, tf.sig, method);
+  if tm.found {
+    if !s.found {
+      s.found = true;
+      s.cand = BoundMethodCand { trait_mod_path: mod_path, trait_name: trait_name, sig: tm.m.sig };
+    } else if s.cand.trait_mod_path != mod_path || s.cand.trait_name != trait_name {
+      s.ambiguous = true;
+      return s;
+    }
+  }
+
+  let mut i: i32 = 0;
+  while i < tf.sig.supers.len() {
+    let sup: TraitSuperSig = tf.sig.supers.get(i);
+    s = search_bound_method_unique_in_trait(ctx, sup.mod_path, sup.name, method, s);
+    if s.ambiguous { return s; }
+    i = i + 1;
+  }
+  return s;
+}
+
 fn find_bound_trait_methods(ctx: Ctx, l0: Locals, type_param: String, method: String) -> BoundMethodSearch {
   let mut s: BoundMethodSearch = BoundMethodSearch { seen_traits: Vec(), cands: Vec() };
   let mut i: i32 = 0;
@@ -1012,6 +1049,25 @@ fn find_bound_trait_methods(ctx: Ctx, l0: Locals, type_param: String, method: St
     let b: TypeParamBoundSig = l0.type_param_bounds.get(i);
     if b.type_param == type_param {
       s = search_bound_method_in_trait(ctx, b.trait_mod_path, b.trait_name, method, s);
+    }
+    i = i + 1;
+  }
+  return s;
+}
+
+fn find_bound_trait_method_quick(ctx: Ctx, l0: Locals, type_param: String, method: String) -> BoundMethodQuickSearch {
+  let mut s: BoundMethodQuickSearch = BoundMethodQuickSearch {
+    seen_traits: Vec(),
+    found: false,
+    ambiguous: false,
+    cand: BoundMethodCand { trait_mod_path: "", trait_name: "", sig: empty_func_sig(-1) },
+  };
+  let mut i: i32 = 0;
+  while i < l0.type_param_bounds.len() {
+    let b: TypeParamBoundSig = l0.type_param_bounds.get(i);
+    if b.type_param == type_param {
+      s = search_bound_method_unique_in_trait(ctx, b.trait_mod_path, b.trait_name, method, s);
+      if s.ambiguous { return s; }
     }
     i = i + 1;
   }
@@ -1381,9 +1437,9 @@ pub fn resolve_call_move_slots(
       return call_move_slots_ok(out);
     }
     if rt.kind == ir.TyKind.Param {
-      let bm: BoundMethodSearch = find_bound_trait_methods(ctx, l0, rt.name, mname);
-      if bm.cands.len() != 1 { return call_move_slots_fail(); }
-      let c0: BoundMethodCand = bm.cands.get(0);
+      let bm: BoundMethodQuickSearch = find_bound_trait_method_quick(ctx, l0, rt.name, mname);
+      if bm.ambiguous || !bm.found { return call_move_slots_fail(); }
+      let c0: BoundMethodCand = bm.cand;
       let msig0: FuncSig = subst_self_in_sig(ctx, c0.sig, rty);
       return call_move_slots_from_sig_with_recv(msig0, recv_id, args);
     }
@@ -1743,13 +1799,14 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
       let rty: i32 = strip_range(ctx, rr.ty);
       let rt: ir.Ty = ir.ty_pool_get(ctx.pool, rty);
       if rt.kind == ir.TyKind.Param {
-        let bm: BoundMethodSearch = find_bound_trait_methods(ctx, l0, rt.name, mname);
-        if bm.cands.len() > 1 {
+        let bmq: BoundMethodQuickSearch = find_bound_trait_method_quick(ctx, l0, rt.name, mname);
+        if bmq.ambiguous {
+          let bm: BoundMethodSearch = find_bound_trait_methods(ctx, l0, rt.name, mname);
           let msg0: String = "ambiguous trait method call: ".concat(mname).concat(" (candidates: ").concat(method_cands_text(bm.cands, mname)).concat(")");
           return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg0) };
         }
-        if bm.cands.len() == 1 {
-          let c0: BoundMethodCand = bm.cands.get(0);
+        if bmq.found {
+          let c0: BoundMethodCand = bmq.cand;
           let msig0: FuncSig = subst_self_in_sig(ctx, c0.sig, rty);
           return tc_call_func_sig_with_recv(ctx, w, mod_path, imps, exprs, l0, call_sp, c0.trait_mod_path, msig0, type_args, recv_id, args, expected);
         }
