@@ -1751,11 +1751,7 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
         if bm.cands.len() == 1 {
           let c0: BoundMethodCand = bm.cands.get(0);
           let msig0: FuncSig = subst_self_in_sig(ctx, c0.sig, rty);
-          let mut all_args0: Vec[i32] = Vec();
-          all_args0.push(recv_id);
-          let mut aj: i32 = 0;
-          while aj < args.len() { all_args0.push(args.get(aj)); aj = aj + 1; }
-          return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, c0.trait_mod_path, msig0, type_args, all_args0, expected);
+          return tc_call_func_sig_with_recv(ctx, w, mod_path, imps, exprs, l0, call_sp, c0.trait_mod_path, msig0, type_args, recv_id, args, expected);
         }
         let msg1: String = "trait method not in bounds: ".concat(rt.name).concat(".").concat(mname).concat(" (bounds: ").concat(bounds_text(l0, rt.name)).concat(")");
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg1) };
@@ -1767,11 +1763,7 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgi) };
       }
       if inh.found {
-        let mut all_args_inh: Vec[i32] = Vec();
-        all_args_inh.push(recv_id);
-        let mut ai_inh: i32 = 0;
-        while ai_inh < args.len() { all_args_inh.push(args.get(ai_inh)); ai_inh = ai_inh + 1; }
-        return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, inh.impl_mod_path, inh.m.sig, type_args, all_args_inh, expected);
+        return tc_call_func_sig_with_recv(ctx, w, mod_path, imps, exprs, l0, call_sp, inh.impl_mod_path, inh.m.sig, type_args, recv_id, args, expected);
       }
 
       let dm: FindTraitDispatchMethodResult = find_trait_dispatch_method(ctx, mod_path, strip_range(ctx, rr.ty), mname);
@@ -1780,11 +1772,7 @@ fn tc_expr_call(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
         return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
       }
       if dm.found {
-        let mut all_args: Vec[i32] = Vec();
-        all_args.push(recv_id);
-        let mut ai: i32 = 0;
-        while ai < args.len() { all_args.push(args.get(ai)); ai = ai + 1; }
-        return tc_call_func_sig(ctx, w, mod_path, imps, exprs, l0, call_sp, dm.impl_mod_path, dm.m.sig, type_args, all_args, expected);
+        return tc_call_func_sig_with_recv(ctx, w, mod_path, imps, exprs, l0, call_sp, dm.impl_mod_path, dm.m.sig, type_args, recv_id, args, expected);
       }
     }
   }
@@ -2533,7 +2521,58 @@ fn tc_call_func_sig(
   args: Vec[i32],
   expected: i32,
 ) -> ExprTyResult {
+  return tc_call_func_sig_core(ctx, w, cur_mod, imps, exprs, l0, call_sp, target_mod, sig, type_args, -1, args, false, expected);
+}
+
+fn tc_call_func_sig_with_recv(
+  ctx: Ctx,
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  target_mod: String,
+  sig: FuncSig,
+  type_args: Vec[ast.TypeName],
+  recv_id: i32,
+  args: Vec[i32],
+  expected: i32,
+) -> ExprTyResult {
+  return tc_call_func_sig_core(ctx, w, cur_mod, imps, exprs, l0, call_sp, target_mod, sig, type_args, recv_id, args, true, expected);
+}
+
+fn tc_call_sig_arg_n(args: Vec[i32], has_recv: bool) -> i32 {
+  if has_recv { return args.len() + 1; }
+  return args.len();
+}
+
+fn tc_call_sig_arg_get(args: Vec[i32], recv_id: i32, has_recv: bool, idx: i32) -> i32 {
+  if has_recv {
+    if idx == 0 { return recv_id; }
+    return args.get(idx - 1);
+  }
+  return args.get(idx);
+}
+
+fn tc_call_func_sig_core(
+  ctx: Ctx,
+  w: World,
+  cur_mod: String,
+  imps: Imports,
+  exprs: ast.ExprPool,
+  l0: Locals,
+  call_sp: ast.Span,
+  target_mod: String,
+  sig: FuncSig,
+  type_args: Vec[ast.TypeName],
+  recv_id: i32,
+  args: Vec[i32],
+  has_recv: bool,
+  expected: i32,
+) -> ExprTyResult {
   let _tm: String = target_mod; // reserved for future: implicit receiver / UFCS.
+  let argc: i32 = tc_call_sig_arg_n(args, has_recv);
   let mut pack_mode: bool = false;
   let mut fixed_n: i32 = sig.params.len();
 
@@ -2542,13 +2581,13 @@ fn tc_call_func_sig(
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, "invalid variadic function signature") };
     }
     fixed_n = sig.params.len() - 1;
-    if args.len() < fixed_n {
+    if argc < fixed_n {
       let msgv0: String =
         "wrong number of args: expected at least ".concat(fixed_n.to_string())
-          .concat(", got ").concat(args.len().to_string());
+          .concat(", got ").concat(argc.to_string());
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msgv0) };
     }
-    if args.len() > sig.params.len() || args.len() == fixed_n {
+    if argc > sig.params.len() || argc == fixed_n {
       pack_mode = true;
     } else {
       let variadic_vec_ty: i32 = sig.params.get(fixed_n);
@@ -2556,7 +2595,7 @@ fn tc_call_func_sig(
       // fully inferred, probing with a strict expected type may reject an
       // otherwise valid explicit-Vec call. Probe raw type first, then use
       // unify on `Vec[...]` shape to decide between vec-mode vs pack-mode.
-      let probe_last: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(fixed_n), -1);
+      let probe_last: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, tc_call_sig_arg_get(args, recv_id, has_recv, fixed_n), -1);
       if probe_last.ok {
         // If the last arg is a Vec, treat it as explicit-Vec mode; mismatched
         // element types are reported later with normal call diagnostics.
@@ -2571,10 +2610,10 @@ fn tc_call_func_sig(
       }
     }
   } else {
-    if args.len() != sig.params.len() {
+    if argc != sig.params.len() {
       let msg: String =
         "wrong number of args: expected ".concat(sig.params.len().to_string())
-          .concat(", got ").concat(args.len().to_string());
+          .concat(", got ").concat(argc.to_string());
       return ExprTyResult { ok: false, ty: ctx.ty_bad, err: type_error_at(call_sp, msg) };
     }
   }
@@ -2585,13 +2624,14 @@ fn tc_call_func_sig(
     }
     if !pack_mode {
       let mut i: i32 = 0;
-      while i < args.len() {
+      while i < argc {
+        let arg_id: i32 = tc_call_sig_arg_get(args, recv_id, has_recv, i);
         let want: i32 = sig.params.get(i);
         let expected_arg: i32 = strip_ref(ctx, want);
-        let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), expected_arg);
+        let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id, expected_arg);
         if !ar.ok {
           if ar.err == TcError.None || tc_error_message(ar.err) == "typecheck failed" {
-            let ap: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
+            let ap: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id, -1);
             if ap.ok && !assignable_to(ctx, want, ap.ty) {
               return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ap.ty, false, sig_param_borrow_kind(sig, i)) };
             }
@@ -2603,10 +2643,10 @@ fn tc_call_func_sig(
         }
         let bk: i32 = sig_param_borrow_kind(sig, i);
         // String literals may implicitly borrow to `&str` / `&'static str`.
-        let perr: TcError = if call_arg_is_str_lit(exprs, args.get(i)) && want_is_str_ref_nonmut(ctx, want) {
+        let perr: TcError = if call_arg_is_str_lit(exprs, arg_id) && want_is_str_ref_nonmut(ctx, want) {
           TcError.None
         } else {
-          ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(i), i, false, bk)
+          ensure_borrow_arg_requirements(call_sp, exprs, l0, arg_id, i, false, bk)
         };
         if perr != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr }; }
         i = i + 1;
@@ -2614,12 +2654,13 @@ fn tc_call_func_sig(
     } else {
       let mut i: i32 = 0;
       while i < fixed_n {
+        let arg_id_fixed: i32 = tc_call_sig_arg_get(args, recv_id, has_recv, i);
         let want_fixed: i32 = sig.params.get(i);
         let expected_argf: i32 = strip_ref(ctx, want_fixed);
-        let arf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), expected_argf);
+        let arf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id_fixed, expected_argf);
         if !arf.ok {
           if arf.err == TcError.None || tc_error_message(arf.err) == "typecheck failed" {
-            let apf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
+            let apf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id_fixed, -1);
             if apf.ok && !assignable_to(ctx, want_fixed, apf.ty) {
               return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, apf.ty, false, sig_param_borrow_kind(sig, i)) };
             }
@@ -2630,22 +2671,23 @@ fn tc_call_func_sig(
           return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, arf.ty, false, sig_param_borrow_kind(sig, i)) };
         }
         let bk_fixed: i32 = sig_param_borrow_kind(sig, i);
-        let perr_fixed: TcError = if call_arg_is_str_lit(exprs, args.get(i)) && want_is_str_ref_nonmut(ctx, want_fixed) {
+        let perr_fixed: TcError = if call_arg_is_str_lit(exprs, arg_id_fixed) && want_is_str_ref_nonmut(ctx, want_fixed) {
           TcError.None
         } else {
-          ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(i), i, false, bk_fixed)
+          ensure_borrow_arg_requirements(call_sp, exprs, l0, arg_id_fixed, i, false, bk_fixed)
         };
         if perr_fixed != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr_fixed }; }
         i = i + 1;
       }
       let mut j: i32 = fixed_n;
-      while j < args.len() {
+      while j < argc {
+        let arg_id_var0: i32 = tc_call_sig_arg_get(args, recv_id, has_recv, j);
         let want_var: i32 = sig.variadic_elem;
         let expected_argv: i32 = strip_ref(ctx, want_var);
-        let arv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), expected_argv);
+        let arv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id_var0, expected_argv);
         if !arv.ok {
           if arv.err == TcError.None || tc_error_message(arv.err) == "typecheck failed" {
-            let apv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), -1);
+            let apv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id_var0, -1);
             if apv.ok && !assignable_to(ctx, want_var, apv.ty) {
               return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, apv.ty, true, sig_param_borrow_kind(sig, fixed_n)) };
             }
@@ -2656,10 +2698,10 @@ fn tc_call_func_sig(
           return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, arv.ty, true, sig_param_borrow_kind(sig, fixed_n)) };
         }
         let bk_var0: i32 = sig_param_borrow_kind(sig, fixed_n);
-        let perr_var0: TcError = if call_arg_is_str_lit(exprs, args.get(j)) && want_is_str_ref_nonmut(ctx, want_var) {
+        let perr_var0: TcError = if call_arg_is_str_lit(exprs, arg_id_var0) && want_is_str_ref_nonmut(ctx, want_var) {
           TcError.None
         } else {
-          ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(j), j, true, bk_var0)
+          ensure_borrow_arg_requirements(call_sp, exprs, l0, arg_id_var0, j, true, bk_var0)
         };
         if perr_var0 != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr_var0 }; }
         j = j + 1;
@@ -2844,7 +2886,8 @@ fn tc_call_func_sig(
   // Infer from arguments.
   if !pack_mode {
     let mut i: i32 = 0;
-    while i < args.len() {
+    while i < argc {
+      let arg_id: i32 = tc_call_sig_arg_get(args, recv_id, has_recv, i);
       let pat0: i32 = strip_ref(ctx, sig_use.params.get(i));
       let want0: i32 = subst_ty(ctx, pat0, subs);
       let want: i32 =
@@ -2855,10 +2898,10 @@ fn tc_call_func_sig(
           if want_t.kind == ir.TyKind.Param || ty_has_param(ctx, want0) { -1 } else { want0 }
         };
       let expected_arg: i32 = if want == -1 { -1 } else { strip_ref(ctx, want) };
-      let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), expected_arg);
+      let ar: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id, expected_arg);
       if !ar.ok {
         if want != -1 && (ar.err == TcError.None || tc_error_message(ar.err) == "typecheck failed") {
-          let ap: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
+          let ap: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id, -1);
           if ap.ok && !assignable_to(ctx, want, ap.ty) {
             return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want, ap.ty, false, sig_param_borrow_kind(sig_use, i)) };
           }
@@ -2872,10 +2915,10 @@ fn tc_call_func_sig(
       }
       subs = ur2.subs;
       let bk2: i32 = sig_param_borrow_kind(sig_use, i);
-      let perr2: TcError = if want != -1 && call_arg_is_str_lit(exprs, args.get(i)) && want_is_str_ref_nonmut(ctx, want) {
+      let perr2: TcError = if want != -1 && call_arg_is_str_lit(exprs, arg_id) && want_is_str_ref_nonmut(ctx, want) {
         TcError.None
       } else {
-        ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(i), i, false, bk2)
+        ensure_borrow_arg_requirements(call_sp, exprs, l0, arg_id, i, false, bk2)
       };
       if perr2 != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perr2 }; }
       i = i + 1;
@@ -2883,6 +2926,7 @@ fn tc_call_func_sig(
   } else {
     let mut i: i32 = 0;
     while i < fixed_n {
+      let arg_id_fixed: i32 = tc_call_sig_arg_get(args, recv_id, has_recv, i);
       let pat0_fixed: i32 = strip_ref(ctx, sig_use.params.get(i));
       let want0_fixed: i32 = subst_ty(ctx, pat0_fixed, subs);
       let want_fixed: i32 =
@@ -2893,10 +2937,10 @@ fn tc_call_func_sig(
           if want_t_fixed.kind == ir.TyKind.Param || ty_has_param(ctx, want0_fixed) { -1 } else { want0_fixed }
         };
       let expected_argf: i32 = if want_fixed == -1 { -1 } else { strip_ref(ctx, want_fixed) };
-      let arf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), expected_argf);
+      let arf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id_fixed, expected_argf);
       if !arf.ok {
         if want_fixed != -1 && (arf.err == TcError.None || tc_error_message(arf.err) == "typecheck failed") {
-          let apf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(i), -1);
+          let apf: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id_fixed, -1);
           if apf.ok && !assignable_to(ctx, want_fixed, apf.ty) {
             return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, i, want_fixed, apf.ty, false, sig_param_borrow_kind(sig_use, i)) };
           }
@@ -2910,16 +2954,17 @@ fn tc_call_func_sig(
       }
       subs = urf.subs;
       let bkf: i32 = sig_param_borrow_kind(sig_use, i);
-      let perrf: TcError = if want_fixed != -1 && call_arg_is_str_lit(exprs, args.get(i)) && want_is_str_ref_nonmut(ctx, want_fixed) {
+      let perrf: TcError = if want_fixed != -1 && call_arg_is_str_lit(exprs, arg_id_fixed) && want_is_str_ref_nonmut(ctx, want_fixed) {
         TcError.None
       } else {
-        ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(i), i, false, bkf)
+        ensure_borrow_arg_requirements(call_sp, exprs, l0, arg_id_fixed, i, false, bkf)
       };
       if perrf != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perrf }; }
       i = i + 1;
     }
     let mut j: i32 = fixed_n;
-    while j < args.len() {
+    while j < argc {
+      let arg_id_var: i32 = tc_call_sig_arg_get(args, recv_id, has_recv, j);
       let pat0_var: i32 = strip_ref(ctx, sig_use.variadic_elem);
       let want0_var: i32 = subst_ty(ctx, pat0_var, subs);
       let want_var: i32 =
@@ -2930,10 +2975,10 @@ fn tc_call_func_sig(
           if want_t_var.kind == ir.TyKind.Param || ty_has_param(ctx, want0_var) { -1 } else { want0_var }
         };
       let expected_argv: i32 = if want_var == -1 { -1 } else { strip_ref(ctx, want_var) };
-      let arv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), expected_argv);
+      let arv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id_var, expected_argv);
       if !arv.ok {
         if want_var != -1 && (arv.err == TcError.None || tc_error_message(arv.err) == "typecheck failed") {
-          let apv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, args.get(j), -1);
+          let apv: ExprTyResult = tc_expr(ctx, w, cur_mod, imps, exprs, l0, arg_id_var, -1);
           if apv.ok && !assignable_to(ctx, want_var, apv.ty) {
             return ExprTyResult { ok: false, ty: ctx.ty_bad, err: call_arg_type_mismatch(ctx, call_sp, j, want_var, apv.ty, true, sig_param_borrow_kind(sig_use, fixed_n)) };
           }
@@ -2947,10 +2992,10 @@ fn tc_call_func_sig(
       }
       subs = urv.subs;
       let bkv: i32 = sig_param_borrow_kind(sig_use, fixed_n);
-      let perrv: TcError = if want_var != -1 && call_arg_is_str_lit(exprs, args.get(j)) && want_is_str_ref_nonmut(ctx, want_var) {
+      let perrv: TcError = if want_var != -1 && call_arg_is_str_lit(exprs, arg_id_var) && want_is_str_ref_nonmut(ctx, want_var) {
         TcError.None
       } else {
-        ensure_borrow_arg_requirements(call_sp, exprs, l0, args.get(j), j, true, bkv)
+        ensure_borrow_arg_requirements(call_sp, exprs, l0, arg_id_var, j, true, bkv)
       };
       if perrv != TcError.None { return ExprTyResult { ok: false, ty: ctx.ty_bad, err: perrv }; }
       j = j + 1;
