@@ -658,7 +658,7 @@ fn collect_concat_call_chain(exprs: ast.ExprPool, id0: i32) -> CollectConcatCall
   return CollectConcatCallChain { ok: true, base_expr: cur, parts: parts };
 }
 
-fn walk_expr_type_names(
+fn walk_expr_type_names_ex(
   ctx: Ctx,
   w: World,
   mod_path: String,
@@ -668,6 +668,7 @@ fn walk_expr_type_names(
   id: i32,
   owner_file: String,
   cache0: TypeResolveCache,
+  typed_path_prewarmed: bool,
 ) -> TypeWalkResult {
   let mut c: Ctx = ctx;
   let mut cache: TypeResolveCache = cache0;
@@ -698,7 +699,7 @@ fn walk_expr_type_names(
       return type_walk_err(c, type_error_at(sp, resolve_fail_msg(tn, "type resolve failed in expression type annotation: ".concat(type_name_text(tn)))), cache);
     }
   }
-  if match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } {
+  if !typed_path_prewarmed && match n { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } {
     let targs: Vec[ast.TypeName] = match n { ast.ExprNode.Call(_c, ts, _a) => ts, _ => Vec() };
     let mut ti: i32 = 0;
     while ti < targs.len() {
@@ -732,20 +733,24 @@ fn walk_expr_type_names(
       ti = ti + 1;
     }
   }
+  let mut member_recv_typed_path_prewarmed: bool = false;
   if match n { ast.ExprNode.Member(_recv, _name) => true, _ => false } {
     let recv: i32 = match n { ast.ExprNode.Member(r, _n) => r, _ => -1 };
     if match ast.expr_pool_get(exprs, recv) { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } {
       let pr: ResolveTypeCachedResult = maybe_resolve_typed_path_marker(c, w, mod_path, imps, type_params, exprs, recv, owner_file, cache);
       c = pr.ctx;
       cache = pr.cache;
+      member_recv_typed_path_prewarmed = true;
     }
   }
+  let mut struct_tyex_typed_path_prewarmed: bool = false;
   if match n { ast.ExprNode.StructLit(_tyex, _fields) => true, _ => false } {
     let tyex: i32 = match n { ast.ExprNode.StructLit(t, _fs) => t, _ => -1 };
     if match ast.expr_pool_get(exprs, tyex) { ast.ExprNode.Call(_callee, _targs, _args) => true, _ => false } {
       let pr: ResolveTypeCachedResult = maybe_resolve_typed_path_marker(c, w, mod_path, imps, type_params, exprs, tyex, owner_file, cache);
       c = pr.ctx;
       cache = pr.cache;
+      struct_tyex_typed_path_prewarmed = true;
     }
   }
 
@@ -763,16 +768,16 @@ fn walk_expr_type_names(
         },
       _ => false,
     };
-  if is_concat_call_head {
-    let ch: CollectConcatCallChain = collect_concat_call_chain(exprs, id);
-    if ch.ok {
-      let base_r: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, ch.base_expr, owner_file, cache);
+    if is_concat_call_head {
+      let ch: CollectConcatCallChain = collect_concat_call_chain(exprs, id);
+      if ch.ok {
+      let base_r: TypeWalkResult = walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, ch.base_expr, owner_file, cache, false);
       if !base_r.ok { return base_r; }
       c = base_r.ctx;
       cache = base_r.cache;
       let mut i: i32 = 0;
       while i < ch.parts.len() {
-        let ar: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, ch.parts.get(i), owner_file, cache);
+        let ar: TypeWalkResult = walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, ch.parts.get(i), owner_file, cache, false);
         if !ar.ok { return ar; }
         c = ar.ctx;
         cache = ar.cache;
@@ -791,31 +796,31 @@ fn walk_expr_type_names(
     ast.ExprNode.DotIdent(_s) => type_walk_ok(c, cache),
     ast.ExprNode.Block(b) => walk_expr_block_type_names(c, w, mod_path, imps, type_params, exprs, b, owner_file, cache),
     ast.ExprNode.If(c0, t0, e0) => {
-      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, c0, owner_file, cache);
+      let r0: TypeWalkResult = walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, c0, owner_file, cache, false);
       if !r0.ok { r0 } else {
-        let r1: TypeWalkResult = walk_expr_type_names(r0.ctx, w, mod_path, imps, type_params, exprs, t0, owner_file, r0.cache);
-        if !r1.ok { r1 } else { walk_expr_type_names(r1.ctx, w, mod_path, imps, type_params, exprs, e0, owner_file, r1.cache) }
+        let r1: TypeWalkResult = walk_expr_type_names_ex(r0.ctx, w, mod_path, imps, type_params, exprs, t0, owner_file, r0.cache, false);
+        if !r1.ok { r1 } else { walk_expr_type_names_ex(r1.ctx, w, mod_path, imps, type_params, exprs, e0, owner_file, r1.cache, false) }
       }
     },
-    ast.ExprNode.Unary(_op, a) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, a, owner_file, cache),
-    ast.ExprNode.As(a, _tn) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, a, owner_file, cache),
+    ast.ExprNode.Unary(_op, a) => walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, a, owner_file, cache, false),
+    ast.ExprNode.As(a, _tn) => walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, a, owner_file, cache, false),
     ast.ExprNode.Binary(_op, l, r) => {
-      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, l, owner_file, cache);
-      if !r0.ok { r0 } else { walk_expr_type_names(r0.ctx, w, mod_path, imps, type_params, exprs, r, owner_file, r0.cache) }
+      let r0: TypeWalkResult = walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, l, owner_file, cache, false);
+      if !r0.ok { r0 } else { walk_expr_type_names_ex(r0.ctx, w, mod_path, imps, type_params, exprs, r, owner_file, r0.cache, false) }
     },
-    ast.ExprNode.Member(recv, _name) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, recv, owner_file, cache),
-    ast.ExprNode.TryBlock(bid) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, bid, owner_file, cache),
-    ast.ExprNode.Try(a) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, a, owner_file, cache),
-    ast.ExprNode.Await(a) => walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, a, owner_file, cache),
+    ast.ExprNode.Member(recv, _name) => walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, recv, owner_file, cache, member_recv_typed_path_prewarmed),
+    ast.ExprNode.TryBlock(bid) => walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, bid, owner_file, cache, false),
+    ast.ExprNode.Try(a) => walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, a, owner_file, cache, false),
+    ast.ExprNode.Await(a) => walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, a, owner_file, cache, false),
     ast.ExprNode.Call(callee, _targs, args) => {
-      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, callee, owner_file, cache);
+      let r0: TypeWalkResult = walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, callee, owner_file, cache, false);
       if !r0.ok { r0 } else {
         let mut c1: Ctx = r0.ctx;
         let mut cache1: TypeResolveCache = r0.cache;
         let mut ai: i32 = 0;
         let mut ok1: bool = true;
         while ok1 && ai < args.len() {
-          let ri: TypeWalkResult = walk_expr_type_names(c1, w, mod_path, imps, type_params, exprs, args.get(ai), owner_file, cache1);
+          let ri: TypeWalkResult = walk_expr_type_names_ex(c1, w, mod_path, imps, type_params, exprs, args.get(ai), owner_file, cache1, false);
           if !ri.ok { ok1 = false; c1 = ri.ctx; cache1 = ri.cache; } else { c1 = ri.ctx; cache1 = ri.cache; ai = ai + 1; }
         }
         if ok1 {
@@ -827,14 +832,14 @@ fn walk_expr_type_names(
       }
     },
     ast.ExprNode.MacroCall(callee, _targs, args) => {
-      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, callee, owner_file, cache);
+      let r0: TypeWalkResult = walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, callee, owner_file, cache, false);
       if !r0.ok { r0 } else {
         let mut c1: Ctx = r0.ctx;
         let mut cache1: TypeResolveCache = r0.cache;
         let mut ai: i32 = 0;
         let mut ok1: bool = true;
         while ok1 && ai < args.len() {
-          let ri: TypeWalkResult = walk_expr_type_names(c1, w, mod_path, imps, type_params, exprs, args.get(ai), owner_file, cache1);
+          let ri: TypeWalkResult = walk_expr_type_names_ex(c1, w, mod_path, imps, type_params, exprs, args.get(ai), owner_file, cache1, false);
           if !ri.ok { ok1 = false; c1 = ri.ctx; cache1 = ri.cache; } else { c1 = ri.ctx; cache1 = ri.cache; ai = ai + 1; }
         }
         if ok1 {
@@ -846,14 +851,14 @@ fn walk_expr_type_names(
       }
     },
     ast.ExprNode.StructLit(tyex, fields) => {
-      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, tyex, owner_file, cache);
+      let r0: TypeWalkResult = walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, tyex, owner_file, cache, struct_tyex_typed_path_prewarmed);
       if !r0.ok { r0 } else {
         let mut c1: Ctx = r0.ctx;
         let mut cache1: TypeResolveCache = r0.cache;
         let mut fi: i32 = 0;
         let mut ok1: bool = true;
         while ok1 && fi < fields.len() {
-          let rf: TypeWalkResult = walk_expr_type_names(c1, w, mod_path, imps, type_params, exprs, fields.get(fi).expr, owner_file, cache1);
+          let rf: TypeWalkResult = walk_expr_type_names_ex(c1, w, mod_path, imps, type_params, exprs, fields.get(fi).expr, owner_file, cache1, false);
           if !rf.ok { ok1 = false; c1 = rf.ctx; cache1 = rf.cache; } else { c1 = rf.ctx; cache1 = rf.cache; fi = fi + 1; }
         }
         if ok1 {
@@ -865,14 +870,14 @@ fn walk_expr_type_names(
       }
     },
     ast.ExprNode.Match(scrut, arms) => {
-      let r0: TypeWalkResult = walk_expr_type_names(c, w, mod_path, imps, type_params, exprs, scrut, owner_file, cache);
+      let r0: TypeWalkResult = walk_expr_type_names_ex(c, w, mod_path, imps, type_params, exprs, scrut, owner_file, cache, false);
       if !r0.ok { r0 } else {
         let mut c1: Ctx = r0.ctx;
         let mut cache1: TypeResolveCache = r0.cache;
         let mut ai: i32 = 0;
         let mut ok1: bool = true;
         while ok1 && ai < arms.len() {
-          let ra: TypeWalkResult = walk_expr_type_names(c1, w, mod_path, imps, type_params, exprs, arms.get(ai).expr, owner_file, cache1);
+          let ra: TypeWalkResult = walk_expr_type_names_ex(c1, w, mod_path, imps, type_params, exprs, arms.get(ai).expr, owner_file, cache1, false);
           if !ra.ok { ok1 = false; c1 = ra.ctx; cache1 = ra.cache; } else { c1 = ra.ctx; cache1 = ra.cache; ai = ai + 1; }
         }
         if ok1 {
@@ -885,6 +890,20 @@ fn walk_expr_type_names(
     },
   };
   return wr;
+}
+
+fn walk_expr_type_names(
+  ctx: Ctx,
+  w: World,
+  mod_path: String,
+  imps: Imports,
+  type_params: Vec[String],
+  exprs: ast.ExprPool,
+  id: i32,
+  owner_file: String,
+  cache0: TypeResolveCache,
+) -> TypeWalkResult {
+  return walk_expr_type_names_ex(ctx, w, mod_path, imps, type_params, exprs, id, owner_file, cache0, false);
 }
 
 fn walk_stmt_type_names(
