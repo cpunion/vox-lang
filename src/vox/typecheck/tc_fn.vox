@@ -582,6 +582,11 @@ fn move_names_sort_unique(xs0: Vec[String]) -> Vec[String] {
   return dedup;
 }
 
+struct ExprMoveScanResult {
+  names: Vec[String],
+  has_release_call: bool,
+}
+
 fn is_copy_move_ty(ctx: Ctx, ty0: i32) -> bool {
   let t0: ir.Ty = ir.ty_pool_get(ctx.pool, ty0);
   if t0.kind == ir.TyKind.Ref { return true; }
@@ -654,92 +659,20 @@ fn value_move_names_from_call_collect(
   return out;
 }
 
-fn release_move_exists_from_stmt(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, st: ast.Stmt) -> bool {
-  return match st {
-    ast.Stmt.Let(_sp, _m, _name, _has_ann, _ann, init) => release_move_exists(ctx, l0, imps, exprs, init),
-    ast.Stmt.Assign(_sp, _name, rhs) => release_move_exists(ctx, l0, imps, exprs, rhs),
-    ast.Stmt.AssignField(_sp, _recv, _field, rhs) => release_move_exists(ctx, l0, imps, exprs, rhs),
-    ast.Stmt.ExprStmt(_sp, eid) => release_move_exists(ctx, l0, imps, exprs, eid),
-    ast.Stmt.IfStmt(_sp, cond, then_b, has_else, else_b) => {
-      if release_move_exists(ctx, l0, imps, exprs, cond) { true } else if release_move_exists_from_block(ctx, l0, imps, exprs, then_b) { true } else if has_else { release_move_exists_from_block(ctx, l0, imps, exprs, else_b) } else { false }
-    },
-    ast.Stmt.WhileStmt(_sp, cond, body) => {
-      if release_move_exists(ctx, l0, imps, exprs, cond) { true } else { release_move_exists_from_block(ctx, l0, imps, exprs, body) }
-    },
-    ast.Stmt.ReturnStmt(_sp, has, eid) => if has { release_move_exists(ctx, l0, imps, exprs, eid) } else { false },
-    _ => false,
-  };
-}
-
-fn release_move_exists_from_block(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, b: ast.Block) -> bool {
+fn expr_move_scan_merge(a: ExprMoveScanResult, b: ExprMoveScanResult) -> ExprMoveScanResult {
+  let mut out: Vec[String] = a.names;
   let mut i: i32 = 0;
-  while i < b.stmts.len() {
-    if release_move_exists_from_stmt(ctx, l0, imps, exprs, b.stmts.get(i)) { return true; }
+  while i < b.names.len() {
+    out.push(b.names.get(i));
     i = i + 1;
   }
-  return false;
-}
-
-fn release_move_exists(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, eid: i32) -> bool {
-  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
-  return match n {
-    ast.ExprNode.Call(callee, _type_args, args) => {
-      let rm: ReleaseMoveSourceResult = release_move_from_call(ctx, l0, imps, exprs, callee, args);
-      if rm.found { return true; }
-      if release_move_exists(ctx, l0, imps, exprs, callee) { return true; }
-      let mut i: i32 = 0;
-      while i < args.len() {
-        if release_move_exists(ctx, l0, imps, exprs, args.get(i)) { return true; }
-        i = i + 1;
-      }
-      false
-    },
-    ast.ExprNode.MacroCall(callee, _type_args, args) => {
-      if release_move_exists(ctx, l0, imps, exprs, callee) { return true; }
-      let mut i: i32 = 0;
-      while i < args.len() {
-        if release_move_exists(ctx, l0, imps, exprs, args.get(i)) { return true; }
-        i = i + 1;
-      }
-      false
-    },
-    ast.ExprNode.Unary(_op, a) => release_move_exists(ctx, l0, imps, exprs, a),
-    ast.ExprNode.As(a, _ty) => release_move_exists(ctx, l0, imps, exprs, a),
-    ast.ExprNode.Binary(_op, a, b) => {
-      if release_move_exists(ctx, l0, imps, exprs, a) { true } else { release_move_exists(ctx, l0, imps, exprs, b) }
-    },
-    ast.ExprNode.Member(recv, _name) => release_move_exists(ctx, l0, imps, exprs, recv),
-    ast.ExprNode.If(cond, then_id, else_id) => {
-      if release_move_exists(ctx, l0, imps, exprs, cond) { true } else if release_move_exists(ctx, l0, imps, exprs, then_id) { true } else { release_move_exists(ctx, l0, imps, exprs, else_id) }
-    },
-    ast.ExprNode.Block(eb) => {
-      if release_move_exists_from_block(ctx, l0, imps, exprs, ast.Block { stmts: eb.stmts }) { true } else if eb.has_tail { release_move_exists(ctx, l0, imps, exprs, eb.tail) } else { false }
-    },
-    ast.ExprNode.TryBlock(bid) => release_move_exists(ctx, l0, imps, exprs, bid),
-    ast.ExprNode.Try(a) => release_move_exists(ctx, l0, imps, exprs, a),
-    ast.ExprNode.StructLit(tyexpr, fields) => {
-      if release_move_exists(ctx, l0, imps, exprs, tyexpr) { return true; }
-      let mut i: i32 = 0;
-      while i < fields.len() {
-        if release_move_exists(ctx, l0, imps, exprs, fields.get(i).expr) { return true; }
-        i = i + 1;
-      }
-      false
-    },
-    ast.ExprNode.Match(scrut, arms) => {
-      if release_move_exists(ctx, l0, imps, exprs, scrut) { return true; }
-      let mut i: i32 = 0;
-      while i < arms.len() {
-        if release_move_exists(ctx, l0, imps, exprs, arms.get(i).expr) { return true; }
-        i = i + 1;
-      }
-      false
-    },
-    _ => false,
+  return ExprMoveScanResult {
+    names: out,
+    has_release_call: a.has_release_call || b.has_release_call,
   };
 }
 
-fn expr_move_sources_collect_from_stmt(
+fn expr_move_scan_from_stmt(
   ctx: Ctx,
   w: World,
   mod_path: String,
@@ -747,30 +680,30 @@ fn expr_move_sources_collect_from_stmt(
   imps: Imports,
   exprs: ast.ExprPool,
   st: ast.Stmt,
-  out0: Vec[String],
-) -> Vec[String] {
+) -> ExprMoveScanResult {
   return match st {
-    ast.Stmt.Let(_sp, _m, _name, _has_ann, _ann, init) => expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, init, out0),
-    ast.Stmt.Assign(_sp, _name, rhs) => expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, rhs, out0),
-    ast.Stmt.AssignField(_sp, _recv, _field, rhs) => expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, rhs, out0),
-    ast.Stmt.ExprStmt(_sp, eid) => expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, eid, out0),
+    ast.Stmt.Let(_sp, _m, _name, _has_ann, _ann, init) => expr_move_scan(ctx, w, mod_path, l0, imps, exprs, init),
+    ast.Stmt.Assign(_sp, _name, rhs) => expr_move_scan(ctx, w, mod_path, l0, imps, exprs, rhs),
+    ast.Stmt.AssignField(_sp, _recv, _field, rhs) => expr_move_scan(ctx, w, mod_path, l0, imps, exprs, rhs),
+    ast.Stmt.ExprStmt(_sp, eid) => expr_move_scan(ctx, w, mod_path, l0, imps, exprs, eid),
     ast.Stmt.IfStmt(_sp, cond, then_b, has_else, else_b) => {
-      let mut out: Vec[String] = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, cond, out0);
-      out = expr_move_sources_collect_from_block(ctx, w, mod_path, l0, imps, exprs, then_b, out);
-      if has_else { out = expr_move_sources_collect_from_block(ctx, w, mod_path, l0, imps, exprs, else_b, out); }
-      out
+      let r0: ExprMoveScanResult = expr_move_scan(ctx, w, mod_path, l0, imps, exprs, cond);
+      let r1: ExprMoveScanResult = expr_move_scan_from_block(ctx, w, mod_path, l0, imps, exprs, then_b);
+      if has_else {
+        return expr_move_scan_merge(expr_move_scan_merge(r0, r1), expr_move_scan_from_block(ctx, w, mod_path, l0, imps, exprs, else_b));
+      }
+      return expr_move_scan_merge(r0, r1);
     },
     ast.Stmt.WhileStmt(_sp, cond, body) => {
-      let mut out: Vec[String] = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, cond, out0);
-      out = expr_move_sources_collect_from_block(ctx, w, mod_path, l0, imps, exprs, body, out);
-      out
+      let r0: ExprMoveScanResult = expr_move_scan(ctx, w, mod_path, l0, imps, exprs, cond);
+      return expr_move_scan_merge(r0, expr_move_scan_from_block(ctx, w, mod_path, l0, imps, exprs, body));
     },
-    ast.Stmt.ReturnStmt(_sp, has, eid) => if has { expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, eid, out0) } else { out0 },
-    _ => out0,
+    ast.Stmt.ReturnStmt(_sp, has, eid) => if has { expr_move_scan(ctx, w, mod_path, l0, imps, exprs, eid) } else { ExprMoveScanResult { names: Vec(), has_release_call: false } },
+    _ => ExprMoveScanResult { names: Vec(), has_release_call: false },
   };
 }
 
-fn expr_move_sources_collect_from_block(
+fn expr_move_scan_from_block(
   ctx: Ctx,
   w: World,
   mod_path: String,
@@ -778,18 +711,17 @@ fn expr_move_sources_collect_from_block(
   imps: Imports,
   exprs: ast.ExprPool,
   b: ast.Block,
-  out0: Vec[String],
-) -> Vec[String] {
-  let mut out: Vec[String] = out0;
+) -> ExprMoveScanResult {
+  let mut out: ExprMoveScanResult = ExprMoveScanResult { names: Vec(), has_release_call: false };
   let mut i: i32 = 0;
   while i < b.stmts.len() {
-    out = expr_move_sources_collect_from_stmt(ctx, w, mod_path, l0, imps, exprs, b.stmts.get(i), out);
+    out = expr_move_scan_merge(out, expr_move_scan_from_stmt(ctx, w, mod_path, l0, imps, exprs, b.stmts.get(i)));
     i = i + 1;
   }
   return out;
 }
 
-fn expr_move_sources_collect(
+fn expr_move_scan(
   ctx: Ctx,
   w: World,
   mod_path: String,
@@ -797,80 +729,82 @@ fn expr_move_sources_collect(
   imps: Imports,
   exprs: ast.ExprPool,
   eid: i32,
-  out0: Vec[String],
-) -> Vec[String] {
+) -> ExprMoveScanResult {
   let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
   return match n {
     ast.ExprNode.Call(callee, type_args, args) => {
-      let mut out: Vec[String] = out0;
+      let mut out: ExprMoveScanResult = ExprMoveScanResult {
+        names: Vec(),
+        has_release_call: is_std_release_module_call(imps, exprs, callee),
+      };
       let rm: ReleaseMoveSourceResult = release_move_from_call(ctx, l0, imps, exprs, callee, args);
-      if rm.found { out = move_names_collect_add(out, rm.name); }
-      if !rm.found { out = value_move_names_from_call_collect(ctx, w, mod_path, l0, imps, exprs, callee, type_args, args, out); }
-      out = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, callee, out);
+      if rm.found {
+        out.names = move_names_collect_add(out.names, rm.name);
+        out.has_release_call = true;
+      }
+      if !rm.found {
+        out.names = value_move_names_from_call_collect(ctx, w, mod_path, l0, imps, exprs, callee, type_args, args, out.names);
+      }
+      out = expr_move_scan_merge(out, expr_move_scan(ctx, w, mod_path, l0, imps, exprs, callee));
       let mut i: i32 = 0;
       while i < args.len() {
-        out = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, args.get(i), out);
+        out = expr_move_scan_merge(out, expr_move_scan(ctx, w, mod_path, l0, imps, exprs, args.get(i)));
         i = i + 1;
       }
       out
     },
     ast.ExprNode.MacroCall(callee, _type_args, args) => {
-      let mut out: Vec[String] = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, callee, out0);
+      let mut out: ExprMoveScanResult = expr_move_scan(ctx, w, mod_path, l0, imps, exprs, callee);
       let mut i: i32 = 0;
       while i < args.len() {
-        out = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, args.get(i), out);
+        out = expr_move_scan_merge(out, expr_move_scan(ctx, w, mod_path, l0, imps, exprs, args.get(i)));
         i = i + 1;
       }
       out
     },
-    ast.ExprNode.Unary(_op, a) => expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, a, out0),
-    ast.ExprNode.As(a, _ty) => expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, a, out0),
-    ast.ExprNode.Binary(_op, a, b) => {
-      let mut out: Vec[String] = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, a, out0);
-      out = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, b, out);
-      out
-    },
-    ast.ExprNode.Member(recv, _name) => expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, recv, out0),
-    ast.ExprNode.If(cond, then_id, else_id) => {
-      let mut out: Vec[String] = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, cond, out0);
-      out = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, then_id, out);
-      out = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, else_id, out);
-      out
-    },
+    ast.ExprNode.Unary(_op, a) => expr_move_scan(ctx, w, mod_path, l0, imps, exprs, a),
+    ast.ExprNode.As(a, _ty) => expr_move_scan(ctx, w, mod_path, l0, imps, exprs, a),
+    ast.ExprNode.Binary(_op, a, b) => expr_move_scan_merge(expr_move_scan(ctx, w, mod_path, l0, imps, exprs, a), expr_move_scan(ctx, w, mod_path, l0, imps, exprs, b)),
+    ast.ExprNode.Member(recv, _name) => expr_move_scan(ctx, w, mod_path, l0, imps, exprs, recv),
+    ast.ExprNode.If(cond, then_id, else_id) =>
+      expr_move_scan_merge(
+        expr_move_scan_merge(expr_move_scan(ctx, w, mod_path, l0, imps, exprs, cond), expr_move_scan(ctx, w, mod_path, l0, imps, exprs, then_id)),
+        expr_move_scan(ctx, w, mod_path, l0, imps, exprs, else_id)
+      ),
     ast.ExprNode.Block(eb) => {
-      let mut out: Vec[String] = expr_move_sources_collect_from_block(ctx, w, mod_path, l0, imps, exprs, ast.Block { stmts: eb.stmts }, out0);
+      let mut out: ExprMoveScanResult = expr_move_scan_from_block(ctx, w, mod_path, l0, imps, exprs, ast.Block { stmts: eb.stmts });
       if eb.has_tail {
-        out = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, eb.tail, out);
+        out = expr_move_scan_merge(out, expr_move_scan(ctx, w, mod_path, l0, imps, exprs, eb.tail));
       }
       out
     },
-    ast.ExprNode.TryBlock(bid) => expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, bid, out0),
-    ast.ExprNode.Try(a) => expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, a, out0),
+    ast.ExprNode.TryBlock(bid) => expr_move_scan(ctx, w, mod_path, l0, imps, exprs, bid),
+    ast.ExprNode.Try(a) => expr_move_scan(ctx, w, mod_path, l0, imps, exprs, a),
     ast.ExprNode.StructLit(tyexpr, fields) => {
-      let mut out: Vec[String] = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, tyexpr, out0);
+      let mut out: ExprMoveScanResult = expr_move_scan(ctx, w, mod_path, l0, imps, exprs, tyexpr);
       let mut i: i32 = 0;
       while i < fields.len() {
-        out = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, fields.get(i).expr, out);
+        out = expr_move_scan_merge(out, expr_move_scan(ctx, w, mod_path, l0, imps, exprs, fields.get(i).expr));
         i = i + 1;
       }
       out
     },
     ast.ExprNode.Match(scrut, arms) => {
-      let mut out: Vec[String] = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, scrut, out0);
+      let mut out: ExprMoveScanResult = expr_move_scan(ctx, w, mod_path, l0, imps, exprs, scrut);
       let mut i: i32 = 0;
       while i < arms.len() {
-        out = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, arms.get(i).expr, out);
+        out = expr_move_scan_merge(out, expr_move_scan(ctx, w, mod_path, l0, imps, exprs, arms.get(i).expr));
         i = i + 1;
       }
       out
     },
-    _ => out0,
+    _ => ExprMoveScanResult { names: Vec(), has_release_call: false },
   };
 }
 
 fn expr_move_sources(ctx: Ctx, w: World, mod_path: String, l0: Locals, imps: Imports, exprs: ast.ExprPool, eid: i32) -> Vec[String] {
-  let collected: Vec[String] = expr_move_sources_collect(ctx, w, mod_path, l0, imps, exprs, eid, Vec());
-  return move_names_sort_unique(collected);
+  let sr: ExprMoveScanResult = expr_move_scan(ctx, w, mod_path, l0, imps, exprs, eid);
+  return move_names_sort_unique(sr.names);
 }
 
 fn find_import_alias_path(imps: Imports, alias: String) -> String {
@@ -902,12 +836,9 @@ fn is_std_release_module_call(imps: Imports, exprs: ast.ExprPool, callee: i32) -
   return false;
 }
 
-fn is_release_call_expr(ctx: Ctx, l0: Locals, imps: Imports, exprs: ast.ExprPool, eid: i32) -> bool {
-  let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
-  if match n { ast.ExprNode.Call(callee, _type_args, _args) => is_std_release_module_call(imps, exprs, callee), _ => false } {
-    return true;
-  }
-  return release_move_exists(ctx, l0, imps, exprs, eid);
+fn is_release_call_expr(ctx: Ctx, w: World, mod_path: String, l0: Locals, imps: Imports, exprs: ast.ExprPool, eid: i32) -> bool {
+  let sr: ExprMoveScanResult = expr_move_scan(ctx, w, mod_path, l0, imps, exprs, eid);
+  return sr.has_release_call;
 }
 
 fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.ExprPool, l0: Locals, sp: ast.Span, eid: i32) -> TcStmtResult {
@@ -916,7 +847,7 @@ fn tc_stmt_expr(ctx: Ctx, w: World, mod_path: String, imps: Imports, exprs: ast.
   let ctx2: Ctx = pr0.ctx;
   let er: ExprTyResult = tc_expr(ctx2, w, mod_path, imps, exprs, l0, eid, -1);
   if !er.ok { return TcStmtResult { ok: false, err: er.err, locals: l0 }; }
-  if er.ty != ctx2.ty_unit && is_release_call_expr(ctx2, l0, imps, exprs, eid) {
+  if er.ty != ctx2.ty_unit && is_release_call_expr(ctx2, w, mod_path, l0, imps, exprs, eid) {
     return TcStmtResult { ok: false, err: type_error_at(sp, "release call result must be assigned back"), locals: l0 };
   }
   return TcStmtResult { ok: true, err: TcError.None, locals: l0 };
