@@ -321,6 +321,14 @@ struct GenericFindModuleIndex {
 struct ModImplDeclIndexes {
   decl_impl_sig_idx: Vec[i32],
   method_sig_decl_idx: Vec[Vec[i32]],
+  mono_method_tasks: Vec[Vec[MonoImplMethodTaskSeed]],
+}
+
+struct MonoImplMethodTaskSeed {
+  lowered_name: String,
+  impl_sig_idx: i32,
+  impl_m_sig_idx: i32,
+  impl_m_decl_idx: i32,
 }
 
 struct GenericFindIndexCacheByModEntry { ready: bool, mix: GenericFindModuleIndex }
@@ -371,11 +379,13 @@ fn build_mod_impl_decl_indexes(ctx: tc.Ctx, w: tc.World, impl_sig_index: Vec[Imp
     }
 
     let mut method_sig_decl_idx: Vec[Vec[i32]] = Vec();
+    let mut mono_method_tasks: Vec[Vec[MonoImplMethodTaskSeed]] = Vec();
     let mut ii: i32 = 0;
     while ii < m.prog.impls.len() {
       let method_decl_index: Vec[ImplMethodDeclIndexEntry] = build_impl_method_decl_index(m.prog.impls.get(ii));
       let ir0: FindImplSigResult = find_impl_sig_from_index(ctx, impl_sig_index, m.path, ii);
       let mut sig_to_decl: Vec[i32] = Vec();
+      let mut mono_tasks: Vec[MonoImplMethodTaskSeed] = Vec();
       if ir0.found {
         decl_impl_sig_idx.set(ii, ir0.idx);
         let isg: tc.ImplSig = ctx.impls.get(ir0.idx);
@@ -391,16 +401,26 @@ fn build_mod_impl_decl_indexes(ctx: tc.Ctx, w: tc.World, impl_sig_index: Vec[Imp
               sig_to_decl.push(find_impl_method_decl_idx_from_index(method_decl_index, ms.name));
             }
           }
+          if ms.sig.type_params.len() == 0 && ms.sig.const_params.len() == 0 {
+            mono_tasks.push(MonoImplMethodTaskSeed {
+              lowered_name: ms.lowered_name,
+              impl_sig_idx: ir0.idx,
+              impl_m_sig_idx: msi,
+              impl_m_decl_idx: sig_to_decl.get(sig_to_decl.len() - 1),
+            });
+          }
           msi = msi + 1;
         }
       }
       method_sig_decl_idx.push(sig_to_decl);
+      mono_method_tasks.push(mono_tasks);
       ii = ii + 1;
     }
 
     out.push(ModImplDeclIndexes {
       decl_impl_sig_idx: decl_impl_sig_idx,
       method_sig_decl_idx: method_sig_decl_idx,
+      mono_method_tasks: mono_method_tasks,
     });
     mi = mi + 1;
   }
@@ -956,32 +976,24 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
     let mod_impl_ix: ModImplDeclIndexes = mod_impl_decl_indexes.get(mi);
     let mut ii: i32 = 0;
     while ii < m.prog.impls.len() {
-      let sig_idx: i32 = mod_impl_ix.decl_impl_sig_idx.get(ii);
-      if sig_idx < 0 { return err0(p, "missing impl signature"); }
-      let sig_to_decl: Vec[i32] = mod_impl_ix.method_sig_decl_idx.get(ii);
-      let ir0: FindImplSigResult = FindImplSigResult { found: true, idx: sig_idx, sig: ctx.impls.get(sig_idx) };
-
+      let mono_tasks: Vec[MonoImplMethodTaskSeed] = mod_impl_ix.mono_method_tasks.get(ii);
       let mut msi: i32 = 0;
-      while msi < ir0.sig.methods.len() {
-        let mr0: tc.ImplMethodSig = ir0.sig.methods.get(msi);
-        if mr0.sig.type_params.len() != 0 || mr0.sig.const_params.len() != 0 {
-          msi = msi + 1;
-          continue;
-        }
-        let mut mdi: i32 = -1;
-        if !mr0.from_default {
-          mdi = sig_to_decl.get(msi);
-          if mdi == -1 { return err0(p, "missing impl method decl"); }
+      while msi < mono_tasks.len() {
+        let mt: MonoImplMethodTaskSeed = mono_tasks.get(msi);
+        if mt.impl_sig_idx < 0 || mt.impl_m_sig_idx < 0 { return err0(p, "missing impl method signature locator"); }
+        if mt.impl_m_decl_idx == -1 {
+          let ms0: tc.ImplMethodSig = ctx.impls.get(mt.impl_sig_idx).methods.get(mt.impl_m_sig_idx);
+          if !ms0.from_default { return err0(p, "missing impl method decl"); }
         }
         tasks.push(FuncTask {
-          qname: qname_with_prefix(mod_qprefix_by_idx.get(mi), mr0.lowered_name),
+          qname: qname_with_prefix(mod_qprefix_by_idx.get(mi), mt.lowered_name),
           mod_path: m.path,
           mod_idx: mi,
           func_idx: -1,
           impl_idx: ii,
-          impl_m_idx: mdi,
-          impl_sig_idx: ir0.idx,
-          impl_m_sig_idx: msi,
+          impl_m_idx: mt.impl_m_decl_idx,
+          impl_sig_idx: mt.impl_sig_idx,
+          impl_m_sig_idx: mt.impl_m_sig_idx,
           base_name: "",
           inst_name: "",
           inst_sig: empty_irgen_func_sig(ctx.ty_bad),
@@ -990,7 +1002,6 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
         });
         msi = msi + 1;
       }
-
       ii = ii + 1;
     }
 
