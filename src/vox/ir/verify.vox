@@ -22,11 +22,18 @@ fn has_name(xs: Vec[String], x: String) -> bool {
   return false;
 }
 
-fn has_func_name(p: Program, name: String) -> bool {
-  let mut i: i32 = 0;
-  while i < p.funcs.len() {
-    if p.funcs.get(i).name == name { return true; }
-    i = i + 1;
+fn has_name_sorted(xs: Vec[String], x: String) -> bool {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = xs.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let cur: String = xs.get(mid);
+    if cur == x { return true; }
+    if cur < x {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
   }
   return false;
 }
@@ -79,6 +86,116 @@ fn find_enum_decl(p: Program, qname: String) -> FindEnumDeclResult {
       return FindEnumDeclResult { found: true, e: e };
     }
     i = i + 1;
+  }
+  return FindEnumDeclResult { found: false, e: EnumDecl { name: "", variants: Vec() } };
+}
+
+fn struct_decl_order(xs: Vec[StructDecl]) -> Vec[i32] {
+  let mut order: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    order.push(i);
+    i = i + 1;
+  }
+  let mut gap: i32 = order.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < order.len() {
+      let keep: i32 = order.get(oi);
+      let keep_name: String = xs.get(keep).name;
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: i32 = order.get(j - gap);
+        if xs.get(prev).name <= keep_name { break; }
+        order.set(j, prev);
+        j = j - gap;
+      }
+      order.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return order;
+}
+
+fn enum_decl_order(xs: Vec[EnumDecl]) -> Vec[i32] {
+  let mut order: Vec[i32] = Vec();
+  let mut i: i32 = 0;
+  while i < xs.len() {
+    order.push(i);
+    i = i + 1;
+  }
+  let mut gap: i32 = order.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < order.len() {
+      let keep: i32 = order.get(oi);
+      let keep_name: String = xs.get(keep).name;
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: i32 = order.get(j - gap);
+        if xs.get(prev).name <= keep_name { break; }
+        order.set(j, prev);
+        j = j - gap;
+      }
+      order.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return order;
+}
+
+fn sorted_names(xs0: Vec[String]) -> Vec[String] {
+  let mut xs: Vec[String] = xs0;
+  let mut gap: i32 = xs.len() / 2;
+  while gap > 0 {
+    let mut oi: i32 = gap;
+    while oi < xs.len() {
+      let keep: String = xs.get(oi);
+      let mut j: i32 = oi;
+      while j >= gap {
+        let prev: String = xs.get(j - gap);
+        if prev <= keep { break; }
+        xs.set(j, prev);
+        j = j - gap;
+      }
+      xs.set(j, keep);
+      oi = oi + 1;
+    }
+    gap = gap / 2;
+  }
+  return xs;
+}
+
+fn find_struct_decl_ordered(p: Program, order: Vec[i32], qname: String) -> FindStructDeclResult {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = order.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let cur: StructDecl = p.structs.get(order.get(mid));
+    if cur.name == qname { return FindStructDeclResult { found: true, s: cur }; }
+    if cur.name < qname {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return FindStructDeclResult { found: false, s: StructDecl { name: "", repr_c: false, packed_align: 0, fields: Vec() } };
+}
+
+fn find_enum_decl_ordered(p: Program, order: Vec[i32], qname: String) -> FindEnumDeclResult {
+  let mut lo: i32 = 0;
+  let mut hi: i32 = order.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let cur: EnumDecl = p.enums.get(order.get(mid));
+    if cur.name == qname { return FindEnumDeclResult { found: true, e: cur }; }
+    if cur.name < qname {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
   }
   return FindEnumDeclResult { found: false, e: EnumDecl { name: "", variants: Vec() } };
 }
@@ -365,7 +482,7 @@ fn verify_cast_float(pool: TyPool, dst_ty: i32, src_ty: i32, ctx: String) -> Ver
   return verify_ok();
 }
 
-fn verify_instr(p: Program, f: Func, b: Block, inst: Instr) -> VerifyResult {
+fn verify_instr(p: Program, struct_order: Vec[i32], enum_order: Vec[i32], f: Func, b: Block, inst: Instr) -> VerifyResult {
   let pool: TyPool = p.pool;
   return
     match inst {
@@ -493,7 +610,7 @@ fn verify_instr(p: Program, f: Func, b: Block, inst: Instr) -> VerifyResult {
         if tt.kind != TyKind.Struct {
           return verify_err("struct_init ty must be struct");
         }
-        let sf: FindStructDeclResult = find_struct_decl(p, nominal_qname(tt));
+        let sf: FindStructDeclResult = find_struct_decl_ordered(p, struct_order, nominal_qname(tt));
         if !sf.found {
           return verify_err("struct_init references unknown struct decl: ".concat(nominal_qname(tt)));
         }
@@ -523,7 +640,7 @@ fn verify_instr(p: Program, f: Func, b: Block, inst: Instr) -> VerifyResult {
         if tt.kind != TyKind.Enum {
           return verify_err("enum_init ty must be enum");
         }
-        let ef: FindEnumDeclResult = find_enum_decl(p, nominal_qname(tt));
+        let ef: FindEnumDeclResult = find_enum_decl_ordered(p, enum_order, nominal_qname(tt));
         if !ef.found {
           return verify_err("enum_init references unknown enum decl: ".concat(nominal_qname(tt)));
         }
@@ -675,15 +792,15 @@ fn verify_term_targets(f: Func, b: Block, block_names: Vec[String]) -> VerifyRes
       Term.Ret(_has, _v) => verify_ok(),
       Term.Panic(_msg) => verify_ok(),
       Term.Br(tgt) =>
-        if has_name(block_names, tgt) {
+        if has_name_sorted(block_names, tgt) {
           verify_ok()
         } else {
           verify_err("unknown branch target in ".concat(f.name).concat("::").concat(b.name).concat(": ").concat(tgt))
         },
       Term.CondBr(_c, a, c) =>
-        if !has_name(block_names, a) {
+        if !has_name_sorted(block_names, a) {
           verify_err("unknown condbr then target in ".concat(f.name).concat("::").concat(b.name).concat(": ").concat(a))
-        } else if !has_name(block_names, c) {
+        } else if !has_name_sorted(block_names, c) {
           verify_err("unknown condbr else target in ".concat(f.name).concat("::").concat(b.name).concat(": ").concat(c))
         } else {
           verify_ok()
@@ -693,6 +810,15 @@ fn verify_term_targets(f: Func, b: Block, block_names: Vec[String]) -> VerifyRes
 
 pub fn verify_program(p: Program) -> VerifyResult {
   let pool: TyPool = p.pool;
+  let struct_order: Vec[i32] = struct_decl_order(p.structs);
+  let enum_order: Vec[i32] = enum_decl_order(p.enums);
+  let mut func_names: Vec[String] = Vec();
+  let mut fni0: i32 = 0;
+  while fni0 < p.funcs.len() {
+    func_names.push(p.funcs.get(fni0).name);
+    fni0 = fni0 + 1;
+  }
+  func_names = sorted_names(func_names);
 
   // Global type index checks.
   let mut si: i32 = 0;
@@ -747,7 +873,7 @@ pub fn verify_program(p: Program) -> VerifyResult {
     let ex: FfiExportDecl = p.ffi_exports.get(fei);
     if ex.target == "" { return verify_err("ffi_export target must not be empty"); }
     if ex.symbol == "" { return verify_err("ffi_export symbol must not be empty"); }
-    if !has_func_name(p, ex.func) {
+    if !has_name_sorted(func_names, ex.func) {
       return verify_err("ffi_export references unknown function: ".concat(ex.func));
     }
     fei = fei + 1;
@@ -775,6 +901,7 @@ pub fn verify_program(p: Program) -> VerifyResult {
       block_names.push(f.blocks.get(bi0).name);
       bi0 = bi0 + 1;
     }
+    block_names = sorted_names(block_names);
 
     let mut bi: i32 = 0;
     while bi < f.blocks.len() {
@@ -783,7 +910,7 @@ pub fn verify_program(p: Program) -> VerifyResult {
       if !vt.ok { return vt; }
       let mut ii: i32 = 0;
       while ii < b.instrs.len() {
-        let vii: VerifyResult = verify_instr(p, f, b, b.instrs.get(ii));
+        let vii: VerifyResult = verify_instr(p, struct_order, enum_order, f, b, b.instrs.get(ii));
         if !vii.ok { return vii; }
         ii = ii + 1;
       }
