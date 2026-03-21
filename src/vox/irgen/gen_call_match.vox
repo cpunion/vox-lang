@@ -54,34 +54,6 @@ fn find_enum_variant(es: tc.EnumSig, vname: String) -> FindVariantResult {
   return FindVariantResult { idx: -1, sig: tc.EnumVariantSig { name: "", fields: Vec() } };
 }
 
-fn find_named_func_import(named: Vec[tc.NamedFuncImport], local: String) -> tc.NamedFuncImport {
-  let mut i: i32 = 0;
-  while i < named.len() {
-    let it: tc.NamedFuncImport = named.get(i);
-    if it.local == local { return it; }
-    i = i + 1;
-  }
-  return tc.NamedFuncImport { local: "", mod_path: "", name: "" };
-}
-
-fn find_named_type_import(named: Vec[tc.NamedTypeImport], local: String) -> tc.NamedTypeImport {
-  let mut i: i32 = 0;
-  while i < named.len() {
-    let it: tc.NamedTypeImport = named.get(i);
-    if it.local == local { return it; }
-    i = i + 1;
-  }
-  return tc.NamedTypeImport { local: "", mod_path: "", name: "", kind: 0 };
-}
-
-fn is_vec_builtin_method(name: String) -> bool {
-  return name == "push" || name == "insert" || name == "set" || name == "clear" || name == "extend" || name == "pop" || name == "remove" || name == "len" || name == "is_empty" || name == "get";
-}
-
-fn is_atomic_builtin_method(name: String) -> bool {
-  return name == "load" || name == "store" || name == "fetch_add" || name == "swap" || name == "cas" || name == "drop";
-}
-
 fn rev_strings(xs: Vec[String]) -> Vec[String] {
   let mut out: Vec[String] = Vec();
   let mut i: i32 = xs.len() - 1;
@@ -1552,10 +1524,13 @@ fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i
     let recv_id: i32 = match cn { ast.ExprNode.Member(r, _n) => r, _ => -1 };
     let mname: String = match cn { ast.ExprNode.Member(_r, n) => n, _ => "" };
     let rr: tc.ExprTyResult = tc.tc_expr(g0.ctx, g0.w, g0.mod_path, g0.imps, g0.exprs, g0.locals, recv_id, -1);
-    if rr.ok && tc.is_vec_ty(g0.ctx, rr.ty) && is_vec_builtin_method(mname) {
+    if rr.ok && tc.is_vec_ty(g0.ctx, rr.ty)
+      && (mname == "push" || mname == "insert" || mname == "set" || mname == "clear" || mname == "extend"
+        || mname == "pop" || mname == "remove" || mname == "len" || mname == "is_empty" || mname == "get") {
       return gen_call_vec_method(g0, recv_id, rr.ty, mname, args, out_ty);
     }
-    if rr.ok && tc.is_atomic_ty(g0.ctx, rr.ty) && is_atomic_builtin_method(mname) {
+    if rr.ok && tc.is_atomic_ty(g0.ctx, rr.ty)
+      && (mname == "load" || mname == "store" || mname == "fetch_add" || mname == "swap" || mname == "cas" || mname == "drop") {
       return gen_call_atomic_method(g0, recv_id, rr.ty, mname, args, out_ty);
     }
     if rr.ok {
@@ -1643,7 +1618,16 @@ fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i
       || name == "@atomic_load" || name == "@atomic_store" || name == "@atomic_cas" || name == "@atomic_fetch_add" {
       return gen_call_ptr_intrinsic(g0, name, ta, args, out_ty);
     }
-    let nf: tc.NamedFuncImport = find_named_func_import(g0.imps.named_funcs, name);
+    let mut nf: tc.NamedFuncImport = tc.NamedFuncImport { local: "", mod_path: "", name: "" };
+    let mut nfi: i32 = 0;
+    while nfi < g0.imps.named_funcs.len() {
+      let it: tc.NamedFuncImport = g0.imps.named_funcs.get(nfi);
+      if it.local == name {
+        nf = it;
+        break;
+      }
+      nfi = nfi + 1;
+    }
     if nf.local != "" {
       let frx: tc.FindFuncResult = tc.find_func(g0.ctx, nf.mod_path, nf.name);
       if frx.found { return gen_call_func(g0, nf.mod_path, nf.name, frx.sig, ta, args, out_ty); }
@@ -1669,7 +1653,16 @@ fn gen_expr_call(g0: Gen, callee: i32, type_args: Vec[ast.TypeName], args: Vec[i
     }
     // Otherwise: `Trait.method(...)` or `Enum.Variant(...)` in current module,
     // or via a named imported type.
-    let nt: tc.NamedTypeImport = find_named_type_import(g0.imps.named_types, parts.get(0));
+    let mut nt: tc.NamedTypeImport = tc.NamedTypeImport { local: "", mod_path: "", name: "", kind: 0 };
+    let mut nti: i32 = 0;
+    while nti < g0.imps.named_types.len() {
+      let it: tc.NamedTypeImport = g0.imps.named_types.get(nti);
+      if it.local == parts.get(0) {
+        nt = it;
+        break;
+      }
+      nti = nti + 1;
+    }
     if nt.local != "" {
       if nt.kind == tc.named_type_kind_trait() {
         return gen_call_trait_static(g0, nt.mod_path, nt.name, parts.get(1), ta, args, out_ty);
