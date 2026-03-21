@@ -272,22 +272,6 @@ fn build_mod_index(w: tc.World) -> Vec[ModIndexEntry] {
   return out;
 }
 
-fn find_mod_idx_from_index(ix: Vec[ModIndexEntry], path: String) -> i32 {
-  let mut lo: i32 = 0;
-  let mut hi: i32 = ix.len();
-  while lo < hi {
-    let mid: i32 = lo + ((hi - lo) / 2);
-    let it: ModIndexEntry = ix.get(mid);
-    if it.path == path { return it.idx; }
-    if it.path < path {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
-  }
-  return -1;
-}
-
 struct FindFuncDeclResult {
   found: bool,
   mod_path: String,
@@ -342,16 +326,6 @@ fn find_func_decl_kind_mod_func() -> i32 { return 1; }
 fn find_func_decl_kind_impl_method_decl() -> i32 { return 2; }
 
 fn find_func_decl_kind_impl_method_default() -> i32 { return 3; }
-
-fn insert_generic_find_name_index_at(xs0: Vec[GenericFindNameIndexEntry], x: GenericFindNameIndexEntry, pos: i32) -> Vec[GenericFindNameIndexEntry] {
-  let mut xs: Vec[GenericFindNameIndexEntry] = xs0;
-  if pos == xs.len() {
-    xs.push(x);
-  } else {
-    xs.insert(pos, x);
-  }
-  return xs;
-}
 
 fn build_mod_impl_decl_indexes(ctx: tc.Ctx, w: tc.World, impl_sig_index: Vec[ImplSigIndexEntry]) -> Vec[ModImplDeclIndexes] {
   let mut out: Vec[ModImplDeclIndexes] = Vec();
@@ -449,7 +423,7 @@ fn build_generic_find_module_index(m: tc.WorldModule, mx: ModImplDeclIndexes) ->
       if pos < 0 {
         let ins: i32 = 0 - (pos + 1);
         seen_names = insert_str_sorted_at(seen_names, fd.name, ins);
-        generic_name_index = insert_generic_find_name_index_at(generic_name_index, GenericFindNameIndexEntry {
+        let entry: GenericFindNameIndexEntry = GenericFindNameIndexEntry {
           name: fd.name,
           res: FindFuncDeclResult {
             found: true,
@@ -460,7 +434,12 @@ fn build_generic_find_module_index(m: tc.WorldModule, mx: ModImplDeclIndexes) ->
             impl_sig_idx: -1,
             impl_m_sig_idx: -1,
           },
-        }, ins);
+        };
+        if ins == generic_name_index.len() {
+          generic_name_index.push(entry);
+        } else {
+          generic_name_index.insert(ins, entry);
+        }
       }
     }
     fi = fi + 1;
@@ -476,10 +455,15 @@ fn build_generic_find_module_index(m: tc.WorldModule, mx: ModImplDeclIndexes) ->
       if pos < 0 {
         let ins: i32 = 0 - (pos + 1);
         seen_names = insert_str_sorted_at(seen_names, seed.lowered_name, ins);
-        generic_name_index = insert_generic_find_name_index_at(generic_name_index, GenericFindNameIndexEntry {
+        let entry: GenericFindNameIndexEntry = GenericFindNameIndexEntry {
           name: seed.lowered_name,
           res: seed.res,
-        }, ins);
+        };
+        if ins == generic_name_index.len() {
+          generic_name_index.push(entry);
+        } else {
+          generic_name_index.insert(ins, entry);
+        }
       }
       si = si + 1;
     }
@@ -595,7 +579,22 @@ fn find_mod_idx_cached(mod_index: Vec[ModIndexEntry], path: String, cache0: Vec[
       }
     }
   }
-  let idx: i32 = find_mod_idx_from_index(mod_index, path);
+  let mut idx: i32 = -1;
+  let mut lo: i32 = 0;
+  let mut hi: i32 = mod_index.len();
+  while lo < hi {
+    let mid: i32 = lo + ((hi - lo) / 2);
+    let it: ModIndexEntry = mod_index.get(mid);
+    if it.path == path {
+      idx = it.idx;
+      break;
+    }
+    if it.path < path {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
   if idx == -1 { return FindModIdxCachedResult { cache: cache0, idx: -1 }; }
   let mut cache: Vec[ModIdxCacheEntry] = cache0;
   if cache.len() == 0 {
@@ -696,27 +695,6 @@ fn find_imports_cached(w: tc.World, mod_idx: i32, mod_imports: Vec[ast.ImportDec
 struct FindImplSigResult { found: bool, idx: i32 }
 
 struct ImplSigIndexEntry { mod_path: String, decl_idx: i32, idx: i32 }
-
-fn empty_irgen_func_sig(ret: i32) -> tc.FuncSig {
-  return tc.FuncSig {
-    params: Vec(),
-    param_borrow_kinds: Vec(),
-    ret: ret,
-    has_variadic: false,
-    is_ffi_variadic: false,
-    variadic_elem: -1,
-    vis: ast.vis_private(),
-    is_pub: false,
-    type_params: Vec(),
-    type_param_packs: Vec(),
-    const_params: Vec(),
-    type_param_bounds: Vec(),
-    effects: Vec(),
-    resource_reads: Vec(),
-    resource_writes: Vec(),
-    const_where_bounds: Vec(),
-  };
-}
 
 fn impl_sig_index_less(a: ImplSigIndexEntry, b: ImplSigIndexEntry) -> bool {
   if a.mod_path < b.mod_path { return true; }
@@ -915,7 +893,24 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
           impl_m_sig_idx: -1,
           base_name: "",
           inst_name: "",
-          inst_sig: empty_irgen_func_sig(ctx.ty_bad),
+          inst_sig: tc.FuncSig {
+            params: Vec(),
+            param_borrow_kinds: Vec(),
+            ret: ctx.ty_bad,
+            has_variadic: false,
+            is_ffi_variadic: false,
+            variadic_elem: -1,
+            vis: ast.vis_private(),
+            is_pub: false,
+            type_params: Vec(),
+            type_param_packs: Vec(),
+            const_params: Vec(),
+            type_param_bounds: Vec(),
+            effects: Vec(),
+            resource_reads: Vec(),
+            resource_writes: Vec(),
+            const_where_bounds: Vec(),
+          },
           subs: Vec(),
           const_subs: Vec(),
         });
@@ -946,7 +941,24 @@ pub fn generate_world_with_ctx(w: tc.World, ctx0: tc.Ctx) -> GenResult {
           impl_m_sig_idx: mt.impl_m_sig_idx,
           base_name: "",
           inst_name: "",
-          inst_sig: empty_irgen_func_sig(ctx.ty_bad),
+          inst_sig: tc.FuncSig {
+            params: Vec(),
+            param_borrow_kinds: Vec(),
+            ret: ctx.ty_bad,
+            has_variadic: false,
+            is_ffi_variadic: false,
+            variadic_elem: -1,
+            vis: ast.vis_private(),
+            is_pub: false,
+            type_params: Vec(),
+            type_param_packs: Vec(),
+            const_params: Vec(),
+            type_param_bounds: Vec(),
+            effects: Vec(),
+            resource_reads: Vec(),
+            resource_writes: Vec(),
+            const_where_bounds: Vec(),
+          },
           subs: Vec(),
           const_subs: Vec(),
         });
