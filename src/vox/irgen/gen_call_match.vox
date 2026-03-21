@@ -2,11 +2,6 @@ import "vox/ast" as ast
 import "vox/ir" as ir
 import "vox/typecheck" as tc
 
-fn starts_with(s: String, pre: String) -> bool {
-  if s.len() < pre.len() { return false; }
-  return s.slice(0, pre.len()) == pre;
-}
-
 struct VecRecvSlotResult { ok: bool, err: String, g: Gen, slot: i32 }
 
 struct GenPatResult { ok: bool, err: String, g: Gen }
@@ -1273,20 +1268,6 @@ fn gen_call_reflect_intrinsic(g0: Gen, name: String, type_args: Vec[ast.TypeName
   return GenExprResult { ok: false, err: "unknown intrinsic", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
 }
 
-fn intrinsic_arg_str_lit(exprs: ast.ExprPool, id: i32) -> String {
-  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
-  return match n { ast.ExprNode.Str(s) => s, _ => "" };
-}
-
-fn intrinsic_arg_int_lit(exprs: ast.ExprPool, id: i32) -> i32 {
-  let n: ast.ExprNode = ast.expr_pool_get(exprs, id);
-  if !match n { ast.ExprNode.Int(_s) => true, _ => false } { return -1; }
-  let s: String = match n { ast.ExprNode.Int(x) => x, _ => "" };
-  let pr: tc.ParseI32DecResult = tc.parse_i32_dec(s);
-  if !pr.ok { return -1; }
-  return pr.val;
-}
-
 fn gen_call_enum_value_intrinsic(g0: Gen, name: String, args: Vec[i32], out_ty: i32) -> GenExprResult {
   let mut g: Gen = g0;
   if name == "@enum_is" {
@@ -1298,7 +1279,8 @@ fn gen_call_enum_value_intrinsic(g0: Gen, name: String, args: Vec[i32], out_ty: 
   }
 
   // Operands are always generated with literal variant/index in our lowering.
-  let vname: String = intrinsic_arg_str_lit(g.exprs, args.get(1));
+  let vname_node: ast.ExprNode = ast.expr_pool_get(g.exprs, args.get(1));
+  let vname: String = match vname_node { ast.ExprNode.Str(s) => s, _ => "" };
   if vname == "" { return GenExprResult { ok: false, err: "intrinsic expects string literal variant name", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
 
   let ar: GenExprResult = gen_expr(g, args.get(0), -1);
@@ -1328,7 +1310,13 @@ fn gen_call_enum_value_intrinsic(g0: Gen, name: String, args: Vec[i32], out_ty: 
     return GenExprResult { ok: true, err: "", g: g, val: ir.v_temp(eq_tid), ty: g.ctx.ty_bool };
   }
 
-  let idx: i32 = intrinsic_arg_int_lit(g.exprs, args.get(2));
+  let idx_node: ast.ExprNode = ast.expr_pool_get(g.exprs, args.get(2));
+  let mut idx: i32 = -1;
+  if match idx_node { ast.ExprNode.Int(_s) => true, _ => false } {
+    let idx_text: String = match idx_node { ast.ExprNode.Int(x) => x, _ => "" };
+    let pr: tc.ParseI32DecResult = tc.parse_i32_dec(idx_text);
+    if pr.ok { idx = pr.val; }
+  }
   if idx < 0 { return GenExprResult { ok: false, err: "intrinsic expects integer literal index", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
 
   // Emit a checked payload extract:
@@ -1773,7 +1761,9 @@ fn gen_explicit_type_arg_bind_name(sig: tc.FuncSig, idx: i32) -> String {
 
 fn gen_type_name_is_pack_member(name: String, pack: String) -> bool {
   if name == pack { return true; }
-  return starts_with(name, pack.concat("."));
+  let pre: String = pack.concat(".");
+  if name.len() < pre.len() { return false; }
+  return name.slice(0, pre.len()) == pre;
 }
 
 fn gen_ty_contains_pack_param(ctx: tc.Ctx, ty: i32, pack: String) -> bool {
@@ -2365,7 +2355,9 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
 
   let inst: String = tc.inst_name_ex(g.ctx, name, inst_type_params, sig_use.const_params, inst_subs, csubs);
   let inst_qn: String = qname(target_mod, inst);
-  g.pending = pending_add(g.pending, PendingInst { qname: inst_qn, mod_path: target_mod, base_name: name, inst_name: inst, sig: inst_sig, subs: inst_subs, const_subs: csubs });
+  if g.pending.len() == 0 || g.pending.get(g.pending.len() - 1).qname != inst_qn {
+    g.pending.push(PendingInst { qname: inst_qn, mod_path: target_mod, base_name: name, inst_name: inst, sig: inst_sig, subs: inst_subs, const_subs: csubs });
+  }
 
   if pack_mode {
     let variadic_vec_ty3: i32 = ps.get(ps.len() - 1);
