@@ -406,26 +406,20 @@ fn synth_async_ctor_body(exprs0: ast.ExprPool, fd: ast.FuncDecl, frame_name: Str
 
 struct AwaitPoint { stmt_idx: i32, operand: i32, is_try: bool }
 
-fn stmt_expr_id(st: ast.Stmt) -> i32 {
-  if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
-    return match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e) => e, _ => -1 };
-  }
-  if match st { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
-    return match st { ast.Stmt.ExprStmt(_sp, e) => e, _ => -1 };
-  }
-  if match st { ast.Stmt.ReturnStmt(_sp, h, _e) => true, _ => false } {
-    let has0: bool = match st { ast.Stmt.ReturnStmt(_sp, h, _e) => h, _ => false };
-    if has0 { return match st { ast.Stmt.ReturnStmt(_sp, _h, e) => e, _ => -1 }; }
-  }
-  return -1;
-}
-
 fn find_await_points(exprs: ast.ExprPool, ss: Vec[ast.Stmt]) -> Vec[AwaitPoint] {
   let mut out: Vec[AwaitPoint] = Vec();
   let mut i: i32 = 0;
   while i < ss.len() {
     let st: ast.Stmt = ss.get(i);
-    let eid: i32 = stmt_expr_id(st);
+    let eid: i32 =
+      if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+        match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, e) => e, _ => -1 }
+      } else if match st { ast.Stmt.ExprStmt(_sp, _e) => true, _ => false } {
+        match st { ast.Stmt.ExprStmt(_sp, e) => e, _ => -1 }
+      } else if match st { ast.Stmt.ReturnStmt(_sp, h, _e) => true, _ => false } {
+        let has0: bool = match st { ast.Stmt.ReturnStmt(_sp, h, _e) => h, _ => false };
+        if has0 { match st { ast.Stmt.ReturnStmt(_sp, _h, e) => e, _ => -1 } } else { -1 }
+      } else { -1 };
     if eid != -1 {
       let n: ast.ExprNode = ast.expr_pool_get(exprs, eid);
       if match n { ast.ExprNode.Await(_x) => true, _ => false } {
@@ -441,27 +435,6 @@ fn find_await_points(exprs: ast.ExprPool, ss: Vec[ast.Stmt]) -> Vec[AwaitPoint] 
     i = i + 1;
   }
   return out;
-}
-
-fn inject_capture_stores(p0: ast.ExprPool, frame_var: String, captures: Vec[String], ss0: Vec[ast.Stmt]) -> SynthResult {
-  let mut p: ast.ExprPool = p0;
-  let mut out: Vec[ast.Stmt] = Vec();
-  let mut i: i32 = 0;
-  while i < ss0.len() {
-    let st: ast.Stmt = ss0.get(i);
-    out.push(st);
-    if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
-      let sp: ast.Span = stmt_span(st);
-      let name0: String = match st { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
-      if txt.contains_str(captures, name0) {
-        let r_id: ast.AddExprResult = add_ident(p, sp, name0);
-        p = r_id.pool;
-        out.push(ast.Stmt.AssignField(sp, frame_var, "l_".concat(name0), r_id.id));
-      }
-    }
-    i = i + 1;
-  }
-  return SynthResult { ok: true, err: "", exprs: p, body: ast.Block { stmts: out } };
 }
 
 fn synth_async_poll_body(
@@ -673,10 +646,23 @@ fn synth_async_poll_body(
     let r_body: SynthResult = async_rewrite_stmt_list(p, frame_var, captures, fd.ret, raw);
     if !r_body.ok { return r_body; }
     p = r_body.exprs;
-    let r_caps: SynthResult = inject_capture_stores(p, frame_var, captures, r_body.body.stmts);
-    if !r_caps.ok { return r_caps; }
-    p = r_caps.exprs;
-    loop_body.push(ast.Stmt.IfStmt(sp, r_eq.id, ast.Block { stmts: r_caps.body.stmts }, false, ast.Block { stmts: Vec() }));
+    let mut cap_body: Vec[ast.Stmt] = Vec();
+    let mut capi: i32 = 0;
+    while capi < r_body.body.stmts.len() {
+      let st: ast.Stmt = r_body.body.stmts.get(capi);
+      cap_body.push(st);
+      if match st { ast.Stmt.Let(_sp, _m, _n, _ha, _ann, _e) => true, _ => false } {
+        let cap_sp: ast.Span = stmt_span(st);
+        let name0: String = match st { ast.Stmt.Let(_sp, _m, n0, _ha, _ann, _e) => n0, _ => "" };
+        if txt.contains_str(captures, name0) {
+          let r_id: ast.AddExprResult = add_ident(p, cap_sp, name0);
+          p = r_id.pool;
+          cap_body.push(ast.Stmt.AssignField(cap_sp, frame_var, "l_".concat(name0), r_id.id));
+        }
+      }
+      capi = capi + 1;
+    }
+    loop_body.push(ast.Stmt.IfStmt(sp, r_eq.id, ast.Block { stmts: cap_body }, false, ast.Block { stmts: Vec() }));
 
     bi = bi + 1;
   }
