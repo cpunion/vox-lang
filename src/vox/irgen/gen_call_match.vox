@@ -1717,13 +1717,6 @@ fn subs_lookup(subs: Vec[tc.TySub], name: String) -> i32 {
   return -1;
 }
 
-fn gen_pack_arity_error(sig: tc.FuncSig, got: i32) -> String {
-  return "wrong number of type args: expected at most "
-    .concat(sig.type_params.len().to_string())
-    .concat(", got ")
-    .concat(got.to_string());
-}
-
 fn gen_has_type_param_pack(sig: tc.FuncSig) -> bool {
   return sig.type_param_packs.len() == 1;
 }
@@ -1731,18 +1724,6 @@ fn gen_has_type_param_pack(sig: tc.FuncSig) -> bool {
 fn gen_type_param_fixed_prefix_len(sig: tc.FuncSig) -> i32 {
   if gen_has_type_param_pack(sig) { return sig.type_params.len() - 1; }
   return sig.type_params.len();
-}
-
-fn gen_explicit_type_arg_arity_ok(sig: tc.FuncSig, explicit_targ_n: i32) -> bool {
-  if !gen_has_type_param_pack(sig) { return explicit_targ_n <= sig.type_params.len(); }
-  return explicit_targ_n >= 0;
-}
-
-fn gen_explicit_type_arg_bind_name(sig: tc.FuncSig, idx: i32) -> String {
-  if !gen_has_type_param_pack(sig) { return sig.type_params.get(idx); }
-  let fixed_n: i32 = gen_type_param_fixed_prefix_len(sig);
-  if idx < fixed_n { return sig.type_params.get(idx); }
-  return sig.type_param_packs.get(0);
 }
 
 fn gen_type_name_is_pack_member(name: String, pack: String) -> bool {
@@ -2003,8 +1984,17 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
       xj = xj + 1;
     }
   }
-  if !gen_explicit_type_arg_arity_ok(sig, explicit_targ_n) {
-    return GenExprResult { ok: false, err: gen_pack_arity_error(sig, explicit_targ_n), g: g, val: ir.v_int(0), ty: g.ctx.ty_bad };
+  if (!gen_has_type_param_pack(sig) && explicit_targ_n > sig.type_params.len()) || explicit_targ_n < 0 {
+    return GenExprResult {
+      ok: false,
+      err: "wrong number of type args: expected at most "
+        .concat(sig.type_params.len().to_string())
+        .concat(", got ")
+        .concat(explicit_targ_n.to_string()),
+      g: g,
+      val: ir.v_int(0),
+      ty: g.ctx.ty_bad,
+    };
   }
   let explicit_const_n: i32 = type_args.len() - explicit_targ_n;
   if explicit_const_n > sig.const_params.len() {
@@ -2065,7 +2055,13 @@ fn gen_call_func(g0: Gen, target_mod: String, name: String, sig: tc.FuncSig, typ
     let tr: tc.ResolveTyResult = tc.resolve_type(g.ctx, g.w, g.mod_path, g.imps, Vec(), explicit_targs.get(ti));
     g.ctx = tr.ctx;
     if !tr.ok { return GenExprResult { ok: false, err: "bad type arg", g: g, val: ir.v_int(0), ty: g.ctx.ty_bad }; }
-    let tp: String = gen_explicit_type_arg_bind_name(sig, ti);
+    let tp: String =
+      if !gen_has_type_param_pack(sig) {
+        sig.type_params.get(ti)
+      } else {
+        let fixed_n: i32 = gen_type_param_fixed_prefix_len(sig);
+        if ti < fixed_n { sig.type_params.get(ti) } else { sig.type_param_packs.get(0) }
+      };
     let is_pack_bind: bool = has_pack && tp == pack_name;
     if is_pack_bind {
       pack_explicit_tys.push(tr.idx);
