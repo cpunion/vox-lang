@@ -38,10 +38,6 @@ fn add_int(p0: ast.ExprPool, sp: ast.Span, text: String) -> ast.AddExprResult {
   return add_expr(p0, ast.ExprNode.Int(text), sp);
 }
 
-fn add_bool(p0: ast.ExprPool, sp: ast.Span, v: bool) -> ast.AddExprResult {
-  return add_expr(p0, ast.ExprNode.Bool(v), sp);
-}
-
 fn add_str(p0: ast.ExprPool, sp: ast.Span, text: String) -> ast.AddExprResult {
   return add_expr(p0, ast.ExprNode.Str(text), sp);
 }
@@ -56,22 +52,6 @@ fn add_binary(p0: ast.ExprPool, sp: ast.Span, op: ast.BinaryOp, a: i32, b: i32) 
 
 fn add_call(p0: ast.ExprPool, sp: ast.Span, callee: i32, args: Vec[i32]) -> ast.AddExprResult {
   return add_expr(p0, ast.ExprNode.Call(callee, Vec(), args), sp);
-}
-
-fn add_dot_call1(p0: ast.ExprPool, sp: ast.Span, name: String, arg0: i32) -> ast.AddExprResult {
-  let r0: ast.AddExprResult = add_expr(p0, ast.ExprNode.DotIdent(name), sp);
-  let mut as0: Vec[i32] = Vec();
-  as0.push(arg0);
-  return add_call(r0.pool, sp, r0.id, as0);
-}
-
-fn has_return_stmt(ss: Vec[ast.Stmt]) -> bool {
-  let mut i: i32 = 0;
-  while i < ss.len() {
-    if match ss.get(i) { ast.Stmt.ReturnStmt(_sp, _h, _e) => true, _ => false } { return true; }
-    i = i + 1;
-  }
-  return false;
 }
 
 struct RewriteExprResult { ok: bool, err: String, exprs: ast.ExprPool, id: i32 }
@@ -331,7 +311,11 @@ fn async_rewrite_stmt_list(p0: ast.ExprPool, frame_var: String, captures: Vec[St
       out.push(ast.Stmt.Let(sp, false, tmp_name, true, ret_ann, rhs_id));
       let r_tmp: ast.AddExprResult = add_ident(p, sp, tmp_name);
       p = r_tmp.pool;
-      let r_ready: ast.AddExprResult = add_dot_call1(p, sp, "Ready", r_tmp.id);
+      let r_ready_callee: ast.AddExprResult = add_expr(p, ast.ExprNode.DotIdent("Ready"), sp);
+      p = r_ready_callee.pool;
+      let mut r_ready_args: Vec[i32] = Vec();
+      r_ready_args.push(r_tmp.id);
+      let r_ready: ast.AddExprResult = add_call(p, sp, r_ready_callee.id, r_ready_args);
       p = r_ready.pool;
 
       let r_zero2: ast.AddExprResult = add_int(p, sp, "0");
@@ -571,7 +555,7 @@ fn synth_async_poll_body(
     return SynthResult { ok: false, err: cfg.err, exprs: p, body: ast.Block { stmts: Vec() } };
   }
 
-  let r_true: ast.AddExprResult = add_bool(p, sp, true);
+  let r_true: ast.AddExprResult = add_expr(p, ast.ExprNode.Bool(true), sp);
   p = r_true.pool;
   let mut loop_body: Vec[ast.Stmt] = Vec();
 
@@ -672,7 +656,16 @@ fn synth_async_poll_body(
     } else {
       // Return: usually the return statement is part of raw stmts (normal return, or await poll return).
       // For unit async fns, fallthrough may become Term.Return with no explicit return stmt.
-      if allow_fallthrough_return && !has_return_stmt(raw) {
+      let mut has_return_stmt: bool = false;
+      let mut rawi: i32 = 0;
+      while rawi < raw.len() {
+        if match raw.get(rawi) { ast.Stmt.ReturnStmt(_sp, _h, _e) => true, _ => false } {
+          has_return_stmt = true;
+          break;
+        }
+        rawi = rawi + 1;
+      }
+      if allow_fallthrough_return && !has_return_stmt {
         raw.push(ast.Stmt.ReturnStmt(sp, false, -1));
       }
     }
