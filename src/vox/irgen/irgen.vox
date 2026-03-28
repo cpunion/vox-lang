@@ -147,43 +147,6 @@ fn synth_params(names: Vec[String]) -> Vec[ast.Param] {
 
 struct ImplMethodDeclIndexEntry { name: String, idx: i32 }
 
-fn build_impl_method_decl_index(id: ast.ImplDecl) -> Vec[ImplMethodDeclIndexEntry] {
-  let mut out: Vec[ImplMethodDeclIndexEntry] = Vec();
-  let mut i: i32 = 0;
-  while i < id.methods.len() {
-    out.push(ImplMethodDeclIndexEntry { name: id.methods.get(i).name, idx: i });
-    i = i + 1;
-  }
-  let mut sorted: bool = true;
-  let mut si: i32 = 1;
-  while si < out.len() {
-    if out.get(si - 1).name > out.get(si).name {
-      sorted = false;
-      break;
-    }
-    si = si + 1;
-  }
-  if sorted { return out; }
-  let mut gap: i32 = out.len() / 2;
-  while gap > 0 {
-    let mut oi: i32 = gap;
-    while oi < out.len() {
-      let keep: ImplMethodDeclIndexEntry = out.get(oi);
-      let mut j: i32 = oi;
-      while j >= gap {
-        let prev: ImplMethodDeclIndexEntry = out.get(j - gap);
-        if prev.name <= keep.name { break; }
-        out.set(j, prev);
-        j = j - gap;
-      }
-      out.set(j, keep);
-      oi = oi + 1;
-    }
-    gap = gap / 2;
-  }
-  return out;
-}
-
 struct ModIndexEntry { path: String, idx: i32 }
 
 struct FindFuncDeclResult {
@@ -241,7 +204,40 @@ fn build_mod_impl_decl_indexes(ctx: tc.Ctx, w: tc.World, impl_sig_index: Vec[Imp
     let mut generic_method_find_seeds: Vec[Vec[GenericMethodFindSeed]] = Vec();
     let mut ii: i32 = 0;
     while ii < m.prog.impls.len() {
-      let method_decl_index: Vec[ImplMethodDeclIndexEntry] = build_impl_method_decl_index(m.prog.impls.get(ii));
+      let mut method_decl_index: Vec[ImplMethodDeclIndexEntry] = Vec();
+      let mut mdi: i32 = 0;
+      while mdi < m.prog.impls.get(ii).methods.len() {
+        method_decl_index.push(ImplMethodDeclIndexEntry { name: m.prog.impls.get(ii).methods.get(mdi).name, idx: mdi });
+        mdi = mdi + 1;
+      }
+      let mut method_decl_sorted: bool = true;
+      let mut mdsi: i32 = 1;
+      while mdsi < method_decl_index.len() {
+        if method_decl_index.get(mdsi - 1).name > method_decl_index.get(mdsi).name {
+          method_decl_sorted = false;
+          break;
+        }
+        mdsi = mdsi + 1;
+      }
+      if !method_decl_sorted {
+        let mut gap: i32 = method_decl_index.len() / 2;
+        while gap > 0 {
+          let mut oi: i32 = gap;
+          while oi < method_decl_index.len() {
+            let keep: ImplMethodDeclIndexEntry = method_decl_index.get(oi);
+            let mut j: i32 = oi;
+            while j >= gap {
+              let prev: ImplMethodDeclIndexEntry = method_decl_index.get(j - gap);
+              if prev.name <= keep.name { break; }
+              method_decl_index.set(j, prev);
+              j = j - gap;
+            }
+            method_decl_index.set(j, keep);
+            oi = oi + 1;
+          }
+          gap = gap / 2;
+        }
+      }
       let mut ir0_idx: i32 = -1;
       let mut lo: i32 = 0;
       let mut hi: i32 = impl_sig_index.len();
@@ -616,12 +612,6 @@ fn find_imports_cached(w: tc.World, mod_idx: i32, mod_imports: Vec[ast.ImportDec
 
 struct ImplSigIndexEntry { mod_path: String, decl_idx: i32, idx: i32 }
 
-fn impl_sig_index_less(a: ImplSigIndexEntry, b: ImplSigIndexEntry) -> bool {
-  if a.mod_path < b.mod_path { return true; }
-  if a.mod_path > b.mod_path { return false; }
-  return a.decl_idx < b.decl_idx;
-}
-
 fn build_impl_sig_index(ctx: tc.Ctx) -> Vec[ImplSigIndexEntry] {
   let mut out: Vec[ImplSigIndexEntry] = Vec();
   let mut i: i32 = 0;
@@ -633,7 +623,9 @@ fn build_impl_sig_index(ctx: tc.Ctx) -> Vec[ImplSigIndexEntry] {
   let mut sorted: bool = true;
   let mut si: i32 = 1;
   while si < out.len() {
-    if impl_sig_index_less(out.get(si), out.get(si - 1)) {
+    let cur: ImplSigIndexEntry = out.get(si);
+    let prev: ImplSigIndexEntry = out.get(si - 1);
+    if cur.mod_path < prev.mod_path || (cur.mod_path == prev.mod_path && cur.decl_idx < prev.decl_idx) {
       sorted = false;
       break;
     }
@@ -648,7 +640,7 @@ fn build_impl_sig_index(ctx: tc.Ctx) -> Vec[ImplSigIndexEntry] {
       let mut j: i32 = oi;
       while j >= gap {
         let prev: ImplSigIndexEntry = out.get(j - gap);
-        if !impl_sig_index_less(keep, prev) { break; }
+        if !(keep.mod_path < prev.mod_path || (keep.mod_path == prev.mod_path && keep.decl_idx < prev.decl_idx)) { break; }
         out.set(j, prev);
         j = j - gap;
       }
